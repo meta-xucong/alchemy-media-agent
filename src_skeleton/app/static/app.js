@@ -29,6 +29,7 @@ const state = {
   selectedProvider: "openai_gpt_image",
   selectedLlmProvider: "openai",
   imageProviderReady: false,
+  imageProviderCapabilities: {},
   providerSettings: null,
 };
 
@@ -250,7 +251,13 @@ function setIntensity(value) {
 }
 
 function setImageProvider(provider, { persist = false } = {}) {
-  state.selectedProvider = provider === "gemini_image" ? "gemini_image" : "openai_gpt_image";
+  const requested = provider === "gemini_image" ? "gemini_image" : "openai_gpt_image";
+  if (requested === "gemini_image" && !isImageProviderUsable("gemini_image")) {
+    state.selectedProvider = "openai_gpt_image";
+    showNotice("Gemini 生图当前还是占位入口，已自动切回 GPT 生图。", "warning");
+  } else {
+    state.selectedProvider = requested;
+  }
   document.querySelectorAll("[data-image-provider]").forEach((button) => {
     button.classList.toggle("active", button.dataset.imageProvider === state.selectedProvider);
   });
@@ -392,6 +399,7 @@ async function loadProviders() {
     request("/v1/runtime/provider-settings"),
   ]);
   state.providerSettings = runtime;
+  state.imageProviderCapabilities = Object.fromEntries((providers.image || []).map((provider) => [provider.provider, provider]));
   state.selectedProvider = runtime.default_image_provider || "openai_gpt_image";
   state.selectedLlmProvider = runtime.default_llm_provider || "openai";
   state.selectedIntensity = runtime.image_work_intensity || "balanced";
@@ -410,6 +418,9 @@ async function loadProviders() {
   renderProviderLists(providers, runtime);
   const openai = providers.image.find((provider) => provider.provider === "openai_gpt_image");
   const gemini = providers.image.find((provider) => provider.provider === "gemini_image");
+  if (!isImageProviderUsable(state.selectedProvider) && isImageProviderUsable("openai_gpt_image")) {
+    state.selectedProvider = "openai_gpt_image";
+  }
   const selectedImage = providers.image.find((provider) => provider.provider === state.selectedProvider);
   const fallbackImage = providers.image.find((provider) => provider.provider !== state.selectedProvider && ["openai_gpt_image", "gemini_image"].includes(provider.provider));
   state.imageProviderReady = Boolean(selectedImage?.configured || fallbackImage?.configured);
@@ -418,6 +429,12 @@ async function loadProviders() {
   els.openaiThinkingState.textContent = runtime.openai_api_key_configured ? runtime.openai_llm_model : "需 API";
   els.kimiThinkingState.textContent = runtime.anthropic_api_key_configured ? runtime.kimi_llm_model : "需 API";
   els.providerState.textContent = state.imageProviderReady ? `${providerLabel(state.selectedProvider)} ready` : "需要 API";
+  setImageProviderAvailability("openai_gpt_image", Boolean(openai?.configured), "");
+  setImageProviderAvailability(
+    "gemini_image",
+    Boolean(gemini?.configured),
+    gemini?.configured ? "" : "Gemini 生图尚未接入 live provider，当前不可选。"
+  );
 
   if (state.imageProviderReady) {
     showNotice(`模型已就绪：生图 ${providerLabel(state.selectedProvider)}；思考 ${thinkingProviderLabel(state.selectedLlmProvider)}。`, "success");
@@ -477,6 +494,18 @@ function providerLabel(provider) {
     seedance: "Seedance Video",
   };
   return labels[provider] || provider;
+}
+
+function isImageProviderUsable(provider) {
+  return Boolean(state.imageProviderCapabilities?.[provider]?.configured);
+}
+
+function setImageProviderAvailability(provider, enabled, title) {
+  const button = document.querySelector(`[data-image-provider="${provider}"]`);
+  if (!button) return;
+  button.disabled = !enabled;
+  button.title = title || "";
+  button.classList.toggle("disabled", !enabled);
 }
 
 function thinkingProviderLabel(provider) {
@@ -630,6 +659,10 @@ async function generateImage() {
   await ensureSession();
   await flushProviderSettingsSync({ silent: true });
   if (!state.imageProviderReady || els.openaiApiKeyInput.value.trim() || els.geminiImageApiKeyInput.value.trim() || els.anthropicApiKeyInput.value.trim()) {
+    await syncProviderSettings({ silent: true });
+  }
+  if (state.selectedProvider === "gemini_image" && isImageProviderUsable("openai_gpt_image")) {
+    setImageProvider("openai_gpt_image");
     await syncProviderSettings({ silent: true });
   }
   if (!state.imageProviderReady) {

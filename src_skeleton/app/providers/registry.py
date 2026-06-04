@@ -26,10 +26,17 @@ class ProviderRegistry:
         return self._require_image(settings.default_image_provider)
 
     async def select_image(self, preferred: str | None = None):
-        provider = self.image(preferred)
+        provider_name = preferred or settings.default_image_provider
+        provider = self._require_image(provider_name)
         caps = await provider.capabilities()
         if caps.configured:
             return provider
+        fallback_name = self.alternate_image_name(provider_name)
+        if fallback_name:
+            fallback = self._require_image(fallback_name)
+            fallback_caps = await fallback.capabilities()
+            if fallback_caps.configured:
+                return fallback
         if preferred:
             raise ProviderNotConfiguredError(caps.reason or "Provider is not configured.", provider=provider.name)
         if settings.mock_image_provider_enabled and "mock_image" in self.image_providers:
