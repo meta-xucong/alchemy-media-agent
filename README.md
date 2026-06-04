@@ -33,6 +33,7 @@
 - `claude_code/.claude/hooks/`：Claude Code hook 示例。
 - `scripts/deploy_vps.sh`：VPS Docker 一键部署脚本。
 - `.github/workflows/deploy-vps.yml`：GitHub Actions 远程部署模板。
+- `src_skeleton/.media_storage/generated_images/`：随仓库分发的历史图片种子数据，用于新环境首屏展示。
 
 ## 重要假设
 
@@ -55,5 +56,6 @@
 
 默认部署目录：`/opt/alchemy-media-agent`  
 默认访问端口：`8017`
+部署后会直接显示仓库内置的历史图片和案例参考图片。
 
 详见 `docs/21_密钥与部署配置.md`。

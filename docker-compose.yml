@@ -9,8 +9,5 @@ services:
     ports:
       - "${APP_PORT:-8017}:8017"
     volumes:
-      - alchemy_media_storage:/app/.media_storage
+      - ./src_skeleton/.media_storage:/app/.media_storage
     restart: unless-stopped
-
-volumes:
-  alchemy_media_storage:

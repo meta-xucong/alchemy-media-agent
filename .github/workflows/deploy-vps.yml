@@ -42,7 +42,6 @@ jobs:
           tar \
             --exclude='.git' \
             --exclude='src_skeleton/.env' \
-            --exclude='src_skeleton/.media_storage' \
             --exclude='**/__pycache__' \
             -czf - . | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "tar -xzf - -C '$DEPLOY_DIR'"
 
