@@ -774,7 +774,7 @@ function renderGallery(outputs) {
     const id = node.querySelector(".output-id");
     const link = node.querySelector(".download-link");
     preview.dataset.label = `${output.format.toUpperCase()} · ${index + 1}`;
-    preview.innerHTML = `<img class="output-image" alt="生成结果 ${index + 1}" src="${output.url}" />`;
+    preview.innerHTML = `<img class="output-image" alt="生成结果 ${index + 1}" src="${output.thumbnail_url || output.url}" loading="lazy" decoding="async" />`;
     id.textContent = output.id;
     link.href = output.url;
     link.download = `${output.id}.${output.format === "jpeg" ? "jpg" : output.format}`;

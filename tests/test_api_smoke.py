@@ -194,6 +194,7 @@ def test_frontend_static_app_is_served():
     assert script.status_code == 200
     assert "/v1/image/jobs" in script.text
     assert "/v1/image/history" in script.text
+    assert "output.thumbnail_url || output.url" in script.text
     assert 'image.loading = "lazy"' in script.text
     assert "noticeBar" in script.text
     assert "生成中" in script.text
