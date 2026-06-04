@@ -58,4 +58,17 @@
 默认访问端口：`8017`
 部署后会直接显示仓库内置的历史图片和案例参考图片。
 
-详见 `docs/21_密钥与部署配置.md`。
+如果你的图片供应商不是官方 OpenAI，而是 OpenAI-compatible 网关，比如 `https://aiself.vip/v1`，务必同时设置：
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+
+否则图片 provider 会默认直连官方 OpenAI，常见报错是 `Connection error.`。
+
+另外要注意：
+
+- `gemini_image` 目前仍是占位 provider，不是 live 生图入口。
+- `seedance` 目前仍是占位视频 provider，不是 live 视频入口。
+- `docker-compose.yml` 已挂载 `./src_skeleton/.env:/app/.env`，因此运行时页面里改过的 provider/base URL 可以持久化到宿主机并在重建容器后保留。
+
+建议直接按 `docs/21_密钥与部署配置.md` 里的“一次到位部署模板”和“冒烟验证”执行。
