@@ -390,6 +390,7 @@ h3 {
 
 .synced-carousel .case-slide {
   opacity: 0;
+  pointer-events: none;
   transform: translateX(12px) rotateY(-4deg) scale(0.98);
   animation: none;
   transition: opacity 520ms ease, transform 620ms ease;
@@ -397,6 +398,7 @@ h3 {
 
 .synced-carousel .case-slide.active {
   opacity: 1;
+  pointer-events: auto;
   transform: translateX(0) rotateY(0deg) scale(1);
 }
 

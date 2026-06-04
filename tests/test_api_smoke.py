@@ -175,6 +175,8 @@ def test_frontend_static_app_is_served():
     assert "sample-modal" in styles.text
     assert "global-toast" in styles.text
     assert "caseFade" in styles.text
+    assert "pointer-events: none" in styles.text
+    assert "pointer-events: auto" in styles.text
     assert "empty-history" in styles.text
     assert "image-lightbox" in styles.text
     assert "delete-link" in styles.text
@@ -209,6 +211,8 @@ def test_frontend_static_app_is_served():
     assert "toggleLightboxPrompt" in script.text
     assert "promptTextFromJob" in script.text
     assert "renderHeroHistory" in script.text
+    assert "openActiveHeroHistorySlide" in script.text
+    assert "state.heroHistoryItems[activeIndex]" in script.text
     assert "deleteHistoryItem" in script.text
     assert "compareHistoryItems" in script.text
     assert "historyTime" in script.text

@@ -31,6 +31,7 @@ const state = {
   imageProviderReady: false,
   imageProviderCapabilities: {},
   providerSettings: null,
+  heroHistoryItems: [],
 };
 
 let providerSaveTimer = null;
@@ -181,6 +182,7 @@ function bindControls() {
   els.generateBtn.addEventListener("click", generateImage);
   els.reviseBtn.addEventListener("click", reviseSelectedOutput);
   els.refreshHistoryBtn.addEventListener("click", () => refreshHistory({ silent: false }));
+  els.heroHistoryCarousel.addEventListener("click", openActiveHeroHistorySlide);
   bindProviderAutosave();
   els.newSessionBtn.addEventListener("click", startNewSession);
   els.smokeBtn.addEventListener("click", openSampleGuide);
@@ -896,6 +898,7 @@ function renderHeroHistory(items) {
   if (!els.heroHistoryCarousel) return;
   clearHeroCarouselTimer();
   const heroItems = [...items].filter((item) => item.url || item.thumbnail_url).sort(compareHistoryItems);
+  state.heroHistoryItems = heroItems;
   els.heroHistoryCarousel.innerHTML = "";
   els.heroHistoryCarousel.classList.toggle("empty-hero-history", heroItems.length === 0);
   if (heroItems.length === 0) {
@@ -916,19 +919,25 @@ function renderHeroHistory(items) {
     image.decoding = "async";
 
     slide.append(image);
-    slide.addEventListener("click", () => {
-      openImageLightbox({
-        id: item.id,
-        title: item.prompt ? item.prompt.slice(0, 34) : "历史图片",
-        url: item.url,
-        format: item.format,
-        meta: historyMetaText(item),
-        promptText: item.prompt || "",
-      });
-    });
     els.heroHistoryCarousel.appendChild(slide);
   });
   restartHeroCarousels();
+}
+
+function openActiveHeroHistorySlide() {
+  if (!state.heroHistoryItems.length || !els.heroHistoryCarousel) return;
+  const slides = Array.from(els.heroHistoryCarousel.querySelectorAll(".case-slide"));
+  const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("active")));
+  const item = state.heroHistoryItems[activeIndex];
+  if (!item) return;
+  openImageLightbox({
+    id: item.id,
+    title: item.prompt ? item.prompt.slice(0, 34) : "历史图片",
+    url: item.url,
+    format: item.format,
+    meta: historyMetaText(item),
+    promptText: item.prompt || "",
+  });
 }
 
 function restartHeroCarousels() {
