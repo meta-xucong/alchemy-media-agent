@@ -9,5 +9,6 @@ services:
     ports:
       - "${APP_PORT:-8017}:8017"
     volumes:
+      - ./src_skeleton/.env:/app/.env
       - ./src_skeleton/.media_storage:/app/.media_storage
     restart: unless-stopped
