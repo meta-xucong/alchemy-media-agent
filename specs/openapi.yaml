@@ -1,0 +1,464 @@
+openapi: 3.1.0
+info:
+  title: Custom Media Generation Agent API
+  version: 0.1.0
+  description: API draft for a chat-based image/video generation agent platform.
+servers:
+  - url: https://api.example.com
+security:
+  - bearerAuth: []
+paths:
+  /v1/sessions:
+    post:
+      summary: Create a chat session
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /v1/sessions/{session_id}/messages:
+    post:
+      summary: Send a user message to the agent runtime
+      operationId: sendMessage
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '200':
+          description: Message accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendMessageResponse'
+  /v1/sessions/{session_id}/events:
+    get:
+      summary: Stream session events using SSE
+      operationId: streamSessionEvents
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/assets/upload-url:
+    post:
+      summary: Create a signed upload URL
+      operationId: createAssetUploadUrl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAssetUploadRequest'
+      responses:
+        '200':
+          description: Upload URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAssetUploadResponse'
+  /v1/assets/{asset_id}/complete:
+    post:
+      summary: Mark upload complete and start processing
+      operationId: completeAssetUpload
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Asset accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+  /v1/assets/{asset_id}:
+    get:
+      summary: Get asset status and material brief
+      operationId: getAsset
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+  /v1/image/jobs:
+    post:
+      summary: Create an image generation job
+      operationId: createImageJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateImageJobRequest'
+      responses:
+        '200':
+          description: Image job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+  /v1/image/jobs/{job_id}:
+    get:
+      summary: Get image job status
+      operationId: getImageJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Image job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+  /v1/image/history:
+    get:
+      summary: List historical image outputs
+      operationId: listImageHistory
+      parameters:
+        - name: session_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: Historical image outputs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageHistoryResponse'
+  /v1/image/jobs/{job_id}/revise:
+    post:
+      summary: Revise an image output
+      operationId: reviseImageJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviseImageRequest'
+      responses:
+        '200':
+          description: Revision job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+  /v1/video/jobs:
+    post:
+      summary: Create a video generation job, experimental
+      operationId: createVideoJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVideoJobRequest'
+      responses:
+        '200':
+          description: Video job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+  /v1/video/jobs/{job_id}:
+    get:
+      summary: Get video job status
+      operationId: getVideoJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Video job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+  /v1/providers:
+    get:
+      summary: List configured providers and capabilities
+      operationId: listProviders
+      responses:
+        '200':
+          description: Providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderCapabilities'
+  /v1/outputs/{output_id}/download:
+    get:
+      summary: Download a generated output file
+      operationId: downloadOutput
+      parameters:
+        - name: output_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Generated output bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    CreateSessionRequest:
+      type: object
+      properties:
+        project_id: { type: string }
+        title: { type: string }
+        orchestration_mode:
+          type: string
+          enum: [runtime_first, claude_first]
+      required: [project_id]
+    Session:
+      type: object
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        title: { type: string }
+        created_at: { type: string, format: date-time }
+    SendMessageRequest:
+      type: object
+      properties:
+        text: { type: string }
+        asset_ids:
+          type: array
+          items: { type: string }
+        target:
+          type: string
+          enum: [auto, image, video, revise, batch]
+        preferences:
+          type: object
+          additionalProperties: true
+      required: [text]
+    SendMessageResponse:
+      type: object
+      properties:
+        message_id: { type: string }
+        assistant_text: { type: string }
+        job_ids:
+          type: array
+          items: { type: string }
+    CreateAssetUploadRequest:
+      type: object
+      properties:
+        filename: { type: string }
+        mime_type: { type: string }
+        size_bytes: { type: integer }
+        consent:
+          type: object
+          additionalProperties: true
+      required: [filename, mime_type, size_bytes, consent]
+    CreateAssetUploadResponse:
+      type: object
+      properties:
+        asset_id: { type: string }
+        upload_url: { type: string }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+    Asset:
+      type: object
+      properties:
+        id: { type: string }
+        status:
+          type: string
+          enum: [uploaded, scanning, extracting, analyzed, ready, failed, rejected]
+        mime_type: { type: string }
+        thumbnail_url: { type: string }
+        material_brief:
+          type: object
+          additionalProperties: true
+    CreateImageJobRequest:
+      type: object
+      properties:
+        session_id: { type: string }
+        prompt: { type: string }
+        asset_ids:
+          type: array
+          items: { type: string }
+        count: { type: integer, minimum: 1, maximum: 10 }
+        size: { type: string, example: "1024x1536" }
+        quality: { type: string, enum: [low, medium, high, auto] }
+        output_format: { type: string, enum: [png, jpeg, webp] }
+        work_intensity: { type: string, enum: [swift, balanced, studio, atelier] }
+        provider_preference: { type: string }
+        idempotency_key: { type: string }
+      required: [session_id, prompt]
+    ReviseImageRequest:
+      type: object
+      properties:
+        output_id: { type: string }
+        feedback: { type: string }
+        preserve:
+          type: array
+          items: { type: string }
+      required: [output_id, feedback]
+    CreateVideoJobRequest:
+      type: object
+      properties:
+        session_id: { type: string }
+        task_type:
+          type: string
+          enum: [text_to_video, image_to_video, reference_to_video, extend_video, first_last_frame_video]
+        prompt: { type: string }
+        asset_ids:
+          type: array
+          items: { type: string }
+        duration_seconds: { type: integer }
+        aspect_ratio: { type: string, example: "9:16" }
+        resolution: { type: string, example: "1080p" }
+        provider_preference: { type: string }
+      required: [session_id, task_type, prompt]
+    GenerationJob:
+      type: object
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        job_type: { type: string, enum: [image, video] }
+        status: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        prompt_plan:
+          type: object
+          additionalProperties: true
+        video_request:
+          type: object
+          additionalProperties: true
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GenerationOutput'
+        error:
+          type: object
+          additionalProperties: true
+        cost_estimate:
+          type: object
+          additionalProperties: true
+        idempotency_key: { type: string }
+        trace_id: { type: string }
+        version_parent_id: { type: string }
+        raw_response_summary:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    GenerationOutput:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        thumbnail_url: { type: string }
+        format: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        duration_seconds: { type: number }
+        score:
+          type: object
+          additionalProperties: true
+        version_parent_id: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+    ImageHistoryResponse:
+      type: object
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImageHistoryItem'
+    ImageHistoryItem:
+      type: object
+      properties:
+        id: { type: string }
+        job_id: { type: string }
+        session_id: { type: string }
+        url: { type: string }
+        thumbnail_url: { type: string }
+        format: { type: string, enum: [png, jpeg, webp] }
+        width: { type: integer }
+        height: { type: integer }
+        provider: { type: string }
+        model: { type: string }
+        prompt: { type: string }
+        size: { type: string }
+        version_parent_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        source: { type: string, enum: [repository, manifest] }
+    ProviderCapabilities:
+      type: object
+      properties:
+        provider: { type: string }
+        configured: { type: boolean }
+        models:
+          type: array
+          items: { type: string }
+        operations:
+          type: array
+          items: { type: string }
+        limits:
+          type: object
+          additionalProperties: true
+        is_mock: { type: boolean }
+        reason: { type: string }

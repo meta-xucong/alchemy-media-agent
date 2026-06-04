@@ -1,0 +1,25 @@
+sequenceDiagram
+    participant User
+    participant UI
+    participant API
+    participant Asset as Asset Service
+    participant Agent as OpenAI Agents Runtime
+    participant Queue
+    participant Provider as Image Provider
+    participant Store as Object Storage
+    participant DB
+
+    User->>UI: 输入 prompt + 上传素材
+    UI->>API: POST message / upload complete
+    API->>Asset: 解析素材
+    Asset->>DB: 写入 MaterialBrief
+    API->>Agent: Runner.run(session, message, asset_ids)
+    Agent->>Agent: Intent -> PromptPlan -> ProviderDecision
+    Agent->>API: create_image_job tool
+    API->>Queue: enqueue image job
+    Queue->>Provider: generate/edit image
+    Provider-->>Queue: base64 / URL / bytes
+    Queue->>Store: 转存输出和缩略图
+    Queue->>DB: job ready + output records
+    API-->>UI: SSE job.status + output
+    UI-->>User: 展示画廊

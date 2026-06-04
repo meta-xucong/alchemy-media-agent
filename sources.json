@@ -1,0 +1,87 @@
+[
+  {
+    "name": "OpenAI Agents SDK - Agents",
+    "url": "https://openai.github.io/openai-agents-python/agents/",
+    "note": "Agent、Runner、tools、handoffs、guardrails、sessions 等核心概念。"
+  },
+  {
+    "name": "OpenAI Agents SDK - Running agents",
+    "url": "https://openai.github.io/openai-agents-python/running_agents/",
+    "note": "Runner 的 agent loop：模型输出、tool calls、handoff、final_output、streaming。"
+  },
+  {
+    "name": "OpenAI Agents SDK - Models",
+    "url": "https://openai.github.io/openai-agents-python/models/",
+    "note": "OpenAI 默认模型、非 OpenAI provider、ModelProvider、Agent.model、LiteLLM/Any-LLM 适配方式。"
+  },
+  {
+    "name": "OpenAI API - Image generation",
+    "url": "https://developers.openai.com/api/docs/guides/image-generation",
+    "note": "GPT Image、Image API 与 Responses API；Responses API 适合多轮图片编辑。"
+  },
+  {
+    "name": "OpenAI API - GPT Image 2 model",
+    "url": "https://developers.openai.com/api/docs/models/gpt-image-2",
+    "note": "gpt-image-2 的输入/输出模态与端点。"
+  },
+  {
+    "name": "OpenAI API - Image API reference",
+    "url": "https://developers.openai.com/api/reference/resources/images/methods/generate",
+    "note": "图片生成参数：n、quality、size、output_format、stream、background 等。"
+  },
+  {
+    "name": "OpenAI API - File inputs",
+    "url": "https://developers.openai.com/api/docs/guides/file-inputs",
+    "note": "Responses API 文件输入；PDF 与非 PDF 文档的处理差异。"
+  },
+  {
+    "name": "OpenAI Help - C2PA and SynthID",
+    "url": "https://help.openai.com/en/articles/8912793-c2pa-in-chatgpt-images",
+    "note": "OpenAI 生成图片包含 C2PA metadata 与 SynthID watermark。"
+  },
+  {
+    "name": "Claude Agent SDK overview",
+    "url": "https://code.claude.com/docs/en/agent-sdk/overview",
+    "note": "Claude Agent SDK、内置工具、Hooks、Subagents、MCP、Permissions、Sessions。"
+  },
+  {
+    "name": "Claude Code subagents",
+    "url": "https://code.claude.com/docs/en/sub-agents",
+    "note": "/agents 命令、Markdown + YAML frontmatter 的 subagent 定义方式。"
+  },
+  {
+    "name": "Claude Code hooks",
+    "url": "https://code.claude.com/docs/en/hooks",
+    "note": "生命周期钩子、SessionStart/UserPromptSubmit/PreToolUse/PostToolUse 等。"
+  },
+  {
+    "name": "Google Gemini image generation",
+    "url": "https://ai.google.dev/gemini-api/docs/image-generation",
+    "note": "Gemini 原生图片生成/编辑能力与 Nano Banana 模型。"
+  },
+  {
+    "name": "Google Gemini video generation with Veo",
+    "url": "https://ai.google.dev/gemini-api/docs/video",
+    "note": "Veo 3.1 文生视频/图生视频、分辨率、参考图、首尾帧等。"
+  },
+  {
+    "name": "BytePlus ModelArk Seedance 2.0 API reference",
+    "url": "https://docs.byteplus.com/en/docs/ModelArk/1520757",
+    "note": "Seedance 2.0 视频生成任务 API。"
+  },
+  {
+    "name": "BytePlus ModelArk API Key",
+    "url": "https://docs.byteplus.com/en/docs/ModelArk/1541594",
+    "note": "API Key 获取、环境变量配置、地域隔离和访问控制。"
+  },
+  {
+    "name": "LangGraph overview",
+    "url": "https://docs.langchain.com/oss/python/langgraph/overview",
+    "note": "持久化、人类审批、状态图；可作为可选工作流层。"
+  },
+  {
+    "name": "CrewAI introduction",
+    "url": "https://docs.crewai.com/en/introduction",
+    "note": "Flows 与 Crews；可作为可选团队式 agent 层。"
+  }
+]

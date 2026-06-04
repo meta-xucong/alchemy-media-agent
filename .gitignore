@@ -1,0 +1,32 @@
+# Local secrets and runtime configuration
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+
+# Runtime-generated media, history, and logs
+src_skeleton/.media_storage/
+src_skeleton/.server_*.log
+src_skeleton/.server_*.err.log
+*.log
+
+# Python caches and test artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+.coverage
+htmlcov/
+
+# JavaScript dependencies and build artifacts
+node_modules/
+dist/
+build/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

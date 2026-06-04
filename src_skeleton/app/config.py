@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import os
+import json
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
+
+def _codex_auth_value(name: str) -> str | None:
+    auth_path = Path(os.path.expandvars(os.getenv("CODEX_AUTH_FILE", r"%USERPROFILE%\.codex\auth.json")))
+    if not auth_path.exists():
+        return None
+    try:
+        value = json.loads(auth_path.read_text(encoding="utf-8")).get(name)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value or None
+
+
+def _claude_env_value(name: str) -> str | None:
+    settings_path = Path(os.path.expandvars(os.getenv("CLAUDE_SETTINGS_FILE", r"%USERPROFILE%\.claude\settings.json")))
+    if not settings_path.exists():
+        return None
+    try:
+        env = json.loads(settings_path.read_text(encoding="utf-8")).get("env", {})
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = env.get(name)
+    return value or None
+
+
+def _normalize_openai_base_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    stripped = value.rstrip("/")
+    if stripped.endswith("/v1"):
+        return stripped
+    # OpenAI-compatible Python SDK endpoints are conventionally rooted at /v1.
+    if "://" in stripped and "/" not in stripped.split("://", 1)[1]:
+        return f"{stripped}/v1"
+    return stripped
+
+
+class Settings(BaseModel):
+    media_agent_mode: str = os.getenv("MEDIA_AGENT_MODE", "live")
+    mock_image_provider_enabled: bool = os.getenv("MOCK_IMAGE_PROVIDER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
+    openai_base_url: str | None = _normalize_openai_base_url(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
+    anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+    anthropic_auth_token: str | None = os.getenv("ANTHROPIC_AUTH_TOKEN") or _claude_env_value("ANTHROPIC_AUTH_TOKEN")
+    anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or _claude_env_value("ANTHROPIC_BASE_URL")
+    gemini_image_api_key: str | None = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    gemini_image_base_url: str | None = os.getenv("GEMINI_IMAGE_BASE_URL")
+    google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
+    byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
+    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
+    default_llm_model: str = os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5")
+    backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "anthropic")
+    backup_llm_model: str = os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding")
+    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5"))
+    kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding"))
+    llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
+    default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")
+    openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2"))
+    gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+    image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
+    default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")
+    orchestration_mode: str = os.getenv("ORCHESTRATION_MODE", "runtime_first")
+    persist_runtime_settings: bool = os.getenv("MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS", "true").lower() in {"1", "true", "yes", "on"}
+    runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
+    media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
+
+    @property
+    def live_mode(self) -> bool:
+        return self.media_agent_mode.lower() == "live"
+
+
+settings = Settings()
+
+
+def update_runtime_settings(
+    *,
+    default_image_provider: str | None = None,
+    default_image_model: str | None = None,
+    openai_image_model: str | None = None,
+    gemini_image_model: str | None = None,
+    default_llm_provider: str | None = None,
+    default_llm_model: str | None = None,
+    backup_llm_model: str | None = None,
+    openai_llm_model: str | None = None,
+    kimi_llm_model: str | None = None,
+    image_work_intensity: str | None = None,
+    openai_api_key: str | None = None,
+    openai_base_url: str | None = None,
+    anthropic_api_key: str | None = None,
+    anthropic_base_url: str | None = None,
+    gemini_image_api_key: str | None = None,
+    gemini_image_base_url: str | None = None,
+) -> Settings:
+    if default_image_provider:
+        settings.default_image_provider = default_image_provider
+    if openai_image_model:
+        settings.openai_image_model = openai_image_model.strip()
+    if gemini_image_model:
+        settings.gemini_image_model = gemini_image_model.strip()
+    if default_image_model:
+        settings.default_image_model = default_image_model.strip()
+        if settings.default_image_provider == "gemini_image":
+            settings.gemini_image_model = default_image_model.strip()
+        else:
+            settings.openai_image_model = default_image_model.strip()
+    if default_llm_provider:
+        settings.default_llm_provider = default_llm_provider.strip()
+    if openai_llm_model:
+        settings.openai_llm_model = openai_llm_model.strip()
+    if kimi_llm_model:
+        settings.kimi_llm_model = kimi_llm_model.strip()
+    if default_llm_model:
+        settings.default_llm_model = default_llm_model.strip()
+        if settings.default_llm_provider in {"anthropic", "kimi"}:
+            settings.kimi_llm_model = default_llm_model.strip()
+        else:
+            settings.openai_llm_model = default_llm_model.strip()
+    if backup_llm_model:
+        settings.backup_llm_model = backup_llm_model.strip()
+    if settings.default_llm_provider in {"anthropic", "kimi"}:
+        settings.default_llm_provider = "anthropic"
+        settings.default_llm_model = settings.kimi_llm_model
+        settings.backup_llm_provider = "openai"
+        settings.backup_llm_model = settings.openai_llm_model
+    else:
+        settings.default_llm_provider = "openai"
+        settings.default_llm_model = settings.openai_llm_model
+        settings.backup_llm_provider = "anthropic"
+        settings.backup_llm_model = settings.kimi_llm_model
+    if settings.default_image_provider == "gemini_image":
+        settings.default_image_model = settings.gemini_image_model
+    else:
+        settings.default_image_provider = "openai_gpt_image"
+        settings.default_image_model = settings.openai_image_model
+    if image_work_intensity:
+        settings.image_work_intensity = image_work_intensity
+    if openai_api_key:
+        settings.openai_api_key = openai_api_key.strip()
+    if openai_base_url is not None:
+        settings.openai_base_url = _normalize_openai_base_url(openai_base_url.strip()) if openai_base_url.strip() else None
+    if anthropic_api_key:
+        settings.anthropic_auth_token = anthropic_api_key.strip()
+    if anthropic_base_url is not None:
+        settings.anthropic_base_url = anthropic_base_url.strip() or None
+    if gemini_image_api_key:
+        settings.gemini_image_api_key = gemini_image_api_key.strip()
+    if gemini_image_base_url is not None:
+        settings.gemini_image_base_url = gemini_image_base_url.strip() or None
+    return settings
+
+
+def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
+    if not settings.persist_runtime_settings:
+        return
+    path = Path(env_path or settings.runtime_env_path)
+    values = {
+        "DEFAULT_IMAGE_PROVIDER": settings.default_image_provider,
+        "DEFAULT_IMAGE_MODEL": settings.default_image_model,
+        "OPENAI_IMAGE_MODEL": settings.openai_image_model,
+        "GEMINI_IMAGE_MODEL": settings.gemini_image_model,
+        "GEMINI_IMAGE_BASE_URL": settings.gemini_image_base_url or "",
+        "DEFAULT_LLM_PROVIDER": settings.default_llm_provider,
+        "DEFAULT_LLM_MODEL": settings.default_llm_model,
+        "BACKUP_LLM_PROVIDER": settings.backup_llm_provider,
+        "BACKUP_LLM_MODEL": settings.backup_llm_model,
+        "OPENAI_LLM_MODEL": settings.openai_llm_model,
+        "KIMI_LLM_MODEL": settings.kimi_llm_model,
+        "IMAGE_WORK_INTENSITY": settings.image_work_intensity,
+        "OPENAI_BASE_URL": settings.openai_base_url or "",
+        "ANTHROPIC_BASE_URL": settings.anthropic_base_url or "",
+    }
+    _write_env_values(path, values)
+
+
+def _write_env_values(path: Path, values: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    remaining = dict(values)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    output: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            output.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            output.append(f"{key}={_env_value(remaining.pop(key))}")
+        else:
+            output.append(line)
+    output.extend(f"{key}={_env_value(value)}" for key, value in remaining.items())
+    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+
+
+def _env_value(value: str | None) -> str:
+    return (value or "").replace("\r", "").replace("\n", "").strip()

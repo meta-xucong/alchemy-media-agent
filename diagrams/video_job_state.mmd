@@ -1,0 +1,17 @@
+stateDiagram-v2
+    [*] --> created
+    created --> queued
+    queued --> submitted
+    queued --> canceled
+    submitted --> processing
+    submitted --> submit_failed
+    processing --> downloading
+    processing --> provider_failed
+    downloading --> transcoding
+    downloading --> expired
+    transcoding --> ready
+    transcoding --> failed
+    ready --> [*]
+    canceled --> [*]
+    failed --> [*]
+    expired --> [*]

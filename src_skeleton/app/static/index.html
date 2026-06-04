@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alchemy Media Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260604-synced-carousel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="lux-header">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <p class="eyebrow">Custom Media Agent</p>
+            <h1>Alchemy</h1>
+          </div>
+        </div>
+
+        <nav class="module-tabs" aria-label="生成模块" role="tablist">
+          <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图</button>
+          <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频</button>
+        </nav>
+
+        <div class="header-status">
+          <span id="providerState" class="state-pill">检查中</span>
+          <span id="sessionLabel" class="session-code">Session</span>
+        </div>
+      </header>
+
+      <div id="globalToast" class="global-toast" role="status" aria-live="polite" hidden></div>
+
+      <main class="homepage">
+        <section class="hero-band">
+          <div class="hero-copy">
+            <p class="eyebrow">Maison Alchemy</p>
+            <h2>Image Atelier</h2>
+            <p class="hero-line">为商品、品牌和社媒内容创建高质感视觉资产。</p>
+            <div class="hero-actions">
+              <button id="newSessionBtn" class="button secondary" type="button">新会话</button>
+              <button id="smokeBtn" class="button ghost" type="button">咖啡海报示例</button>
+            </div>
+          </div>
+          <div class="hero-gallery-lane">
+            <div class="hero-card history-showcase">
+              <div class="hero-card-head">
+                <span>生成历史</span>
+                <strong>Archive</strong>
+              </div>
+              <div id="heroHistoryCarousel" class="case-carousel history-carousel empty-hero-history" aria-label="历史生成作品轮播">
+                <article class="case-slide"></article>
+              </div>
+            </div>
+
+            <div class="hero-card case-showcase">
+              <div class="hero-card-head">
+                <span>案例参考</span>
+                <a class="case-source" href="https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts" target="_blank" rel="noopener noreferrer">EvoLinkAI</a>
+              </div>
+              <div class="case-carousel" aria-label="GPT Image 2 案例轮播">
+                <article class="case-slide">
+                  <img src="/static/showcase/city-poster.jpg" alt="城市海报案例" />
+                  <div>
+                    <span>城市海报</span>
+                    <strong>City Campaign</strong>
+                  </div>
+                </article>
+                <article class="case-slide">
+                  <img src="/static/showcase/luxury-product.jpg" alt="香水电商广告案例" />
+                  <div>
+                    <span>电商主图</span>
+                    <strong>Luxury Product</strong>
+                  </div>
+                </article>
+                <article class="case-slide">
+                  <img src="/static/showcase/summer-ad.jpg" alt="饮料广告海报案例" />
+                  <div>
+                    <span>广告创意</span>
+                    <strong>Summer Launch</strong>
+                  </div>
+                </article>
+                <article class="case-slide">
+                  <img src="/static/showcase/interface-kit.jpg" alt="UI 设计生成案例" />
+                  <div>
+                    <span>界面设计</span>
+                    <strong>Interface Kit</strong>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="imageTab" class="module-panel active" data-panel="image" role="tabpanel">
+          <div class="module-stack">
+            <section class="studio-panel flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">01 / Workbench</p>
+                  <h3>工作台</h3>
+                </div>
+                <span id="modeBadge" class="state-pill">OpenAI</span>
+              </div>
+
+              <textarea id="promptInput" rows="6" placeholder="生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的"></textarea>
+              <div id="noticeBar" class="notice-bar" role="status" aria-live="polite">正在检查图片模型配置。</div>
+
+              <div class="composer-actions">
+                <button id="generateBtn" class="button primary" type="button">生成图片</button>
+                <span class="micro-copy">多张图片会逐张生成，完成后自动展示。</span>
+              </div>
+
+              <div class="status-strip" aria-live="polite">
+                <div>
+                  <span class="metric-label">状态</span>
+                  <strong id="jobStatus">待命</strong>
+                </div>
+                <div>
+                  <span class="metric-label">输出</span>
+                  <strong id="outputCount">0</strong>
+                </div>
+                <div>
+                  <span class="metric-label">Trace</span>
+                  <strong id="traceId">-</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel flow-section tuning-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">02 / Materials & Controls</p>
+                  <h3>调参、素材</h3>
+                </div>
+              </div>
+
+              <div class="tuning-grid">
+                <div class="tuning-card params-card">
+                  <h4>参数</h4>
+                  <label class="control-block">
+                    <span>数量 <strong id="countValue">1</strong></span>
+                    <input id="countInput" type="range" min="1" max="10" step="1" value="1" />
+                  </label>
+
+                  <div class="control-block">
+                    <span>画幅</span>
+                    <div class="segmented" role="radiogroup" aria-label="画幅">
+                      <button class="segment active" data-size="1024x1536" type="button">竖版</button>
+                      <button class="segment" data-size="1024x1024" type="button">方图</button>
+                      <button class="segment" data-size="1536x1024" type="button">横版</button>
+                    </div>
+                  </div>
+
+                  <div class="control-block">
+                    <span>格式</span>
+                    <div class="segmented" role="radiogroup" aria-label="格式">
+                      <button class="format segment active" data-format="png" type="button">PNG</button>
+                      <button class="format segment" data-format="jpeg" type="button">JPEG</button>
+                      <button class="format segment" data-format="webp" type="button">WebP</button>
+                    </div>
+                  </div>
+
+                  <div class="control-block">
+                    <span>图片质量 <strong id="qualityValue">高</strong></span>
+                    <div class="segmented quality" role="radiogroup" aria-label="图片质量">
+                      <button class="segment" data-quality="auto" type="button">自动</button>
+                      <button class="segment" data-quality="low" type="button">低</button>
+                      <button class="segment" data-quality="medium" type="button">中</button>
+                      <button class="segment active" data-quality="high" type="button">高</button>
+                    </div>
+                  </div>
+
+                  <div class="control-block">
+                    <span>工作强度 <strong id="intensityValue">均衡</strong></span>
+                    <div class="segmented intensity" role="radiogroup" aria-label="工作强度">
+                      <button class="segment" data-intensity="swift" type="button">快速</button>
+                      <button class="segment active" data-intensity="balanced" type="button">均衡</button>
+                      <button class="segment" data-intensity="studio" type="button">精修</button>
+                      <button class="segment" data-intensity="atelier" type="button">臻选</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="tuning-card material-card">
+                  <div class="mini-head">
+                    <h4>素材</h4>
+                    <span id="assetState" class="state-pill">空</span>
+                  </div>
+                  <div id="assetPreview" class="asset-preview empty-asset-preview">
+                    <span id="assetPreviewLabel">未选择素材</span>
+                  </div>
+                  <label class="file-drop" for="assetInput">
+                    <input id="assetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.csv" />
+                    <span class="file-title">选择参考素材</span>
+                    <span id="assetName" class="file-meta">图片、PDF、文档或表格</span>
+                  </label>
+                  <label class="check-row">
+                    <input id="rightsCheck" type="checkbox" checked />
+                    <span>已确认素材授权</span>
+                  </label>
+                </div>
+              </div>
+            </section>
+
+            <section class="gallery-wrap flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">03 / Outputs</p>
+                  <h3>生成的结果板块</h3>
+                </div>
+                <span id="galleryHint" class="muted">Generated output</span>
+              </div>
+              <div id="gallery" class="gallery empty-gallery" aria-live="polite"></div>
+            </section>
+
+            <section class="panel flow-section revision-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">04 / Revision</p>
+                  <h3>继续修改</h3>
+                </div>
+                <span id="selectedOutputLabel" class="state-pill">未选</span>
+              </div>
+              <div class="revision-grid">
+                <textarea id="revisionInput" rows="4" placeholder="选择一张结果图后，描述要保留和要改变的部分。"></textarea>
+                <button id="reviseBtn" class="button secondary" type="button" disabled>生成修改版本</button>
+              </div>
+            </section>
+
+            <section class="panel flow-section history-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">05 / History</p>
+                  <h3>历史图片</h3>
+                </div>
+                <div class="history-actions">
+                  <span id="historyCount" class="state-pill">0</span>
+                  <button id="refreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                </div>
+              </div>
+              <div id="historyGallery" class="history-gallery empty-history" aria-live="polite"></div>
+            </section>
+
+            <section class="panel flow-section provider-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">06 / Model & API</p>
+                  <h3>模型与 API</h3>
+                </div>
+                <span class="state-pill auto-save-pill">改动即时生效</span>
+              </div>
+
+              <div class="model-workbench-grid">
+                <section class="model-switch-card">
+                  <div class="mini-head">
+                    <div>
+                      <h4>生图模型</h4>
+                      <p class="model-help">点击选择优先用于出图的模型，另一个会自动兜底。</p>
+                    </div>
+                    <span id="imageActiveLabel" class="state-pill">GPT</span>
+                  </div>
+                  <div class="model-options" role="radiogroup" aria-label="生图模型">
+                    <button class="model-option active" data-image-provider="openai_gpt_image" type="button">
+                      <span>GPT</span>
+                      <strong>GPT Image</strong>
+                      <small id="openaiImageState">检查中</small>
+                    </button>
+                    <button class="model-option" data-image-provider="gemini_image" type="button">
+                      <span>Gemini</span>
+                      <strong>Gemini Image</strong>
+                      <small id="geminiImageState">待接入</small>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="model-switch-card">
+                  <div class="mini-head">
+                    <div>
+                      <h4>思考模型</h4>
+                      <p class="model-help">用于提示词规划、工作强度和生成前审美判断。</p>
+                    </div>
+                    <span id="thinkingActiveLabel" class="state-pill">GPT</span>
+                  </div>
+                  <div class="model-options" role="radiogroup" aria-label="思考模型">
+                    <button class="model-option active" data-llm-provider="openai" type="button">
+                      <span>GPT</span>
+                      <strong>GPT 5.5</strong>
+                      <small id="openaiThinkingState">检查中</small>
+                    </button>
+                    <button class="model-option" data-llm-provider="anthropic" type="button">
+                      <span>Kimi</span>
+                      <strong>Kimi</strong>
+                      <small id="kimiThinkingState">检查中</small>
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              <details class="advanced-api-panel">
+                <summary>
+                  <span>高级 API 配置</span>
+                  <small>填新的 Key、Base URL 或模型 ID 后自动应用</small>
+                </summary>
+                <div class="advanced-api-grid">
+                  <section class="api-subpanel">
+                    <h4>生图模型 API</h4>
+                    <label class="field">
+                      <span>GPT API Key</span>
+                      <input id="openaiApiKeyInput" type="password" autocomplete="off" placeholder="粘贴后自动应用，仅当前运行时使用" />
+                    </label>
+                    <label class="field">
+                      <span>GPT Base URL</span>
+                      <input id="openaiBaseUrlInput" type="url" placeholder="https://api.openai.com/v1" />
+                    </label>
+                    <label class="field">
+                      <span>GPT 生图模型</span>
+                      <input id="openaiImageModelInput" type="text" list="imageModelList" placeholder="gpt-image-2" />
+                      <datalist id="imageModelList">
+                        <option value="gpt-image-2"></option>
+                      </datalist>
+                    </label>
+                    <label class="field">
+                      <span>Gemini 生图 API Key</span>
+                      <input id="geminiImageApiKeyInput" type="password" autocomplete="off" placeholder="预留；接入 Gemini 生图时使用" />
+                    </label>
+                    <label class="field">
+                      <span>Gemini 生图 Base URL</span>
+                      <input id="geminiImageBaseUrlInput" type="url" placeholder="预留；默认可留空" />
+                    </label>
+                    <label class="field">
+                      <span>Gemini 生图模型</span>
+                      <input id="geminiImageModelInput" type="text" list="geminiImageModelList" placeholder="gemini-3.1-flash-image" />
+                      <datalist id="geminiImageModelList">
+                        <option value="gemini-3.1-flash-image"></option>
+                        <option value="gemini-3-pro-image"></option>
+                      </datalist>
+                    </label>
+                  </section>
+
+                  <section class="api-subpanel">
+                    <h4>思考模型 API</h4>
+                    <label class="field">
+                      <span>GPT 思考模型</span>
+                      <input id="openaiLlmModelInput" type="text" list="llmModelList" placeholder="gpt-5.5" />
+                      <datalist id="llmModelList">
+                        <option value="gpt-5.5"></option>
+                        <option value="gpt-5.5-test"></option>
+                      </datalist>
+                    </label>
+                    <label class="field">
+                      <span>Kimi 思考模型</span>
+                      <input id="kimiLlmModelInput" type="text" list="kimiLlmModelList" placeholder="kimi-for-coding" />
+                      <datalist id="kimiLlmModelList">
+                        <option value="kimi-for-coding"></option>
+                        <option value="kimi-k2.6"></option>
+                      </datalist>
+                    </label>
+                    <label class="field">
+                      <span>Kimi 思考 API Key</span>
+                      <input id="anthropicApiKeyInput" type="password" autocomplete="off" placeholder="粘贴后自动应用" />
+                    </label>
+                    <label class="field">
+                      <span>Kimi 思考 Base URL</span>
+                      <input id="anthropicBaseUrlInput" type="url" placeholder="https://aiself.vip" />
+                    </label>
+                    <p class="model-help">Gemini 生图入口已预留，当前后端只保留 provider 框架；Kimi 仍只用于思考模型。</p>
+                    <div id="providerList" class="provider-list compact-provider-list"></div>
+                  </section>
+                </div>
+              </details>
+            </section>
+
+            <section class="panel flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">07 / Events</p>
+                  <h3>事件</h3>
+                </div>
+                <span id="eventCount" class="state-pill">0</span>
+              </div>
+              <div id="eventList" class="event-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="videoTab" class="module-panel" data-panel="video" role="tabpanel" hidden>
+          <div class="video-frame">
+            <div>
+              <p class="eyebrow">Video Generation</p>
+              <h3>生视频工作台</h3>
+              <p class="video-state">Seedance / Veo 接入未启用，当前只保留模块框架。</p>
+            </div>
+
+            <div class="video-grid">
+              <textarea id="videoPromptInput" rows="6" placeholder="视频生成 Prompt"></textarea>
+              <div class="video-params">
+                <label class="field">
+                  <span>时长</span>
+                  <input type="text" value="6 秒" disabled />
+                </label>
+                <label class="field">
+                  <span>画幅</span>
+                  <input type="text" value="9:16" disabled />
+                </label>
+                <label class="field">
+                  <span>分辨率</span>
+                  <input type="text" value="1080p" disabled />
+                </label>
+              </div>
+            </div>
+
+            <div class="video-footer">
+              <div id="videoProviderList" class="provider-list"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <section id="sampleGuideModal" class="sample-modal" role="dialog" aria-modal="true" aria-labelledby="sampleGuideTitle" hidden>
+      <div class="sample-dialog">
+        <button id="closeSampleGuideBtn" class="modal-close" type="button" aria-label="关闭示例教学">×</button>
+        <div class="sample-hero">
+          <p class="eyebrow">Guided Example</p>
+          <h2 id="sampleGuideTitle">Coffee Poster Atelier</h2>
+          <p>用一组完整参数生成手机竖屏咖啡产品海报。</p>
+        </div>
+
+        <div class="sample-grid">
+          <div class="sample-card">
+            <span class="sample-step">01</span>
+            <h3>目标</h3>
+            <p>4 张日系清爽风格产品海报，竖屏比例，适合手机端展示。</p>
+          </div>
+          <div class="sample-card">
+            <span class="sample-step">02</span>
+            <h3>参数</h3>
+            <p>数量 4，画幅竖版，PNG，图片质量高，工作强度均衡。</p>
+          </div>
+          <div class="sample-card">
+            <span class="sample-step">03</span>
+            <h3>提示词</h3>
+            <p id="samplePromptPreview">生成 4 张日系清爽风格的咖啡产品海报，适配手机竖屏的</p>
+          </div>
+        </div>
+
+        <div class="sample-actions">
+          <button id="applySampleBtn" class="button secondary" type="button">载入示例</button>
+          <button id="applyAndGenerateSampleBtn" class="button primary" type="button">载入并生成</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
+      <div class="lightbox-backdrop" data-close-lightbox></div>
+      <div class="lightbox-panel">
+        <div class="lightbox-head">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h3 id="lightboxTitle">图片预览</h3>
+          </div>
+          <button id="closeImageLightboxBtn" class="button compact ghost" type="button">关闭</button>
+        </div>
+        <div class="lightbox-stage">
+          <img id="lightboxImage" alt="放大预览图" />
+        </div>
+        <div class="lightbox-foot">
+          <button id="lightboxPromptBtn" class="prompt-trigger" type="button" disabled>
+            <span>提示词</span>
+            <small id="lightboxMeta">-</small>
+          </button>
+          <a id="lightboxDownload" class="download-link" href="#">下载</a>
+        </div>
+        <div id="lightboxPromptPanel" class="lightbox-prompt-panel" hidden>
+          <div class="prompt-card">
+            <div class="prompt-card-head">
+              <span>完整提示词</span>
+              <button id="closePromptPanelBtn" class="delete-link" type="button">关闭</button>
+            </div>
+            <pre id="lightboxPromptText"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <template id="outputTemplate">
+      <article class="output-card">
+        <button class="output-preview" type="button"></button>
+        <div class="output-meta">
+          <span class="output-id"></span>
+          <a class="download-link" href="#">下载</a>
+        </div>
+      </article>
+    </template>
+
+    <script src="/static/app.js?v=20260604-history-intensity" defer></script>
+  </body>
+</html>

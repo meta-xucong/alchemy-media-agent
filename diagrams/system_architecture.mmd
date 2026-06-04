@@ -1,0 +1,27 @@
+flowchart TD
+    U[User / Web Chat UI] --> API[FastAPI Backend / API Gateway]
+    API --> AUTH[Auth + Tenant + Rate Limit]
+    AUTH --> ORCH{Orchestration Mode}
+    ORCH -->|runtime_first| OAI[OpenAI Agents SDK Runtime]
+    ORCH -->|claude_first| CLAUDE[Claude Code Orchestrator / Claude Agent SDK]
+    CLAUDE --> OAI
+    OAI --> MANAGER[RuntimeManagerAgent]
+    MANAGER --> MAT[MaterialAnalyzerAgent]
+    MANAGER --> PROMPT[PromptArchitectAgent]
+    PROMPT --> SELECT[ProviderSelectorAgent]
+    SELECT --> IMG[ImageGenerationAgent]
+    SELECT --> VID[VideoPlannerAgent]
+    IMG --> GENSVC[Generation Service]
+    VID --> GENSVC
+    GENSVC --> REG[Provider Registry]
+    REG --> OPENAI[OpenAI GPT Image 2]
+    REG --> GEMINI[Gemini Image]
+    REG --> SEEDANCE[Seedance / Video]
+    REG --> VEO[Veo / Video]
+    API --> ASSET[Asset Service]
+    ASSET --> OBJ[(Object Storage)]
+    GENSVC --> OBJ
+    API --> DB[(PostgreSQL)]
+    GENSVC --> Q[(Redis Queue)]
+    OAI --> TRACE[Tracing / Observability]
+    CLAUDE --> HOOKS[Claude Hooks / MCP / Subagents]
