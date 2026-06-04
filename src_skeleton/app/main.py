@@ -31,6 +31,7 @@ from app.storage import media_store
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -114,7 +115,7 @@ def list_image_history(
                     job_id=job.id,
                     session_id=job.session_id,
                     url=output.url,
-                    thumbnail_url=output.thumbnail_url,
+                    thumbnail_url=media_store.thumbnail_url(output.id),
                     format=output.format,
                     width=output.width,
                     height=output.height,
@@ -146,13 +147,15 @@ def list_image_history(
 @app.delete("/v1/image/history/{output_id}")
 def delete_image_history_item(output_id: str):
     output = repository.delete_output(output_id)
+    thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     deleted_file = media_store.delete_output_file(
         output_id=output_id,
         job_id=output.job_id if output else None,
         output_format=output.format if output else None,
     )
+    deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
     removed_records = media_store.delete_history_record(output_id)
-    if not output and not deleted_file and removed_records == 0:
+    if not output and not deleted_file and not deleted_thumbnail and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     if output:
         repository.append_event(
@@ -164,6 +167,7 @@ def delete_image_history_item(output_id: str):
         "ok": True,
         "output_id": output_id,
         "deleted_file": deleted_file,
+        "deleted_thumbnail": deleted_thumbnail,
         "removed_history_records": removed_records,
         "removed_repository_output": bool(output),
     }
@@ -248,20 +252,35 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest):
 
 @app.get("/v1/outputs/{output_id}/download")
 def download_output(output_id: str):
+    path, _ = _resolve_output_file(output_id)
+    return FileResponse(path, headers=IMMUTABLE_IMAGE_HEADERS)
+
+
+@app.get("/v1/outputs/{output_id}/thumbnail")
+def thumbnail_output(output_id: str):
+    path, _ = _resolve_output_file(output_id)
+    thumbnail_path = media_store.ensure_thumbnail(output_id=output_id, source_path=path)
+    if thumbnail_path == media_store.thumbnail_path(output_id):
+        return FileResponse(thumbnail_path, media_type="image/jpeg", headers=IMMUTABLE_IMAGE_HEADERS)
+    return FileResponse(thumbnail_path, headers=IMMUTABLE_IMAGE_HEADERS)
+
+
+def _resolve_output_file(output_id: str) -> tuple[Path, str]:
     output = repository.get_output(output_id)
     if not output:
         fallback = media_store.find_output_file(output_id)
         if not fallback:
             raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
-        path, _, _ = fallback
-        return FileResponse(path)
+        path, output_format, _ = fallback
+        return path, output_format
     path = media_store.output_path(job_id=output.job_id, output_id=output.id, output_format=output.format)
     if not path.exists():
         fallback = media_store.find_output_file(output_id)
         if not fallback:
             raise HTTPException(status_code=404, detail={"code": "output_file_not_found", "message": "Output file not found."})
-        path, _, _ = fallback
-    return FileResponse(path)
+        path, output_format, _ = fallback
+        return path, output_format
+    return path, output.format
 
 
 def _job_prompt(job) -> str | None:

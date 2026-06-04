@@ -845,6 +845,8 @@ function renderHistory(items) {
     const image = document.createElement("img");
     image.className = "output-image";
     image.alt = `历史图片 ${index + 1}`;
+    image.loading = "lazy";
+    image.decoding = "async";
     image.src = item.thumbnail_url || item.url;
     preview.appendChild(image);
 
@@ -910,6 +912,8 @@ function renderHeroHistory(items) {
     const image = document.createElement("img");
     image.src = item.thumbnail_url || item.url;
     image.alt = item.prompt || `历史生成作品 ${index + 1}`;
+    image.loading = index === 0 ? "eager" : "lazy";
+    image.decoding = "async";
 
     slide.append(image);
     slide.addEventListener("click", () => {

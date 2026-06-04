@@ -222,7 +222,7 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict]) -> list[Gen
                 id=output_id,
                 job_id=job.id,
                 url=url,
-                thumbnail_url=url,
+                thumbnail_url=media_store.thumbnail_url(output_id),
                 format=output_format,
                 width=width,
                 height=height,
