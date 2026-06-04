@@ -1,0 +1,113 @@
+name: Deploy VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_dir:
+        description: "Remote deploy directory"
+        default: "/opt/alchemy-media-agent"
+        required: true
+      app_port:
+        description: "Host port"
+        default: "8017"
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Sync source to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          DEPLOY_DIR: ${{ inputs.deploy_dir }}
+        run: |
+          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "mkdir -p '$DEPLOY_DIR'"
+          tar \
+            --exclude='.git' \
+            --exclude='src_skeleton/.env' \
+            --exclude='src_skeleton/.media_storage' \
+            --exclude='**/__pycache__' \
+            -czf - . | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "tar -xzf - -C '$DEPLOY_DIR'"
+
+      - name: Write runtime env
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          DEPLOY_DIR: ${{ inputs.deploy_dir }}
+          APP_PORT: ${{ inputs.app_port }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || 'https://aiself.vip/v1' }}
+          ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://aiself.vip' }}
+          DEFAULT_IMAGE_PROVIDER: ${{ vars.DEFAULT_IMAGE_PROVIDER || 'openai_gpt_image' }}
+          OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL || 'gpt-image-2' }}
+          DEFAULT_LLM_PROVIDER: ${{ vars.DEFAULT_LLM_PROVIDER || 'anthropic' }}
+          KIMI_LLM_MODEL: ${{ vars.KIMI_LLM_MODEL || 'kimi-for-coding' }}
+          IMAGE_WORK_INTENSITY: ${{ vars.IMAGE_WORK_INTENSITY || 'atelier' }}
+        run: |
+          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
+          umask 077
+          cat > /tmp/alchemy-media-agent.env <<EOF
+          MEDIA_AGENT_MODE=live
+          MOCK_IMAGE_PROVIDER_ENABLED=false
+          ORCHESTRATION_MODE=runtime_first
+
+          DEFAULT_IMAGE_PROVIDER=$DEFAULT_IMAGE_PROVIDER
+          DEFAULT_IMAGE_MODEL=$OPENAI_IMAGE_MODEL
+          OPENAI_IMAGE_MODEL=$OPENAI_IMAGE_MODEL
+          GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+          GEMINI_IMAGE_BASE_URL=
+
+          DEFAULT_LLM_PROVIDER=$DEFAULT_LLM_PROVIDER
+          DEFAULT_LLM_MODEL=$KIMI_LLM_MODEL
+          BACKUP_LLM_PROVIDER=openai
+          BACKUP_LLM_MODEL=gpt-5.5
+          OPENAI_LLM_MODEL=gpt-5.5
+          KIMI_LLM_MODEL=$KIMI_LLM_MODEL
+          LLM_PROMPT_PLANNING_ENABLED=true
+          IMAGE_WORK_INTENSITY=$IMAGE_WORK_INTENSITY
+
+          DEFAULT_VIDEO_PROVIDER=seedance
+
+          OPENAI_API_KEY=$OPENAI_API_KEY
+          OPENAI_BASE_URL=$OPENAI_BASE_URL
+          ANTHROPIC_API_KEY=
+          ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN
+          ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL
+          GEMINI_IMAGE_API_KEY=
+          BYTEPLUS_API_KEY=
+
+          MEDIA_STORAGE_ROOT=.media_storage
+          EOF
+          sed -i 's/^          //' /tmp/alchemy-media-agent.env
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" /tmp/alchemy-media-agent.env "$REMOTE:$DEPLOY_DIR/src_skeleton/.env"
+          rm -f /tmp/alchemy-media-agent.env
+
+      - name: Start stack
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          DEPLOY_DIR: ${{ inputs.deploy_dir }}
+          APP_PORT: ${{ inputs.app_port }}
+        run: |
+          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "cd '$DEPLOY_DIR' && APP_PORT='$APP_PORT' ./scripts/deploy_vps.sh --local --skip-env"

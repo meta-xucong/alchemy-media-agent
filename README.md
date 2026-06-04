@@ -31,6 +31,8 @@
 - `src_skeleton/`：最小代码骨架，方便研发快速起项目。
 - `claude_code/.claude/agents/`：Claude Code subagent 示例定义。
 - `claude_code/.claude/hooks/`：Claude Code hook 示例。
+- `scripts/deploy_vps.sh`：VPS Docker 一键部署脚本。
+- `.github/workflows/deploy-vps.yml`：GitHub Actions 远程部署模板。
 
 ## 重要假设
 
@@ -46,3 +48,12 @@
 - 前端先读 01、07、11。
 - 模型/提示词工程先读 05、06、07、14。
 - 安全/法务/运维先读 12、13、16。
+
+## VPS 快速部署
+
+仓库已内置 Docker Compose 和 GitHub Actions 部署流程。把 `OPENAI_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`VPS_HOST`、`VPS_USER`、`VPS_SSH_KEY` 写入 GitHub Secrets 后，在 GitHub 页面执行 `Actions -> Deploy VPS -> Run workflow` 即可部署。
+
+默认部署目录：`/opt/alchemy-media-agent`  
+默认访问端口：`8017`
+
+详见 `docs/21_密钥与部署配置.md`。

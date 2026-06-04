@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.media_storage/
+.server_*.log
+.server_*.err.log
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/

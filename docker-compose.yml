@@ -1,0 +1,16 @@
+services:
+  alchemy-media-agent:
+    build:
+      context: ./src_skeleton
+    image: alchemy-media-agent:latest
+    container_name: alchemy-media-agent
+    env_file:
+      - ./src_skeleton/.env
+    ports:
+      - "${APP_PORT:-8017}:8017"
+    volumes:
+      - alchemy_media_storage:/app/.media_storage
+    restart: unless-stopped
+
+volumes:
+  alchemy_media_storage:
