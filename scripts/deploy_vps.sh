@@ -75,11 +75,11 @@ ensure_command() {
 }
 
 install_docker_if_needed() {
-  if ensure_command docker && docker compose version >/dev/null 2>&1; then
+  if ensure_command docker; then
     return
   fi
   if [[ "${INSTALL_DOCKER}" != "1" ]]; then
-    echo "Docker with Compose plugin is required." >&2
+    echo "Docker is required." >&2
     exit 1
   fi
   if ! ensure_command apt-get; then
@@ -87,7 +87,11 @@ install_docker_if_needed() {
     exit 1
   fi
   run_as_root apt-get update
-  run_as_root apt-get install -y ca-certificates curl git docker.io docker-compose-plugin
+  local packages=(ca-certificates curl git docker.io)
+  if apt-cache show docker-compose-plugin >/dev/null 2>&1; then
+    packages+=(docker-compose-plugin)
+  fi
+  run_as_root apt-get install -y "${packages[@]}"
   run_as_root systemctl enable --now docker || true
 }
 
@@ -186,7 +190,21 @@ EOF
 
 start_stack() {
   cd "${DEPLOY_DIR}"
-  APP_PORT="${APP_PORT}" docker compose up -d --build
+  if docker compose version >/dev/null 2>&1; then
+    APP_PORT="${APP_PORT}" docker compose up -d --build
+    return
+  fi
+
+  docker build -t alchemy-media-agent:latest ./src_skeleton
+  docker rm -f alchemy-media-agent >/dev/null 2>&1 || true
+  docker run -d \
+    --name alchemy-media-agent \
+    --restart unless-stopped \
+    --env-file ./src_skeleton/.env \
+    -p "127.0.0.1:${APP_PORT}:8017" \
+    -v "${DEPLOY_DIR}/src_skeleton/.env:/app/.env" \
+    -v "${DEPLOY_DIR}/src_skeleton/.media_storage:/app/.media_storage" \
+    alchemy-media-agent:latest
 }
 
 health_check() {
@@ -199,7 +217,11 @@ health_check() {
     sleep 2
   done
   echo "Service did not pass health check. Recent logs:" >&2
-  docker compose -f "${DEPLOY_DIR}/docker-compose.yml" logs --tail=80 alchemy-media-agent >&2 || true
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -f "${DEPLOY_DIR}/docker-compose.yml" logs --tail=80 alchemy-media-agent >&2 || true
+  else
+    docker logs --tail=80 alchemy-media-agent >&2 || true
+  fi
   exit 1
 }
 

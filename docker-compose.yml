@@ -7,7 +7,7 @@ services:
     env_file:
       - ./src_skeleton/.env
     ports:
-      - "${APP_PORT:-8017}:8017"
+      - "127.0.0.1:${APP_PORT:-8017}:8017"
     volumes:
       - ./src_skeleton/.env:/app/.env
       - ./src_skeleton/.media_storage:/app/.media_storage
