@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Alchemy Media Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260604-carousel" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260607-asset-contain-preview" />
   </head>
   <body>
     <div class="app-shell">
@@ -18,8 +18,9 @@
         </div>
 
         <nav class="module-tabs" aria-label="生成模块" role="tablist">
-          <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图</button>
-          <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频</button>
+          <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图 V1.0 基础版</button>
+          <button class="tab" data-tab="v2" type="button" role="tab" aria-selected="false">生图 V2.0 AGENT</button>
+          <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频（DEMO）</button>
         </nav>
 
         <div class="header-status">
@@ -136,7 +137,7 @@
 
               <div class="tuning-grid">
                 <div class="tuning-card params-card">
-                  <h4>参数</h4>
+                  <h4>基础版</h4>
                   <label class="control-block">
                     <span>数量 <strong id="countValue">1</strong></span>
                     <input id="countInput" type="range" min="1" max="10" step="1" value="1" />
@@ -183,21 +184,72 @@
 
                 <div class="tuning-card material-card">
                   <div class="mini-head">
-                    <h4>素材</h4>
+                    <h4>高级版</h4>
                     <span id="assetState" class="state-pill">空</span>
                   </div>
                   <div id="assetPreview" class="asset-preview empty-asset-preview">
                     <span id="assetPreviewLabel">未选择素材</span>
                   </div>
                   <label class="file-drop" for="assetInput">
-                    <input id="assetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.csv" />
+                    <input id="assetInput" type="file" accept="image/*" />
                     <span class="file-title">选择参考素材</span>
-                    <span id="assetName" class="file-meta">图片、PDF、文档或表格</span>
+                    <span id="assetName" class="file-meta">仅支持图片素材</span>
                   </label>
-                  <label class="check-row">
-                    <input id="rightsCheck" type="checkbox" checked />
-                    <span>已确认素材授权</span>
-                  </label>
+                  <div id="advancedAssetPanel" class="advanced-asset-panel">
+                    <div class="advanced-role-checks" aria-label="高级素材用途">
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="style_reference" checked />
+                        <span>风格</span>
+                      </label>
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="subject_reference" />
+                        <span>主体</span>
+                      </label>
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="logo_overlay" />
+                        <span>Logo</span>
+                      </label>
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="portrait_identity" />
+                        <span>人脸</span>
+                      </label>
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="background_reference" />
+                        <span>背景</span>
+                      </label>
+                      <label class="role-check">
+                        <input type="checkbox" data-asset-role="composition_reference" />
+                        <span>构图</span>
+                      </label>
+                    </div>
+                    <label class="control-block advanced-strength">
+                      <span>参考强度 <strong id="assetStrengthValue">65%</strong></span>
+                      <input id="assetStrengthInput" type="range" min="0" max="100" step="5" value="65" />
+                    </label>
+                    <label class="field">
+                      <span>保真级别</span>
+                      <select id="assetPreservationInput">
+                        <option value="loose">宽松参考</option>
+                        <option value="medium" selected>中等参考</option>
+                        <option value="strict">强保真</option>
+                        <option value="exact">精确保留</option>
+                      </select>
+                    </label>
+                    <label id="assetPlacementField" class="field advanced-conditional-field" hidden>
+                      <span>角标位置</span>
+                      <select id="assetPlacementInput">
+                        <option value="bottom_right">右下</option>
+                        <option value="bottom_center">底部居中</option>
+                        <option value="bottom_left">左下</option>
+                        <option value="top_right">右上</option>
+                        <option value="center">居中</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>用途说明</span>
+                      <textarea id="assetIntentNotesInput" rows="1" placeholder="例如：Logo 印在衣服胸口；或仅作右下角角标。"></textarea>
+                    </label>
+                  </div>
                 </div>
               </div>
             </section>
@@ -268,7 +320,7 @@
                     <button class="model-option" data-image-provider="gemini_image" type="button">
                       <span>Gemini</span>
                       <strong>Gemini Image</strong>
-                      <small id="geminiImageState">待接入</small>
+                      <small id="geminiImageState">检查中</small>
                     </button>
                   </div>
                 </section>
@@ -290,7 +342,7 @@
                     <button class="model-option" data-llm-provider="anthropic" type="button">
                       <span>Kimi</span>
                       <strong>Kimi</strong>
-                      <small id="kimiThinkingState">检查中</small>
+                      <small id="agentThinkingState">检查中</small>
                     </button>
                   </div>
                 </section>
@@ -321,18 +373,20 @@
                     </label>
                     <label class="field">
                       <span>Gemini 生图 API Key</span>
-                      <input id="geminiImageApiKeyInput" type="password" autocomplete="off" placeholder="预留；接入 Gemini 生图时使用" />
+                      <input id="geminiImageApiKeyInput" type="password" autocomplete="off" placeholder="Gemini API Key" />
                     </label>
                     <label class="field">
                       <span>Gemini 生图 Base URL</span>
-                      <input id="geminiImageBaseUrlInput" type="url" placeholder="预留；默认可留空" />
+                      <input id="geminiImageBaseUrlInput" type="url" placeholder="默认可留空；代理填 https://..." />
                     </label>
                     <label class="field">
                       <span>Gemini 生图模型</span>
-                      <input id="geminiImageModelInput" type="text" list="geminiImageModelList" placeholder="gemini-3.1-flash-image" />
+                      <input id="geminiImageModelInput" type="text" list="geminiImageModelList" placeholder="gemini-3-pro-image-preview" />
                       <datalist id="geminiImageModelList">
-                        <option value="gemini-3.1-flash-image"></option>
+                        <option value="gemini-3-pro-image-preview"></option>
                         <option value="gemini-3-pro-image"></option>
+                        <option value="gemini-3.1-flash-image"></option>
+                        <option value="gemini-2.5-flash-image"></option>
                       </datalist>
                     </label>
                   </section>
@@ -349,21 +403,22 @@
                     </label>
                     <label class="field">
                       <span>Kimi 思考模型</span>
-                      <input id="kimiLlmModelInput" type="text" list="kimiLlmModelList" placeholder="kimi-for-coding" />
-                      <datalist id="kimiLlmModelList">
+                      <input id="agentLlmModelInput" type="text" list="agentLlmModelList" placeholder="kimi-for-coding" />
+                      <datalist id="agentLlmModelList">
                         <option value="kimi-for-coding"></option>
-                        <option value="kimi-k2.6"></option>
+                        <option value="kimi-latest"></option>
+                        <option value="kimi-k2"></option>
                       </datalist>
                     </label>
                     <label class="field">
-                      <span>Kimi 思考 API Key</span>
-                      <input id="anthropicApiKeyInput" type="password" autocomplete="off" placeholder="粘贴后自动应用" />
+                      <span>Kimi API Key</span>
+                      <input id="anthropicApiKeyInput" type="password" autocomplete="off" placeholder="Kimi / Anthropic 兼容 Key" />
                     </label>
                     <label class="field">
-                      <span>Kimi 思考 Base URL</span>
-                      <input id="anthropicBaseUrlInput" type="url" placeholder="https://aiself.vip" />
+                      <span>Kimi Base URL</span>
+                      <input id="anthropicBaseUrlInput" type="url" placeholder="https://api.kimi.com 或你的代理地址" />
                     </label>
-                    <p class="model-help">Gemini 生图入口已预留，当前后端只保留 provider 框架；Kimi 仍只用于思考模型。</p>
+                    <p class="model-help">Gemini 生图已接入；V2.0 可通过模型调度选择 Gemini 通道。</p>
                     <div id="providerList" class="provider-list compact-provider-list"></div>
                   </section>
                 </div>
@@ -383,11 +438,348 @@
           </div>
         </section>
 
+        <section id="v2Tab" class="module-panel" data-panel="v2" role="tabpanel" hidden>
+          <div class="module-stack v2-workbench">
+            <section class="panel flow-section v2-case-area">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">01 / Case Gallery</p>
+                  <h3>案例展示区</h3>
+                </div>
+                <span id="v2TemplateCount" class="state-pill">0</span>
+              </div>
+
+              <div class="v2-filter-row">
+                <label class="field">
+                  <span>模糊搜索</span>
+                  <input id="v2TemplateSearch" type="text" placeholder="风格、类型、关键元素：奢华香水、电商主图、赛博角色、UI 仪表盘" />
+                </label>
+                <button id="v2TemplateSearchBtn" class="button secondary" type="button">匹配案例</button>
+              </div>
+              <div id="v2SearchThinking" class="v2-search-thinking" role="status" aria-live="polite" hidden>
+                <span class="thinking-spinner" aria-hidden="true"></span>
+                <strong>大模型思考中</strong>
+                <small>正在理解需求、抽象特征并匹配案例。</small>
+              </div>
+
+              <div id="v2CaseFacetBar" class="v2-facet-bar" aria-label="案例标签过滤"></div>
+              <div id="v2TemplateGrid" class="v2-template-grid empty-v2-list" aria-live="polite"></div>
+            </section>
+
+            <section class="panel flow-section v2-agent-area">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">02 / AI Agent Studio</p>
+                  <h3>AI Agent 生图区</h3>
+                </div>
+                <span id="v2ModeState" class="state-pill">智能增强</span>
+              </div>
+
+              <div class="v2-run-grid">
+                <div class="v2-composer">
+                  <label class="field v2-prompt-field">
+                    <span>你的需求</span>
+                    <textarea id="v2PromptInput" rows="6" placeholder="例如：为一款高端香水生成电商主图，画面干净、质感高级，突出瓶身与光影。"></textarea>
+                  </label>
+                  <div id="v2NoticeBar" class="notice-bar" role="status" aria-live="polite">V2.0 Agent 中枢待命。</div>
+                  <div id="v2ProgressPanel" class="v2-progress-panel" aria-live="polite" hidden>
+                    <div class="v2-progress-head">
+                      <strong id="v2ProgressTitle">待命</strong>
+                      <span id="v2ProgressElapsed">0s</span>
+                    </div>
+                    <div class="v2-progress-meter" aria-hidden="true">
+                      <span id="v2ProgressFill"></span>
+                    </div>
+                    <div id="v2ProgressSteps" class="v2-progress-steps" aria-label="生图进度"></div>
+                    <p id="v2ProgressDetail" class="v2-progress-detail">等待提交任务。</p>
+                  </div>
+                  <div class="composer-actions">
+                    <button id="v2RunBtn" class="button primary" type="button">生成图片</button>
+                    <span id="v2SelectedTemplateLabel" class="micro-copy">未选择模板</span>
+                  </div>
+                </div>
+
+                <div class="v2-side-controls">
+                  <label class="control-block">
+                    <span>生成数量 <strong id="v2CountValue">1</strong></span>
+                    <input id="v2CountInput" type="range" min="1" max="4" step="1" value="1" />
+                  </label>
+                  <div class="control-block">
+                    <span>画幅</span>
+                    <div class="segmented" role="radiogroup" aria-label="2.0 画幅">
+                      <button class="segment active" data-v2-ratio="1024x1536" type="button">竖版</button>
+                      <button class="segment" data-v2-ratio="1024x1024" type="button">方图</button>
+                      <button class="segment" data-v2-ratio="1536x1024" type="button">横版</button>
+                    </div>
+                  </div>
+                  <button id="v2ClearTemplateBtn" class="button full-width ghost" type="button">清空模板选择</button>
+                  <details class="v2-template-vars">
+                    <summary>模板微调</summary>
+                    <label class="field">
+                      <span>替换主体</span>
+                      <input id="v2SubjectInput" type="text" placeholder="客户产品、人物或场景" />
+                    </label>
+                    <label class="field">
+                      <span>想要的感觉</span>
+                      <input id="v2StyleInput" type="text" placeholder="可选；留空则跟随手选模板" />
+                    </label>
+                    <label class="field">
+                      <span>使用场景</span>
+                      <input id="v2UseCaseInput" type="text" placeholder="可选；留空则跟随手选模板" />
+                    </label>
+                  </details>
+                </div>
+                <div class="v2-asset-panel">
+                  <div class="mini-head">
+                    <h4>上传素材</h4>
+                    <span id="v2AssetState" class="state-pill">可选</span>
+                  </div>
+                  <div id="v2AssetPreview" class="asset-preview v2-asset-preview empty-asset-preview">
+                    <span id="v2AssetPreviewLabel">未选择素材</span>
+                  </div>
+                  <label class="file-drop v2-file-drop" for="v2AssetInput">
+                    <input id="v2AssetInput" type="file" accept="image/*" />
+                    <span class="file-title">选择参考图片</span>
+                    <span id="v2AssetName" class="file-meta">可与案例、提示词协作生效</span>
+                  </label>
+                  <div class="advanced-role-checks v2-asset-role-checks" aria-label="V2素材用途">
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="style_reference" checked />
+                      <span>风格</span>
+                    </label>
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="subject_reference" />
+                      <span>主体</span>
+                    </label>
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="logo_reference" />
+                      <span>Logo</span>
+                    </label>
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="face_reference" />
+                      <span>人脸</span>
+                    </label>
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="background_reference" />
+                      <span>背景</span>
+                    </label>
+                    <label class="role-check">
+                      <input type="checkbox" data-v2-asset-role="composition_reference" />
+                      <span>构图</span>
+                    </label>
+                  </div>
+                  <div class="v2-asset-mini-grid">
+                    <label class="field">
+                      <span>约束强度</span>
+                      <select id="v2AssetStrengthInput">
+                        <option value="strong" selected>强参考</option>
+                        <option value="required">必须保留</option>
+                        <option value="soft">弱参考</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>用途说明</span>
+                      <textarea id="v2AssetNotesInput" rows="1" placeholder="例如：保留瓶身形状，Logo 放右下。"></textarea>
+                    </label>
+                  </div>
+                  <div id="v2AssetList" class="v2-asset-list empty-v2-list">暂无上传素材</div>
+                  <button id="v2ClearAssetBtn" class="button compact ghost full-width" type="button">清空素材</button>
+                  <p id="v2AssetLockHint" class="micro-copy">未选案例时，中枢会自由结合素材与案例库。</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="gallery-wrap flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">03 / Agent Output</p>
+                  <h3>生成结果</h3>
+                </div>
+                <span id="v2TraceId" class="state-pill">-</span>
+              </div>
+
+              <div class="v2-output-layout">
+                <div>
+                  <h4>选用案例</h4>
+                  <div id="v2SelectedCases" class="v2-case-list empty-v2-list"></div>
+                </div>
+                <div>
+                  <h4>中枢判断</h4>
+                  <div id="v2BrainPanel" class="v2-brain-panel empty-v2-list">等待 Agent 判断。</div>
+                </div>
+                <div>
+                  <h4>组合提示词</h4>
+                  <pre id="v2PromptPlan" class="v2-prompt-plan">等待 V2.0 Agent 输出。</pre>
+                </div>
+                <div>
+                  <h4>生成结果</h4>
+                  <div id="v2Outputs" class="v2-output-grid empty-v2-list"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">04 / V2 History</p>
+                  <h3>2.0 历史</h3>
+                </div>
+                <div class="history-actions">
+                  <span id="v2HistoryCount" class="state-pill">0</span>
+                  <button id="v2RefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                </div>
+              </div>
+              <div id="v2HistoryGrid" class="v2-history-grid empty-v2-list" aria-live="polite"></div>
+            </section>
+
+            <section class="panel flow-section v2-provider-area">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">05 / Providers</p>
+                  <h3>外接 Provider</h3>
+                </div>
+                <span id="v2InheritedProviderState" class="state-pill">读取中</span>
+              </div>
+
+              <div class="v2-status-grid" aria-live="polite">
+                <div class="v2-status-tile">
+                  <span class="metric-label">Provider</span>
+                  <strong id="v2ProviderState">未同步</strong>
+                  <small id="v2ProviderMeta">EvoLinkAI</small>
+                </div>
+                <div class="v2-status-tile">
+                  <span class="metric-label">案例索引</span>
+                  <strong id="v2IndexState">-</strong>
+                  <small id="v2SyncMeta">等待检查</small>
+                </div>
+                <div class="v2-status-tile">
+                  <span class="metric-label">当前模型</span>
+                  <strong id="v2ProviderModelState">读取中</strong>
+                  <small id="v2InheritedModelMeta">V2 独立配置</small>
+                </div>
+              </div>
+
+              <div class="v2-sync-actions v2-auto-sync-copy">
+                <span>案例库会在服务启动和后台同步任务中自动检查更新。</span>
+              </div>
+
+              <details class="advanced-api-panel v2-model-panel">
+                <summary>
+                  <span>高级调度</span>
+                  <small id="v2ModelSummary">读取模型配置</small>
+                </summary>
+                <div class="v2-model-control-grid">
+                  <label class="field">
+                    <span>V2 生图通道</span>
+                    <select id="v2ImageProviderInput">
+                      <option value="auto">自动：V2 可用通道优先</option>
+                      <option value="openai_gpt_image">OpenAI GPT Image</option>
+                      <option value="gemini_image">Gemini Image</option>
+                      <option value="mock_image">Mock 测试图</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>备用 Agent 模型</span>
+                    <input id="v2AgentModelInput" type="text" list="v2AgentModelList" placeholder="gpt-4.1-mini" />
+                    <datalist id="v2AgentModelList">
+                      <option value="gpt-4.1-mini"></option>
+                      <option value="gpt-4.1"></option>
+                      <option value="gpt-5.5"></option>
+                    </datalist>
+                  </label>
+                  <label class="field">
+                    <span>Claude 中枢模型</span>
+                    <input id="v2ClaudeModelInput" type="text" list="v2ClaudeModelList" placeholder="留空使用 Claude Code 默认模型" />
+                    <datalist id="v2ClaudeModelList">
+                      <option value="claude-sonnet-4-20250514"></option>
+                      <option value="claude-opus-4-20250514"></option>
+                    </datalist>
+                  </label>
+                  <label class="field">
+                    <span>Claude 兜底模型</span>
+                    <input id="v2ClaudeFallbackModelInput" type="text" list="v2ClaudeModelList" placeholder="可留空" />
+                  </label>
+                  <label class="field">
+                    <span>案例理解来源</span>
+                    <select id="v2CaseIntelligenceProviderInput">
+                      <option value="rules">本地案例画像</option>
+                      <option value="claude-code">Claude Code 中枢</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>案例理解模型</span>
+                    <input id="v2CaseIntelligenceModelInput" type="text" placeholder="自动沿用所选来源" />
+                  </label>
+                  <label class="field">
+                    <span>复检 Agent 模型</span>
+                    <input id="v2ReviewModelInput" type="text" placeholder="默认沿用备用 Agent 模型" />
+                  </label>
+                  <button id="v2ModelApplyBtn" class="button secondary" type="button">应用高级调度</button>
+                </div>
+              </details>
+            </section>
+
+            <section class="studio-panel flow-section">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">06 / Model & Kernel</p>
+                  <h3>生图 V2.0 AGENT</h3>
+                </div>
+                <div class="v2-status-actions">
+                  <span id="v2HealthState" class="state-pill">检查中</span>
+                  <button id="v2RefreshBtn" class="button compact ghost" type="button">刷新</button>
+                </div>
+              </div>
+
+              <div class="model-workbench-grid v2-model-card-grid">
+                <section class="model-switch-card">
+                  <div class="mini-head">
+                    <div>
+                      <h4>生图模型</h4>
+                      <p class="model-help">选择 V2.0 最终调用的出图模型。</p>
+                    </div>
+                    <span id="v2ImageActiveLabel" class="state-pill">读取中</span>
+                  </div>
+                  <div class="model-options" role="radiogroup" aria-label="V2 生图模型">
+                    <button class="model-option active" data-v2-image-provider="openai_gpt_image" type="button">
+                      <span>GPT</span>
+                      <strong>GPT Image 2</strong>
+                      <small id="v2OpenaiImageState">检查中</small>
+                    </button>
+                    <button class="model-option" data-v2-image-provider="gemini_image" type="button">
+                      <span>Gemini</span>
+                      <strong>Gemini Image</strong>
+                      <small id="v2GeminiImageState">检查中</small>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="model-switch-card">
+                  <div class="mini-head">
+                    <div>
+                      <h4>思考模型</h4>
+                      <p class="model-help">V2.0 当前由 Claude Code 作为中枢大脑。</p>
+                    </div>
+                    <span id="v2BrainActiveLabel" class="state-pill">Claude Code</span>
+                  </div>
+                  <div class="model-options v2-single-model" role="radiogroup" aria-label="V2 思考模型">
+                    <button class="model-option active" data-v2-brain-provider="claude-code" type="button" disabled>
+                      <span>Agent</span>
+                      <strong>Claude Code</strong>
+                      <small id="v2BrainModelState">默认选定</small>
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <section id="videoTab" class="module-panel" data-panel="video" role="tabpanel" hidden>
           <div class="video-frame">
             <div>
               <p class="eyebrow">Video Generation</p>
-              <h3>生视频工作台</h3>
+              <h3>生视频（DEMO）</h3>
               <p class="video-state">Seedance / Veo 接入未启用，当前只保留模块框架。</p>
             </div>
 
@@ -454,12 +846,12 @@
     <section id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
       <div class="lightbox-backdrop" data-close-lightbox></div>
       <div class="lightbox-panel">
+        <button id="closeImageLightboxBtn" class="modal-close lightbox-close" type="button" aria-label="关闭大图预览" title="关闭">×</button>
         <div class="lightbox-head">
           <div>
             <p class="eyebrow">Preview</p>
             <h3 id="lightboxTitle">图片预览</h3>
           </div>
-          <button id="closeImageLightboxBtn" class="button compact ghost" type="button">关闭</button>
         </div>
         <div class="lightbox-stage">
           <img id="lightboxImage" alt="放大预览图" />
@@ -475,9 +867,12 @@
           <div class="prompt-card">
             <div class="prompt-card-head">
               <span>完整提示词</span>
-              <button id="closePromptPanelBtn" class="delete-link" type="button">关闭</button>
+              <div class="prompt-card-actions">
+                <button id="copyPromptBtn" class="delete-link prompt-copy-btn" type="button">复制</button>
+                <button id="closePromptPanelBtn" class="delete-link" type="button">关闭</button>
+              </div>
             </div>
-            <pre id="lightboxPromptText"></pre>
+            <pre id="lightboxPromptText" class="prompt-scroll-box" tabindex="0"></pre>
           </div>
         </div>
       </div>
@@ -493,6 +888,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260604-carousel" defer></script>
+    <script src="/static/app.js?v=20260607-asset-contain-preview" defer></script>
   </body>
 </html>

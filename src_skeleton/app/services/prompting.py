@@ -21,7 +21,7 @@ def build_prompt_plan(
         style=_infer_style(prompt),
         composition=_infer_composition(prompt, inferred_size),
         brand_constraints=_infer_brand_constraints(prompt, asset_ids or []),
-        negative_constraints=["avoid malformed text", "avoid distorted hands", "avoid unauthorized logos"],
+        negative_constraints=["避免错别字或乱码", "避免文字被拆开或多余空格", "避免肢体和手部畸形", "避免未授权 Logo"],
         text=_infer_text(prompt),
         count=count,
         size=inferred_size,
@@ -45,7 +45,7 @@ def build_revision_patch(*, output_id: str, feedback: str, preserve: list[str] |
 def apply_patch_to_plan(base_plan: ImagePromptPlan, patch: PromptPatch) -> ImagePromptPlan:
     return base_plan.model_copy(
         update={
-            "main_subject": f"{base_plan.main_subject}\nRevision request: {patch.new_prompt_delta}",
+            "main_subject": f"{base_plan.main_subject}\n修改要求：{patch.new_prompt_delta}",
             "count": 1,
             "variables": {**base_plan.variables, "prompt_patch": patch.model_dump()},
         }
@@ -74,23 +74,23 @@ def _infer_style(prompt: str) -> str | None:
 
 def _infer_composition(prompt: str, size: str) -> str:
     if size == "1024x1536":
-        return "Vertical composition with clear central subject and safe title area."
+        return "竖版构图，主体清晰居中，预留安全标题区域。"
     if size == "1536x1024":
-        return "Horizontal composition with clear foreground and background separation."
-    return "Balanced square composition."
+        return "横版构图，前景与背景层次清楚。"
+    return "均衡方图构图，主体明确，四周留白干净。"
 
 
 def _infer_brand_constraints(prompt: str, asset_ids: list[str]) -> list[str]:
     constraints: list[str] = []
     if asset_ids:
-        constraints.append("Respect uploaded reference assets and material brief.")
+        constraints.append("尊重上传参考素材及其素材摘要。")
     if "品牌" in prompt:
-        constraints.append("Preserve brand palette and premium visual tone.")
+        constraints.append("保持品牌配色和高级视觉气质。")
     return constraints
 
 
 def _infer_text(prompt: str) -> dict[str, str | bool]:
-    quoted = re.findall(r"[“\"]([^”\"]+)[”\"]", prompt)
+    quoted = [item.strip() for item in re.findall(r"[“\"「『《]([^”\"」』》]+)[”\"」』》]", prompt) if item.strip()]
     if quoted:
         return {"required": True, "content": quoted[0], "language": "zh-CN"}
     return {"required": "文字" in prompt or "标题" in prompt, "language": "zh-CN"}

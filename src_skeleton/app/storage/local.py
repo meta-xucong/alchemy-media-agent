@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ class LocalMediaStore:
     @property
     def generated_root(self) -> Path:
         return self.root / "generated_images"
+
+    @property
+    def asset_root(self) -> Path:
+        return self.root / "assets"
 
     @property
     def thumbnail_root(self) -> Path:
@@ -33,6 +38,26 @@ class LocalMediaStore:
         path.write_bytes(base64.b64decode(b64_json))
         self.ensure_thumbnail(output_id=output_id, source_path=path)
         return f"/v1/outputs/{output_id}/download"
+
+    def save_asset_bytes(self, *, asset_id: str, filename: str, content: bytes) -> Path:
+        target_dir = self.asset_root / asset_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = _safe_filename(filename)
+        path = target_dir / safe_name
+        path.write_bytes(content)
+        return path
+
+    def find_asset_file(self, asset_id: str) -> Path | None:
+        target_dir = self.asset_root / asset_id
+        if not target_dir.exists():
+            return None
+        for path in target_dir.iterdir():
+            if path.is_file() and not path.name.startswith("."):
+                return path
+        return None
+
+    def asset_url(self, asset_id: str) -> str:
+        return f"/v1/assets/{asset_id}/content"
 
     def thumbnail_url(self, output_id: str) -> str:
         return f"/v1/outputs/{output_id}/thumbnail"
@@ -182,6 +207,12 @@ def _format_from_suffix(suffix: str) -> str | None:
     if normalized in {"png", "jpeg", "webp", "mp4"}:
         return normalized
     return None
+
+
+def _safe_filename(filename: str) -> str:
+    stem = Path(filename or "asset").name
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+    return cleaned or "asset.bin"
 
 
 def _flatten_for_jpeg(image):

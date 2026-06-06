@@ -1,4 +1,6 @@
 from pathlib import Path
+import base64
+from io import BytesIO
 
 from fastapi.testclient import TestClient
 import pytest
@@ -11,10 +13,28 @@ from app.storage import media_store
 
 @pytest.fixture(autouse=True)
 def isolate_repository_and_media_store(tmp_path, monkeypatch):
+    original_provider = settings.default_image_provider
+    original_model = settings.default_image_model
+    original_openai_model = settings.openai_image_model
+    original_gemini_model = settings.gemini_image_model
+    original_gemini_key = settings.gemini_image_api_key
+    original_gemini_base_url = settings.gemini_image_base_url
     monkeypatch.setattr(media_store, "root", tmp_path)
+    settings.default_image_provider = "mock_image"
+    settings.default_image_model = "mock-image"
+    settings.openai_image_model = "gpt-image-2"
+    settings.gemini_image_model = "gemini-3-pro-image-preview"
+    settings.gemini_image_api_key = None
+    settings.gemini_image_base_url = None
     repository.reset()
     yield
     repository.reset()
+    settings.default_image_provider = original_provider
+    settings.default_image_model = original_model
+    settings.openai_image_model = original_openai_model
+    settings.gemini_image_model = original_gemini_model
+    settings.gemini_image_api_key = original_gemini_key
+    settings.gemini_image_base_url = original_gemini_base_url
 
 
 def test_http_smoke_image_revision_video_and_providers():
@@ -119,6 +139,378 @@ def test_http_smoke_image_revision_video_and_providers():
     assert "job.status" in events.text
 
 
+def test_asset_upload_rejects_non_image_materials():
+    client = TestClient(app)
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "brief.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 128,
+            "consent": {"rights_confirmed": True},
+        },
+    )
+    assert upload.status_code == 200
+    body = upload.json()
+    assert body["upload_url"] == ""
+    assert body["asset_id"].startswith("asset_")
+
+    asset = client.get(f"/v1/assets/{body['asset_id']}")
+    assert asset.status_code == 200
+    assert asset.json()["status"] == "rejected"
+
+
+def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_advanced"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "style.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "style_reference",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    assert upload.json()["upload_url"].endswith("/content")
+
+    content = client.put(
+        f"/v1/assets/{asset_id}/content",
+        json={"content_base64": png_b64, "mime_type": "image/png"},
+    )
+    assert content.status_code == 200
+    assert content.json()["status"] == "stored"
+
+    completed = client.post(f"/v1/assets/{asset_id}/complete")
+    assert completed.status_code == 200
+    completed_body = completed.json()
+    assert completed_body["status"] == "ready"
+    assert completed_body["vision_profile"]["status"] == "ready"
+    assert completed_body["vision_profile"]["image"]["width"] == 1
+    assert "style_reference" in completed_body["material_brief"]["detected_roles"]
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "生成 1 张高级咖啡海报。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "priority": 80,
+                    "preservation": "loose",
+                    "strength": 0.65,
+                    "notes": "参考柔和光线和高级感",
+                    "consent": {"user_confirmed_rights": True},
+                },
+                {
+                    "asset_id": asset_id,
+                    "role": "composition_reference",
+                    "priority": 70,
+                    "preservation": "medium",
+                    "strength": 0.65,
+                    "notes": "参考版式和主体位置",
+                    "consent": {"user_confirmed_rights": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+    assert image_job.status_code == 200
+    body = image_job.json()
+    assert body["status"] == "ready"
+    assert body["asset_mode"] == "advanced"
+    assert body["asset_plan"]["provider_requirements"]["needs_image_reference"] is True
+    assert body["asset_plan"]["provider_input_plan"]["reference_image_count"] == 1
+    assert body["asset_plan"]["assets"][0]["vision_profile_used"] is True
+    assert body["prompt_plan"]["variables"]["asset_mode"] == "advanced"
+    assert body["prompt_plan"]["variables"]["provider_input_plan"]["reference_image_count"] == 1
+    assert body["prompt_plan"]["variables"]["asset_vision_profiles"][0]["status"] == "ready"
+    assert "上传素材要求" in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "素材画像" in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "真实保真" not in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "reference 输入" not in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "provider" not in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert body["raw_response_summary"]["prompt_plan"]["original_prompt"] == "生成 1 张高级咖啡海报。"
+    assert body["outputs"][0]["visual_review"]["review_status"] == "ready"
+    assert body["outputs"][0]["visual_review"]["overall_score"] is not None
+
+    history = client.get(f"/v1/image/history?session_id={session_id}")
+    assert history.status_code == 200
+    item = history.json()["items"][0]
+    assert item["asset_mode"] == "advanced"
+    assert item["original_prompt"] == "生成 1 张高级咖啡海报。"
+    assert "上传素材要求" in item["final_prompt"]
+    assert "真实保真" not in item["final_prompt"]
+    assert "reference 输入" not in item["final_prompt"]
+    assert {intent["role_label"] for intent in item["asset_intents"]} == {"风格参考", "构图参考"}
+    assert item["asset_vision_profiles"][0]["status"] == "ready"
+    assert item["provider_input_plan"]["reference_image_count"] == 1
+    assert item["visual_review"]["review_status"] == "ready"
+
+
+def test_chinese_corner_quote_text_is_preserved_in_prompt_plan():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_text"}).json()["id"]
+
+    response = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "生成 1 张高级咖啡新品海报，画面中出现短文字「新品拿铁」。",
+            "count": 1,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["prompt_plan"]["text"]["required"] is True
+    assert body["prompt_plan"]["text"]["content"] == "新品拿铁"
+    assert "文字必须严格为“新品拿铁”" in body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "不要多余空格" in body["prompt_plan"]["variables"]["generation_prompt"]
+
+
+def test_advanced_asset_vision_keeps_small_but_important_accent_colors():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_accent"}).json()["id"]
+    png_b64 = _accent_reference_png_base64()
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "premium-green-gold-reference.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "style_reference",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+
+    completed = client.post(f"/v1/assets/{asset_id}/complete")
+    assert completed.status_code == 200
+    vision_style = completed.json()["vision_profile"]["style"]
+    dark_accents = {item["hex"] for item in vision_style["dark_accent_colors"]}
+    warm_accents = {item["hex"] for item in vision_style["warm_metal_colors"]}
+    assert "#002000" in dark_accents
+    assert "#ffa020" in warm_accents
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "参考上传图的高级感，生成 1 张冰拿铁海报，画面中出现短文字「新品拿铁」。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "priority": 80,
+                    "preservation": "strict",
+                    "strength": 0.65,
+                    "consent": {"user_confirmed_rights": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+    assert image_job.status_code == 200
+    prompt = image_job.json()["prompt_plan"]["variables"]["generation_prompt"]
+    assert "深色强调 #002000" in prompt
+    assert "暖金/琥珀点缀" in prompt
+    assert "文字必须严格为“新品拿铁”" in prompt
+    assert "asset_" not in prompt
+
+
+def test_advanced_logo_mode_requires_logo_rights():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_logo"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "brand-logo.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "logo_overlay",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/v1/assets/{asset_id}/complete").status_code == 200
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "生成 1 张品牌海报。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "logo_overlay",
+                    "priority": 100,
+                    "preservation": "exact",
+                    "strength": 1,
+                    "consent": {"user_confirmed_rights": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+    assert image_job.status_code == 200
+    body = image_job.json()
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "asset_consent_required"
+
+
+def test_advanced_logo_on_scene_surface_uses_reference_image_not_canvas_overlay():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_logo_surface"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "alcoen-logo.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "logo_overlay",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True, "logo_or_trademark_allowed": True},
+        },
+    )
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/v1/assets/{asset_id}/complete").status_code == 200
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "设计一款高端深绿色 POLO 衫海报，品牌 ALCOEN，上传的 Logo 要印在衣服胸口。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "logo_overlay",
+                    "priority": 100,
+                    "preservation": "exact",
+                    "strength": 1,
+                    "notes": "Logo 贴到衣服胸口，不要放在海报下方或角落。",
+                    "placement": {"anchor": "bottom_right", "width_ratio": 0.18},
+                    "consent": {"user_confirmed_rights": True, "logo_or_trademark_allowed": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert image_job.status_code == 200
+    body = image_job.json()
+    assert body["status"] == "ready"
+    asset = body["asset_plan"]["assets"][0]
+    assert asset["provider_input_mode"] == "reference_image"
+    assert asset["placement_intent"]["mode"] == "scene_surface"
+    assert "衣服" in asset["placement_intent"]["target_label"]
+    assert body["asset_plan"]["provider_requirements"]["needs_image_reference"] is True
+    assert body["asset_plan"]["provider_requirements"]["needs_postprocess"] is False
+    assert body["asset_plan"]["provider_input_plan"]["reference_image_count"] == 1
+    assert body["asset_plan"]["provider_input_plan"]["postprocess_asset_ids"] == []
+    assert body["postprocess_steps"] == []
+    final_prompt = body["prompt_plan"]["variables"]["generation_prompt"]
+    assert "衣服胸口" in final_prompt or "服装表面" in final_prompt
+    assert "不要把 Logo 放到海报下方" in final_prompt
+    visual_review = body["outputs"][0]["visual_review"]
+    assert visual_review["review_status"] == "ready"
+    assert not any(issue["code"] == "logo_overlay_missing" for issue in visual_review["issues"])
+
+
+def test_advanced_logo_canvas_badge_still_uses_postprocess_overlay():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_logo_badge"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "brand-logo-badge.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "logo_overlay",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True, "logo_or_trademark_allowed": True},
+        },
+    )
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/v1/assets/{asset_id}/complete").status_code == 200
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "生成 1 张品牌海报，Logo 作为右下角角标。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "logo_overlay",
+                    "priority": 100,
+                    "preservation": "exact",
+                    "strength": 1,
+                    "notes": "仅作为右下角角标。",
+                    "placement": {"anchor": "bottom_right", "width_ratio": 0.18},
+                    "consent": {"user_confirmed_rights": True, "logo_or_trademark_allowed": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert image_job.status_code == 200
+    body = image_job.json()
+    assert body["status"] == "ready"
+    asset = body["asset_plan"]["assets"][0]
+    assert asset["provider_input_mode"] == "postprocess_only"
+    assert asset["placement_intent"]["mode"] == "canvas_overlay"
+    assert body["asset_plan"]["provider_requirements"]["needs_postprocess"] is True
+    assert body["asset_plan"]["provider_input_plan"]["reference_image_count"] == 0
+    assert body["asset_plan"]["provider_input_plan"]["postprocess_asset_ids"] == [asset_id]
+    assert body["postprocess_steps"]
+    assert body["postprocess_steps"][0]["type"] == "logo_overlay"
+
+
+def _accent_reference_png_base64() -> str:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (96, 96), (224, 192, 160))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 18, 66, 78), fill=(0, 32, 0))
+    draw.rectangle((30, 18, 66, 27), fill=(255, 160, 32))
+    draw.rectangle((30, 69, 66, 78), fill=(255, 160, 32))
+    draw.ellipse((10, 10, 30, 30), fill=(192, 160, 96))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def test_frontend_static_app_is_served():
     client = TestClient(app)
 
@@ -142,20 +534,41 @@ def test_frontend_static_app_is_served():
     assert "自动应用" in index.text
     assert "Gemini Image" in index.text
     assert "Gemini 生图 Base URL" in index.text
-    assert "Kimi 思考 Base URL" in index.text
+    assert "Kimi 思考模型" in index.text
+    assert "Kimi Base URL" in index.text
     assert "geminiImageBaseUrlInput" in index.text
     assert "geminiImageApiKeyInput" in index.text
     assert "openaiImageModelInput" in index.text
     assert "geminiImageModelInput" in index.text
     assert "openaiLlmModelInput" in index.text
-    assert "kimiLlmModelInput" in index.text
+    assert "agentLlmModelInput" in index.text
     assert "anthropicBaseUrlInput" in index.text
     assert "heroHistoryCarousel" in index.text
     assert "lightboxPromptPanel" in index.text
     assert "lightboxPromptText" in index.text
     assert "Your Work" not in index.text
     assert "assetPreview" in index.text
+    assert 'accept="image/*"' in index.text
+    assert "仅支持图片素材" in index.text
+    assert "图片、PDF、文档或表格" not in index.text
+    assert "advanced-role-checks" in index.text
+    assert 'rows="1"' in index.text
+    assert "已确认素材授权" not in index.text
+    assert "确认拥有 Logo" not in index.text
+    assert "确认拥有人物肖像授权" not in index.text
     assert "模型与 API" in index.text
+    assert "高级调度" in index.text
+    assert "外接 Provider" in index.text
+    assert "v2ImageActiveLabel" in index.text
+    assert "v2OpenaiImageState" in index.text
+    assert "v2BrainModelState" in index.text
+    assert "v2AgentModelInput" in index.text
+    assert "v2ClaudeModelInput" in index.text
+    assert "v2CaseIntelligenceProviderInput" in index.text
+    assert "v2ModelApplyBtn" in index.text
+    assert "v2SearchThinking" in index.text
+    assert "大模型思考中" in index.text
+    assert index.text.find("生图 V2.0 AGENT", index.text.find('id="v2Tab"')) > index.text.find("外接 Provider")
     assert "保存配置" not in index.text
     assert "saveProviderBtn" not in index.text
     flow_labels = ["工作台", "调参、素材", "生成的结果板块", "继续修改", "历史图片", "模型与 API", "事件"]
@@ -184,6 +597,9 @@ def test_frontend_static_app_is_served():
     assert "lightbox-prompt-panel" in styles.text
     assert "aspect-ratio: 1 / 1" in styles.text
     assert "max-height: 560px" in styles.text
+    assert "v2-model-control-grid" in styles.text
+    assert "thinking-spinner" in styles.text
+    assert "spinThinking" in styles.text
     assert "segmented.quality" in styles.text
     assert "asset-preview" in styles.text
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles.text
@@ -210,6 +626,11 @@ def test_frontend_static_app_is_served():
     assert "openImageLightbox" in script.text
     assert "toggleLightboxPrompt" in script.text
     assert "promptTextFromJob" in script.text
+    assert "素材视觉理解" in script.text
+    assert "图片输入链路" in script.text
+    assert "视觉复检" in script.text
+    assert "providerInputSummaryFromJob" in script.text
+    assert "图片编辑接口" in script.text
     assert "renderHeroHistory" in script.text
     assert "openActiveHeroHistorySlide" in script.text
     assert "state.heroHistoryItems[activeIndex]" in script.text
@@ -218,11 +639,15 @@ def test_frontend_static_app_is_served():
     assert "historyTime" in script.text
     assert "/v1/image/history/" in script.text
     assert 'method: "DELETE"' in script.text
+    assert "v2PromptTextFromHistory" in script.text
+    assert "Claude 思考后的最终提示词" in script.text
     assert "selectedQuality" in script.text
     assert "openaiLlmModelInput" in script.text
-    assert "kimiLlmModelInput" in script.text
+    assert "agentLlmModelInput" in script.text
     assert "anthropicBaseUrlInput" in script.text
     assert "default_llm_provider" in script.text
+    assert "selectedAssetRoles" in script.text
+    assert "asset_intents: roles.map" in script.text
     assert "default_llm_model" in script.text
     assert "openai_image_model" in script.text
     assert "gemini_image_model" in script.text
@@ -245,6 +670,13 @@ def test_frontend_static_app_is_served():
     assert "保存配置" not in script.text
     assert "quality: state.selectedQuality" in script.text
     assert "work_intensity: state.selectedIntensity" in script.text
+    assert "/runtime/model-settings" in script.text
+    assert "applyV2ModelSettings" in script.text
+    assert "v2CaseIntelligenceSourceLabel" in script.text
+    assert "setV2CaseSearchThinking" in script.text
+    assert "后台仍在运行，页面会持续刷新" in script.text
+    assert "openV2HistoryLightbox" in script.text
+    assert "v2PromptTextFromJob" in script.text
     assert "生成修改版本" in script.text
     assert "后续接入" not in script.text
 
@@ -278,7 +710,7 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
     assert body["items"][0]["source"] == "manifest"
     assert body["items"][0]["url"] == output_url
     assert body["items"][0]["thumbnail_url"].endswith("/thumbnail")
-    assert "User request:" in body["items"][0]["prompt"]
+    assert "创作目标：" in body["items"][0]["prompt"]
     assert client.get(output_url).status_code == 200
     assert client.get(body["items"][0]["thumbnail_url"]).status_code == 200
 
@@ -290,6 +722,55 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
     assert after_delete.status_code == 200
     assert after_delete.json()["total"] == 0
     assert client.get(output_url).status_code == 404
+
+
+def test_image_history_excludes_v2_bridge_outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "alchemy_v2_bridge"}).json()["id"]
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "V2 bridge generated image should stay out of V1 history.",
+            "count": 1,
+            "provider_preference": "mock_image",
+            "idempotency_key": "v2:run_test:plan_test",
+        },
+    )
+    assert image_job.status_code == 200
+
+    history = client.get("/v1/image/history")
+    assert history.status_code == 200
+    assert history.json()["total"] == 0
+
+    repository.reset()
+    output_path = media_store.output_path(job_id="job_bridge_manifest", output_id="out_bridge_manifest", output_format="png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": "out_bridge_manifest",
+            "job_id": "job_bridge_manifest",
+            "session_id": session_id,
+            "url": "/v1/outputs/out_bridge_manifest/download",
+            "thumbnail_url": "/v1/outputs/out_bridge_manifest/thumbnail",
+            "format": "png",
+            "provider": "mock_image",
+            "model": "mock-image-v1",
+            "source_app": "alchemy_v2_bridge",
+            "idempotency_key": "v2:run_manifest:plan_manifest",
+            "prompt": "bridge manifest",
+            "created_at": "2026-04-01T09:00:00+00:00",
+            "updated_at": "2026-04-01T09:00:00+00:00",
+        }
+    )
+
+    manifest_history = client.get("/v1/image/history")
+    assert manifest_history.status_code == 200
+    assert manifest_history.json()["total"] == 0
 
 
 def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatch):
@@ -368,7 +849,7 @@ def test_image_work_intensity_changes_prompt_planning():
     assert variables["work_intensity"] == "atelier"
     assert variables["reasoning_effort"] == "high"
     assert variables["planner"] == "local"
-    assert "premium art-director planning" in variables["generation_prompt"]
+    assert "高级创意指导" in variables["generation_prompt"]
     assert body["raw_response_summary"]["prompt_planning"]["work_intensity"] == "atelier"
 
     history = client.get(f"/v1/image/history?session_id={session_id}")
@@ -518,7 +999,7 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         seedance_caps = next(provider for provider in providers["video"] if provider["provider"] == "seedance")
         assert openai_caps["models"] == ["gpt-image-2-test"]
         assert gemini_caps["models"] == ["gemini-image-test"]
-        assert gemini_caps["configured"] is False
+        assert gemini_caps["configured"] is True
         assert seedance_caps["configured"] is False
     finally:
         settings.persist_runtime_settings = original_persist

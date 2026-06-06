@@ -10,6 +10,8 @@ class ProviderCapabilities(BaseModel):
     configured: bool
     models: list[str] = Field(default_factory=list)
     operations: list[str] = Field(default_factory=list)
+    model_capabilities: list[dict[str, Any]] = Field(default_factory=list)
+    advanced_asset_roles: list[str] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
     is_mock: bool = False
     reason: str | None = None
