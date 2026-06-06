@@ -1,0 +1,19 @@
+[Unit]
+Description=Alchemy Custom Media Agent 2.0 API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alchemy
+Group=alchemy
+WorkingDirectory=/opt/alchemy/AlchemyOS/custom_media_agent_2_0
+EnvironmentFile=/etc/alchemy/alchemy-v2.env
+ExecStart=/opt/alchemy/AlchemyOS/custom_media_agent_2_0/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8020
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,13 @@ src_skeleton/.media_storage/history/*.bak*
 src_skeleton/.media_storage/outputs/
 src_skeleton/.server_*.log
 src_skeleton/.server_*.err.log
+custom_media_agent_2_0/.env
+custom_media_agent_2_0/.env.*
+custom_media_agent_2_0/.v2_data/
+custom_media_agent_2_0/.v2_storage/
+custom_media_agent_2_0/.venv/
+custom_media_agent_2_0/.server_*.log
+custom_media_agent_2_0/.server_*.err.log
 *.log
 
 # Python caches and test artifacts

@@ -1,0 +1,19 @@
+[Unit]
+Description=Alchemy Custom Media Agent 2.0 Task Worker
+After=network-online.target alchemy-v2-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alchemy
+Group=alchemy
+WorkingDirectory=/opt/alchemy/AlchemyOS/custom_media_agent_2_0
+EnvironmentFile=/etc/alchemy/alchemy-v2.env
+ExecStart=/opt/alchemy/AlchemyOS/custom_media_agent_2_0/.venv/bin/python -m app.workers.task_queue_worker --worker-id v2-worker-1
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

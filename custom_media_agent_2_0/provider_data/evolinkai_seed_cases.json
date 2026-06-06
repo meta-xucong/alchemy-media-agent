@@ -1,0 +1,178 @@
+{
+  "provider_id": "github_evolinkai_gpt_image_cases",
+  "source_version": "seed-2026-06-04",
+  "cases": [
+    {
+      "case_id": "case_github_evolinkai_ad_0001",
+      "title": "Premium skincare product hero image",
+      "category": "ad-creative",
+      "summary": "A refined advertising composition for a skincare bottle with studio lighting and clean negative space.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/ad-creative.md",
+      "preview_url": null,
+      "raw_prompt": "Create a premium studio product hero image with a centered skincare bottle, soft rim lighting, glass reflections, minimal background, and elegant negative space for campaign copy.",
+      "prompt_atoms": {
+        "subject": "skincare bottle",
+        "scene": "minimal studio set",
+        "composition": "centered hero product with negative space",
+        "lighting": "soft rim light and clean highlight",
+        "color_palette": ["ivory", "deep green", "warm gold"],
+        "material_texture": "glossy glass, satin backdrop",
+        "mood": "luxury, calm, trustworthy",
+        "typography": "reserved campaign copy area"
+      },
+      "visual_features": {
+        "primary_subject_type": "product",
+        "background_complexity": "low",
+        "contains_text": false,
+        "commercial_fit": "high",
+        "composition_type": "centered_hero"
+      },
+      "style_tags": ["premium", "studio-lighting", "minimal", "luxury"],
+      "use_case_tags": ["ecommerce", "ad-creative", "social-media"],
+      "risk_tags": ["raw_image_not_final_asset"],
+      "quality_score": 0.88
+    },
+    {
+      "case_id": "case_github_evolinkai_poster_0001",
+      "title": "Cinematic city event poster",
+      "category": "poster",
+      "summary": "A dramatic poster layout with strong atmosphere, layered depth, and typography-safe composition.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/poster.md",
+      "preview_url": null,
+      "raw_prompt": "Design a cinematic city event poster with atmospheric lighting, layered foreground and background depth, bold empty headline zone, rich contrast, and editorial polish.",
+      "prompt_atoms": {
+        "subject": "city event",
+        "scene": "night urban street",
+        "composition": "layered poster composition with headline zone",
+        "lighting": "cinematic contrast and atmospheric glow",
+        "color_palette": ["black", "electric blue", "warm amber"],
+        "mood": "dramatic, energetic, premium",
+        "typography": "large readable title area"
+      },
+      "visual_features": {
+        "primary_subject_type": "environment",
+        "background_complexity": "medium",
+        "contains_text": true,
+        "commercial_fit": "medium",
+        "composition_type": "poster_depth"
+      },
+      "style_tags": ["cinematic", "high-contrast", "editorial", "urban"],
+      "use_case_tags": ["poster", "social-media", "event"],
+      "risk_tags": ["raw_image_not_final_asset"],
+      "quality_score": 0.84
+    },
+    {
+      "case_id": "case_github_evolinkai_ecommerce_0001",
+      "title": "Clean marketplace product listing",
+      "category": "ecommerce",
+      "summary": "A marketplace-ready product image with neutral background, clear silhouette, and conversion-focused lighting.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/ecommerce.md",
+      "preview_url": null,
+      "raw_prompt": "Generate a clean ecommerce listing image on a neutral background, crisp product silhouette, accurate material texture, soft shadow, and high clarity for marketplace thumbnails.",
+      "prompt_atoms": {
+        "subject": "consumer product",
+        "scene": "neutral ecommerce background",
+        "composition": "clear three-quarter product view",
+        "lighting": "softbox lighting with natural shadow",
+        "color_palette": ["white", "soft gray"],
+        "material_texture": "accurate product texture",
+        "mood": "clean, practical, trustworthy"
+      },
+      "visual_features": {
+        "primary_subject_type": "product",
+        "background_complexity": "low",
+        "contains_text": false,
+        "commercial_fit": "high",
+        "composition_type": "marketplace_listing"
+      },
+      "style_tags": ["clean", "marketplace", "high-clarity", "neutral"],
+      "use_case_tags": ["ecommerce", "product-listing"],
+      "risk_tags": ["raw_image_not_final_asset"],
+      "quality_score": 0.82
+    },
+    {
+      "case_id": "case_github_evolinkai_portrait_0001",
+      "title": "Editorial founder portrait",
+      "category": "portrait",
+      "summary": "A professional editorial portrait with confident pose, tasteful lighting, and brand-friendly polish.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/portrait.md",
+      "preview_url": null,
+      "raw_prompt": "Create a professional editorial founder portrait with confident posture, natural skin texture, soft key light, refined wardrobe, and a subtle office background.",
+      "prompt_atoms": {
+        "subject": "professional founder",
+        "scene": "subtle office background",
+        "composition": "waist-up editorial portrait",
+        "lighting": "soft key light and gentle fill",
+        "color_palette": ["charcoal", "white", "muted blue"],
+        "mood": "confident, credible, modern"
+      },
+      "visual_features": {
+        "primary_subject_type": "person",
+        "background_complexity": "low",
+        "contains_text": false,
+        "commercial_fit": "medium",
+        "composition_type": "editorial_portrait"
+      },
+      "style_tags": ["editorial", "professional", "soft-light", "modern"],
+      "use_case_tags": ["portrait", "brand-visual"],
+      "risk_tags": ["requires_portrait_authorization", "raw_image_not_final_asset"],
+      "quality_score": 0.8
+    },
+    {
+      "case_id": "case_github_evolinkai_ui_0001",
+      "title": "Premium SaaS dashboard concept",
+      "category": "ui",
+      "summary": "A polished SaaS interface concept with dense but readable information hierarchy and restrained visual styling.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/ui.md",
+      "preview_url": null,
+      "raw_prompt": "Design a premium SaaS dashboard concept with dense but organized data panels, restrained colors, crisp typography, clear navigation, and realistic product UI details.",
+      "prompt_atoms": {
+        "subject": "SaaS dashboard",
+        "scene": "desktop product interface",
+        "composition": "navigation sidebar plus dense analytical panels",
+        "lighting": "flat product UI lighting",
+        "color_palette": ["white", "graphite", "teal"],
+        "mood": "quiet, professional, operational"
+      },
+      "visual_features": {
+        "primary_subject_type": "interface",
+        "background_complexity": "medium",
+        "contains_text": true,
+        "commercial_fit": "medium",
+        "composition_type": "dashboard"
+      },
+      "style_tags": ["saas", "dashboard", "professional", "restrained"],
+      "use_case_tags": ["ui", "product-concept"],
+      "risk_tags": ["avoid_real_brand_copying", "raw_image_not_final_asset"],
+      "quality_score": 0.81
+    },
+    {
+      "case_id": "case_github_evolinkai_character_0001",
+      "title": "Original stylized mascot character",
+      "category": "character",
+      "summary": "An original character design approach with readable silhouette, material detail, and brand-safe personality.",
+      "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/character.md",
+      "preview_url": null,
+      "raw_prompt": "Create an original stylized mascot character with a readable silhouette, expressive pose, distinctive materials, friendly personality, and no resemblance to protected characters.",
+      "prompt_atoms": {
+        "subject": "original mascot character",
+        "scene": "simple character presentation background",
+        "composition": "full-body three-quarter pose",
+        "lighting": "soft character key light",
+        "color_palette": ["coral", "cream", "navy"],
+        "mood": "friendly, memorable, brand-safe"
+      },
+      "visual_features": {
+        "primary_subject_type": "character",
+        "background_complexity": "low",
+        "contains_text": false,
+        "commercial_fit": "medium",
+        "composition_type": "character_sheet"
+      },
+      "style_tags": ["original-character", "mascot", "friendly", "brand-safe"],
+      "use_case_tags": ["character", "brand-visual"],
+      "risk_tags": ["avoid_protected_character_similarity", "raw_image_not_final_asset"],
+      "quality_score": 0.79
+    }
+  ]
+}

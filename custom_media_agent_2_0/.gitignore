@@ -1,0 +1,9 @@
+.venv/
+.env
+.v2_data/
+.v2_storage/
+__pycache__/
+.pytest_cache/
+*.pyc
+.server_*.log
+.server_*.err.log
