@@ -103,7 +103,7 @@ class Settings:
     claude_orchestrator_cli: str = "claude"
     claude_orchestrator_model: str | None = None
     claude_orchestrator_timeout_seconds: float = 240.0
-    claude_orchestrator_max_output_tokens: int = 8192
+    claude_orchestrator_max_output_tokens: int = 12288
     claude_orchestrator_effort: str = "low"
     claude_orchestrator_disable_slash_commands: bool = True
     claude_orchestrator_tools: str = "none"
@@ -229,7 +229,10 @@ def load_settings() -> Settings:
         claude_orchestrator_cli=os.getenv("V2_CLAUDE_ORCHESTRATOR_CLI", "claude"),
         claude_orchestrator_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL") or None,
         claude_orchestrator_timeout_seconds=float(os.getenv("V2_CLAUDE_ORCHESTRATOR_TIMEOUT_SECONDS", "240")),
-        claude_orchestrator_max_output_tokens=max(512, int(os.getenv("V2_CLAUDE_ORCHESTRATOR_MAX_OUTPUT_TOKENS", "8192"))),
+        claude_orchestrator_max_output_tokens=max(
+            512,
+            int(os.getenv("V2_CLAUDE_ORCHESTRATOR_MAX_OUTPUT_TOKENS", "12288")),
+        ),
         claude_orchestrator_effort=_normalize_claude_effort(os.getenv("V2_CLAUDE_ORCHESTRATOR_EFFORT", "low")),
         claude_orchestrator_disable_slash_commands=os.getenv(
             "V2_CLAUDE_ORCHESTRATOR_DISABLE_SLASH_COMMANDS",

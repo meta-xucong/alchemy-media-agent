@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -561,11 +562,83 @@ def test_claude_inline_prompt_template_fast_path_compacts_to_single_case(tmp_pat
     prompt = claude_orchestrator_service._build_inline_json_prompt(tmp_path)
     payload = json.loads(prompt.split("\n", 1)[1])
 
+    assert prompt.startswith("Return compact JSON only.")
+    assert f"Total JSON <= {claude_orchestrator_service._CLAUDE_INLINE_JSON_CHAR_BUDGET} chars" in prompt
     assert payload["fallback"]["selected_case_ids"] == [template.case_id]
     assert [item["case_id"] for item in payload["candidate_cases"]] == [template.case_id]
     assert other.title not in prompt
     assert "prompt_instruction" not in json.dumps(payload["asset_binding_policy"], ensure_ascii=False)
-    assert len(prompt) < 4200
+    assert len(prompt) < 3600
+
+
+def test_claude_inline_invocation_overrides_stale_output_token_env(monkeypatch, tmp_path: Path) -> None:
+    old_limit = settings.claude_orchestrator_max_output_tokens
+    object.__setattr__(settings, "claude_orchestrator_max_output_tokens", 12288)
+    monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "8192")
+    captured: dict[str, str | None] = {}
+
+    (tmp_path / "context.json").write_text(
+        json.dumps(
+            {
+                "request": {
+                    "user_prompt": "Create a premium perfume ecommerce hero image.",
+                    "template_case_id": None,
+                    "output": {"count": 1, "provider_hint": "mock_image"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "fallback_decision.json").write_text(
+        json.dumps(
+            {
+                "mode": "smart_enhance",
+                "selected_case_ids": ["case_seed"],
+                "generation_directives": {"count": 1},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_cases.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "candidate_case_details.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "template_lock_contract.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "uploaded_assets.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "asset_binding_policy.json").write_text("{}", encoding="utf-8")
+
+    def fake_run(command_line, **kwargs):
+        captured["max_output_tokens"] = kwargs["env"].get("CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "structured_output": {
+                        "mode": "smart_enhance",
+                        "selected_case_ids": ["case_seed"],
+                        "final_prompt": "Premium perfume ecommerce hero, black glass bottle, gold rim light, clean studio surface.",
+                        "negative_prompt": "watermark, garbled text",
+                        "provider_parameters": {"count": 1},
+                        "prompt_rationale": "Compact prompt keeps the commercial hero direction.",
+                        "confidence": 0.82,
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+    try:
+        decision = claude_orchestrator_service._invoke_claude_inline_json(
+            command=["claude"],
+            workspace=tmp_path,
+        )
+    finally:
+        object.__setattr__(settings, "claude_orchestrator_max_output_tokens", old_limit)
+
+    assert captured["max_output_tokens"] == "12288"
+    assert decision is not None
+    assert decision["final_prompt"].startswith("Premium perfume")
 
 
 def test_claude_final_prompt_strips_internal_reference_ids(monkeypatch) -> None:

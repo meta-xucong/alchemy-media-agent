@@ -32,7 +32,11 @@ from app.services.visual_signals import build_case_visual_signals
 _RECENT_INVOCATIONS: list[OrchestratorInvocationRecord] = []
 _MAX_RECENT_INVOCATIONS = 30
 _NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout"}
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v6_template_lock_fast_path"
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v7_compact_output_budget"
+_CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
+_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
+_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
+_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET = 140
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -65,10 +69,10 @@ CLAUDE_INLINE_DECISION_SCHEMA: dict[str, Any] = {
     "properties": {
         "mode": {"type": "string", "enum": ["template_customize", "smart_enhance", "revision", "batch"]},
         "selected_case_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
-        "final_prompt": {"type": "string", "minLength": 30, "maxLength": 1400},
-        "negative_prompt": {"type": "string", "maxLength": 320},
+        "final_prompt": {"type": "string", "minLength": 30, "maxLength": _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET},
+        "negative_prompt": {"type": "string", "maxLength": _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET},
         "provider_parameters": {"type": "object", "additionalProperties": True},
-        "prompt_rationale": {"type": "string", "maxLength": 180},
+        "prompt_rationale": {"type": "string", "maxLength": _CLAUDE_INLINE_RATIONALE_CHAR_BUDGET},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
     "required": [
@@ -341,7 +345,7 @@ def _invoke_claude_file_mode(
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", str(settings.claude_orchestrator_max_output_tokens))
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
         completed = subprocess.run(
             command_line,
@@ -400,7 +404,7 @@ def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[s
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", str(settings.claude_orchestrator_max_output_tokens))
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
         completed = subprocess.run(
             command_line,
@@ -456,15 +460,15 @@ def _normalize_decision(
     provider_parameters = _normalize_provider_parameters(raw.get("provider_parameters"), generation_directives)
     final_prompt = _truncate(
         _sanitize_downstream_prompt(_text_value(raw.get("final_prompt")) or _text_value(generation_directives.get("prompt"))),
-        2200,
+        1600,
     )
     negative_prompt = _truncate(
         _text_value(raw.get("negative_prompt")) or _text_value(generation_directives.get("negative_prompt")),
-        600,
+        420,
     )
     prompt_rationale = _truncate(
         _text_value(raw.get("prompt_rationale")) or _text_value(raw.get("rationale")),
-        320,
+        220,
     )
     quality_gates = raw.get("quality_gates") if isinstance(raw.get("quality_gates"), dict) else {}
     return CreativeOrchestratorDecision(
@@ -751,13 +755,14 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     if template_case_id:
         fallback_selected_case_ids = [template_case_id]
     payload = {
-        "task": "Top creative brain. Return one compact downstream image prompt package as JSON only.",
+        "task": "Return one compact image prompt decision as JSON only.",
         "rules": (
-            "Template mode: selected_case_ids=[template_case_id] only. Template controls frame: composition, layout, "
-            "background, palette, lighting, mood, text/card treatment, spatial hierarchy, subject relation. User request "
-            "and uploaded assets fill slots only. Obey asset_binding_policy; hard refs are input images. logo_product_surface "
-            "means uploaded logo on target surface, never footer/corner badge/watermark/sticker. If template uses labels/cards, "
-            "ban garbled text, not all text. final_prompt<=1400; negative<=320; no ids/URLs/API/brand copying."
+            "Template mode: selected_case_ids=[template_case_id] only. Template controls composition, layout, background, "
+            "palette, lighting, mood, text/card treatment, hierarchy, subject relation. User/assets fill slots only. Obey "
+            "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
+            f"badge/watermark/sticker. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
+            f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
+            f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying."
         ),
         "user_request": (context.get("request") or {}).get("user_prompt", ""),
         "template_case_id": template_case_id,
@@ -777,7 +782,9 @@ def _build_inline_json_prompt(workspace: Path) -> str:
         ),
     }
     return (
-        "Return compact JSON only. final_prompt is the exact image prompt. No markdown/prose/analysis/extra keys. Output under 1700 chars.\n"
+        "Return compact JSON only. final_prompt is the exact image prompt. "
+        f"Total JSON <= {_CLAUDE_INLINE_JSON_CHAR_BUDGET} chars; final_prompt <= {_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET} chars. "
+        "Use dense visual directives. No markdown/prose/analysis/chain-of-thought/extra keys.\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -800,15 +807,15 @@ def _compact_inline_cases(
         compact.append(
             {
                 "case_id": item.get("case_id"),
-                "title": _truncate(_text_value(item.get("title")), 60),
+                "title": _truncate(_text_value(item.get("title")), 52),
                 "category": item.get("category"),
-                "summary": _truncate(_text_value(item.get("summary")), 90 if template_case_id else 70),
+                "summary": _truncate(_text_value(item.get("summary")), 70 if template_case_id else 56),
                 "style_tags": item.get("style_tags", [])[: (3 if template_case_id else 2)],
                 "use_case_tags": item.get("use_case_tags", [])[: (3 if template_case_id else 2)],
                 "prompt_atoms": {}
                 if template_case_id
                 else _compact_atoms(detail.get("prompt_atoms", {}) if isinstance(detail, dict) else {}),
-                "raw_visual_skeleton": _compact_case_excerpt(_text_value(detail.get("raw_prompt_excerpt")), limit=420)
+                "raw_visual_skeleton": _compact_case_excerpt(_text_value(detail.get("raw_prompt_excerpt")), limit=300)
                 if template_case_id and isinstance(detail, dict)
                 else "",
                 "visual_signal_brief": _compact_visual_signal_brief(
@@ -837,7 +844,7 @@ def _compact_visual_signal_brief(raw: Any, *, tight: bool = False) -> dict[str, 
     compact: dict[str, Any] = {}
     brief = _text_value(raw.get("brief"))
     if brief:
-        compact["brief"] = _truncate(brief, 110 if tight else 120)
+        compact["brief"] = _truncate(brief, 90 if tight else 105)
     keys = [
         "accent_color_signals",
         "material_signals",
@@ -848,14 +855,14 @@ def _compact_visual_signal_brief(raw: Any, *, tight: bool = False) -> dict[str, 
         value = raw.get(key)
         if isinstance(value, list):
             compact[key] = [
-                _truncate(_text_value(item), 38 if tight else 42)
+                _truncate(_text_value(item), 32 if tight else 38)
                 for item in value[:1]
                 if _text_value(item)
             ]
     reusable = raw.get("reusable_principles")
     if isinstance(reusable, list):
         compact["reusable_principles"] = [
-            _truncate(_text_value(item), 56 if tight else 64)
+            _truncate(_text_value(item), 48 if tight else 56)
             for item in reusable[:1]
             if _text_value(item)
         ]
@@ -884,7 +891,7 @@ def _compact_uploaded_assets(raw: list[Any]) -> list[dict[str, Any]]:
                 "role": item.get("role"),
                 "constraint_strength": item.get("constraint_strength"),
                 "status": item.get("status"),
-                "visual_summary": _truncate(_text_value(brief.get("visual_summary")), 120),
+                "visual_summary": _truncate(_text_value(brief.get("visual_summary")), 90),
                 "identity_requirements": (brief.get("identity_requirements") or [])[:2],
                 "style_signals": (brief.get("style_signals") or [])[:2],
                 "provider_input_required": brief.get("provider_input_required"),
@@ -914,7 +921,7 @@ def _compact_asset_binding_policy(raw: Any) -> dict[str, Any]:
         if not template_mode:
             binding["allowed"] = (item.get("allowed_to_override") or [])[:2]
             binding["blocked"] = (item.get("not_allowed_to_override") or [])[:3]
-            binding["conflict"] = _truncate(_text_value(item.get("conflict_resolution")), 90)
+            binding["conflict"] = _truncate(_text_value(item.get("conflict_resolution")), 70)
         bindings.append(binding)
     return {
         "mode": raw.get("mode"),
@@ -932,7 +939,7 @@ def _compact_placement_intent(raw: Any) -> dict[str, Any]:
         "target_surface": raw.get("target_surface"),
         "target_label": raw.get("target_label"),
         "source": raw.get("source"),
-        "instruction": _truncate(_text_value(raw.get("instruction")), 70),
+        "instruction": _truncate(_text_value(raw.get("instruction")), 55),
     }
 
 
@@ -997,7 +1004,8 @@ def _sanitize_case_excerpt_sentence(value: str) -> str:
 def _system_prompt() -> str:
     return (
         "You are the highest-level creative orchestration brain for a custom image generation agent. "
-        "Return only executable JSON decisions for downstream tools. Do not output natural-language-only reports."
+        "Return only compact executable JSON matching the schema. No markdown, explanations, analysis, "
+        f"chain-of-thought, or extra keys. Keep total JSON under {_CLAUDE_INLINE_JSON_CHAR_BUDGET} characters."
     )
 
 
