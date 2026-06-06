@@ -1,11 +1,15 @@
 import asyncio
+import base64
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.providers.base import ProviderRateLimitError
+import app.providers.gemini_image as gemini_image_provider
+import app.providers.openai_image as openai_image_provider
 from app.providers.registry import registry
 from app.schemas import ImageGenerationRequest, ImagePromptPlan
 from app.config import settings
@@ -39,6 +43,16 @@ def test_openai_image_provider_detects_concurrency_limit():
     assert provider._retry_delay_seconds(exc, 3) == 36.0
 
 
+def test_openai_image_provider_detects_image_quota_limit():
+    provider = registry.image("openai_gpt_image")
+    exc = Exception(
+        "Error code: 429 - Rate limit reached for gpt-image-2-codex in organization org on input-images per min: Limit 4000, Used 4000"
+    )
+
+    assert provider._is_retryable_error(exc) is True
+    assert provider._is_image_quota_limit_error(exc) is True
+
+
 def test_openai_image_provider_passes_quality_to_sdk_call():
     provider = registry.image("openai_gpt_image")
     captured = {}
@@ -70,6 +84,127 @@ def test_openai_image_provider_passes_quality_to_sdk_call():
     assert captured["model"] == "gpt-image-2"
 
 
+def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    captured = {}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    class CapturingClient:
+        images = CapturingImages()
+
+    result = asyncio.run(
+        provider._generate_one_with_references(
+            CapturingClient(),
+            "prompt with material constraints",
+            ImagePromptPlan(main_subject="咖啡海报", count=1, quality="medium", output_format="png"),
+            [reference_path],
+            index=0,
+        )
+    )
+
+    assert captured["model"] == "gpt-image-2"
+    assert captured["prompt"] == "prompt with material constraints"
+    assert captured["quality"] == "medium"
+    assert captured["output_format"] == "png"
+    assert len(captured["image"]) == 1
+    assert result[0]["api_operation"] == "images.edit"
+    assert result[0]["reference_image_count"] == 1
+
+
+def test_gemini_image_provider_generates_from_inline_data(monkeypatch):
+    provider = registry.image("gemini_image")
+    captured = {}
+    original_key = settings.gemini_image_api_key
+    original_base_url = settings.gemini_image_base_url
+    original_model = settings.gemini_image_model
+
+    class FakeResponse:
+        status_code = 200
+
+        @property
+        def text(self):
+            return "{}"
+
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": base64.b64encode(b"fake-png").decode("ascii"),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return FakeResponse()
+
+    try:
+        settings.gemini_image_api_key = "sk-gemini-test"
+        settings.gemini_image_base_url = "https://gemini.example.test"
+        settings.gemini_image_model = "gemini-3-pro-image-preview"
+        monkeypatch.setattr(gemini_image_provider.httpx, "AsyncClient", FakeAsyncClient)
+
+        result = asyncio.run(
+            provider.generate(
+                ImageGenerationRequest(
+                    prompt_plan=ImagePromptPlan(
+                        main_subject="精品咖啡海报",
+                        count=1,
+                        size="1024x1536",
+                        quality="high",
+                    )
+                )
+            )
+        )
+    finally:
+        settings.gemini_image_api_key = original_key
+        settings.gemini_image_base_url = original_base_url
+        settings.gemini_image_model = original_model
+
+    assert captured["url"] == "https://gemini.example.test/models/gemini-3-pro-image-preview:generateContent?key=sk-gemini-test"
+    assert captured["headers"]["x-goog-api-key"] == "sk-gemini-test"
+    assert captured["payload"]["generationConfig"]["responseModalities"] == ["Image"]
+    assert captured["payload"]["generationConfig"]["responseFormat"]["image"]["aspectRatio"] == "2:3"
+    assert captured["payload"]["generationConfig"]["responseFormat"]["image"]["imageSize"] == "2K"
+    assert result.provider == "gemini_image"
+    assert result.model == "gemini-3-pro-image-preview"
+    assert result.outputs[0]["format"] == "png"
+    assert result.outputs[0]["b64_json"]
+
+
 def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
     captured = {}
     original_key = settings.openai_api_key
@@ -91,7 +226,7 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
                         "brand_constraints": ["premium tone"],
                         "negative_constraints": ["avoid clutter"],
                         "text": {"required": False, "language": "zh-CN"},
-                        "generation_prompt": "LLM refined premium coffee poster prompt",
+                        "generation_prompt": "LLM refined premium coffee poster prompt. Style reference: asset_ref color harmony.",
                         "planning_notes": ["checked composition"],
                     }
                 )
@@ -115,6 +250,10 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
                 original_prompt="生成 1 张精品咖啡海报",
                 work_intensity="atelier",
                 provider_preference="openai_gpt_image",
+                asset_context={
+                    "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1},
+                    "assets": [{"asset_id": "asset_ref", "role": "style_reference", "vision_profile": {"summary": "暖色咖啡风格参考"}}],
+                },
             )
         )
     finally:
@@ -126,10 +265,14 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
 
     assert captured["reasoning"]["effort"] == "high"
     assert captured["model"] == "gpt-5.5-test"
+    planner_payload = json.loads(captured["input"][1]["content"])
+    assert planner_payload["asset_context"]["provider_input_plan"]["reference_image_count"] == 1
+    assert planner_payload["asset_context_rule"].startswith("Use structured asset context")
     assert summary["planner"] == "llm"
     assert summary["llm_used"] is True
     assert plan.variables["planner"] == "llm"
-    assert plan.variables["generation_prompt"] == "LLM refined premium coffee poster prompt"
+    assert "asset_ref" not in plan.variables["generation_prompt"]
+    assert "上传参考图" in plan.variables["generation_prompt"]
 
 
 def test_work_intensity_uses_backup_llm_when_primary_fails(monkeypatch):
@@ -282,6 +425,66 @@ def test_openai_image_provider_raises_retryable_rate_limit_after_retries(monkeyp
     assert raised.value.detail["upstream_concurrency_limited"] is True
 
 
+def test_openai_image_provider_cools_down_after_image_quota_limit(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    attempts = 0
+    original_queue_timeout = settings.openai_image_local_queue_timeout_seconds
+    settings.openai_image_local_queue_timeout_seconds = 0.01
+
+    class QuotaResponse:
+        headers = {"Retry-After": "120"}
+
+    class QuotaError(Exception):
+        status_code = 429
+        response = QuotaResponse()
+
+    class QuotaImages:
+        async def generate(self, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise QuotaError(
+                "Rate limit reached for gpt-image-2-codex on input-images per min: Limit 4000, Used 4000"
+            )
+
+    class SuccessImages:
+        async def generate(self, **kwargs):
+            raise AssertionError("OpenAI SDK should not be called during local cooldown.")
+
+    class QuotaClient:
+        images = QuotaImages()
+
+    class SuccessClient:
+        images = SuccessImages()
+
+    try:
+        with pytest.raises(ProviderRateLimitError) as first:
+            asyncio.run(
+                provider._generate_one(
+                    QuotaClient(),
+                    "prompt",
+                    ImagePromptPlan(main_subject="咖啡海报", count=1),
+                    index=0,
+                )
+            )
+        assert attempts == 1
+        assert first.value.detail["rate_limit_scope"] == "openai_image_input_images_per_minute"
+        assert first.value.detail["retry_after_seconds"] == 120
+
+        with pytest.raises(ProviderRateLimitError) as second:
+            asyncio.run(
+                provider._generate_one(
+                    SuccessClient(),
+                    "prompt",
+                    ImagePromptPlan(main_subject="咖啡海报", count=1),
+                    index=0,
+                )
+            )
+        assert second.value.detail["rate_limit_scope"] == "upstream_openai_image_rate_limit_cooldown"
+    finally:
+        openai_image_provider._openai_image_rate_limiter.reset()
+        settings.openai_image_local_queue_timeout_seconds = original_queue_timeout
+
+
 def test_mock_image_provider_contract():
     provider = registry.image("mock_image")
     caps = asyncio.run(provider.capabilities())
@@ -303,5 +506,16 @@ def test_mock_image_provider_contract():
 
 
 def test_default_image_selection_falls_back_to_mock_when_openai_unconfigured():
-    provider = asyncio.run(registry.select_image())
-    assert provider.name == "mock_image"
+    original_provider = settings.default_image_provider
+    original_openai_key = settings.openai_api_key
+    original_gemini_key = settings.gemini_image_api_key
+    try:
+        settings.default_image_provider = "openai_gpt_image"
+        settings.openai_api_key = None
+        settings.gemini_image_api_key = None
+        provider = asyncio.run(registry.select_image())
+        assert provider.name == "mock_image"
+    finally:
+        settings.default_image_provider = original_provider
+        settings.openai_api_key = original_openai_key
+        settings.gemini_image_api_key = original_gemini_key

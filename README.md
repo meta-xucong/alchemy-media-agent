@@ -26,6 +26,13 @@
 - `docs/18_验收执行矩阵.md`：全量、模拟、冒烟、live-readiness 验收命令。
 - `docs/19_全量自检报告.md`：对照开发文档的模块覆盖、修复项和验收边界。
 - `docs/20_前端界面说明.md`：Apple 风格前端工作台、接口接入和验证结果。
+- `docs/21_密钥与部署配置.md`：模型密钥、OpenAI-compatible 网关、VPS 部署和冒烟验证配置。
+- `docs/22_2.0_Agent化案例库与中枢调度方案.md`：2.0 Agent 化案例库、中枢调度、资源 provider 和案例智能化方案上一版。
+- `docs/23_2.0_OpenAI_Agents_SDK优先架构方案.md`：2.0 新主方案，OpenAI Agents SDK 优先，中枢、专业 agent、tools、handoffs、sessions、guardrails 和 tracing 设计。
+- `docs/24_V1素材高级版_开发文档.md`：V1 素材高级版后端方案，定义基础参数与高级图片素材增强的叠加关系、素材用途、AssetVisionProfile、AssetPlan、PromptPlan、provider 图片输入、视觉复检和实施分期。
+- `docs/25_V1素材高级版_API与数据模型.md`：V1 素材高级版 API 扩展、请求 schema、视觉画像、复检结果、数据表、状态机和 provider capability 契约。
+- `docs/26_V1素材高级版_测试验收与风控.md`：V1 素材高级版测试矩阵、真实图片输入验收、视觉画像/复检、历史验收、限流、上传安全、授权与内容风控。
+- `docs/27_V1素材高级版_实施任务拆解.md`：V1 素材高级版从开关、schema、vision analyzer、Kimi planner、provider 图片输入、后处理到测试上线的任务拆解。
 - `specs/openapi.yaml`：第一版后端 API 草案。
 - `diagrams/*.mmd`：Mermaid 架构图。
 - `src_skeleton/`：最小代码骨架，方便研发快速起项目。
@@ -67,7 +74,7 @@
 
 另外要注意：
 
-- `gemini_image` 目前仍是占位 provider，不是 live 生图入口。
+- `gemini_image` 已接入 Gemini `generateContent` 生图通道；生产环境需配置 `GEMINI_IMAGE_API_KEY`、`GEMINI_IMAGE_BASE_URL` 和模型 ID。
 - `seedance` 目前仍是占位视频 provider，不是 live 视频入口。
 - `docker-compose.yml` 已挂载 `./src_skeleton/.env:/app/.env`，因此运行时页面里改过的 provider/base URL 可以持久化到宿主机并在重建容器后保留。
 

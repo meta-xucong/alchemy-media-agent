@@ -96,6 +96,44 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Asset'
+  /v1/assets/{asset_id}/content:
+    put:
+      summary: Upload asset bytes as base64 JSON for local development
+      operationId: putAssetContent
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetContentUploadRequest'
+      responses:
+        '200':
+          description: Asset content stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+    get:
+      summary: Read stored asset bytes
+      operationId: getAssetContent
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Stored asset bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
   /v1/assets/{asset_id}:
     get:
       summary: Get asset status and material brief
@@ -112,6 +150,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Asset'
+  /v1/assets/{asset_id}/intent:
+    put:
+      summary: Save an advanced asset intent preset
+      operationId: setAssetIntent
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetIntent'
+      responses:
+        '200':
+          description: Asset intent saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetIntent'
+  /v1/assets/{asset_id}/masks:
+    post:
+      summary: Create a mask for local image editing
+      operationId: createAssetMask
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAssetMaskRequest'
+      responses:
+        '200':
+          description: Mask created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAssetMaskResponse'
   /v1/image/jobs:
     post:
       summary: Create an image generation job
@@ -321,9 +403,12 @@ components:
         filename: { type: string }
         mime_type: { type: string }
         size_bytes: { type: integer }
+        declared_role:
+          type: string
+          enum: [style_reference, subject_reference, logo_overlay, portrait_identity, background_reference, composition_reference, local_edit, negative_reference]
+        intended_use: { type: string, example: "image_generation" }
         consent:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/AssetConsent'
       required: [filename, mime_type, size_bytes, consent]
     CreateAssetUploadResponse:
       type: object
@@ -333,26 +418,106 @@ components:
         headers:
           type: object
           additionalProperties: { type: string }
+    AssetContentUploadRequest:
+      type: object
+      properties:
+        content_base64: { type: string }
+        mime_type: { type: string }
+      required: [content_base64]
     Asset:
       type: object
       properties:
         id: { type: string }
         status:
           type: string
-          enum: [uploaded, scanning, extracting, analyzed, ready, failed, rejected]
+          enum: [created, upload_requested, uploaded, scanning, stored, normalized, derivatives_ready, extracting, analyzed, ready, scan_failed, normalize_failed, analysis_failed, unsupported_type, policy_blocked, failed, rejected]
         mime_type: { type: string }
         thumbnail_url: { type: string }
+        normalized_url: { type: string }
         material_brief:
           type: object
           additionalProperties: true
+        consent:
+          $ref: '#/components/schemas/AssetConsent'
+    AssetConsent:
+      type: object
+      properties:
+        user_confirmed_rights: { type: boolean, default: false }
+        portrait_identity_allowed: { type: boolean, default: false }
+        logo_or_trademark_allowed: { type: boolean, default: false }
+        commercial_use_allowed: { type: boolean, default: false }
+        source_note: { type: string }
+    AssetIntent:
+      type: object
+      properties:
+        asset_id: { type: string }
+        role:
+          type: string
+          enum: [style_reference, subject_reference, logo_overlay, portrait_identity, background_reference, composition_reference, local_edit, negative_reference]
+        priority: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        preservation:
+          type: string
+          enum: [loose, medium, strict, exact]
+          default: loose
+        strength: { type: number, minimum: 0, maximum: 1, default: 0.5 }
+        notes: { type: string }
+        placement:
+          $ref: '#/components/schemas/AssetPlacement'
+        mask_id: { type: string }
+        consent:
+          $ref: '#/components/schemas/AssetConsent'
+      required: [asset_id, role]
+    AssetPlacement:
+      type: object
+      properties:
+        anchor:
+          type: string
+          enum: [top_left, top_center, top_right, center_left, center, center_right, bottom_left, bottom_center, bottom_right, custom]
+          default: bottom_right
+        margin_ratio: { type: number, minimum: 0, maximum: 0.5, default: 0.06 }
+        width_ratio: { type: number, minimum: 0.01, maximum: 1, default: 0.18 }
+        height_ratio: { type: number, minimum: 0.01, maximum: 1 }
+        opacity: { type: number, minimum: 0, maximum: 1, default: 1 }
+        safe_area: { type: boolean, default: true }
+        x_ratio: { type: number, minimum: 0, maximum: 1 }
+        y_ratio: { type: number, minimum: 0, maximum: 1 }
+    CreateAssetMaskRequest:
+      type: object
+      properties:
+        mask_type:
+          type: string
+          enum: [polygon, brush, rectangle]
+        points:
+          type: array
+          items:
+            type: object
+            properties:
+              x: { type: number, minimum: 0, maximum: 1 }
+              y: { type: number, minimum: 0, maximum: 1 }
+            required: [x, y]
+        label: { type: string }
+      required: [mask_type]
+    CreateAssetMaskResponse:
+      type: object
+      properties:
+        mask_id: { type: string }
+        mask_url: { type: string }
     CreateImageJobRequest:
       type: object
       properties:
         session_id: { type: string }
         prompt: { type: string }
+        asset_mode:
+          type: string
+          enum: [basic, advanced]
+          default: basic
         asset_ids:
           type: array
           items: { type: string }
+        asset_intents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetIntent'
         count: { type: integer, minimum: 1, maximum: 10 }
         size: { type: string, example: "1024x1536" }
         quality: { type: string, enum: [low, medium, high, auto] }
@@ -395,7 +560,19 @@ components:
         status: { type: string }
         provider: { type: string }
         model: { type: string }
+        asset_mode: { type: string, enum: [basic, advanced] }
+        asset_plan:
+          type: object
+          additionalProperties: true
         prompt_plan:
+          type: object
+          additionalProperties: true
+        postprocess_steps:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        provenance:
           type: object
           additionalProperties: true
         video_request:
@@ -457,6 +634,22 @@ components:
         height: { type: integer }
         provider: { type: string }
         model: { type: string }
+        requested_provider: { type: string }
+        requested_model: { type: string }
+        provider_fallback: { type: boolean }
+        asset_mode: { type: string, enum: [basic, advanced] }
+        asset_intents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetIntent'
+        asset_plan:
+          type: object
+          additionalProperties: true
+        prompt_plan:
+          type: object
+          additionalProperties: true
+        original_prompt: { type: string }
+        final_prompt: { type: string }
         prompt: { type: string }
         size: { type: string }
         version_parent_id: { type: string }
@@ -471,6 +664,10 @@ components:
         models:
           type: array
           items: { type: string }
+        model_capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderModelCapabilities'
         operations:
           type: array
           items: { type: string }
@@ -479,3 +676,17 @@ components:
           additionalProperties: true
         is_mock: { type: boolean }
         reason: { type: string }
+    ProviderModelCapabilities:
+      type: object
+      properties:
+        id: { type: string }
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [text_to_image, image_reference, image_edit, mask_edit, multi_image_reference, transparent_output, provider_file_upload]
+        advanced_asset_roles:
+          type: array
+          items:
+            type: string
+            enum: [style_reference, subject_reference, logo_overlay, portrait_identity, background_reference, composition_reference, local_edit, negative_reference]

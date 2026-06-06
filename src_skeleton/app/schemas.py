@@ -29,14 +29,110 @@ class MaterialBrief(BaseModel):
     visual_style: dict[str, Any] = Field(default_factory=dict)
     text_constraints: list[str] = Field(default_factory=list)
     reference_usage: str | None = None
+    detected_roles: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+
+
+class AssetVisionProfile(BaseModel):
+    asset_id: str
+    status: Literal["pending", "ready", "failed", "skipped"] = "pending"
+    analyzer_provider: str = "local_asset_vision"
+    analyzer_model: str = "pillow-statistical-v1"
+    summary: str | None = None
+    image: dict[str, Any] = Field(default_factory=dict)
+    style: dict[str, Any] = Field(default_factory=dict)
+    composition: dict[str, Any] = Field(default_factory=dict)
+    subjects: list[dict[str, Any]] = Field(default_factory=list)
+    detected_text: list[dict[str, Any]] = Field(default_factory=list)
+    logo_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    faces: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_roles: list[str] = Field(default_factory=list)
+    error: dict[str, Any] | None = None
+    created_at: str | None = None
+
+
+class VisualReviewResult(BaseModel):
+    review_status: Literal["ready", "failed", "skipped"] = "skipped"
+    review_provider: str = "local_visual_review_fallback"
+    overall_score: float | None = Field(default=None, ge=0, le=1)
+    checks: dict[str, Any] = Field(default_factory=dict)
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    retry_recommendation: str | None = None
+    created_at: str | None = None
+
+
+class AssetConsent(BaseModel):
+    user_confirmed_rights: bool = False
+    rights_confirmed: bool | None = None
+    portrait_identity_allowed: bool = False
+    logo_or_trademark_allowed: bool = False
+    commercial_use_allowed: bool = False
+    source_note: str | None = None
+
+    def has_basic_rights(self) -> bool:
+        return self.user_confirmed_rights or bool(self.rights_confirmed)
+
+
+class AssetPlacement(BaseModel):
+    anchor: Literal[
+        "top_left",
+        "top_center",
+        "top_right",
+        "center_left",
+        "center",
+        "center_right",
+        "bottom_left",
+        "bottom_center",
+        "bottom_right",
+        "custom",
+    ] = "bottom_right"
+    margin_ratio: float = Field(default=0.06, ge=0, le=0.5)
+    width_ratio: float = Field(default=0.18, ge=0.01, le=1)
+    height_ratio: float | None = Field(default=None, ge=0.01, le=1)
+    opacity: float = Field(default=1.0, ge=0, le=1)
+    safe_area: bool = True
+    x_ratio: float | None = Field(default=None, ge=0, le=1)
+    y_ratio: float | None = Field(default=None, ge=0, le=1)
+
+
+class AssetIntent(BaseModel):
+    asset_id: str
+    role: Literal[
+        "style_reference",
+        "subject_reference",
+        "logo_overlay",
+        "portrait_identity",
+        "background_reference",
+        "composition_reference",
+        "local_edit",
+        "negative_reference",
+    ]
+    priority: int = Field(default=50, ge=1, le=100)
+    preservation: Literal["loose", "medium", "strict", "exact"] = "loose"
+    strength: float = Field(default=0.5, ge=0, le=1)
+    notes: str | None = None
+    placement: AssetPlacement | None = None
+    mask_id: str | None = None
+    consent: AssetConsent = Field(default_factory=AssetConsent)
 
 
 class CreateAssetUploadRequest(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int = Field(ge=0)
-    consent: dict[str, Any]
+    declared_role: Literal[
+        "style_reference",
+        "subject_reference",
+        "logo_overlay",
+        "portrait_identity",
+        "background_reference",
+        "composition_reference",
+        "local_edit",
+        "negative_reference",
+    ] | None = None
+    intended_use: str | None = None
+    consent: AssetConsent | dict[str, Any]
 
 
 class CreateAssetUploadResponse(BaseModel):
@@ -45,16 +141,54 @@ class CreateAssetUploadResponse(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
+class AssetContentUploadRequest(BaseModel):
+    content_base64: str
+    mime_type: str | None = None
+
+
+class CreateAssetMaskRequest(BaseModel):
+    mask_type: Literal["polygon", "brush", "rectangle"]
+    points: list[dict[str, float]] = Field(default_factory=list)
+    label: str | None = None
+
+
+class CreateAssetMaskResponse(BaseModel):
+    mask_id: str
+    mask_url: str
+
+
 class Asset(BaseModel):
     id: str
     filename: str
     mime_type: str
     size_bytes: int
-    status: Literal["uploaded", "scanning", "extracting", "analyzed", "ready", "failed", "rejected"]
+    status: Literal[
+        "created",
+        "upload_requested",
+        "uploaded",
+        "scanning",
+        "stored",
+        "normalized",
+        "derivatives_ready",
+        "extracting",
+        "analyzed",
+        "ready",
+        "scan_failed",
+        "normalize_failed",
+        "analysis_failed",
+        "unsupported_type",
+        "policy_blocked",
+        "failed",
+        "rejected",
+    ]
     upload_url: str | None = None
     thumbnail_url: str | None = None
+    normalized_url: str | None = None
     material_brief: MaterialBrief | None = None
-    consent: dict[str, Any] = Field(default_factory=dict)
+    vision_profile: AssetVisionProfile | None = None
+    declared_role: str | None = None
+    intended_use: str | None = None
+    consent: AssetConsent | dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
 
@@ -88,6 +222,9 @@ class PromptPatch(BaseModel):
 class ImageGenerationRequest(BaseModel):
     prompt_plan: ImagePromptPlan
     asset_ids: list[str] = Field(default_factory=list)
+    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_intents: list[AssetIntent] = Field(default_factory=list)
+    asset_plan: dict[str, Any] | None = None
     provider_preference: str | None = None
     idempotency_key: str | None = None
     trace_id: str | None = None
@@ -138,6 +275,7 @@ class GenerationOutput(BaseModel):
     height: int | None = None
     duration_seconds: float | None = None
     score: ScoreReport | None = None
+    visual_review: VisualReviewResult | None = None
     version_parent_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -149,6 +287,10 @@ class GenerationJob(BaseModel):
     status: JobStatus
     provider: str | None = None
     model: str | None = None
+    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_plan: dict[str, Any] | None = None
+    postprocess_steps: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: dict[str, Any] = Field(default_factory=dict)
     prompt_plan: ImagePromptPlan | None = None
     video_request: "VideoGenerationRequest | None" = None
     outputs: list[GenerationOutput] = Field(default_factory=list)
@@ -173,6 +315,18 @@ class ImageHistoryItem(BaseModel):
     height: int | None = None
     provider: str | None = None
     model: str | None = None
+    requested_provider: str | None = None
+    requested_model: str | None = None
+    provider_fallback: dict[str, Any] | None = None
+    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_intents: list[dict[str, Any]] = Field(default_factory=list)
+    asset_plan: dict[str, Any] | None = None
+    asset_vision_profiles: list[dict[str, Any]] = Field(default_factory=list)
+    provider_input_plan: dict[str, Any] | None = None
+    visual_review: dict[str, Any] | None = None
+    prompt_plan: dict[str, Any] | None = None
+    original_prompt: str | None = None
+    final_prompt: str | None = None
     work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
     work_intensity_label: str | None = None
     prompt: str | None = None
@@ -218,7 +372,9 @@ class MessageResponse(BaseModel):
 class CreateImageJobRequest(BaseModel):
     session_id: str
     prompt: str
+    asset_mode: Literal["basic", "advanced"] = "basic"
     asset_ids: list[str] = Field(default_factory=list)
+    asset_intents: list[AssetIntent] = Field(default_factory=list)
     count: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     quality: Literal["low", "medium", "high", "auto"] = "auto"
@@ -256,6 +412,8 @@ class ProviderCapabilitiesResponse(BaseModel):
     configured: bool
     models: list[str] = Field(default_factory=list)
     operations: list[str] = Field(default_factory=list)
+    model_capabilities: list[dict[str, Any]] = Field(default_factory=list)
+    advanced_asset_roles: list[str] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
     is_mock: bool = False
     reason: str | None = None

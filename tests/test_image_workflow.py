@@ -2,18 +2,40 @@ import asyncio
 
 import pytest
 
+from app.providers.base import ProviderRuntimeError
+from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
-from app.schemas import ReviseImageRequest
+from app.schemas import CostEstimate, ImageGenerationResult, ReviseImageRequest
+import app.services.image_service as image_service
 from app.services.image_service import create_image_job, revise_image_job
 from app.storage import media_store
 
 
 @pytest.fixture(autouse=True)
 def isolate_repository_and_media_store(tmp_path, monkeypatch):
+    original_default_provider = image_service.settings.default_image_provider
+    original_default_model = image_service.settings.default_image_model
+    original_mock_enabled = image_service.settings.mock_image_provider_enabled
+    original_openai_key = image_service.settings.openai_api_key
+    original_gemini_key = image_service.settings.gemini_image_api_key
+    original_llm_enabled = image_service.settings.llm_prompt_planning_enabled
     monkeypatch.setattr(media_store, "root", tmp_path)
+    monkeypatch.setitem(image_service.registry.image_providers, "mock_image", MockImageProvider())
+    image_service.settings.default_image_provider = "mock_image"
+    image_service.settings.default_image_model = "mock-image-v1"
+    image_service.settings.mock_image_provider_enabled = True
+    image_service.settings.openai_api_key = None
+    image_service.settings.gemini_image_api_key = None
+    image_service.settings.llm_prompt_planning_enabled = False
     repository.reset()
     yield
     repository.reset()
+    image_service.settings.default_image_provider = original_default_provider
+    image_service.settings.default_image_model = original_default_model
+    image_service.settings.mock_image_provider_enabled = original_mock_enabled
+    image_service.settings.openai_api_key = original_openai_key
+    image_service.settings.gemini_image_api_key = original_gemini_key
+    image_service.settings.llm_prompt_planning_enabled = original_llm_enabled
 
 
 def test_create_image_job_batch_outputs_and_persisted_metadata():
@@ -113,6 +135,122 @@ def test_explicit_unconfigured_provider_is_not_silently_bypassed():
     assert job.error.code == "provider_not_configured"
     assert job.provider in {"openai_gpt_image", "gemini_image"}
     assert job.error.detail["primary_provider"] == "openai_gpt_image"
+
+
+def test_gemini_runtime_failure_records_openai_fallback(monkeypatch):
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    original_llm_enabled = image_service.settings.llm_prompt_planning_enabled
+    image_service.settings.llm_prompt_planning_enabled = False
+
+    class FailingGemini:
+        name = "gemini_image"
+
+        async def estimate_cost(self, request):
+            return CostEstimate(provider=self.name, model="gemini-3-pro-image-preview")
+
+        async def generate(self, request):
+            raise ProviderRuntimeError(
+                "Gemini image generation returned an error.",
+                provider=self.name,
+                detail={"status_code": 404, "body": "model not found"},
+            )
+
+    class SuccessfulOpenAI:
+        name = "openai_gpt_image"
+
+        async def estimate_cost(self, request):
+            return CostEstimate(provider=self.name, model="gpt-image-2")
+
+        async def generate(self, request):
+            return ImageGenerationResult(
+                provider=self.name,
+                model="gpt-image-2",
+                outputs=[{"b64_json": png_b64, "format": "png", "width": 1, "height": 1}],
+            )
+
+    async def fake_select_image(provider_name=None):
+        if provider_name == "gemini_image":
+            return FailingGemini()
+        if provider_name == "openai_gpt_image":
+            return SuccessfulOpenAI()
+        raise AssertionError(provider_name)
+
+    monkeypatch.setattr(image_service.registry, "select_image", fake_select_image)
+    monkeypatch.setattr(image_service.registry, "alternate_image_name", lambda provider: "openai_gpt_image" if provider == "gemini_image" else None)
+
+    try:
+        job = asyncio.run(
+            create_image_job(
+                session_id="ses_test",
+                prompt="生成 1 张极简茶饮海报。",
+                provider_preference="gemini_image",
+                work_intensity="swift",
+            )
+        )
+    finally:
+        image_service.settings.llm_prompt_planning_enabled = original_llm_enabled
+
+    fallback = job.raw_response_summary["image_provider_fallback"]
+    assert job.status == "ready"
+    assert job.provider == "openai_gpt_image"
+    assert job.model == "gpt-image-2"
+    assert job.raw_response_summary["requested_image_provider"] == "gemini_image"
+    assert fallback["from"] == "gemini_image"
+    assert fallback["to"] == "openai_gpt_image"
+    assert job.outputs[0].metadata["requested_provider"] == "gemini_image"
+    assert job.outputs[0].metadata["actual_provider"] == "openai_gpt_image"
+    assert job.outputs[0].metadata["provider_fallback"]["to"] == "openai_gpt_image"
+
+    history = media_store.list_history_records(limit=10)
+    assert history[0]["requested_provider"] == "gemini_image"
+    assert history[0]["provider"] == "openai_gpt_image"
+    assert history[0]["provider_fallback"]["from"] == "gemini_image"
+
+
+def test_failed_image_fallback_preserves_primary_and_fallback_diagnostics(monkeypatch):
+    class FailingProvider:
+        def __init__(self, name: str, model: str, message: str):
+            self.name = name
+            self.model = model
+            self.message = message
+
+        async def estimate_cost(self, request):
+            return CostEstimate(provider=self.name, model=self.model)
+
+        async def generate(self, request):
+            raise ProviderRuntimeError(
+                self.message,
+                provider=self.name,
+                detail={"model": self.model, "reason": self.message},
+            )
+
+    async def fake_select_image(provider_name=None):
+        if provider_name == "openai_gpt_image":
+            return FailingProvider("openai_gpt_image", "gpt-image-2", "OpenAI reference route unavailable")
+        if provider_name == "gemini_image":
+            return FailingProvider("gemini_image", "gemini-3-pro-image-preview", "Gemini model not found")
+        raise AssertionError(provider_name)
+
+    monkeypatch.setattr(image_service.registry, "select_image", fake_select_image)
+    monkeypatch.setattr(image_service.registry, "alternate_image_name", lambda provider: "gemini_image" if provider == "openai_gpt_image" else None)
+
+    job = asyncio.run(
+        create_image_job(
+            session_id="ses_test",
+            prompt="生成 1 张错误诊断测试图。",
+            provider_preference="openai_gpt_image",
+            work_intensity="swift",
+        )
+    )
+
+    assert job.status == "failed"
+    assert job.provider == "gemini_image"
+    assert job.error is not None
+    assert job.error.detail["primary_provider"] == "openai_gpt_image"
+    assert job.error.detail["primary_error_message"] == "OpenAI reference route unavailable"
+    assert job.error.detail["primary_error_detail"]["model"] == "gpt-image-2"
+    assert job.error.detail["fallback_provider"] == "gemini_image"
+    assert job.error.detail["fallback_error_message"] == "Gemini model not found"
 
 
 def test_safety_rejected_prompt_does_not_call_provider():

@@ -63,7 +63,7 @@ $lines = @(
     "DEFAULT_IMAGE_PROVIDER=openai_gpt_image",
     "DEFAULT_IMAGE_MODEL=gpt-image-2",
     "OPENAI_IMAGE_MODEL=gpt-image-2",
-    "GEMINI_IMAGE_MODEL=gemini-3.1-flash-image",
+    "GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview",
     "GEMINI_IMAGE_BASE_URL=",
     "",
     "DEFAULT_LLM_PROVIDER=anthropic",

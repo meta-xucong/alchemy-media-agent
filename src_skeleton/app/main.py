@@ -11,6 +11,9 @@ from app.config import persist_runtime_settings_to_env, settings, update_runtime
 from app.providers.registry import registry
 from app.repositories import repository
 from app.schemas import (
+    AssetContentUploadRequest,
+    AssetIntent,
+    CreateAssetMaskRequest,
     CreateAssetUploadRequest,
     CreateImageJobRequest,
     CreateSessionRequest,
@@ -22,7 +25,7 @@ from app.schemas import (
     RuntimeProviderSettingsRequest,
     RuntimeProviderSettingsResponse,
 )
-from app.services.asset_service import complete_asset_upload, create_asset_upload, get_asset
+from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content
 from app.services.events import format_sse_events
 from app.services.image_service import create_image_job, revise_image_job
 from app.services.session_service import create_session, handle_message
@@ -32,6 +35,8 @@ from app.storage import media_store
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
+V2_IDEMPOTENCY_PREFIX = "v2:"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -65,6 +70,27 @@ def create_asset_upload_endpoint(body: CreateAssetUploadRequest):
     return create_asset_upload(body)
 
 
+@app.put("/v1/assets/{asset_id}/content")
+def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest):
+    asset = store_asset_content(asset_id, body)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
+    if asset.status == "failed":
+        raise HTTPException(status_code=400, detail={"code": "invalid_asset_content", "message": "Asset content is not valid base64."})
+    return asset
+
+
+@app.get("/v1/assets/{asset_id}/content")
+def get_asset_content_endpoint(asset_id: str):
+    asset = get_asset(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
+    path = media_store.find_asset_file(asset_id)
+    if not path:
+        raise HTTPException(status_code=404, detail={"code": "asset_content_not_found", "message": "Asset content not found."})
+    return FileResponse(path, media_type=asset.mime_type)
+
+
 @app.post("/v1/assets/{asset_id}/complete")
 def complete_asset_upload_endpoint(asset_id: str):
     asset = complete_asset_upload(asset_id)
@@ -81,12 +107,30 @@ def get_asset_endpoint(asset_id: str):
     return asset
 
 
+@app.put("/v1/assets/{asset_id}/intent")
+def set_asset_intent_endpoint(asset_id: str, body: AssetIntent):
+    asset = get_asset(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
+    return body.model_copy(update={"asset_id": asset_id})
+
+
+@app.post("/v1/assets/{asset_id}/masks")
+def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest):
+    result = create_asset_mask(asset_id, body)
+    if not result:
+        raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
+    return result
+
+
 @app.post("/v1/image/jobs")
 async def create_image_job_endpoint(body: CreateImageJobRequest):
     return await create_image_job(
         session_id=body.session_id,
         prompt=body.prompt,
+        asset_mode=body.asset_mode,
         asset_ids=body.asset_ids,
+        asset_intents=body.asset_intents,
         count=body.count,
         size=body.size,
         quality=body.quality,
@@ -105,6 +149,8 @@ def list_image_history(
     items: list[ImageHistoryItem] = []
     known_output_ids: set[str] = set()
     for job in repository.list_jobs(job_type="image", session_id=session_id):
+        if _is_v2_bridge_job(job):
+            continue
         for output in job.outputs:
             if output.format not in {"png", "jpeg", "webp"}:
                 continue
@@ -121,6 +167,18 @@ def list_image_history(
                     height=output.height,
                     provider=job.provider,
                     model=job.model,
+                    requested_provider=_job_requested_provider(job),
+                    requested_model=_job_requested_model(job),
+                    provider_fallback=job.raw_response_summary.get("image_provider_fallback") if job.raw_response_summary else None,
+                    asset_mode=job.asset_mode,
+                    asset_intents=_job_asset_intents(job),
+                    asset_plan=job.asset_plan,
+                    asset_vision_profiles=_job_asset_vision_profiles(job),
+                    provider_input_plan=_job_provider_input_plan(job),
+                    visual_review=output.visual_review.model_dump() if output.visual_review else None,
+                    prompt_plan=job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
+                    original_prompt=job.provenance.get("original_prompt") if job.provenance else None,
+                    final_prompt=_job_prompt(job),
                     work_intensity=_job_work_intensity(job),
                     work_intensity_label=_job_work_intensity_label(job),
                     prompt=_job_prompt(job),
@@ -134,7 +192,7 @@ def list_image_history(
 
     if len(items) < limit:
         for record in media_store.list_history_records(limit=limit, session_id=session_id):
-            if record["id"] in known_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
+            if record["id"] in known_output_ids or record["format"] not in {"png", "jpeg", "webp"} or _is_v2_bridge_history_record(record):
                 continue
             items.append(ImageHistoryItem(**record))
             if len(items) >= limit:
@@ -298,6 +356,40 @@ def _job_prompt(job) -> str | None:
     return "，".join(part for part in parts if part)
 
 
+def _job_asset_intents(job) -> list[dict]:
+    if not job.asset_plan:
+        return []
+    return [
+        {
+            "asset_id": item.get("asset_id"),
+            "role": item.get("role"),
+            "role_label": item.get("role_label"),
+            "priority": item.get("priority"),
+            "preservation": item.get("preservation"),
+            "strength": item.get("strength"),
+        }
+        for item in job.asset_plan.get("assets", [])
+    ]
+
+
+def _job_asset_vision_profiles(job) -> list[dict]:
+    if not job.asset_plan:
+        return []
+    profiles = []
+    for item in job.asset_plan.get("assets", []):
+        profile = item.get("vision_profile")
+        if profile:
+            profiles.append(profile)
+    return profiles
+
+
+def _job_provider_input_plan(job) -> dict | None:
+    if not job.asset_plan:
+        return None
+    value = job.asset_plan.get("provider_input_plan")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _job_work_intensity(job) -> str | None:
     if not job.prompt_plan or not job.prompt_plan.variables:
         return None
@@ -309,6 +401,16 @@ def _job_work_intensity_label(job) -> str | None:
     if not job.prompt_plan or not job.prompt_plan.variables:
         return None
     value = job.prompt_plan.variables.get("work_intensity_label")
+    return str(value) if value else None
+
+
+def _job_requested_provider(job) -> str | None:
+    value = job.raw_response_summary.get("requested_image_provider") if job.raw_response_summary else None
+    return str(value) if value else None
+
+
+def _job_requested_model(job) -> str | None:
+    value = job.raw_response_summary.get("requested_image_model") if job.raw_response_summary else None
     return str(value) if value else None
 
 
@@ -328,6 +430,21 @@ def _parse_history_timestamp(value: str | None) -> float:
         return parsed.timestamp()
     except ValueError:
         return 0.0
+
+
+def _is_v2_bridge_job(job) -> bool:
+    if str(job.idempotency_key or "").startswith(V2_IDEMPOTENCY_PREFIX):
+        return True
+    session = repository.get_session(job.session_id) if job.session_id else None
+    return session.project_id == V2_BRIDGE_PROJECT_ID if session else False
+
+
+def _is_v2_bridge_history_record(record: dict) -> bool:
+    if record.get("source_app") == V2_BRIDGE_PROJECT_ID:
+        return True
+    if str(record.get("idempotency_key") or "").startswith(V2_IDEMPOTENCY_PREFIX):
+        return True
+    return False
 
 
 def _runtime_provider_settings_response() -> RuntimeProviderSettingsResponse:
@@ -351,7 +468,7 @@ def _runtime_provider_settings_response() -> RuntimeProviderSettingsResponse:
         gemini_image_api_key_configured=bool(settings.gemini_image_api_key),
         provider_notes={
             "openai_gpt_image": "OpenAI-compatible GPT Image provider is wired for live image generation.",
-            "gemini_image": "Gemini image provider is a documented placeholder; live google-genai image wiring is reserved for later integration.",
+            "gemini_image": "Gemini image provider is wired for live generateContent image generation.",
             "seedance": "Seedance video provider is a documented async placeholder; live task API is not implemented yet.",
             "thinking_models": "Prompt planning uses the selected thinking model first and automatically tries the other model when the selected one fails.",
         },

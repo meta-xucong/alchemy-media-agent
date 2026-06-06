@@ -50,6 +50,20 @@ def _normalize_openai_base_url(value: str | None) -> str | None:
     return stripped
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 class Settings(BaseModel):
     media_agent_mode: str = os.getenv("MEDIA_AGENT_MODE", "live")
     mock_image_provider_enabled: bool = os.getenv("MOCK_IMAGE_PROVIDER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -58,8 +72,8 @@ class Settings(BaseModel):
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     anthropic_auth_token: str | None = os.getenv("ANTHROPIC_AUTH_TOKEN") or _claude_env_value("ANTHROPIC_AUTH_TOKEN")
     anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or _claude_env_value("ANTHROPIC_BASE_URL")
-    gemini_image_api_key: str | None = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    gemini_image_base_url: str | None = os.getenv("GEMINI_IMAGE_BASE_URL")
+    gemini_image_api_key: str | None = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    gemini_image_base_url: str | None = os.getenv("GEMINI_IMAGE_BASE_URL") or os.getenv("GOOGLE_GEMINI_BASE_URL")
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
@@ -72,7 +86,12 @@ class Settings(BaseModel):
     default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
     default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")
     openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2"))
-    gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+    openai_image_local_max_requests_per_minute: int = _int_env("OPENAI_IMAGE_LOCAL_MAX_REQUESTS_PER_MINUTE", 12)
+    openai_image_local_max_outputs_per_minute: int = _int_env("OPENAI_IMAGE_LOCAL_MAX_OUTPUTS_PER_MINUTE", 24)
+    openai_image_local_queue_timeout_seconds: float = _float_env("OPENAI_IMAGE_LOCAL_QUEUE_TIMEOUT_SECONDS", 900.0)
+    openai_image_upstream_cooldown_seconds: float = _float_env("OPENAI_IMAGE_UPSTREAM_COOLDOWN_SECONDS", 90.0)
+    openai_image_max_retry_after_seconds: float = _float_env("OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", 900.0)
+    gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3-pro-image-preview"))
     image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
     default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")
     orchestration_mode: str = os.getenv("ORCHESTRATION_MODE", "runtime_first")

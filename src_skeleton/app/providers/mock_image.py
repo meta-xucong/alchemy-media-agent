@@ -30,7 +30,33 @@ class MockImageProvider:
             provider=self.name,
             configured=True,
             models=[self.model],
-            operations=["generate", "edit", "multi_turn_edit"],
+            operations=["generate", "edit", "multi_turn_edit", "image_reference", "image_edit", "mask_edit"],
+            advanced_asset_roles=[
+                "style_reference",
+                "subject_reference",
+                "logo_overlay",
+                "portrait_identity",
+                "background_reference",
+                "composition_reference",
+                "local_edit",
+                "negative_reference",
+            ],
+            model_capabilities=[
+                {
+                    "id": self.model,
+                    "capabilities": ["text_to_image", "image_reference", "image_edit", "mask_edit"],
+                    "advanced_asset_roles": [
+                        "style_reference",
+                        "subject_reference",
+                        "logo_overlay",
+                        "portrait_identity",
+                        "background_reference",
+                        "composition_reference",
+                        "local_edit",
+                        "negative_reference",
+                    ],
+                }
+            ],
             limits={
                 "max_batch": 10,
                 "formats": ["png", "jpeg", "webp"],
