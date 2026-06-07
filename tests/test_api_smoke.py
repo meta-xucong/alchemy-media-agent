@@ -518,6 +518,8 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Alchemy Media Agent" in index.text
     assert "/static/app.js" in index.text
+    assert 'href="/h5"' in index.text
+    assert "手机 H5" in index.text
     assert "sampleGuideModal" in index.text
     assert "Coffee Poster Atelier" in index.text
     assert "case-carousel" in index.text
@@ -679,6 +681,55 @@ def test_frontend_static_app_is_served():
     assert "v2PromptTextFromJob" in script.text
     assert "生成修改版本" in script.text
     assert "后续接入" not in script.text
+
+
+def test_mobile_h5_app_is_served_independently():
+    client = TestClient(app)
+
+    h5 = client.get("/h5")
+    mobile = client.get("/mobile")
+
+    assert h5.status_code == 200
+    assert mobile.status_code == 200
+    assert "/mobile-static/mobile.css" in h5.text
+    assert "/mobile-static/mobile.js" in h5.text
+    assert "生图 V1.0 基础版" in h5.text
+    assert "生图 V2.0 AGENT" in h5.text
+    assert "生视频（DEMO）" in h5.text
+    assert 'href="/"' in h5.text
+    assert "桌面版" in h5.text
+    assert "基础版" in h5.text
+    assert "高级版" in h5.text
+    assert "继续修改" in h5.text
+    assert "模型与 API" in h5.text
+    assert "案例展示区" in h5.text
+    assert "AI Agent 生图区" in h5.text
+    assert "外接 Provider" in h5.text
+    assert "/static/app.js" not in h5.text
+    assert "/static/showcase" not in h5.text
+    assert "/mobile-static/showcase" in h5.text
+    assert mobile.text == h5.text
+
+    mobile_styles = client.get("/mobile-static/mobile.css")
+    assert mobile_styles.status_code == 200
+    assert "safe-area-inset-bottom" in mobile_styles.text
+    assert "background-size: contain" in mobile_styles.text
+    assert "--sage-deep" in mobile_styles.text
+    assert "--champagne" in mobile_styles.text
+    assert ".h5-advanced-panel" in mobile_styles.text
+    assert ".h5-quick-guide" in mobile_styles.text
+
+    mobile_script = client.get("/mobile-static/mobile.js")
+    assert mobile_script.status_code == 200
+    assert "/creative/runs/async" in mobile_script.text
+    assert "/v1/image/jobs" in mobile_script.text
+    assert "setupH5AdvancedPanels" in mobile_script.text
+    assert "createH5AdvancedPanel" in mobile_script.text
+    assert "参数、素材、修图、历史、模型/API 和事件" not in mobile_script.text
+    assert "中枢输出、历史、Provider 和调度" not in mobile_script.text
+    assert "runV2Creative" in mobile_script.text
+    assert "imageAssetPayload" in mobile_script.text
+    assert "deleteV2HistoryItem" in mobile_script.text
 
 
 def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_path, monkeypatch):

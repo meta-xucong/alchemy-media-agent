@@ -34,15 +34,23 @@ from app.storage import media_store
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")
 
 
 @app.get("/")
 def frontend_app():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/h5")
+@app.get("/mobile")
+def mobile_frontend_app():
+    return FileResponse(MOBILE_STATIC_DIR / "index.html")
 
 
 @app.get("/healthz")
