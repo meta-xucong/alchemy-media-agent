@@ -609,6 +609,7 @@ def test_claude_inline_invocation_overrides_stale_output_token_env(monkeypatch, 
 
     def fake_run(command_line, **kwargs):
         captured["max_output_tokens"] = kwargs["env"].get("CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+        captured["structured_retries"] = kwargs["env"].get("MAX_STRUCTURED_OUTPUT_RETRIES")
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -637,6 +638,7 @@ def test_claude_inline_invocation_overrides_stale_output_token_env(monkeypatch, 
         object.__setattr__(settings, "claude_orchestrator_max_output_tokens", old_limit)
 
     assert captured["max_output_tokens"] == "12288"
+    assert captured["structured_retries"] == "1"
     assert decision is not None
     assert decision["final_prompt"].startswith("Premium perfume")
 

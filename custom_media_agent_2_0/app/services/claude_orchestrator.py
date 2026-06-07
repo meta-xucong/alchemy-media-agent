@@ -345,6 +345,7 @@ def _invoke_claude_file_mode(
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
+    env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
         completed = subprocess.run(
@@ -404,6 +405,7 @@ def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[s
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
+    env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
         completed = subprocess.run(
