@@ -43,8 +43,15 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_orchestrator_model", None)
     object.__setattr__(settings, "claude_orchestrator_fallback_model", None)
+    object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
+    object.__setattr__(settings, "claude_orchestrator_max_output_tokens", 32000)
     object.__setattr__(settings, "claude_orchestrator_effort", "low")
     object.__setattr__(settings, "claude_orchestrator_tools", "none")
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
+    object.__setattr__(settings, "claude_final_prompt_max_chars", 1400)
+    object.__setattr__(settings, "claude_negative_prompt_max_chars", 320)
+    object.__setattr__(settings, "claude_rationale_max_chars", 180)
     object.__setattr__(settings, "claude_orchestrator_cache_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_max_attempts", 2)
     object.__setattr__(settings, "claude_orchestrator_retry_delay_seconds", 0.0)
@@ -676,6 +683,461 @@ def test_claude_final_prompt_strips_internal_reference_ids(monkeypatch) -> None:
     assert "uploaded visual reference" in prompt
 
 
+def test_checkpoint_orchestrator_runs_all_stages_and_compresses_output(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_final_prompt_max_chars", 240)
+    object.__setattr__(settings, "claude_negative_prompt_max_chars", 90)
+    object.__setattr__(settings, "claude_rationale_max_chars", 60)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidates = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))
+        fallback = json.loads((workspace / "fallback_decision.json").read_text(encoding="utf-8"))
+        candidate = (
+            candidates[0]["case_id"]
+            if candidates
+            else (fallback.get("selected_case_ids") or ["case_synthetic_checkpoint"])[0]
+        )
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "three armored infantry",
+                "scene_goal": "fantasy dungeon breach battle",
+                "must_keep": ["tower shields", "spears", "crossbow cover fire"],
+                "must_avoid": ["cartoon tone"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.84,
+            }
+        if stage_name.startswith("visual_strategy"):
+            payload = json.loads(prompt.split("\n", 1)[1])
+            assert payload["stage"] == "visual_strategy_ultra_micro"
+            assert payload["candidate_cases"] == []
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "shield wall compresses the doorway, rear shooters visible over shoulders",
+                "lighting": "torchlit smoke and cold metal glints",
+                "palette": "dark stone, silver armor, ember orange",
+                "spatial_hierarchy": "frontline dominates foreground, defenders pushed back at the threshold",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.88,
+            }
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": (
+                "Epic dark fantasy dungeon battle, three emotionless human infantry in heavy silver plate armor "
+                "advance as a disciplined shield wall with nearly two-meter tower shields and long spears, rear "
+                "crossbowmen firing controlled cover volleys through smoke and torchlight, cinematic realism, "
+                "cold steel highlights, gritty stone doorway, compressed brutal momentum. "
+            )
+            * 2,
+            "negative_prompt": "watermark, modern weapons, cheerful cartoon tone, unreadable text, blurry armor details",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": (
+                "Checkpoint compression keeps the hard combat staging, metal armor, formation logic, and cover fire "
+                "while removing internal planning prose."
+            ),
+            "confidence": 0.91,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "生成一张西幻背景下的巢穴入口作战场景，三名重甲步兵用塔盾和长矛冷酷推进，"
+                "身后两名十字弩射手覆盖射击。"
+            ),
+            "output": {"count": 1},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    decision = run["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "generation_decision"]
+    assert decision["provider"] == "claude-code"
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 3
+    assert len(decision["final_prompt"]) <= 240
+    assert len(decision["negative_prompt"]) <= 90
+    assert len(decision["prompt_rationale"]) <= 60
+    assert run["prompt_plan"]["user_variables"]["prompt_source"] == "claude_final_prompt"
+    assert run["generation_jobs"][0]["provider_id"] == "mock_image"
+
+
+def test_checkpoint_orchestrator_micro_retries_output_limit_stage(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name == "visual_strategy":
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_output_token_limit")
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product",
+                "scene_goal": "commercial hero image",
+                "must_keep": ["premium lighting"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.82,
+            }
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "centered product hero composition",
+                "lighting": "soft rim lighting",
+                "palette": "black, gold, clear glass",
+                "spatial_hierarchy": "product first, quiet background",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.87,
+            }
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": "Premium product hero image, centered composition, black-gold rim light, clean commercial finish.",
+            "negative_prompt": "watermark, clutter",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Recovered with a compact visual strategy retry.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product hero image.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 4
+
+
+def test_checkpoint_orchestrator_retries_structured_output_exhaustion(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product",
+                "scene_goal": "commercial hero image",
+                "must_keep": ["premium lighting"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.82,
+            }
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "centered product hero composition",
+                "lighting": "soft rim lighting",
+                "palette": "black, gold, clear glass",
+                "spatial_hierarchy": "product first, quiet background",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.87,
+            }
+        if stage_name == "generation_decision":
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_structured_output_retries_exhausted")
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": "Premium product hero image, centered composition, black-gold rim light, clean commercial finish.",
+            "negative_prompt": "watermark, clutter",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Recovered after structured output retry exhaustion.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product hero image.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_retry_1"]
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 4
+
+
+def test_checkpoint_orchestrator_retries_kimi_sub2api_502(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product",
+                "scene_goal": "commercial hero image",
+                "must_keep": ["premium lighting"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.82,
+            }
+        if stage_name == "visual_strategy":
+            raise claude_orchestrator_service.ClaudeInvocationError("kimi_sub2api_502")
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "centered product hero composition",
+                "lighting": "soft rim lighting",
+                "palette": "black, gold, clear glass",
+                "spatial_hierarchy": "product first, quiet background",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.87,
+            }
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": "Premium product hero image, centered composition, black-gold rim light, clean commercial finish.",
+            "negative_prompt": "watermark, clutter",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Recovered after Kimi upstream 502.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product hero image.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 4
+
+
+def test_checkpoint_orchestrator_falls_back_after_stage_retry_exhaustion(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def always_output_limit(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        raise claude_orchestrator_service.ClaudeInvocationError("claude_output_token_limit")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", always_output_limit)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product hero image.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "intent_retry_1"]
+    assert decision["provider"] == "deterministic-fallback"
+    assert decision["invocation_status"] == "checkpoint_fallback"
+    assert decision["fallback_reason"] == "claude_checkpoint_missing_decision"
+    assert decision["attempts"] == 2
+
+
+def test_checkpoint_intent_prompt_uses_bounded_context(tmp_path: Path) -> None:
+    (tmp_path / "context.json").write_text(
+        json.dumps(
+            {
+                "request": {
+                    "user_prompt": "Create a complex fantasy battle scene.",
+                    "template_case_id": None,
+                    "output": {"count": 1},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "fallback_decision.json").write_text(
+        json.dumps({"mode": "smart_enhance", "selected_case_ids": ["case_seed"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case_seed",
+                    "title": "Dense candidate",
+                    "summary": "This should not be sent to the intent stage.",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_case_details.json").write_text(
+        json.dumps([{"case_id": "case_seed", "raw_prompt_excerpt": "x" * 5000}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "template_lock_contract.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "uploaded_assets.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "asset_binding_policy.json").write_text("{}", encoding="utf-8")
+
+    prompt = claude_orchestrator_service._build_checkpoint_stage_prompt(tmp_path, stage_name="intent")
+    payload = json.loads(prompt.split("\n", 1)[1])
+
+    assert payload["candidate_cases"] == []
+    assert "Think fully" not in prompt
+    assert "bounded internal" in claude_orchestrator_service._checkpoint_system_prompt()
+    assert len(prompt) < 1800
+
+
+def test_checkpoint_generation_prompt_uses_compact_checkpoints_only(tmp_path: Path) -> None:
+    (tmp_path / "context.json").write_text(
+        json.dumps(
+            {
+                "request": {
+                    "user_prompt": "Create a complex fantasy battle scene.",
+                    "template_case_id": None,
+                    "output": {"count": 1},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "fallback_decision.json").write_text(
+        json.dumps({"mode": "smart_enhance", "selected_case_ids": ["case_seed"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_cases.json").write_text(
+        json.dumps(
+            [{"case_id": "case_seed", "title": "Dense candidate", "summary": "x" * 2000}],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_case_details.json").write_text(
+        json.dumps([{"case_id": "case_seed", "raw_prompt_excerpt": "y" * 8000}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "template_lock_contract.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "uploaded_assets.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "asset_binding_policy.json").write_text("{}", encoding="utf-8")
+    checkpoints = {
+        "intent": {
+            "mode": "smart_enhance",
+            "primary_subject": "armored infantry " * 20,
+            "scene_goal": "dungeon breach " * 30,
+            "must_keep": ["tower shields " * 20, "rear crossbow cover fire " * 20],
+            "must_avoid": ["modern weapons " * 20],
+        },
+        "visual_strategy": {
+            "selected_case_ids": ["case_seed"],
+            "composition": "shield wall foreground " * 30,
+            "lighting": "torch rim light " * 20,
+            "palette": "silver armor and amber torch " * 20,
+            "spatial_hierarchy": "frontline dominates " * 30,
+            "template_lock_notes": "none",
+            "asset_fusion_notes": "none",
+        },
+    }
+
+    prompt = claude_orchestrator_service._build_checkpoint_stage_prompt(
+        tmp_path,
+        stage_name="generation_decision",
+        checkpoints=checkpoints,
+    )
+    payload = json.loads(prompt.split("\n", 1)[1])
+
+    assert payload["candidate_cases"] == []
+    assert payload["checkpoints"]["intent"]["primary_subject"].endswith("...")
+    assert payload["checkpoints"]["visual_strategy"]["composition"].endswith("...")
+    assert len(prompt) < 3500
+
+
+def test_checkpoint_visual_ultra_micro_prompt_drops_candidate_context(tmp_path: Path) -> None:
+    (tmp_path / "context.json").write_text(
+        json.dumps({"request": {"user_prompt": "Create a complex battle scene.", "output": {"count": 1}}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "fallback_decision.json").write_text(
+        json.dumps({"mode": "smart_enhance", "selected_case_ids": ["case_seed"]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_cases.json").write_text(
+        json.dumps([{"case_id": "case_seed", "title": "Candidate", "summary": "x" * 1000}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_case_details.json").write_text(
+        json.dumps([{"case_id": "case_seed", "raw_prompt_excerpt": "y" * 5000}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "template_lock_contract.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "uploaded_assets.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "asset_binding_policy.json").write_text("{}", encoding="utf-8")
+
+    prompt = claude_orchestrator_service._build_checkpoint_stage_prompt(
+        tmp_path,
+        stage_name="visual_strategy_ultra_micro",
+        checkpoints={
+            "intent": {
+                "mode": "smart_enhance",
+                "primary_subject": "armored infantry",
+                "scene_goal": "dungeon breach",
+                "must_keep": ["tower shields"],
+                "must_avoid": ["modern weapons"],
+            }
+        },
+    )
+    payload = json.loads(prompt.split("\n", 1)[1])
+
+    assert payload["candidate_cases"] == []
+    assert len(prompt) < 2200
+
+
 def test_runtime_model_settings_can_switch_v2_models() -> None:
     client = fresh_client()
 
@@ -690,6 +1152,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
             "claude_orchestrator_model": "claude-sonnet-test",
             "claude_orchestrator_fallback_model": "claude-haiku-test",
             "claude_orchestrator_effort": "medium",
+            "claude_checkpoint_orchestrator_enabled": True,
             "case_intelligence_provider": "claude-code",
             "case_intelligence_model": "claude-sonnet-test",
         },
@@ -702,6 +1165,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert body["output_review_agent_enabled"] is True
     assert body["claude_orchestrator_enabled"] is True
     assert body["claude_orchestrator_model"] == "claude-sonnet-test"
+    assert body["claude_checkpoint_orchestrator_enabled"] is True
     assert body["case_intelligence_provider"] == "claude-code"
     assert body["case_intelligence_model"] == "claude-sonnet-test"
 
@@ -710,6 +1174,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert status.json()["model"] == "claude-sonnet-test"
     assert status.json()["timeout_seconds"] == settings.claude_orchestrator_timeout_seconds
     assert status.json()["max_output_tokens"] == settings.claude_orchestrator_max_output_tokens
+    assert status.json()["checkpoint_enabled"] is True
 
     profile = client.get("/api/v2/case-profiles/case_github_evolinkai_ad_0001")
     assert profile.status_code == 200
@@ -1744,6 +2209,16 @@ def test_claude_failure_classifier_detects_output_token_limit() -> None:
     assert failure == "claude_output_token_limit"
 
 
+def test_claude_failure_classifier_detects_structured_output_exhaustion() -> None:
+    failure = claude_orchestrator_service._classify_claude_failure(
+        '{"type":"result","subtype":"error_max_structured_output_retries","errors":["Failed to provide valid structured output after 1 attempts"]}',
+        "",
+        1,
+    )
+
+    assert failure == "claude_structured_output_retries_exhausted"
+
+
 def test_image_job_endpoint_and_feedback() -> None:
     client = fresh_client()
     run = client.post(
@@ -1813,25 +2288,24 @@ def test_image_history_thumbnail_endpoint_serves_v2_native_webp(tmp_path) -> Non
         assert thumbnail.height <= 512
 
 
-def test_image_history_preserves_legacy_bridge_thumbnail_url(tmp_path) -> None:
+def test_image_history_normalizes_external_thumbnail_url_to_v2_endpoint(tmp_path) -> None:
     client = fresh_client()
     object.__setattr__(settings, "image_history_path", tmp_path / "image_history.jsonl")
     record = {
-        "output_id": "out_legacy_bridge",
-        "job_id": "job_legacy_bridge",
-        "run_id": "run_legacy_bridge",
+        "output_id": "out_external",
+        "job_id": "job_external",
+        "run_id": "run_external",
         "status": "completed",
         "provider_id": "openai_gpt_image",
         "model": "gpt-image-2",
         "mode": "template_customize",
         "template_case_id": None,
         "prompt": "ALCOEN poster with uploaded logo.",
-        "url": "/v1/outputs/out_legacy_bridge/download",
-        "thumbnail_url": "/api/v2/image/history/out_legacy_bridge/thumbnail",
+        "url": "/external/outputs/out_external/download",
+        "thumbnail_url": "/external/outputs/out_external/thumbnail",
         "score": {},
         "metadata": {
-            "bridge": "alchemy_1_0",
-            "thumbnail_url": "/v1/outputs/out_legacy_bridge/thumbnail",
+            "thumbnail_url": "/external/outputs/out_external/thumbnail",
             "format": "png",
         },
         "created_at": "2026-06-06T14:16:49.093980Z",
@@ -1843,26 +2317,26 @@ def test_image_history_preserves_legacy_bridge_thumbnail_url(tmp_path) -> None:
 
     assert response.status_code == 200
     item = response.json()["items"][0]
-    assert item["thumbnail_url"] == "/v1/outputs/out_legacy_bridge/thumbnail"
+    assert item["thumbnail_url"] == "/api/v2/image/history/out_external/thumbnail"
 
 
-def test_image_history_derives_legacy_bridge_thumbnail_url(tmp_path) -> None:
+def test_image_history_derives_v2_thumbnail_url_for_non_native_record(tmp_path) -> None:
     client = fresh_client()
     object.__setattr__(settings, "image_history_path", tmp_path / "image_history.jsonl")
     record = {
-        "output_id": "out_legacy_bridge_derived",
-        "job_id": "job_legacy_bridge_derived",
-        "run_id": "run_legacy_bridge_derived",
+        "output_id": "out_external_derived",
+        "job_id": "job_external_derived",
+        "run_id": "run_external_derived",
         "status": "completed",
         "provider_id": "openai_gpt_image",
         "model": "gpt-image-2",
         "mode": "template_customize",
         "template_case_id": None,
-        "prompt": "Legacy bridge output without a stored thumbnail.",
-        "url": "/v1/outputs/out_legacy_bridge_derived/download",
-        "thumbnail_url": "/api/v2/image/history/out_legacy_bridge_derived/thumbnail",
+        "prompt": "External output without a stored thumbnail.",
+        "url": "/external/outputs/out_external_derived/download",
+        "thumbnail_url": "",
         "score": {},
-        "metadata": {"bridge": "alchemy_1_0", "format": "png"},
+        "metadata": {"format": "png"},
         "created_at": "2026-06-06T14:16:49.093980Z",
         "updated_at": "2026-06-06T14:18:48.900239Z",
     }
@@ -1872,7 +2346,7 @@ def test_image_history_derives_legacy_bridge_thumbnail_url(tmp_path) -> None:
 
     assert response.status_code == 200
     item = response.json()["items"][0]
-    assert item["thumbnail_url"] == "/v1/outputs/out_legacy_bridge_derived/thumbnail"
+    assert item["thumbnail_url"] == "/api/v2/image/history/out_external_derived/thumbnail"
 
 
 def test_delete_image_history_removes_v2_record_and_native_files(tmp_path) -> None:

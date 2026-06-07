@@ -22,6 +22,7 @@ RUNTIME_MODEL_FIELDS = {
     "claude_orchestrator_fallback_model",
     "claude_orchestrator_effort",
     "claude_orchestrator_tools",
+    "claude_checkpoint_orchestrator_enabled",
     "case_intelligence_provider",
     "case_intelligence_model",
 }
@@ -63,6 +64,7 @@ def get_runtime_model_settings() -> V2RuntimeModelSettingsResponse:
         claude_orchestrator_tools=settings.claude_orchestrator_tools,
         claude_orchestrator_timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         claude_orchestrator_max_output_tokens=settings.claude_orchestrator_max_output_tokens,
+        claude_checkpoint_orchestrator_enabled=settings.claude_checkpoint_orchestrator_enabled,
         case_intelligence_provider=settings.case_intelligence_provider,  # type: ignore[arg-type]
         case_intelligence_model=settings.case_intelligence_model,
         persisted=runtime_model_settings_path().exists(),

@@ -32,7 +32,16 @@ from app.services.visual_signals import build_case_visual_signals
 _RECENT_INVOCATIONS: list[OrchestratorInvocationRecord] = []
 _MAX_RECENT_INVOCATIONS = 30
 _NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout"}
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v7_compact_output_budget"
+_CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
+    "claude_output_token_limit",
+    "claude_structured_output_retries_exhausted",
+    "claude_api_error",
+    "kimi_context_canceled",
+    "kimi_sub2api_502",
+    "kimi_upstream_error",
+    "upstream_context_canceled",
+}
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v8_checkpoint_orchestrator"
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
@@ -82,6 +91,48 @@ CLAUDE_INLINE_DECISION_SCHEMA: dict[str, Any] = {
         "negative_prompt",
         "provider_parameters",
         "prompt_rationale",
+        "confidence",
+    ],
+}
+
+CLAUDE_INTENT_CHECKPOINT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "stage": {"type": "string", "enum": ["intent"]},
+        "mode": {"type": "string", "enum": ["template_customize", "smart_enhance", "revision", "batch"]},
+        "primary_subject": {"type": "string", "maxLength": 180},
+        "scene_goal": {"type": "string", "maxLength": 260},
+        "must_keep": {"type": "array", "items": {"type": "string", "maxLength": 100}, "maxItems": 6},
+        "must_avoid": {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 6},
+        "asset_requirements": {"type": "array", "items": {"type": "object"}, "maxItems": 5},
+        "risk_notes": {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 4},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["stage", "mode", "primary_subject", "scene_goal", "must_keep", "must_avoid", "confidence"],
+}
+
+CLAUDE_VISUAL_STRATEGY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "stage": {"type": "string", "enum": ["visual_strategy"]},
+        "selected_case_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+        "composition": {"type": "string", "maxLength": 260},
+        "lighting": {"type": "string", "maxLength": 180},
+        "palette": {"type": "string", "maxLength": 180},
+        "spatial_hierarchy": {"type": "string", "maxLength": 220},
+        "template_lock_notes": {"type": "string", "maxLength": 220},
+        "asset_fusion_notes": {"type": "string", "maxLength": 220},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": [
+        "stage",
+        "selected_case_ids",
+        "composition",
+        "lighting",
+        "palette",
+        "spatial_hierarchy",
         "confidence",
     ],
 }
@@ -163,6 +214,56 @@ def orchestrate_creative_request(
                 "attempts": 0,
                 "cache_hit": True,
                 "cache_key": f"{cache_key}:semantic:{cached_key}:{score:.2f}",
+                "workspace_id": workspace_id,
+            }
+        )
+        _record_invocation(decision)
+        return decision
+
+    if settings.claude_checkpoint_orchestrator_enabled:
+        raw_decision = None
+        errors: list[str] = []
+        used_attempts = 0
+        try:
+            raw_decision, checkpoint_meta = _invoke_claude_checkpoint_mode(
+                request=request,
+                fallback=fallback,
+                candidate_cases=candidate_cases,
+                candidate_case_details=candidate_case_details or [],
+            )
+            used_attempts = int(checkpoint_meta.get("attempts") or 0)
+        except ClaudeInvocationError as exc:
+            errors.append(f"claude_checkpoint_error:{exc}")
+        except Exception as exc:
+            errors.append(f"claude_checkpoint_error:{exc!r}")
+
+        if raw_decision:
+            _write_cached_decision(cache_key, raw_decision, metadata=cache_metadata)
+            decision = _normalize_decision(
+                raw_decision,
+                fallback=fallback,
+                fallback_retrieval_plan=fallback_retrieval_plan,
+                candidate_cases=candidate_cases,
+            ).model_copy(
+                update={
+                    "invocation_status": "checkpoint_success",
+                    "latency_ms": _elapsed_ms(started),
+                    "attempts": used_attempts,
+                    "cache_hit": False,
+                    "cache_key": cache_key,
+                    "workspace_id": workspace_id,
+                }
+            )
+            _record_invocation(decision)
+            return decision
+
+        decision = fallback.model_copy(
+            update={
+                "fallback_reason": errors[-1] if errors else "claude_checkpoint_missing_decision",
+                "invocation_status": "checkpoint_fallback",
+                "latency_ms": _elapsed_ms(started),
+                "attempts": used_attempts,
+                "cache_key": cache_key,
                 "workspace_id": workspace_id,
             }
         )
@@ -275,8 +376,10 @@ def _fallback_decision(
 def get_orchestrator_status() -> OrchestratorStatusResponse:
     cache = _read_cache_store()
     recent = list(_RECENT_INVOCATIONS)
-    success_records = [item for item in recent if item.status in {"success", "cache_hit", "semantic_cache_hit"}]
-    failure_records = [item for item in recent if item.status in {"fallback", "error"}]
+    success_records = [
+        item for item in recent if item.status in {"success", "checkpoint_success", "cache_hit", "semantic_cache_hit"}
+    ]
+    failure_records = [item for item in recent if item.status in {"fallback", "checkpoint_fallback", "error"}]
     latency_values = [item.latency_ms for item in recent if isinstance(item.latency_ms, int)]
     return OrchestratorStatusResponse(
         enabled=settings.claude_orchestrator_enabled,
@@ -289,6 +392,7 @@ def get_orchestrator_status() -> OrchestratorStatusResponse:
         max_attempts=settings.claude_orchestrator_max_attempts,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         max_output_tokens=settings.claude_orchestrator_max_output_tokens,
+        checkpoint_enabled=settings.claude_checkpoint_orchestrator_enabled,
         recent_invocations=recent[:10],
         last_success_at=success_records[0].created_at if success_records else None,
         last_failure_at=failure_records[0].created_at if failure_records else None,
@@ -298,6 +402,423 @@ def get_orchestrator_status() -> OrchestratorStatusResponse:
 
 def reset_orchestrator_observability() -> None:
     _RECENT_INVOCATIONS.clear()
+
+
+def _invoke_claude_checkpoint_mode(
+    *,
+    request: CreateCreativeRunRequest,
+    fallback: CreativeOrchestratorDecision,
+    candidate_cases: list[PromptCaseSummary],
+    candidate_case_details: list[PromptCase],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    command = _resolve_claude_command()
+    if not command:
+        return None, {"attempts": 0, "trace": []}
+    workspace = _build_workspace(
+        request=request,
+        fallback=fallback,
+        candidate_cases=candidate_cases,
+        candidate_case_details=candidate_case_details,
+    )
+    trace: list[dict[str, Any]] = []
+    attempts = 0
+
+    intent, attempt_count = _invoke_checkpoint_stage_with_micro(
+        command=command,
+        workspace=workspace,
+        stage_name="intent",
+        schema=CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent"),
+        micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_micro"),
+        ultra_micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_ultra_micro"),
+        trace=trace,
+    )
+    attempts += attempt_count
+    if not intent:
+        _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "checkpoint_failed"})
+        return None, {"attempts": attempts, "trace": trace}
+    _write_json(workspace / "stage_01_intent_checkpoint.json", intent)
+
+    visual_first_stage = "visual_strategy" if request.template_case_id else "visual_strategy_ultra_micro"
+    visual, attempt_count = _invoke_checkpoint_stage_with_micro(
+        command=command,
+        workspace=workspace,
+        stage_name="visual_strategy",
+        schema=CLAUDE_VISUAL_STRATEGY_SCHEMA,
+        prompt=_build_checkpoint_stage_prompt(workspace, stage_name=visual_first_stage, checkpoints={"intent": intent}),
+        micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="visual_strategy_micro", checkpoints={"intent": intent}),
+        ultra_micro_prompt=_build_checkpoint_stage_prompt(
+            workspace,
+            stage_name="visual_strategy_ultra_micro",
+            checkpoints={"intent": intent},
+        ),
+        trace=trace,
+    )
+    attempts += attempt_count
+    if not visual:
+        _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "checkpoint_failed"})
+        return None, {"attempts": attempts, "trace": trace}
+    _write_json(workspace / "stage_02_visual_strategy_checkpoint.json", visual)
+
+    decision, attempt_count = _invoke_checkpoint_stage_with_micro(
+        command=command,
+        workspace=workspace,
+        stage_name="generation_decision",
+        schema=CLAUDE_INLINE_DECISION_SCHEMA,
+        prompt=_build_checkpoint_stage_prompt(
+            workspace,
+            stage_name="generation_decision_micro",
+            checkpoints={"intent": intent, "visual_strategy": visual},
+        ),
+        micro_prompt=_build_checkpoint_stage_prompt(
+            workspace,
+            stage_name="generation_decision_micro",
+            checkpoints={"intent": intent, "visual_strategy": visual},
+        ),
+        ultra_micro_prompt=_build_checkpoint_stage_prompt(
+            workspace,
+            stage_name="generation_decision_ultra_micro",
+            checkpoints={"intent": intent, "visual_strategy": visual},
+        ),
+        trace=trace,
+    )
+    attempts += attempt_count
+    if not decision:
+        _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "checkpoint_failed"})
+        return None, {"attempts": attempts, "trace": trace}
+
+    compressed = _compress_checkpoint_decision(
+        decision,
+        intent=intent,
+        visual_strategy=visual,
+        fallback=fallback,
+    )
+    _write_json(workspace / "stage_03_generation_decision.json", decision)
+    _write_json(workspace / "compressed_decision.json", compressed)
+    _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "success"})
+    return compressed, {"attempts": attempts, "trace": trace}
+
+
+def _invoke_checkpoint_stage_with_micro(
+    *,
+    command: list[str],
+    workspace: Path,
+    stage_name: str,
+    schema: dict[str, Any],
+    prompt: str,
+    micro_prompt: str,
+    ultra_micro_prompt: str | None = None,
+    trace: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, int]:
+    attempts = 0
+    max_retries = max(0, settings.claude_checkpoint_max_stage_retries)
+    prompts = [(stage_name, prompt)]
+    for index in range(1, max_retries + 1):
+        retry_prompt = ultra_micro_prompt if index >= 2 and ultra_micro_prompt else micro_prompt
+        prompts.append((f"{stage_name}_retry_{index}", retry_prompt))
+    last_failure: str | None = None
+    for attempt_stage_name, attempt_prompt in prompts:
+        attempts += 1
+        started = time.perf_counter()
+        try:
+            result = _invoke_claude_stage_json(
+                command=command,
+                workspace=workspace,
+                stage_name=attempt_stage_name,
+                prompt=attempt_prompt,
+                schema=schema,
+            )
+        except ClaudeInvocationError as exc:
+            last_failure = str(exc)
+            trace.append(
+                {
+                    "stage": attempt_stage_name,
+                    "status": "error",
+                    "failure_code": last_failure,
+                    "duration_ms": _elapsed_ms(started),
+                }
+            )
+            if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
+                raise
+            continue
+        trace.append(
+            {
+                "stage": attempt_stage_name,
+                "status": "success" if result else "missing_decision",
+                "failure_code": None if result else "missing_decision",
+                "duration_ms": _elapsed_ms(started),
+            }
+        )
+        if result:
+            return result, attempts
+    if last_failure:
+        trace.append({"stage": stage_name, "status": "failed", "failure_code": last_failure})
+    return None, attempts
+
+
+def _invoke_claude_stage_json(
+    *,
+    command: list[str],
+    workspace: Path,
+    stage_name: str,
+    prompt: str,
+    schema: dict[str, Any],
+) -> dict[str, Any] | None:
+    safe_stage = re.sub(r"[^a-zA-Z0-9_.-]+", "_", stage_name).strip("_") or "stage"
+    command_line = [
+        *command,
+        "-p",
+        "--system-prompt",
+        _checkpoint_system_prompt(),
+        "--output-format",
+        "json",
+        "--json-schema",
+        json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+        "--permission-mode",
+        settings.claude_orchestrator_permission_mode,
+        "--tools",
+        "none",
+        "--effort",
+        settings.claude_orchestrator_effort,
+        "--bare",
+        "--no-session-persistence",
+    ]
+    _apply_claude_cli_acceleration_flags(command_line)
+    if settings.claude_orchestrator_model:
+        command_line.extend(["--model", settings.claude_orchestrator_model])
+    if settings.claude_orchestrator_fallback_model:
+        command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
+    env = dict(os.environ)
+    env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+    env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
+    env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
+    _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
+    try:
+        completed = subprocess.run(
+            command_line,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.claude_orchestrator_timeout_seconds,
+            check=False,
+            cwd=str(workspace),
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _write_text(workspace / f"{safe_stage}_stdout.json", _timeout_output(exc.stdout))
+        _write_text(workspace / f"{safe_stage}_stderr.txt", _timeout_output(exc.stderr))
+        raise ClaudeInvocationError("claude_timeout") from exc
+    _write_text(workspace / f"{safe_stage}_stdout.json", completed.stdout or "")
+    _write_text(workspace / f"{safe_stage}_stderr.txt", completed.stderr or "")
+    failure = _classify_claude_failure(completed.stdout, completed.stderr, completed.returncode)
+    if failure:
+        raise ClaudeInvocationError(failure)
+    if completed.returncode != 0:
+        return None
+    parsed = _parse_structured_output(completed.stdout or "")
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _checkpoint_system_prompt() -> str:
+    return (
+        "You are the central creative brain for a staged image-generation orchestrator. "
+        "Make a complete high-quality decision for the current narrow stage with bounded internal deliberation. "
+        "Do not write or simulate chain-of-thought, long analysis, drafts, alternatives, markdown, or commentary. "
+        "The visible answer must be compact JSON matching the schema, with no internal ids, URLs, API names, repository names, or storage identifiers."
+    )
+
+
+def _build_checkpoint_stage_prompt(
+    workspace: Path,
+    *,
+    stage_name: str,
+    checkpoints: dict[str, Any] | None = None,
+) -> str:
+    context = _read_json(workspace / "context.json") or {}
+    fallback = _read_json(workspace / "fallback_decision.json") or {}
+    template_lock_contract = _read_json(workspace / "template_lock_contract.json") or {}
+    asset_binding_policy = _read_json(workspace / "asset_binding_policy.json") or {}
+    uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
+    template_case_id = (context.get("request") or {}).get("template_case_id")
+    compact_cases = _compact_inline_cases(
+        _read_json_list(workspace / "candidate_cases.json"),
+        _read_json_list(workspace / "candidate_case_details.json"),
+        template_case_id=template_case_id,
+    )
+    if stage_name.startswith("intent"):
+        compact_cases = []
+    elif "ultra_micro" in stage_name or stage_name.startswith("generation_decision"):
+        compact_cases = []
+    elif stage_name.endswith("_micro"):
+        compact_cases = compact_cases[:1]
+    elif stage_name.startswith("visual_strategy") and not template_case_id:
+        compact_cases = compact_cases[:2]
+    if stage_name.startswith("visual_strategy"):
+        compact_cases = [_checkpoint_visual_case(item, tight=stage_name.endswith("_micro")) for item in compact_cases]
+    checkpoint_payload = checkpoints or {}
+    if stage_name.startswith("generation_decision"):
+        checkpoint_payload = _compact_generation_checkpoints(checkpoint_payload)
+
+    payload = {
+        "stage": stage_name,
+        "instruction": _checkpoint_stage_instruction(stage_name),
+        "rules": (
+            "Every stage is Claude-led and must be completed; do not skip Claude for any subject. "
+            "Use compact internal judgment, not extended written analysis. Output only compact JSON. "
+            "If template_case_id exists, it is the locked visual frame and must remain selected_case_ids[0]. "
+            "Uploaded assets fill slots and hard identity refs must remain provider input images. "
+            "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers."
+        ),
+        "request": {
+            "user_prompt": (context.get("request") or {}).get("user_prompt", ""),
+            "template_case_id": template_case_id,
+            "output": (context.get("request") or {}).get("output", {}),
+        },
+        "fallback": {
+            "mode": fallback.get("mode"),
+            "selected_case_ids": [template_case_id] if template_case_id else fallback.get("selected_case_ids", [])[:4],
+            "generation_directives": fallback.get("generation_directives", {}),
+        },
+        "template_lock_contract": _compact_template_lock(template_lock_contract),
+        "uploaded_assets": _compact_uploaded_assets(uploaded_assets),
+        "asset_binding_policy": _compact_asset_binding_policy(asset_binding_policy),
+        "candidate_cases": compact_cases,
+        "checkpoints": checkpoint_payload,
+        "visible_output_budget": {
+            "final_prompt_chars": settings.claude_final_prompt_max_chars,
+            "negative_prompt_chars": settings.claude_negative_prompt_max_chars,
+            "rationale_chars": settings.claude_rationale_max_chars,
+        },
+    }
+    if "ultra_micro" in stage_name and not uploaded_assets and not template_case_id:
+        payload.pop("template_lock_contract", None)
+        payload.pop("uploaded_assets", None)
+        payload.pop("asset_binding_policy", None)
+        payload["fallback"] = {
+            "mode": fallback.get("mode"),
+            "selected_case_ids": fallback.get("selected_case_ids", [])[:2],
+            "generation_directives": fallback.get("generation_directives", {}),
+        }
+        payload["rules"] += " Ultra-micro context: do not compare cases or expand alternatives; decide from the user request and checkpoints only."
+    if stage_name.startswith("generation_decision"):
+        payload["rules"] += " Final stage: write one dense provider-ready prompt directly; no draft variants, no option analysis."
+    if stage_name.endswith("_micro"):
+        payload["rules"] += " This is a retry micro-stage: finish only the missing decision; no broad re-analysis."
+    return "Return schema-valid compact JSON only.\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _checkpoint_visual_case(item: dict[str, Any], *, tight: bool) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    visual = item.get("visual_signal_brief") if isinstance(item.get("visual_signal_brief"), dict) else {}
+    return {
+        "case_id": item.get("case_id"),
+        "title": _truncate(_text_value(item.get("title")), 38 if tight else 48),
+        "category": item.get("category"),
+        "summary": _truncate(_text_value(item.get("summary")), 42 if tight else 60),
+        "style_tags": (item.get("style_tags") or [])[: (1 if tight else 2)],
+        "use_case_tags": (item.get("use_case_tags") or [])[:1],
+        "visual_brief": _truncate(_text_value(visual.get("brief")), 70 if tight else 90),
+    }
+
+
+def _compact_generation_checkpoints(checkpoints: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(checkpoints, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    intent = checkpoints.get("intent")
+    if isinstance(intent, dict):
+        compact["intent"] = {
+            "mode": intent.get("mode"),
+            "primary_subject": _truncate(_text_value(intent.get("primary_subject")), 160),
+            "scene_goal": _truncate(_text_value(intent.get("scene_goal")), 220),
+            "must_keep": [_truncate(_text_value(item), 80) for item in (intent.get("must_keep") or [])[:6] if _text_value(item)],
+            "must_avoid": [_truncate(_text_value(item), 70) for item in (intent.get("must_avoid") or [])[:4] if _text_value(item)],
+        }
+    visual = checkpoints.get("visual_strategy")
+    if isinstance(visual, dict):
+        compact["visual_strategy"] = {
+            "selected_case_ids": [str(item) for item in (visual.get("selected_case_ids") or [])[:3] if str(item).strip()],
+            "composition": _truncate(_text_value(visual.get("composition")), 220),
+            "lighting": _truncate(_text_value(visual.get("lighting")), 140),
+            "palette": _truncate(_text_value(visual.get("palette")), 140),
+            "spatial_hierarchy": _truncate(_text_value(visual.get("spatial_hierarchy")), 180),
+            "template_lock_notes": _truncate(_text_value(visual.get("template_lock_notes")), 120),
+            "asset_fusion_notes": _truncate(_text_value(visual.get("asset_fusion_notes")), 120),
+        }
+    return compact
+
+
+def _checkpoint_stage_instruction(stage_name: str) -> str:
+    if stage_name.startswith("intent"):
+        return (
+            "Understand the user's concrete image goal. Output subject, scene goal, must_keep, must_avoid, "
+            "asset requirements, risk notes, and confidence. Do not choose final wording yet."
+        )
+    if stage_name.startswith("visual_strategy") and "ultra_micro" in stage_name:
+        return (
+            "From the intent checkpoint only, decide one compact visual strategy: composition, lighting, palette, "
+            "and spatial hierarchy. Do not compare cases, list alternatives, or write the final image prompt yet."
+        )
+    if stage_name.startswith("visual_strategy"):
+        return (
+            "Choose the reusable visual strategy: selected cases, composition, lighting, palette, hierarchy, "
+            "template lock notes, and asset fusion notes. Do not write the final image prompt yet."
+        )
+    return (
+        "Using prior checkpoints, output the final concise image prompt package for the provider. "
+        "Preserve all hard request constraints while keeping visible fields short."
+    )
+
+
+def _compress_checkpoint_decision(
+    raw: dict[str, Any],
+    *,
+    intent: dict[str, Any],
+    visual_strategy: dict[str, Any],
+    fallback: CreativeOrchestratorDecision,
+) -> dict[str, Any]:
+    selected_case_ids = raw.get("selected_case_ids")
+    if not isinstance(selected_case_ids, list) or not selected_case_ids:
+        selected_case_ids = visual_strategy.get("selected_case_ids") if isinstance(visual_strategy.get("selected_case_ids"), list) else []
+    selected_case_ids = [str(item) for item in selected_case_ids if str(item).strip()]
+    template_case_id = _template_case_id_from_fallback(fallback)
+    if template_case_id:
+        selected_case_ids = [template_case_id]
+    selected_case_ids = _dedupe(selected_case_ids or fallback.selected_case_ids)[:4]
+
+    final_prompt = _sanitize_downstream_prompt(_text_value(raw.get("final_prompt")))
+    if not final_prompt:
+        final_prompt = _fallback_prompt_from_checkpoints(intent=intent, visual_strategy=visual_strategy)
+    negative_prompt = _text_value(raw.get("negative_prompt"))
+    rationale = _text_value(raw.get("prompt_rationale")) or _text_value(visual_strategy.get("composition"))
+    provider_parameters = raw.get("provider_parameters") if isinstance(raw.get("provider_parameters"), dict) else {}
+
+    return {
+        "mode": raw.get("mode") if raw.get("mode") in {"template_customize", "smart_enhance", "revision", "batch"} else fallback.mode,
+        "selected_case_ids": selected_case_ids,
+        "final_prompt": _truncate(final_prompt, settings.claude_final_prompt_max_chars),
+        "negative_prompt": _truncate(negative_prompt, settings.claude_negative_prompt_max_chars),
+        "provider_parameters": provider_parameters,
+        "prompt_rationale": _truncate(rationale, settings.claude_rationale_max_chars),
+        "confidence": _bounded_float(raw.get("confidence"), _bounded_float(visual_strategy.get("confidence"), 0.78)),
+    }
+
+
+def _fallback_prompt_from_checkpoints(*, intent: dict[str, Any], visual_strategy: dict[str, Any]) -> str:
+    pieces = [
+        _text_value(intent.get("primary_subject")),
+        _text_value(intent.get("scene_goal")),
+        _text_value(visual_strategy.get("composition")),
+        _text_value(visual_strategy.get("lighting")),
+        _text_value(visual_strategy.get("palette")),
+        _text_value(visual_strategy.get("spatial_hierarchy")),
+        _text_value(visual_strategy.get("asset_fusion_notes")),
+    ]
+    return _sanitize_downstream_prompt(", ".join(piece for piece in pieces if piece))
 
 
 def _invoke_claude_file_mode(
@@ -462,15 +983,15 @@ def _normalize_decision(
     provider_parameters = _normalize_provider_parameters(raw.get("provider_parameters"), generation_directives)
     final_prompt = _truncate(
         _sanitize_downstream_prompt(_text_value(raw.get("final_prompt")) or _text_value(generation_directives.get("prompt"))),
-        1600,
+        settings.claude_final_prompt_max_chars,
     )
     negative_prompt = _truncate(
         _text_value(raw.get("negative_prompt")) or _text_value(generation_directives.get("negative_prompt")),
-        420,
+        settings.claude_negative_prompt_max_chars,
     )
     prompt_rationale = _truncate(
         _text_value(raw.get("prompt_rationale")) or _text_value(raw.get("rationale")),
-        220,
+        settings.claude_rationale_max_chars,
     )
     quality_gates = raw.get("quality_gates") if isinstance(raw.get("quality_gates"), dict) else {}
     return CreativeOrchestratorDecision(
@@ -1119,6 +1640,8 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
         or "response exceeded" in text and "output token" in text
     ):
         return "claude_output_token_limit"
+    if "error_max_structured_output_retries" in text or "failed to provide valid structured output" in text:
+        return "claude_structured_output_retries_exhausted"
     if "api error" in text:
         return "claude_api_error"
     if returncode != 0:

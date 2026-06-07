@@ -109,6 +109,11 @@ class Settings:
     claude_orchestrator_tools: str = "none"
     claude_orchestrator_permission_mode: str = "bypassPermissions"
     claude_orchestrator_fallback_model: str | None = None
+    claude_checkpoint_orchestrator_enabled: bool = False
+    claude_checkpoint_max_stage_retries: int = 2
+    claude_final_prompt_max_chars: int = 1400
+    claude_negative_prompt_max_chars: int = 320
+    claude_rationale_max_chars: int = 180
     claude_orchestrator_workspace_dir: Path = PROJECT_ROOT / ".v2_data" / "claude_orchestrator_runs"
     claude_orchestrator_cache_enabled: bool = True
     claude_orchestrator_semantic_cache_enabled: bool = True
@@ -245,6 +250,18 @@ def load_settings() -> Settings:
             "bypassPermissions",
         ),
         claude_orchestrator_fallback_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODEL") or None,
+        claude_checkpoint_orchestrator_enabled=os.getenv(
+            "V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED",
+            "false",
+        ).lower()
+        in {"1", "true", "yes", "on"},
+        claude_checkpoint_max_stage_retries=max(
+            0,
+            int(os.getenv("V2_CLAUDE_CHECKPOINT_MAX_STAGE_RETRIES", "2")),
+        ),
+        claude_final_prompt_max_chars=max(200, int(os.getenv("V2_CLAUDE_FINAL_PROMPT_MAX_CHARS", "1400"))),
+        claude_negative_prompt_max_chars=max(80, int(os.getenv("V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS", "320"))),
+        claude_rationale_max_chars=max(40, int(os.getenv("V2_CLAUDE_RATIONALE_MAX_CHARS", "180"))),
         claude_orchestrator_workspace_dir=Path(
             os.getenv(
                 "V2_CLAUDE_ORCHESTRATOR_WORKSPACE_DIR",

@@ -11,11 +11,6 @@ from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageO
 from app.services.output_storage import delete_output_storage
 
 
-_LEGACY_OUTPUT_PREFIX = "/" + "v1" + "/outputs/"
-_DOWNLOAD_SUFFIX = "/download"
-_THUMBNAIL_SUFFIX = "/thumbnail"
-
-
 def persist_image_job_history(job: ImageJob) -> None:
     if not settings.persist_image_history:
         return
@@ -173,24 +168,9 @@ def _thumbnail_url(output: ImageOutput) -> str | None:
 def _normalize_thumbnail_url(item: ImageHistoryItem) -> ImageHistoryItem:
     if item.metadata.get("native_v2_storage"):
         return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
-    if item.metadata.get("bridge") == "alchemy_1_0":
-        legacy_thumbnail = _legacy_bridge_thumbnail_url(item)
-        if legacy_thumbnail:
-            return item.model_copy(update={"thumbnail_url": legacy_thumbnail})
     if item.metadata.get("mock"):
         return item
     return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
-
-
-def _legacy_bridge_thumbnail_url(item: ImageHistoryItem) -> str | None:
-    for value in [item.metadata.get("thumbnail_url"), item.thumbnail_url, item.url]:
-        url = str(value or "")
-        if not url.startswith(_LEGACY_OUTPUT_PREFIX):
-            continue
-        if url.endswith(_DOWNLOAD_SUFFIX):
-            return url[: -len(_DOWNLOAD_SUFFIX)] + _THUMBNAIL_SUFFIX
-        return url
-    return None
 
 
 def _thumbnail_endpoint(output_id: str) -> str:
