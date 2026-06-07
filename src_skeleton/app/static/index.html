@@ -4,6 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Alchemy Media Agent</title>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const normalizedPath = window.location.pathname.replace(/\/+$/, "") || "/";
+        if (normalizedPath !== "/" || params.get("desktop") === "1") {
+          return;
+        }
+        const mobileUserAgent = /Android|iPhone|iPod|BlackBerry|IEMobile|Opera Mini|Windows Phone|Mobile/i.test(
+          navigator.userAgent || "",
+        );
+        const coarseSmallScreen =
+          window.matchMedia &&
+          window.matchMedia("(hover: none) and (pointer: coarse) and (max-width: 820px)").matches;
+        if (mobileUserAgent || coarseSmallScreen) {
+          window.location.replace(`/h5${window.location.search}${window.location.hash}`);
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/static/styles.css?v=20260607-asset-contain-preview" />
   </head>
   <body>

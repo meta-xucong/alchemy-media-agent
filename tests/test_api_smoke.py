@@ -520,6 +520,8 @@ def test_frontend_static_app_is_served():
     assert "/static/app.js" in index.text
     assert 'href="/h5"' in index.text
     assert "手机 H5" in index.text
+    assert "window.location.replace(`/h5${window.location.search}${window.location.hash}`)" in index.text
+    assert 'params.get("desktop") === "1"' in index.text
     assert "sampleGuideModal" in index.text
     assert "Coffee Poster Atelier" in index.text
     assert "case-carousel" in index.text
@@ -696,7 +698,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
     assert "生视频（DEMO）" in h5.text
-    assert 'href="/"' in h5.text
+    assert 'href="/?desktop=1"' in h5.text
     assert "桌面版" in h5.text
     assert "基础版" in h5.text
     assert "高级版" in h5.text
