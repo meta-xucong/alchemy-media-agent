@@ -524,6 +524,7 @@ def _invoke_claude_checkpoint_mode(
             checkpoints={"intent": intent, "visual_strategy": visual},
         ),
         trace=trace,
+        stop_on_soft_timeout=True,
     )
     attempts += attempt_count
     if not decision:
@@ -566,6 +567,7 @@ def _invoke_checkpoint_stage_with_micro(
     micro_prompt: str,
     ultra_micro_prompt: str | None = None,
     trace: list[dict[str, Any]],
+    stop_on_soft_timeout: bool = False,
 ) -> tuple[dict[str, Any] | None, int]:
     attempts = 0
     max_retries = max(0, settings.claude_checkpoint_max_stage_retries)
@@ -596,6 +598,8 @@ def _invoke_checkpoint_stage_with_micro(
                     "duration_ms": _elapsed_ms(started),
                 }
             )
+            if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
+                return None, attempts
             if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
                 raise
             continue

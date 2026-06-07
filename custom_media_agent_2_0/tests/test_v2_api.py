@@ -938,7 +938,6 @@ def test_checkpoint_orchestrator_recovers_from_intent_after_visual_timeout_exhau
 
     def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
         calls.append(stage_name)
-        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
         if stage_name.startswith("intent"):
             return {
                 "stage": "intent",
@@ -951,6 +950,9 @@ def test_checkpoint_orchestrator_recovers_from_intent_after_visual_timeout_exhau
                 "risk_notes": ["QR needs deterministic preservation"],
                 "confidence": 0.84,
             }
+        candidates = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))
+        fallback = json.loads((workspace / "fallback_decision.json").read_text(encoding="utf-8"))
+        candidate = candidates[0]["case_id"] if candidates else (fallback.get("selected_case_ids") or ["case_seed"])[0]
         if stage_name.startswith("visual_strategy"):
             raise claude_orchestrator_service.ClaudeInvocationError("claude_timeout")
         if stage_name.startswith("generation_decision_recovery"):
@@ -996,7 +998,6 @@ def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_li
 
     def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
         calls.append(stage_name)
-        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
         if stage_name.startswith("intent"):
             return {
                 "stage": "intent",
@@ -1009,6 +1010,9 @@ def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_li
                 "risk_notes": [],
                 "confidence": 0.83,
             }
+        candidates = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))
+        fallback = json.loads((workspace / "fallback_decision.json").read_text(encoding="utf-8"))
+        candidate = candidates[0]["case_id"] if candidates else (fallback.get("selected_case_ids") or ["case_seed"])[0]
         if stage_name.startswith("visual_strategy"):
             return {
                 "stage": "visual_strategy",
@@ -1036,6 +1040,61 @@ def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_li
     assert decision["invocation_status"] == "checkpoint_success"
     assert len(decision["final_prompt"]) <= 180
     assert "deterministic" not in decision["provider"]
+
+
+def test_checkpoint_orchestrator_compacts_after_final_soft_timeout_without_retries(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product poster",
+                "scene_goal": "commercial product hero",
+                "must_keep": ["clean hierarchy"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.84,
+            }
+        candidates = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))
+        fallback = json.loads((workspace / "fallback_decision.json").read_text(encoding="utf-8"))
+        candidate = candidates[0]["case_id"] if candidates else (fallback.get("selected_case_ids") or ["case_seed"])[0]
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "minimal centered product with negative space",
+                "lighting": "soft studio key light",
+                "palette": "warm ivory and champagne gold",
+                "spatial_hierarchy": "product dominates, background recedes",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.88,
+            }
+        raise claude_orchestrator_service.ClaudeInvocationError("claude_soft_timeout")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product poster.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "generation_decision"]
+    assert decision["provider"] == "claude-code"
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 3
+    assert decision["fallback_reason"] is None
 
 
 def test_checkpoint_orchestrator_retries_structured_output_exhaustion(monkeypatch) -> None:
