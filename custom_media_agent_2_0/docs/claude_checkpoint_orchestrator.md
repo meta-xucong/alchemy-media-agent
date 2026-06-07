@@ -236,7 +236,17 @@ raw thinking 可能是：
 1. 改用 `intent_micro` stage。
 2. 只要求 Claude 输出 5 个字段以内。
 3. 保留完整 thinking，不设置 `CLAUDE_CODE_DISABLE_THINKING`。
-4. 仍然失败时标记 `claude_thinking_overrun_unrecoverable`。
+4. 如果仍然失败且没有任何 Claude checkpoint，标记 `claude_thinking_overrun_unrecoverable`，不得继续出图。
+5. 如果已经拿到任一 Claude checkpoint，保留该 checkpoint，压缩可见状态，再进入更短 Claude recovery stage；recovery 仍失败时，只能基于已有 Claude checkpoint 组装压缩决策，不能切到 deterministic-only creative fallback。
+
+### Claude 自动压缩继续原则
+
+V2 的 Claude 中枢必须模仿人类使用 Claude Code 时“接近边界就压缩上下文继续”的行为：
+
+- `claude_timeout`、`claude_output_token_limit`、结构化输出重试耗尽、上游 context cancellation 都是压缩续跑触发器，不是绕过 Claude 的理由。
+- 每个 stage 允许 Claude 完整思考，但可见输出必须是短 JSON/checkpoint，并受 `V2_CLAUDE_FINAL_PROMPT_MAX_CHARS`、`V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS`、`V2_CLAUDE_RATIONALE_MAX_CHARS` 控制。
+- 一旦已有 `intent` 或 `visual_strategy` checkpoint，后续失败必须继续使用压缩 checkpoint；最终 prompt 必须来自 Claude 输出或 Claude checkpoint 压缩结果。
+- deterministic fallback 只能用于 Claude 完全未开始、无 checkpoint 可用且任务不得继续出图的失败解释，不得作为已启动 Claude 中枢后的创意替代。
 
 ## Stream-json 的用途
 
@@ -514,4 +524,3 @@ The old single-shot Claude orchestrator remains available until checkpoint mode 
 - Stage 超限时只拆成一个 micro stage，不做复杂树状规划。
 - raw thinking 不保存，只保存 stdout summary 和 final JSON/checkpoint。
 - 如果 checkpoint mode 连续失败，回退 single-shot Claude 一次，而不是跳过 Claude。
-

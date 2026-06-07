@@ -865,6 +865,179 @@ def test_checkpoint_orchestrator_micro_retries_output_limit_stage(monkeypatch) -
     assert decision["attempts"] == 4
 
 
+def test_checkpoint_orchestrator_micro_retries_timeout_stage(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name == "visual_strategy":
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_timeout")
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product",
+                "scene_goal": "commercial hero image",
+                "must_keep": ["premium lighting"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.82,
+            }
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "centered product hero composition",
+                "lighting": "soft rim lighting",
+                "palette": "black, gold, clear glass",
+                "spatial_hierarchy": "product first, quiet background",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "",
+                "confidence": 0.87,
+            }
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": "Premium product hero image, centered composition, black-gold rim light, clean commercial finish.",
+            "negative_prompt": "watermark, clutter",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Recovered with a compact timeout retry.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Create a premium product hero image.", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert decision["provider"] == "claude-code"
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["attempts"] == 4
+
+
+def test_checkpoint_orchestrator_recovers_from_intent_after_visual_timeout_exhaustion(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "Japanese poster product",
+                "scene_goal": "preserve product copy and scannable QR in a refined layout",
+                "must_keep": ["product identity", "copy text", "QR code clarity"],
+                "must_avoid": ["QR obstruction", "text loss"],
+                "asset_requirements": [],
+                "risk_notes": ["QR needs deterministic preservation"],
+                "confidence": 0.84,
+            }
+        if stage_name.startswith("visual_strategy"):
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_timeout")
+        if stage_name.startswith("generation_decision_recovery"):
+            return {
+                "mode": "smart_enhance",
+                "selected_case_ids": [candidate],
+                "final_prompt": (
+                    "Refined Japanese commercial poster using the uploaded reference image as the product identity, "
+                    "preserve the original product content, integrate original copy cleanly, reserve a clear scannable QR area."
+                ),
+                "negative_prompt": "unreadable QR, distorted product, missing copy",
+                "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+                "prompt_rationale": "Recovered through compressed Claude intent checkpoint.",
+                "confidence": 0.86,
+            }
+        raise AssertionError(stage_name)
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "保留产品、文案和二维码，做更精美的日式海报。", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision_recovery"]
+    assert decision["provider"] == "claude-code"
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert decision["final_prompt"]
+    assert decision["fallback_reason"] is None
+    assert "deterministic" not in decision["provider"]
+
+
+def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_limit(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    object.__setattr__(settings, "claude_final_prompt_max_chars", 180)
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product poster",
+                "scene_goal": "commercial layout with preserved product and QR",
+                "must_keep": ["product identity", "QR clarity"],
+                "must_avoid": ["unreadable QR"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.83,
+            }
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "Japanese poster grid with product as the visual anchor and QR in a clean scan-safe zone",
+                "lighting": "soft daylight",
+                "palette": "warm paper, muted blue, restrained black text",
+                "spatial_hierarchy": "product first, copy second, QR clear and separate",
+                "template_lock_notes": "",
+                "asset_fusion_notes": "uploaded product remains provider input image",
+                "confidence": 0.88,
+            }
+        raise claude_orchestrator_service.ClaudeInvocationError("claude_output_token_limit")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "保留产品和二维码，做日式海报。", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    decision = response.json()["orchestrator_decision"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_retry_1"]
+    assert decision["provider"] == "claude-code"
+    assert decision["invocation_status"] == "checkpoint_success"
+    assert len(decision["final_prompt"]) <= 180
+    assert "deterministic" not in decision["provider"]
+
+
 def test_checkpoint_orchestrator_retries_structured_output_exhaustion(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)

@@ -34,6 +34,7 @@ _MAX_RECENT_INVOCATIONS = 30
 _NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout"}
 _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_output_token_limit",
+    "claude_timeout",
     "claude_structured_output_retries_exhausted",
     "claude_api_error",
     "kimi_context_canceled",
@@ -439,7 +440,7 @@ def _invoke_claude_checkpoint_mode(
         return None, {"attempts": attempts, "trace": trace}
     _write_json(workspace / "stage_01_intent_checkpoint.json", intent)
 
-    visual_first_stage = "visual_strategy" if request.template_case_id else "visual_strategy_ultra_micro"
+    visual_first_stage = "visual_strategy_micro" if request.template_case_id else "visual_strategy_ultra_micro"
     visual, attempt_count = _invoke_checkpoint_stage_with_micro(
         command=command,
         workspace=workspace,
@@ -456,8 +457,49 @@ def _invoke_claude_checkpoint_mode(
     )
     attempts += attempt_count
     if not visual:
-        _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "checkpoint_failed"})
-        return None, {"attempts": attempts, "trace": trace}
+        decision, attempt_count = _invoke_checkpoint_stage_with_micro(
+            command=command,
+            workspace=workspace,
+            stage_name="generation_decision_recovery",
+            schema=CLAUDE_INLINE_DECISION_SCHEMA,
+            prompt=_build_checkpoint_stage_prompt(
+                workspace,
+                stage_name="generation_decision_recovery",
+                checkpoints={"intent": intent},
+            ),
+            micro_prompt=_build_checkpoint_stage_prompt(
+                workspace,
+                stage_name="generation_decision_recovery_ultra_micro",
+                checkpoints={"intent": intent},
+            ),
+            ultra_micro_prompt=_build_checkpoint_stage_prompt(
+                workspace,
+                stage_name="generation_decision_recovery_ultra_micro",
+                checkpoints={"intent": intent},
+            ),
+            trace=trace,
+        )
+        attempts += attempt_count
+        visual = _visual_strategy_from_partial(intent=intent, raw_decision=decision or {}, fallback=fallback)
+        compressed = _compress_checkpoint_decision(
+            decision or {},
+            intent=intent,
+            visual_strategy=visual,
+            fallback=fallback,
+        )
+        _write_json(workspace / "stage_02_visual_strategy_checkpoint.json", visual)
+        if decision:
+            _write_json(workspace / "stage_03_generation_decision.json", decision)
+        _write_json(workspace / "compressed_decision.json", compressed)
+        _write_json(
+            workspace / "orchestration_trace.json",
+            {
+                "stages": trace,
+                "final_status": "recovered_from_intent_checkpoint",
+                "recovery_reason": "visual_strategy_checkpoint_unavailable",
+            },
+        )
+        return compressed, {"attempts": attempts, "trace": trace, "recovery": "intent_checkpoint_compaction"}
     _write_json(workspace / "stage_02_visual_strategy_checkpoint.json", visual)
 
     decision, attempt_count = _invoke_checkpoint_stage_with_micro(
@@ -484,8 +526,22 @@ def _invoke_claude_checkpoint_mode(
     )
     attempts += attempt_count
     if not decision:
-        _write_json(workspace / "orchestration_trace.json", {"stages": trace, "final_status": "checkpoint_failed"})
-        return None, {"attempts": attempts, "trace": trace}
+        compressed = _compress_checkpoint_decision(
+            {},
+            intent=intent,
+            visual_strategy=visual,
+            fallback=fallback,
+        )
+        _write_json(workspace / "compressed_decision.json", compressed)
+        _write_json(
+            workspace / "orchestration_trace.json",
+            {
+                "stages": trace,
+                "final_status": "recovered_from_stage_checkpoints",
+                "recovery_reason": "generation_decision_checkpoint_unavailable",
+            },
+        )
+        return compressed, {"attempts": attempts, "trace": trace, "recovery": "stage_checkpoint_compaction"}
 
     compressed = _compress_checkpoint_decision(
         decision,
@@ -850,6 +906,41 @@ def _compress_checkpoint_decision(
         "provider_parameters": provider_parameters,
         "prompt_rationale": _truncate(rationale, settings.claude_rationale_max_chars),
         "confidence": _bounded_float(raw.get("confidence"), _bounded_float(visual_strategy.get("confidence"), 0.78)),
+    }
+
+
+def _visual_strategy_from_partial(
+    *,
+    intent: dict[str, Any],
+    raw_decision: dict[str, Any],
+    fallback: CreativeOrchestratorDecision,
+) -> dict[str, Any]:
+    selected_case_ids = raw_decision.get("selected_case_ids") if isinstance(raw_decision.get("selected_case_ids"), list) else []
+    selected_case_ids = [str(item) for item in selected_case_ids if str(item).strip()]
+    template_case_id = _template_case_id_from_fallback(fallback)
+    if template_case_id:
+        selected_case_ids = [template_case_id]
+    selected_case_ids = _dedupe(selected_case_ids or fallback.selected_case_ids)[:4]
+    final_prompt = _text_value(raw_decision.get("final_prompt"))
+    scene_goal = _text_value(intent.get("scene_goal"))
+    primary_subject = _text_value(intent.get("primary_subject"))
+    must_keep = ", ".join(_text_value(item) for item in (intent.get("must_keep") or [])[:4] if _text_value(item))
+    composition = _truncate(
+        _sanitize_downstream_prompt(final_prompt or scene_goal or primary_subject or "Claude intent checkpoint defines the core image goal."),
+        240,
+    )
+    if must_keep:
+        composition = _truncate(f"{composition}; preserve {must_keep}", 260)
+    return {
+        "stage": "visual_strategy",
+        "selected_case_ids": selected_case_ids,
+        "composition": composition,
+        "lighting": "Keep the selected template or request-compatible lighting; avoid expanding beyond the compressed Claude intent.",
+        "palette": "Use a restrained palette compatible with the selected template and uploaded reference image.",
+        "spatial_hierarchy": "Selected template frame first; uploaded hard-reference subject fills the replaceable subject slot.",
+        "template_lock_notes": "Selected template remains the locked frame when present.",
+        "asset_fusion_notes": "Hard uploaded identities remain provider input images and must not be reduced to text-only prompts.",
+        "confidence": _bounded_float(raw_decision.get("confidence"), _bounded_float(intent.get("confidence"), 0.72)),
     }
 
 
