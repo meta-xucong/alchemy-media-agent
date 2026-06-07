@@ -12,9 +12,9 @@ const qualityMap = {
   high: "高",
 };
 
-const coffeeSamplePrompt = "生成 4 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
+const coffeeSamplePrompt = "生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
-const coffeeSampleCount = "4";
+const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 48;
 const v2TemplatePageSize = 48;

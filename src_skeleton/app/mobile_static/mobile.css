@@ -135,7 +135,7 @@ img {
 .eyebrow {
   margin: 0 0 7px;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
 }
 
 h1,
@@ -151,7 +151,7 @@ p {
   font-size: 18px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: 0.27em;
+  letter-spacing: 0;
 }
 
 .module-tabs {
@@ -238,17 +238,17 @@ body.h5-simplified .header-status {
 }
 
 .hero-copy h2 {
-  font-size: clamp(34px, 10.8vw, 48px);
+  font-size: 38px;
   line-height: 1.1;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", "PingFang SC", sans-serif;
   font-weight: 300;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .hero-line {
   margin-top: 12px;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.75;
 }
 
@@ -258,7 +258,7 @@ body.h5-simplified .hero-band {
 }
 
 body.h5-simplified .hero-copy h2 {
-  font-size: clamp(33px, 10.6vw, 46px);
+  font-size: 37px;
 }
 
 body.h5-simplified .hero-line {
@@ -1410,5 +1410,633 @@ select:focus {
   .v2-asset-role-checks,
   .v2-progress-steps {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Mobile app polish: quieter iOS-like proportions while preserving the ivory/sage atmosphere. */
+.app-shell {
+  width: min(100%, 430px);
+  padding: calc(22px + env(safe-area-inset-top)) 16px calc(42px + env(safe-area-inset-bottom));
+}
+
+.lux-header {
+  gap: 19px;
+}
+
+.brand-lockup {
+  align-items: center;
+}
+
+.brand-lockup h1 {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", "PingFang SC", sans-serif;
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.surface-switch-link {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-color: rgba(24, 25, 21, 0.1);
+  background: rgba(255, 255, 252, 0.46);
+}
+
+.eyebrow {
+  margin-bottom: 5px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.eyebrow,
+.metric-label,
+.micro-copy,
+.muted,
+.model-help,
+.file-meta,
+.state-pill,
+.session-code,
+.provider-models,
+.video-state,
+.case-source,
+.output-id,
+.output-provider,
+.history-detail,
+.v2-history-note,
+.v2-template-card p,
+.v2-template-head span,
+.v2-brain-row span:first-child,
+.v2-status-tile small,
+.sample-step,
+.prompt-trigger small {
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.module-tabs {
+  gap: 22px;
+  margin: 0 -2px;
+  padding: 0 2px;
+}
+
+.tab {
+  min-height: 43px;
+  padding-bottom: 10px;
+  border-bottom-width: 2px;
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.homepage {
+  padding-top: 19px;
+}
+
+.hero-band {
+  gap: 11px;
+  padding-bottom: 13px;
+}
+
+.hero-copy h2,
+body.h5-simplified .hero-copy h2 {
+  font-size: 28px;
+  line-height: 1.08;
+  font-weight: 340;
+  letter-spacing: 0;
+}
+
+.hero-line {
+  margin-top: 8px;
+  max-width: 29em;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.hero-actions,
+.composer-actions,
+.history-actions,
+.v2-status-actions,
+.sample-actions,
+.video-footer {
+  gap: 8px;
+}
+
+.hero-actions {
+  margin-top: 11px;
+}
+
+.button,
+.download-link,
+.delete-link,
+.prompt-trigger,
+.case-source {
+  min-height: 38px;
+  padding: 0 13px;
+  gap: 6px;
+  border-color: rgba(24, 25, 21, 0.11);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 520;
+  background: rgba(255, 255, 252, 0.58);
+}
+
+.button.primary {
+  min-height: 46px;
+  color: #fffdfa;
+  background: #78866f;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.button.compact,
+.download-link,
+.delete-link {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.state-pill,
+.session-code,
+.auto-save-pill {
+  min-height: 26px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 520;
+  border-color: rgba(24, 25, 21, 0.1);
+}
+
+.module-panel {
+  margin-top: 13px;
+}
+
+.module-stack {
+  gap: 10px;
+}
+
+.flow-section {
+  padding: 19px 0;
+}
+
+.panel-head {
+  margin-bottom: 12px;
+}
+
+.section-title h3,
+.video-frame h3 {
+  font-size: 19px;
+  line-height: 1.18;
+  font-weight: 560;
+}
+
+.section-title h4,
+.mini-head h4,
+.model-switch-card h4,
+.v2-output-layout h4,
+.api-subpanel h4,
+.sample-card h3 {
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 560;
+}
+
+textarea {
+  min-height: 132px;
+  padding: 13px;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+input,
+select {
+  min-height: 38px;
+  padding: 0 11px;
+  font-size: 13px;
+}
+
+input[type="range"] {
+  min-height: 28px;
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  box-shadow: 0 0 0 3px rgba(125, 139, 111, 0.1);
+}
+
+.notice-bar {
+  margin-top: 10px;
+  padding: 10px 11px;
+  font-size: 11px;
+  line-height: 1.48;
+}
+
+.composer-actions {
+  margin-top: 12px;
+}
+
+.status-strip,
+.compact-params,
+.v2-status-grid,
+.video-params,
+.sample-grid,
+.tuning-grid,
+.model-workbench-grid,
+.advanced-api-grid,
+.v2-run-grid,
+.v2-output-layout,
+.v2-model-control-grid,
+.v2-model-card-grid {
+  gap: 10px;
+}
+
+.status-strip {
+  margin-top: 12px;
+}
+
+.status-strip > div,
+.v2-status-tile {
+  padding: 10px;
+}
+
+.status-strip strong,
+.v2-status-tile strong {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 580;
+}
+
+.tuning-card,
+.model-switch-card,
+.api-subpanel,
+.sample-card {
+  padding: 12px;
+  background: rgba(255, 255, 252, 0.43);
+}
+
+.control-block,
+.field,
+.field-row {
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.control-block > span,
+.field > span,
+.field-row > span {
+  font-size: 11px;
+  font-weight: 590;
+}
+
+.segmented,
+.model-options,
+.advanced-role-checks,
+.v2-asset-role-checks,
+.model-strip {
+  gap: 7px;
+}
+
+.segment,
+.model-option,
+.role-check,
+.model-chip {
+  min-height: 37px;
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.model-option {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+}
+
+.model-option strong {
+  font-size: 12px;
+  font-weight: 590;
+}
+
+.role-check {
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.role-check input {
+  width: 14px;
+  min-height: 14px;
+}
+
+.asset-preview,
+.v2-asset-preview {
+  min-height: 190px;
+  margin-top: 10px;
+  background-size: contain;
+}
+
+.file-drop,
+.v2-file-drop {
+  min-height: 48px;
+  gap: 2px;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.file-title {
+  font-size: 12px;
+  font-weight: 620;
+}
+
+#assetIntentNotesInput,
+#v2AssetNotesInput {
+  min-height: 36px;
+  max-height: 82px;
+}
+
+.gallery,
+.history-gallery,
+.v2-template-grid,
+.v2-history-grid,
+.v2-output-grid {
+  gap: 8px;
+  max-height: 560px;
+  padding: 1px 1px 7px;
+}
+
+.output-card,
+.history-card,
+.v2-template-card,
+.v2-history-card,
+.v2-output-card {
+  background: rgba(255, 255, 252, 0.5);
+}
+
+.output-meta,
+.history-meta,
+.v2-output-meta,
+.v2-history-meta,
+.v2-template-body {
+  gap: 6px;
+  padding: 8px;
+}
+
+.history-card-actions,
+.v2-history-footer {
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.history-load-more,
+.v2-template-load-more {
+  min-height: 39px;
+}
+
+.h5-quick-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 6px;
+  padding-bottom: 16px;
+}
+
+.h5-quick-guide strong {
+  grid-column: 1 / -1;
+  font-size: 10px;
+}
+
+.h5-quick-guide span {
+  min-height: 28px;
+  min-width: 0;
+  flex: none;
+  padding: 0 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.h5-advanced-panel {
+  padding: 16px 0;
+}
+
+.h5-advanced-summary {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.46;
+}
+
+.h5-advanced-body {
+  margin-top: 12px;
+}
+
+.h5-advanced-body > .h5-advanced-item,
+.h5-advanced-body > .v2-side-controls,
+.h5-advanced-body > .v2-asset-panel {
+  padding-top: 13px;
+}
+
+.h5-advanced-body > .h5-advanced-item + .h5-advanced-item,
+.h5-advanced-body > .v2-asset-panel {
+  margin-top: 13px;
+}
+
+.h5-advanced-toggle {
+  min-width: 62px;
+}
+
+.provider-list,
+.event-list {
+  max-height: 230px;
+  padding: 8px;
+}
+
+.provider-row {
+  padding: 9px;
+}
+
+.advanced-api-panel summary,
+.v2-template-vars summary {
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.v2-filter-row,
+.v2-asset-mini-grid {
+  gap: 8px;
+}
+
+.v2-search-thinking {
+  gap: 7px 9px;
+  margin: 10px 0;
+  padding: 10px;
+}
+
+.thinking-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.v2-facet-bar,
+.v2-tag-row {
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.v2-facet,
+.v2-tag,
+.v2-tag-row span,
+.mini-pill,
+.v2-output-badge {
+  min-height: 27px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.v2-template-body p {
+  min-height: 50px;
+  max-height: 64px;
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.v2-template-body .v2-tag-row {
+  min-height: 30px;
+}
+
+.v2-template-body .button {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.v2-progress-panel {
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.v2-progress-meter {
+  height: 6px;
+  margin: 8px 0;
+}
+
+.v2-progress-steps {
+  gap: 5px;
+}
+
+.v2-progress-step {
+  min-height: 25px;
+  font-size: 10px;
+}
+
+.v2-progress-detail {
+  margin-top: 7px;
+  font-size: 11px;
+}
+
+.v2-case-list,
+.v2-brain-panel,
+.v2-prompt-plan,
+.v2-asset-list {
+  min-height: 82px;
+  max-height: 230px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.v2-case-row,
+.v2-brain-row,
+.v2-asset-row {
+  gap: 3px;
+  padding: 8px 0;
+}
+
+.v2-brain-row {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.video-frame {
+  padding: 14px;
+}
+
+.video-grid {
+  gap: 10px;
+  margin-top: 13px;
+}
+
+.global-toast {
+  padding: 12px 13px;
+  font-size: 13px;
+}
+
+.sample-modal,
+.image-lightbox {
+  padding: calc(12px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
+}
+
+.sample-dialog,
+.lightbox-panel {
+  border-radius: 18px;
+}
+
+.sample-dialog {
+  padding: 14px;
+}
+
+.modal-close,
+.lightbox-close {
+  width: 34px;
+  height: 34px;
+  font-size: 17px;
+}
+
+.sample-hero {
+  padding: 9px 0 13px;
+}
+
+.sample-hero h2 {
+  font-size: 27px;
+  line-height: 1.05;
+}
+
+.lightbox-panel {
+  gap: 10px;
+  padding: 12px;
+}
+
+.lightbox-stage {
+  min-height: 250px;
+  border-radius: 14px;
+}
+
+.lightbox-stage img,
+#lightboxImage {
+  max-height: 70vh;
+}
+
+.prompt-card {
+  padding: 10px;
+  border-radius: 12px;
+}
+
+.prompt-scroll-box {
+  max-height: 30vh;
+  margin-top: 8px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 374px) {
+  .app-shell {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .hero-copy h2,
+  body.h5-simplified .hero-copy h2 {
+    font-size: 27px;
+  }
+
+  .tab {
+    font-size: 12px;
   }
 }
