@@ -1232,8 +1232,42 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
     assert "--json-schema" not in captured["command_line"]
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
     assert captured["timeout"] == 60.0
-    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 92.25
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 61.5
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 60.0
+
+
+def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+
+    def fake_run(command_line, **kwargs):
+        result = json.dumps(
+            {
+                "stage": "intent_micro",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product poster",
+                "scene_goal": "compact commercial hero image",
+                "must_keep": ["clean hierarchy"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": "no specific product identity supplied",
+                "confidence": "high",
+            }
+        )
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
+
+    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+
+    parsed = claude_orchestrator_service._invoke_claude_stage_json(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent_micro_retry_1",
+        prompt="Return JSON.",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+    )
+
+    assert parsed["stage"] == "intent"
+    assert parsed["confidence"] == 0.9
+    assert parsed["risk_notes"] == ["no specific product identity supplied"]
 
 
 def test_checkpoint_stage_rejects_missing_required_fields(monkeypatch, tmp_path: Path) -> None:

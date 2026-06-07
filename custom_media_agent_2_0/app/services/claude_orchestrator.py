@@ -682,6 +682,7 @@ def _invoke_claude_stage_json(
     parsed = _parse_structured_output(completed.stdout or "")
     if not isinstance(parsed, dict):
         return None
+    parsed = _coerce_checkpoint_payload(parsed, schema)
     return parsed if _matches_checkpoint_schema(parsed, schema) else None
 
 
@@ -699,11 +700,41 @@ def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
         return soft_timeout
     if "ultra_micro" in stage_name:
         return soft_timeout
-    return min(hard_timeout, max(soft_timeout, hard_timeout * 0.75))
+    return min(hard_timeout, max(soft_timeout, hard_timeout * 0.5))
 
 
 def _is_checkpoint_soft_timeout(stage_name: str, timeout_seconds: float) -> bool:
     return timeout_seconds < _checkpoint_stage_hard_timeout_seconds() and "_retry_" not in stage_name
+
+
+def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    coerced = dict(payload)
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    stage_spec = properties.get("stage") if isinstance(properties.get("stage"), dict) else {}
+    stage_enum = stage_spec.get("enum") if isinstance(stage_spec.get("enum"), list) else []
+    if stage_enum and _text_value(coerced.get("stage")):
+        expected_stage = str(stage_enum[0])
+        if _text_value(coerced.get("stage")).startswith(expected_stage):
+            coerced["stage"] = expected_stage
+    for field, spec in properties.items():
+        if not isinstance(spec, dict) or field not in coerced:
+            continue
+        if spec.get("type") == "array" and isinstance(coerced.get(field), str):
+            coerced[field] = [_text_value(coerced[field])] if _text_value(coerced[field]) else []
+        if spec.get("type") == "number" and isinstance(coerced.get(field), str):
+            label = _text_value(coerced[field]).lower()
+            if label in {"high", "strong", "yes"}:
+                coerced[field] = 0.9
+            elif label in {"medium", "moderate"}:
+                coerced[field] = 0.65
+            elif label in {"low", "weak"}:
+                coerced[field] = 0.35
+            else:
+                try:
+                    coerced[field] = float(label)
+                except ValueError:
+                    pass
+    return coerced
 
 
 def _checkpoint_system_prompt() -> str:
