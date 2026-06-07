@@ -31,6 +31,7 @@ Claude's response exceeded the ... output token maximum
 - 每轮 Claude 都有完整思考空间。
 - 每轮只输出短 JSON checkpoint 或最终 decision。
 - 如果某轮超限，系统自动缩小该轮任务并重试，不要求用户介入。
+- 如果某轮接近软边界仍未产出紧凑 JSON，系统先压缩状态并切换到 micro/ultra-micro stage，而不是等用户可见超时。
 - 成功后统一压缩最终 `CreativeOrchestratorDecision`。
 - 全程保留可诊断 workspace，但不向前端暴露 raw thinking。
 
@@ -197,13 +198,14 @@ Claude 任务：基于前两个 checkpoint 输出最终 creative decision。
 
 ### 基本原则
 
-如果某一 stage 超限，不直接失败，也不直接喂回 raw thinking。控制器应当：
+如果某一 stage 接近软边界、超限或输出膨胀，不直接失败，也不直接喂回 raw thinking。控制器应当：
 
 1. 保存该 stage 的 stdout/stderr 和错误分类。
 2. 保留前面已完成的 checkpoint。
 3. 将失败 stage 拆成更小的 substage。
 4. 重新调用 Claude 完成缺失部分。
 5. 最多自动续跑 `N` 次。
+6. 若 Claude 是必需中枢且完全没有 recoverable checkpoint，停止 run，不能继续 deterministic-only 出图。
 
 ### 为什么不喂 raw thinking
 
@@ -274,6 +276,7 @@ V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED=true
 V2_CLAUDE_CHECKPOINT_MAX_ROUNDS=4
 V2_CLAUDE_CHECKPOINT_MAX_STAGE_RETRIES=2
 V2_CLAUDE_CHECKPOINT_STAGE_TIMEOUT_SECONDS=180
+V2_CLAUDE_CHECKPOINT_SOFT_STAGE_TIMEOUT_SECONDS=90
 V2_CLAUDE_CHECKPOINT_SAVE_STREAM_EVENTS=false
 V2_CLAUDE_FINAL_PROMPT_MAX_CHARS=1400
 V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS=320

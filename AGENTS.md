@@ -72,10 +72,12 @@ When developing Custom Media Agent 2.0, Claude Code remains the central creative
 Hard rules:
 
 1. `claude_timeout`, output-token-limit, structured-output exhaustion, or upstream context cancellation must not silently bypass Claude and continue with a deterministic-only creative decision.
-2. If any Claude checkpoint has completed, V2 must preserve that checkpoint, compress the visible state, and continue with a shorter Claude stage or a checkpoint-derived compressed decision.
-3. Timeout guards are allowed only as boundary triggers for compression and continuation. They are not an acceptable final creative fallback once Claude has started reasoning.
-4. Claude may think fully inside each bounded stage, but visible output must always be compact, schema-shaped, and capped by configured prompt/negative/rationale budgets.
-5. Final prompts must come from Claude output or from compressed Claude checkpoints. Local deterministic logic may provide safety scaffolding, provider parameters, and hard guards, but must not replace Claude's creative role.
+2. V2 must use a soft stage boundary before the hard timeout/context/output boundary. When a normal stage approaches that soft boundary without valid compact JSON, the controller must compress state and continue through a shorter Claude micro or ultra-micro stage.
+3. If any Claude checkpoint has completed, V2 must preserve that checkpoint, compress the visible state, and continue with a shorter Claude stage or a checkpoint-derived compressed decision.
+4. Timeout guards are allowed only as internal boundary triggers for compression and continuation. They are not an acceptable final creative fallback once Claude has started reasoning.
+5. Claude may think fully inside each bounded stage, but visible output must always be compact, schema-shaped, and capped by configured prompt/negative/rationale budgets.
+6. If Claude is required and no recoverable Claude checkpoint or Claude decision can be produced, V2 must stop the run as failed rather than generate from a deterministic-only creative fallback.
+7. Final prompts must come from Claude output or from compressed Claude checkpoints. Local deterministic logic may provide safety scaffolding, provider parameters, and hard guards, but must not replace Claude's creative role.
 
 Short form:
 

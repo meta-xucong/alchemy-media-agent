@@ -242,6 +242,20 @@ class CreativeManagerRuntime:
             candidate_cases=orchestrator_candidate_summaries,
             candidate_case_details=orchestrator_candidate_details,
         )
+        orchestrator_failure = _claude_required_failure_message(orchestrator_decision)
+        if orchestrator_failure:
+            return self._save_run_stage(
+                request,
+                run_id=run_id,
+                trace_id=trace_id,
+                created_at=created,
+                status="failed",
+                mode=fallback_mode,
+                case_retrieval_plan=fallback_retrieval_plan,
+                selected_cases=orchestrator_candidate_summaries,
+                orchestrator_decision=orchestrator_decision,
+                next_actions=[orchestrator_failure],
+            )
         mode = orchestrator_decision.mode
         retrieval_plan = orchestrator_decision.case_retrieval_plan
         selected_cases = []
@@ -560,6 +574,23 @@ def _asset_binding_failure(asset_context: dict | None) -> str | None:
     provider_plan = plan.get("provider_input_plan") if isinstance(plan, dict) and isinstance(plan.get("provider_input_plan"), dict) else {}
     if hard_bindings and not provider_plan.get("reference_image_count"):
         return "Uploaded asset binding failed: hard visual constraints require provider input images, but no reference image was prepared."
+    return None
+
+
+def _claude_required_failure_message(orchestrator_decision) -> str | None:
+    if not settings.claude_orchestrator_enabled:
+        return None
+    if orchestrator_decision.provider == "claude-code" and not orchestrator_decision.fallback_reason:
+        return None
+    status = str(orchestrator_decision.invocation_status or "")
+    reason = str(orchestrator_decision.fallback_reason or "")
+    if status in {"checkpoint_fallback", "fallback"} and (
+        reason.startswith("claude_") or reason.startswith("claude_checkpoint")
+    ):
+        return (
+            "Claude Code central orchestration did not produce a recoverable checkpointed decision; "
+            "image generation was stopped instead of using a deterministic creative fallback."
+        )
     return None
 
 

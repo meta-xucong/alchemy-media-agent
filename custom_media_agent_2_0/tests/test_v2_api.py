@@ -860,7 +860,7 @@ def test_checkpoint_orchestrator_micro_retries_output_limit_stage(monkeypatch) -
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_micro_retry_1", "generation_decision"]
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["attempts"] == 4
 
@@ -921,7 +921,7 @@ def test_checkpoint_orchestrator_micro_retries_timeout_stage(monkeypatch) -> Non
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_micro_retry_1", "generation_decision"]
     assert decision["provider"] == "claude-code"
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["attempts"] == 4
@@ -976,7 +976,7 @@ def test_checkpoint_orchestrator_recovers_from_intent_after_visual_timeout_exhau
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision_recovery"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_micro_retry_1", "generation_decision_recovery"]
     assert decision["provider"] == "claude-code"
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["final_prompt"]
@@ -1031,7 +1031,7 @@ def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_li
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_retry_1"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_micro_retry_1"]
     assert decision["provider"] == "claude-code"
     assert decision["invocation_status"] == "checkpoint_success"
     assert len(decision["final_prompt"]) <= 180
@@ -1094,7 +1094,7 @@ def test_checkpoint_orchestrator_retries_structured_output_exhaustion(monkeypatc
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_retry_1"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_micro_retry_1"]
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["attempts"] == 4
 
@@ -1155,12 +1155,12 @@ def test_checkpoint_orchestrator_retries_kimi_sub2api_502(monkeypatch) -> None:
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "visual_strategy_retry_1", "generation_decision"]
+    assert calls == ["intent", "visual_strategy", "visual_strategy_micro_retry_1", "generation_decision"]
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["attempts"] == 4
 
 
-def test_checkpoint_orchestrator_falls_back_after_stage_retry_exhaustion(monkeypatch) -> None:
+def test_checkpoint_orchestrator_stops_generation_after_initial_checkpoint_exhaustion(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
@@ -1181,7 +1181,10 @@ def test_checkpoint_orchestrator_falls_back_after_stage_retry_exhaustion(monkeyp
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "intent_retry_1"]
+    run = response.json()
+    assert run["status"] == "failed"
+    assert run["generation_jobs"] == []
+    assert calls == ["intent", "intent_micro_retry_1"]
     assert decision["provider"] == "deterministic-fallback"
     assert decision["invocation_status"] == "checkpoint_fallback"
     assert decision["fallback_reason"] == "claude_checkpoint_missing_decision"
@@ -1193,6 +1196,7 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
     object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
     object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 123.0)
+    object.__setattr__(settings, "claude_checkpoint_soft_stage_timeout_seconds", 60.0)
     captured: dict[str, object] = {}
 
     def fake_run(command_line, **kwargs):
@@ -1227,7 +1231,9 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
     assert parsed["stage"] == "intent"
     assert "--json-schema" not in captured["command_line"]
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
-    assert captured["timeout"] == 123.0
+    assert captured["timeout"] == 60.0
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 92.25
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 60.0
 
 
 def test_checkpoint_stage_rejects_missing_required_fields(monkeypatch, tmp_path: Path) -> None:
@@ -2156,7 +2162,7 @@ def test_template_customize_forces_hand_selected_case_through_claude(monkeypatch
     assert "highest-priority visual anchor" in run["prompt_plan"]["risk_notes"][0]
 
 
-def test_template_lock_fallback_uses_only_hand_selected_case(monkeypatch) -> None:
+def test_template_lock_claude_boundary_failure_keeps_template_but_stops_generation(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_max_attempts", 3)
@@ -2216,16 +2222,13 @@ def test_template_lock_fallback_uses_only_hand_selected_case(monkeypatch) -> Non
 
     assert response.status_code == 202
     run = response.json()
+    assert run["status"] == "failed"
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
     assert run["orchestrator_decision"]["selected_case_ids"] == [template_id]
     assert [item["case_id"] for item in run["selected_cases"]] == [template_id]
-    assert [item["case_id"] for item in run["prompt_plan"]["style_basis"]] == [template_id]
-    prompt = run["prompt_plan"]["prompt"]
-    assert "TEMPLATE LOCK" in prompt
-    assert "pale powder-blue studio background" in prompt
-    assert "glossy reflective floor" in prompt
-    assert "Juicy Burger Food Poster" not in prompt
-    assert "Black Gold Perfume Hero" not in prompt
+    assert run["prompt_plan"] is None
+    assert run["generation_jobs"] == []
+    assert "deterministic creative fallback" in run["next_actions"][0]
 
 
 def test_template_anchor_preserves_concrete_visual_skeleton_without_copying_brand_text() -> None:
@@ -2330,7 +2333,7 @@ def test_creative_run_consumes_claude_orchestrator_decision(monkeypatch) -> None
     assert len(run["generation_jobs"][0]["outputs"]) == 1
 
 
-def test_creative_run_falls_back_when_claude_orchestrator_fails(monkeypatch) -> None:
+def test_creative_run_stops_generation_when_required_claude_orchestrator_fails(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
 
@@ -2345,7 +2348,8 @@ def test_creative_run_falls_back_when_claude_orchestrator_fails(monkeypatch) -> 
 
     assert response.status_code == 202
     run = response.json()
-    assert run["status"] == "completed"
+    assert run["status"] == "failed"
+    assert run["generation_jobs"] == []
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
     assert run["orchestrator_decision"]["fallback_reason"].startswith("claude_invoke_error")
     assert run["orchestrator_decision"]["invocation_status"] == "fallback"
@@ -2460,7 +2464,7 @@ def test_creative_run_retries_transient_kimi_context_cancel(monkeypatch) -> None
     assert run["orchestrator_decision"]["invocation_status"] == "success"
 
 
-def test_creative_run_does_not_retry_claude_output_token_limit(monkeypatch) -> None:
+def test_creative_run_stops_generation_after_single_shot_claude_output_token_limit(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_max_attempts", 3)
@@ -2479,13 +2483,14 @@ def test_creative_run_does_not_retry_claude_output_token_limit(monkeypatch) -> N
     assert response.status_code == 202
     run = response.json()
     assert calls["count"] == 1
-    assert run["status"] == "completed"
+    assert run["status"] == "failed"
+    assert run["generation_jobs"] == []
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
     assert run["orchestrator_decision"]["fallback_reason"] == "claude_invoke_error:claude_output_token_limit"
     assert run["orchestrator_decision"]["attempts"] == 1
 
 
-def test_creative_run_does_not_retry_claude_timeout(monkeypatch) -> None:
+def test_creative_run_stops_generation_after_single_shot_claude_timeout(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_max_attempts", 3)
@@ -2504,7 +2509,8 @@ def test_creative_run_does_not_retry_claude_timeout(monkeypatch) -> None:
     assert response.status_code == 202
     run = response.json()
     assert calls["count"] == 1
-    assert run["status"] == "completed"
+    assert run["status"] == "failed"
+    assert run["generation_jobs"] == []
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
     assert run["orchestrator_decision"]["fallback_reason"] == "claude_invoke_error:claude_timeout"
     assert run["orchestrator_decision"]["attempts"] == 1

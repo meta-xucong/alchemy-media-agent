@@ -34,6 +34,7 @@ _MAX_RECENT_INVOCATIONS = 30
 _NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout"}
 _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_output_token_limit",
+    "claude_soft_timeout",
     "claude_timeout",
     "claude_structured_output_retries_exhausted",
     "claude_api_error",
@@ -571,7 +572,8 @@ def _invoke_checkpoint_stage_with_micro(
     prompts = [(stage_name, prompt)]
     for index in range(1, max_retries + 1):
         retry_prompt = ultra_micro_prompt if index >= 2 and ultra_micro_prompt else micro_prompt
-        prompts.append((f"{stage_name}_retry_{index}", retry_prompt))
+        retry_suffix = "ultra_micro_retry" if index >= 2 and ultra_micro_prompt else "micro_retry"
+        prompts.append((f"{stage_name}_{retry_suffix}_{index}", retry_prompt))
     last_failure: str | None = None
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
@@ -651,6 +653,7 @@ def _invoke_claude_stage_json(
     env["MAX_STRUCTURED_OUTPUT_RETRIES"] = structured_retries
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
+    timeout_seconds = _checkpoint_stage_timeout_seconds(stage_name)
     try:
         completed = subprocess.run(
             command_line,
@@ -659,10 +662,7 @@ def _invoke_claude_stage_json(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=min(
-                settings.claude_orchestrator_timeout_seconds,
-                settings.claude_checkpoint_stage_timeout_seconds,
-            ),
+            timeout=timeout_seconds,
             check=False,
             cwd=str(workspace),
             env=env,
@@ -670,7 +670,8 @@ def _invoke_claude_stage_json(
     except subprocess.TimeoutExpired as exc:
         _write_text(workspace / f"{safe_stage}_stdout.json", _timeout_output(exc.stdout))
         _write_text(workspace / f"{safe_stage}_stderr.txt", _timeout_output(exc.stderr))
-        raise ClaudeInvocationError("claude_timeout") from exc
+        failure_code = "claude_soft_timeout" if _is_checkpoint_soft_timeout(stage_name, timeout_seconds) else "claude_timeout"
+        raise ClaudeInvocationError(failure_code) from exc
     _write_text(workspace / f"{safe_stage}_stdout.json", completed.stdout or "")
     _write_text(workspace / f"{safe_stage}_stderr.txt", completed.stderr or "")
     failure = _classify_claude_failure(completed.stdout, completed.stderr, completed.returncode)
@@ -682,6 +683,27 @@ def _invoke_claude_stage_json(
     if not isinstance(parsed, dict):
         return None
     return parsed if _matches_checkpoint_schema(parsed, schema) else None
+
+
+def _checkpoint_stage_hard_timeout_seconds() -> float:
+    return min(
+        settings.claude_orchestrator_timeout_seconds,
+        settings.claude_checkpoint_stage_timeout_seconds,
+    )
+
+
+def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
+    hard_timeout = _checkpoint_stage_hard_timeout_seconds()
+    soft_timeout = min(hard_timeout, settings.claude_checkpoint_soft_stage_timeout_seconds)
+    if "_retry_" not in stage_name:
+        return soft_timeout
+    if "ultra_micro" in stage_name:
+        return soft_timeout
+    return min(hard_timeout, max(soft_timeout, hard_timeout * 0.75))
+
+
+def _is_checkpoint_soft_timeout(stage_name: str, timeout_seconds: float) -> bool:
+    return timeout_seconds < _checkpoint_stage_hard_timeout_seconds() and "_retry_" not in stage_name
 
 
 def _checkpoint_system_prompt() -> str:
