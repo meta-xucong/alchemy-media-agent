@@ -41,6 +41,10 @@ cd D:\AI\AlchemyOS\custom_media_agent_2_0
 .\scripts\test.ps1
 ```
 
+## Design Docs
+
+- [Claude Checkpoint Orchestrator](docs/claude_checkpoint_orchestrator.md): staged Claude Code orchestration plan for automatic checkpoint compression and continuation without skipping Claude.
+
 ## MVP Scope
 
 - `/api/v2/health`
