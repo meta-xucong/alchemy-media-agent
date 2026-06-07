@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageOutput
+from app.services.qr_preservation import preserve_requested_qr_code
 
 
 THUMBNAIL_SIZE = (512, 512)
@@ -20,6 +21,13 @@ THUMBNAIL_QUALITY = 78
 def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str) -> ImageOutput:
     content = base64.b64decode(encoded)
     fmt = _normalize_format(output_format, mime_type)
+    qr_result = preserve_requested_qr_code(
+        content=content,
+        metadata=output.metadata,
+        output_format=fmt,
+        mime_type=mime_type,
+    )
+    content = qr_result.content
     output_dir = settings.storage_dir / "outputs" / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{output.output_id}.{fmt}"
@@ -34,6 +42,11 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
         "mime_type": mime_type,
         "format": fmt,
     }
+    if qr_result.metadata:
+        metadata["pixel_preservation"] = {
+            **dict(metadata.get("pixel_preservation") or {}),
+            "qr_code": qr_result.metadata,
+        }
     return output.model_copy(
         update={
             "url": f"/api/v2/outputs/{output.output_id}/download",

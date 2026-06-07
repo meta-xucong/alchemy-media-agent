@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 from app.config import settings
@@ -35,7 +36,7 @@ def create_uploaded_asset(request: CreateUploadedAssetRequest) -> CreateUploaded
         created_at=now,
         updated_at=now,
     )
-    repository.save_uploaded_asset(asset)
+    _save_uploaded_asset(asset)
     return CreateUploadedAssetResponse(
         asset_id=asset.asset_id,
         upload_url=upload_url,
@@ -44,7 +45,7 @@ def create_uploaded_asset(request: CreateUploadedAssetRequest) -> CreateUploaded
 
 
 def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadRequest) -> UploadedAsset | None:
-    asset = repository.get_uploaded_asset(asset_id)
+    asset = get_uploaded_asset(asset_id)
     if not asset:
         return None
     if asset.status == "rejected":
@@ -58,7 +59,7 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
                 "updated_at": utc_now(),
             }
         )
-        return repository.save_uploaded_asset(failed)
+        return _save_uploaded_asset(failed)
     try:
         content = base64.b64decode(request.content_base64, validate=True)
     except (ValueError, TypeError) as exc:
@@ -69,7 +70,7 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
                 "updated_at": utc_now(),
             }
         )
-        return repository.save_uploaded_asset(failed)
+        return _save_uploaded_asset(failed)
     path = _asset_content_path(asset)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -84,11 +85,11 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
             "updated_at": utc_now(),
         }
     )
-    return repository.save_uploaded_asset(stored)
+    return _save_uploaded_asset(stored)
 
 
 def complete_uploaded_asset(asset_id: str) -> UploadedAsset | None:
-    asset = repository.get_uploaded_asset(asset_id)
+    asset = get_uploaded_asset(asset_id)
     if not asset:
         return None
     if asset.status in {"rejected", "failed"}:
@@ -103,15 +104,21 @@ def complete_uploaded_asset(asset_id: str) -> UploadedAsset | None:
             "updated_at": utc_now(),
         }
     )
-    return repository.save_uploaded_asset(ready)
+    return _save_uploaded_asset(ready)
 
 
 def get_uploaded_asset(asset_id: str) -> UploadedAsset | None:
-    return repository.get_uploaded_asset(asset_id)
+    cached = repository.get_uploaded_asset(asset_id)
+    if cached:
+        return cached
+    loaded = _load_uploaded_asset(asset_id)
+    if loaded:
+        return repository.save_uploaded_asset(loaded)
+    return None
 
 
 def read_uploaded_asset_content(asset_id: str) -> tuple[bytes, str] | None:
-    asset = repository.get_uploaded_asset(asset_id)
+    asset = get_uploaded_asset(asset_id)
     if not asset or not _is_image_mime(asset.mime_type):
         return None
     path = uploaded_asset_path(asset_id)
@@ -121,7 +128,7 @@ def read_uploaded_asset_content(asset_id: str) -> tuple[bytes, str] | None:
 
 
 def uploaded_asset_path(asset_id: str) -> Path | None:
-    asset = repository.get_uploaded_asset(asset_id)
+    asset = get_uploaded_asset(asset_id)
     if not asset:
         return None
     if asset.storage_path:
@@ -137,6 +144,70 @@ def _asset_content_path(asset: UploadedAsset) -> Path:
     return settings.storage_dir / "uploads" / asset.asset_id / f"original{suffix}"
 
 
+def _save_uploaded_asset(asset: UploadedAsset) -> UploadedAsset:
+    saved = repository.save_uploaded_asset(asset)
+    _persist_uploaded_asset(saved)
+    return saved
+
+
+def _asset_metadata_path(asset_id: str) -> Path:
+    return settings.storage_dir / "uploads" / asset_id / "asset.json"
+
+
+def _persist_uploaded_asset(asset: UploadedAsset) -> None:
+    path = _asset_metadata_path(asset.asset_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(asset.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
+        temp.replace(path)
+    except Exception:
+        return
+
+
+def _load_uploaded_asset(asset_id: str) -> UploadedAsset | None:
+    path = _asset_metadata_path(asset_id)
+    if path.exists():
+        try:
+            return UploadedAsset.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return _recover_uploaded_asset_from_file(asset_id)
+
+
+def _recover_uploaded_asset_from_file(asset_id: str) -> UploadedAsset | None:
+    upload_dir = settings.storage_dir / "uploads" / asset_id
+    if not upload_dir.exists():
+        return None
+    candidates = sorted(
+        [
+            item
+            for item in upload_dir.iterdir()
+            if item.is_file() and item.name.startswith("original") and item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        ]
+    )
+    if not candidates:
+        return None
+    path = candidates[0]
+    stat = path.stat()
+    created = utc_now()
+    mime_type = _mime_for_suffix(path.suffix.lower())
+    return UploadedAsset(
+        asset_id=asset_id,
+        filename=path.name,
+        mime_type=mime_type,
+        size_bytes=stat.st_size,
+        status="ready",
+        role="subject_reference",
+        constraint_strength="strong",
+        source_url=f"/api/v2/uploads/{asset_id}/content",
+        thumbnail_url=f"/api/v2/uploads/{asset_id}/content",
+        storage_path=str(path),
+        created_at=created,
+        updated_at=created,
+    )
+
+
 def _suffix_for_mime(mime_type: str) -> str:
     if mime_type == "image/jpeg":
         return ".jpg"
@@ -145,6 +216,16 @@ def _suffix_for_mime(mime_type: str) -> str:
     if mime_type == "image/gif":
         return ".gif"
     return ".png"
+
+
+def _mime_for_suffix(suffix: str) -> str:
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    return "image/png"
 
 
 def _safe_filename(filename: str) -> str:

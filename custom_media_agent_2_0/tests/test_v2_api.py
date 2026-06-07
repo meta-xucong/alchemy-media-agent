@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from PIL import Image
+import qrcode
 
 from app.config import settings
 from app.providers.images.registry import get_v2_image_provider
@@ -120,12 +121,16 @@ def make_prompt_case(
 def upload_test_asset(client: TestClient, *, role: str = "subject_reference", color=(32, 96, 180)) -> str:
     image_bytes = BytesIO()
     Image.new("RGB", (320, 240), color).save(image_bytes, format="PNG")
+    return upload_image_asset(client, image_bytes.getvalue(), role=role, filename=f"{role}.png")
+
+
+def upload_image_asset(client: TestClient, image_content: bytes, *, role: str, filename: str = "uploaded.png") -> str:
     upload = client.post(
         "/api/v2/uploads",
         json={
-            "filename": f"{role}.png",
+            "filename": filename,
             "mime_type": "image/png",
-            "size_bytes": len(image_bytes.getvalue()),
+            "size_bytes": len(image_content),
             "role": role,
             "constraint_strength": "required",
         },
@@ -135,7 +140,7 @@ def upload_test_asset(client: TestClient, *, role: str = "subject_reference", co
     content = client.put(
         f"/api/v2/uploads/{asset_id}/content",
         json={
-            "content_base64": base64.b64encode(image_bytes.getvalue()).decode("ascii"),
+            "content_base64": base64.b64encode(image_content).decode("ascii"),
             "mime_type": "image/png",
         },
     )
@@ -144,6 +149,28 @@ def upload_test_asset(client: TestClient, *, role: str = "subject_reference", co
     assert completed.status_code == 200
     assert completed.json()["status"] == "ready"
     return asset_id
+
+
+def make_qr_reference_image(payload: str) -> bytes:
+    qr = qrcode.QRCode(border=4, box_size=8)
+    qr.add_data(payload)
+    qr.make(fit=True)
+    qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    canvas = Image.new("RGB", (720, 480), (248, 244, 235))
+    canvas.paste(qr_image.resize((176, 176), Image.Resampling.NEAREST), (492, 252))
+    output = BytesIO()
+    canvas.save(output, format="PNG")
+    return output.getvalue()
+
+
+def decode_qr_from_image(path: Path) -> str:
+    import cv2
+    import numpy as np
+
+    with Image.open(path) as image:
+        array = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+    decoded, _points, _ = cv2.QRCodeDetector().detectAndDecode(array)
+    return decoded
 
 
 def test_health_reports_v2_isolation() -> None:
@@ -1312,6 +1339,90 @@ def test_v2_native_generation_preserves_uploaded_logo_reference() -> None:
     assert output.metadata["input_images"][0]["role"] == "logo_reference"
     assert "logo_overlay" not in str(output.metadata)
     assert Path(output.metadata["storage_path"]).exists()
+
+
+def test_uploaded_asset_metadata_survives_repository_reset_for_worker() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(20, 130, 90))
+    assert (settings.storage_dir / "uploads" / asset_id / "asset.json").exists()
+    repository.reset()
+    bootstrap_v2_repository(seed_cases=True, use_persisted_index=False)
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把上传图片里的产品保留下来，套入高级海报模板。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [{"asset_id": asset_id, "role": "subject_reference", "constraint_strength": "required"}],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["status"] == "completed"
+    variables = run["prompt_plan"]["user_variables"]
+    assert variables["uploaded_assets"][0]["asset_id"] == asset_id
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == [asset_id]
+    assert run["generation_jobs"][0]["outputs"][0]["metadata"]["input_images"][0]["asset_id"] == asset_id
+
+
+def test_missing_uploaded_asset_fails_before_text_only_generation() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把上传图片里的产品保留下来，套入高级海报模板。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {"asset_id": "asset_missing_for_test", "role": "subject_reference", "constraint_strength": "required"}
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["status"] == "failed"
+    assert "Uploaded asset binding failed" in run["next_actions"][0]
+    assert run["generation_jobs"] == []
+
+
+def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset() -> None:
+    client = fresh_client()
+    qr_payload = "https://alchemy.test/qr/preserve-original"
+    asset_id = upload_image_asset(
+        client,
+        make_qr_reference_image(qr_payload),
+        role="subject_reference",
+        filename="product-with-qr.png",
+    )
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "保留上传图中的产品和二维码，版式使用选定案例，二维码附加在图片中合适的位置。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "产品和二维码必须沿用原图，不要重画二维码。",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image", "aspect_ratio": "1024x1024"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    output = run["generation_jobs"][0]["outputs"][0]
+    preservation = output["metadata"]["pixel_preservation"]["qr_code"]
+    assert preservation["applied"] is True
+    assert preservation["source_asset_id"] == asset_id
+    assert decode_qr_from_image(Path(output["metadata"]["storage_path"])) == qr_payload
 
 
 def test_v2_generation_running_job_is_reused_for_final_result() -> None:

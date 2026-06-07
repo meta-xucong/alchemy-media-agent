@@ -4,5 +4,7 @@ pydantic>=2.8
 httpx>=0.28.0
 openai-agents>=0.17.4
 Pillow>=10.4
+opencv-python-headless>=4.10,<5
+qrcode>=7.4,<9
 sse-starlette==3.0.3
 pytest>=8.0

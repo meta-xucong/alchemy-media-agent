@@ -10,12 +10,14 @@ dependencies = [
   "httpx>=0.28.0",
   "openai-agents>=0.17.4",
   "Pillow>=10.4",
+  "opencv-python-headless>=4.10,<5",
   "sse-starlette==3.0.3",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "qrcode>=7.4,<9",
 ]
 
 [tool.pytest.ini_options]

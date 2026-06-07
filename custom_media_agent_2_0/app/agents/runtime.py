@@ -211,6 +211,19 @@ class CreativeManagerRuntime:
             orchestrator_candidate_summaries = summaries_from_cases([template_case])
             orchestrator_candidate_details = [template_case]
         asset_context = build_asset_context(request)
+        asset_binding_error = _asset_binding_failure(asset_context)
+        if asset_binding_error:
+            return self._save_run_stage(
+                request,
+                run_id=run_id,
+                trace_id=trace_id,
+                created_at=created,
+                status="failed",
+                mode=fallback_mode,
+                case_retrieval_plan=fallback_retrieval_plan,
+                selected_cases=orchestrator_candidate_summaries,
+                next_actions=[asset_binding_error],
+            )
         self._save_run_stage(
             request,
             run_id=run_id,
@@ -522,6 +535,32 @@ def _dedupe(items: list[str]) -> list[str]:
 
 def _json_tool_result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _asset_binding_failure(asset_context: dict | None) -> str | None:
+    if not asset_context:
+        return None
+    plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
+    conflicts = plan.get("conflicts") if isinstance(plan, dict) else []
+    missing = []
+    if isinstance(conflicts, list):
+        missing = [
+            str(item.get("asset_id"))
+            for item in conflicts
+            if isinstance(item, dict) and item.get("type") == "asset_missing" and item.get("asset_id")
+        ]
+    if missing:
+        return (
+            "Uploaded asset binding failed: requested uploaded image(s) are not available to the V2 worker: "
+            + ", ".join(sorted(set(missing)))
+            + ". Please upload again before generation."
+        )
+    bindings = plan.get("bindings") if isinstance(plan, dict) else []
+    hard_bindings = [item for item in bindings if isinstance(item, dict) and item.get("provider_input_required")]
+    provider_plan = plan.get("provider_input_plan") if isinstance(plan, dict) and isinstance(plan.get("provider_input_plan"), dict) else {}
+    if hard_bindings and not provider_plan.get("reference_image_count"):
+        return "Uploaded asset binding failed: hard visual constraints require provider input images, but no reference image was prepared."
+    return None
 
 
 def _image_job_failure_action(job) -> str:

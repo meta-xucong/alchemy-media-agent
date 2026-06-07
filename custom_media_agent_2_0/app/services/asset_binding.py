@@ -17,6 +17,7 @@ from app.schemas import (
 )
 from app.services.case_intelligence import get_prompt_case
 from app.services.ids import new_id
+from app.services.uploaded_assets import get_uploaded_asset
 
 
 LOCKED_TEMPLATE_ELEMENTS = [
@@ -155,7 +156,7 @@ def provider_input_images(binding_plan: AssetBindingPlan, brief_by_id: dict[str,
         brief = brief_by_id.get(binding.asset_id)
         if not brief or not binding.provider_input_required:
             continue
-        asset = repository.get_uploaded_asset(binding.asset_id)
+        asset = get_uploaded_asset(binding.asset_id)
         if not asset:
             continue
         existing = images_by_asset_id.get(binding.asset_id)
@@ -214,7 +215,7 @@ def _normalize_asset_inputs(raw_assets: list[str | CreativeRunAssetInput]) -> li
 
 
 def _resolve_uploaded_asset(asset_id: str) -> UploadedAsset | None:
-    return repository.get_uploaded_asset(asset_id)
+    return get_uploaded_asset(asset_id)
 
 
 def _brief_for(asset: UploadedAsset) -> AssetBrief:
