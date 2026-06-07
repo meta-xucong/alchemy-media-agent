@@ -183,7 +183,7 @@ def _paste_qr_crop(
 
 def _target_qr_size(canvas_size: tuple[int, int], qr_size: tuple[int, int]) -> tuple[int, int]:
     min_canvas = min(canvas_size)
-    max_side = max(96, int(min_canvas * 0.22))
+    max_side = max(96, int(min_canvas * 0.3))
     min_side = max(80, int(min_canvas * 0.12))
     qr_width, qr_height = qr_size
     longest = max(qr_width, qr_height)
