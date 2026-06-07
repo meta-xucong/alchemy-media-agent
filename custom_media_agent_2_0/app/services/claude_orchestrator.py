@@ -37,6 +37,40 @@ _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
 _CLAUDE_INLINE_RATIONALE_CHAR_BUDGET = 140
+_CLAUDE_KIMI_BUDGET_GUARD_REASON = "orchestrator_budget_guard:kimi_known_output_limit_pattern"
+_CLAUDE_OUTPUT_LIMIT_FALLBACK_REASON = "orchestrator_budget_guard:local_prompt_composer_after_output_budget"
+_KIMI_BUDGET_GUARD_KEYWORDS = {
+    "西幻",
+    "奇幻",
+    "哥布林",
+    "地精",
+    "妖精",
+    "精灵",
+    "兽人",
+    "龙",
+    "巢穴",
+    "魔法",
+    "怪物",
+    "战斗",
+    "作战",
+    "防线",
+    "十字弩",
+    "板甲",
+    "塔盾",
+    "goblin",
+    "fantasy",
+    "lair",
+    "fairy",
+    "elf",
+    "orc",
+    "dragon",
+    "monster",
+    "battle",
+    "combat",
+    "crossbow",
+    "plate armor",
+    "shield wall",
+}
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -169,6 +203,21 @@ def orchestrate_creative_request(
         _record_invocation(decision)
         return decision
 
+    budget_guard_reason = _claude_budget_guard_reason(request)
+    if budget_guard_reason:
+        decision = fallback.model_copy(
+            update={
+                "fallback_reason": budget_guard_reason,
+                "invocation_status": "budget_guard",
+                "latency_ms": _elapsed_ms(started),
+                "attempts": 0,
+                "cache_key": cache_key,
+                "workspace_id": workspace_id,
+            }
+        )
+        _record_invocation(decision)
+        return decision
+
     attempts = max(1, settings.claude_orchestrator_max_attempts)
     errors: list[str] = []
     raw_decision: dict[str, Any] | None = None
@@ -187,7 +236,7 @@ def orchestrate_creative_request(
             errors.append("claude_missing_decision")
         except ClaudeInvocationError as exc:
             failure_code = str(exc)
-            errors.append(f"claude_invoke_error:{failure_code}")
+            errors.append(_claude_failure_fallback_reason(failure_code))
             if failure_code in _NON_RETRYABLE_CLAUDE_FAILURES:
                 break
         except Exception as exc:
@@ -300,6 +349,33 @@ def reset_orchestrator_observability() -> None:
     _RECENT_INVOCATIONS.clear()
 
 
+def _claude_budget_guard_reason(request: CreateCreativeRunRequest) -> str | None:
+    if not settings.claude_orchestrator_kimi_budget_guard_enabled:
+        return None
+    if request.template_case_id:
+        return None
+    if not _claude_route_is_kimi_like():
+        return None
+    prompt = str(request.user_prompt or "").lower()
+    if any(keyword in prompt for keyword in _KIMI_BUDGET_GUARD_KEYWORDS):
+        return _CLAUDE_KIMI_BUDGET_GUARD_REASON
+    return None
+
+
+def _claude_route_is_kimi_like() -> bool:
+    model = str(settings.claude_orchestrator_model or "").strip().lower()
+    fallback_model = str(settings.claude_orchestrator_fallback_model or "").strip().lower()
+    if not model:
+        return True
+    return "kimi" in model or "kimi" in fallback_model
+
+
+def _claude_failure_fallback_reason(failure_code: str) -> str:
+    if failure_code == "claude_output_token_limit":
+        return _CLAUDE_OUTPUT_LIMIT_FALLBACK_REASON
+    return f"claude_invoke_error:{failure_code}"
+
+
 def _invoke_claude_file_mode(
     *,
     request: CreateCreativeRunRequest,
@@ -319,6 +395,7 @@ def _invoke_claude_file_mode(
     if not _uses_file_tools():
         return _invoke_claude_inline_json(command=command, workspace=workspace)
     prompt = _build_file_tool_prompt()
+    _write_text(workspace / "claude_prompt.txt", prompt)
     command_line = [
         *command,
         "-p",
@@ -378,6 +455,7 @@ def _invoke_claude_file_mode(
 
 def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[str, Any] | None:
     prompt = _build_inline_json_prompt(workspace)
+    _write_text(workspace / "claude_prompt.txt", prompt)
     command_line = [
         *command,
         "-p",

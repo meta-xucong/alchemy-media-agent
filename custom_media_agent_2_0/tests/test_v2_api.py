@@ -45,6 +45,7 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_orchestrator_fallback_model", None)
     object.__setattr__(settings, "claude_orchestrator_effort", "low")
     object.__setattr__(settings, "claude_orchestrator_tools", "none")
+    object.__setattr__(settings, "claude_orchestrator_kimi_budget_guard_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_cache_enabled", True)
     object.__setattr__(settings, "claude_orchestrator_max_attempts", 2)
     object.__setattr__(settings, "claude_orchestrator_retry_delay_seconds", 0.0)
@@ -1641,8 +1642,41 @@ def test_creative_run_does_not_retry_claude_output_token_limit(monkeypatch) -> N
     assert calls["count"] == 1
     assert run["status"] == "completed"
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
-    assert run["orchestrator_decision"]["fallback_reason"] == "claude_invoke_error:claude_output_token_limit"
+    assert run["orchestrator_decision"]["fallback_reason"] == (
+        "orchestrator_budget_guard:local_prompt_composer_after_output_budget"
+    )
     assert run["orchestrator_decision"]["attempts"] == 1
+
+
+def test_creative_run_skips_kimi_for_known_fantasy_budget_pattern(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_orchestrator_model", "kimi-for-coding")
+    object.__setattr__(settings, "claude_orchestrator_kimi_budget_guard_enabled", True)
+
+    def unexpected_claude_decision(*, request, fallback, candidate_cases, candidate_case_details):
+        raise AssertionError("Kimi budget guard should skip Claude for this prompt class")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", unexpected_claude_decision)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "生成一张西幻背景下，在哥布林巢穴中作战的场景图片。"
+                "三名厚重银色板甲步兵手持塔盾和长矛推进，身后十字弩射手覆盖射击。"
+            ),
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    decision = run["orchestrator_decision"]
+    assert run["status"] == "completed"
+    assert decision["provider"] == "deterministic-fallback"
+    assert decision["invocation_status"] == "budget_guard"
+    assert decision["fallback_reason"] == "orchestrator_budget_guard:kimi_known_output_limit_pattern"
+    assert decision["attempts"] == 0
 
 
 def test_creative_run_does_not_retry_claude_timeout(monkeypatch) -> None:

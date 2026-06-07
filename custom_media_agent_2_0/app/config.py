@@ -109,6 +109,7 @@ class Settings:
     claude_orchestrator_tools: str = "none"
     claude_orchestrator_permission_mode: str = "bypassPermissions"
     claude_orchestrator_fallback_model: str | None = None
+    claude_orchestrator_kimi_budget_guard_enabled: bool = True
     claude_orchestrator_workspace_dir: Path = PROJECT_ROOT / ".v2_data" / "claude_orchestrator_runs"
     claude_orchestrator_cache_enabled: bool = True
     claude_orchestrator_semantic_cache_enabled: bool = True
@@ -245,6 +246,11 @@ def load_settings() -> Settings:
             "bypassPermissions",
         ),
         claude_orchestrator_fallback_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODEL") or None,
+        claude_orchestrator_kimi_budget_guard_enabled=os.getenv(
+            "V2_CLAUDE_ORCHESTRATOR_KIMI_BUDGET_GUARD_ENABLED",
+            "true",
+        ).lower()
+        in {"1", "true", "yes", "on"},
         claude_orchestrator_workspace_dir=Path(
             os.getenv(
                 "V2_CLAUDE_ORCHESTRATOR_WORKSPACE_DIR",
