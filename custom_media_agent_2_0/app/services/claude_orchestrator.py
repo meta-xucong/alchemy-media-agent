@@ -572,8 +572,6 @@ def _invoke_claude_stage_json(
         _checkpoint_system_prompt(),
         "--output-format",
         "json",
-        "--json-schema",
-        json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
         "--permission-mode",
         settings.claude_orchestrator_permission_mode,
         "--tools",
@@ -583,6 +581,8 @@ def _invoke_claude_stage_json(
         "--bare",
         "--no-session-persistence",
     ]
+    if settings.claude_checkpoint_cli_schema_enabled:
+        command_line.extend(["--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":"))])
     _apply_claude_cli_acceleration_flags(command_line)
     if settings.claude_orchestrator_model:
         command_line.extend(["--model", settings.claude_orchestrator_model])
@@ -591,7 +591,8 @@ def _invoke_claude_stage_json(
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-    env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
+    structured_retries = "1" if settings.claude_checkpoint_cli_schema_enabled else "0"
+    env["MAX_STRUCTURED_OUTPUT_RETRIES"] = structured_retries
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
     try:
@@ -602,7 +603,10 @@ def _invoke_claude_stage_json(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=settings.claude_orchestrator_timeout_seconds,
+            timeout=min(
+                settings.claude_orchestrator_timeout_seconds,
+                settings.claude_checkpoint_stage_timeout_seconds,
+            ),
             check=False,
             cwd=str(workspace),
             env=env,
@@ -619,7 +623,9 @@ def _invoke_claude_stage_json(
     if completed.returncode != 0:
         return None
     parsed = _parse_structured_output(completed.stdout or "")
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed if _matches_checkpoint_schema(parsed, schema) else None
 
 
 def _checkpoint_system_prompt() -> str:
@@ -668,10 +674,12 @@ def _build_checkpoint_stage_prompt(
         "rules": (
             "Every stage is Claude-led and must be completed; do not skip Claude for any subject. "
             "Use compact internal judgment, not extended written analysis. Output only compact JSON. "
+            "Think through the stage fully, then compress the visible answer to the requested fields. "
             "If template_case_id exists, it is the locked visual frame and must remain selected_case_ids[0]. "
             "Uploaded assets fill slots and hard identity refs must remain provider input images. "
             "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers."
         ),
+        "output_contract": _checkpoint_output_contract(stage_name),
         "request": {
             "user_prompt": (context.get("request") or {}).get("user_prompt", ""),
             "template_case_id": template_case_id,
@@ -708,6 +716,43 @@ def _build_checkpoint_stage_prompt(
     if stage_name.endswith("_micro"):
         payload["rules"] += " This is a retry micro-stage: finish only the missing decision; no broad re-analysis."
     return "Return schema-valid compact JSON only.\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _checkpoint_output_contract(stage_name: str) -> str:
+    if stage_name.startswith("intent"):
+        return (
+            "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
+            "asset_requirements, risk_notes, confidence. Use short strings; arrays max 6."
+        )
+    if stage_name.startswith("visual_strategy"):
+        return (
+            "Object keys: stage, selected_case_ids, composition, lighting, palette, "
+            "spatial_hierarchy, template_lock_notes, asset_fusion_notes, confidence. One strategy only."
+        )
+    return (
+        "Object keys: mode, selected_case_ids, final_prompt, negative_prompt, provider_parameters, "
+        "prompt_rationale, confidence. final_prompt must be provider-ready and within visible_output_budget."
+    )
+
+
+def _matches_checkpoint_schema(payload: dict[str, Any], schema: dict[str, Any]) -> bool:
+    required = schema.get("required") if isinstance(schema.get("required"), list) else []
+    for field in required:
+        if not isinstance(field, str):
+            continue
+        if field not in payload:
+            return False
+        value = payload.get(field)
+        if value is None or value == "":
+            return False
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    for field, spec in properties.items():
+        if field not in payload or not isinstance(spec, dict):
+            continue
+        allowed = spec.get("enum")
+        if isinstance(allowed, list) and payload[field] not in allowed:
+            return False
+    return True
 
 
 def _checkpoint_visual_case(item: dict[str, Any], *, tight: bool) -> dict[str, Any]:

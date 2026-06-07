@@ -111,6 +111,8 @@ class Settings:
     claude_orchestrator_fallback_model: str | None = None
     claude_checkpoint_orchestrator_enabled: bool = False
     claude_checkpoint_max_stage_retries: int = 2
+    claude_checkpoint_stage_timeout_seconds: float = 180.0
+    claude_checkpoint_cli_schema_enabled: bool = False
     claude_final_prompt_max_chars: int = 1400
     claude_negative_prompt_max_chars: int = 320
     claude_rationale_max_chars: int = 180
@@ -259,6 +261,15 @@ def load_settings() -> Settings:
             0,
             int(os.getenv("V2_CLAUDE_CHECKPOINT_MAX_STAGE_RETRIES", "2")),
         ),
+        claude_checkpoint_stage_timeout_seconds=max(
+            30.0,
+            float(os.getenv("V2_CLAUDE_CHECKPOINT_STAGE_TIMEOUT_SECONDS", "180")),
+        ),
+        claude_checkpoint_cli_schema_enabled=os.getenv(
+            "V2_CLAUDE_CHECKPOINT_CLI_SCHEMA_ENABLED",
+            "false",
+        ).lower()
+        in {"1", "true", "yes", "on"},
         claude_final_prompt_max_chars=max(200, int(os.getenv("V2_CLAUDE_FINAL_PROMPT_MAX_CHARS", "1400"))),
         claude_negative_prompt_max_chars=max(80, int(os.getenv("V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS", "320"))),
         claude_rationale_max_chars=max(40, int(os.getenv("V2_CLAUDE_RATIONALE_MAX_CHARS", "180"))),

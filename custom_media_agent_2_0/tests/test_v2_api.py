@@ -49,6 +49,8 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_orchestrator_tools", "none")
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
+    object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 180.0)
+    object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_final_prompt_max_chars", 1400)
     object.__setattr__(settings, "claude_negative_prompt_max_chars", 320)
     object.__setattr__(settings, "claude_rationale_max_chars", 180)
@@ -986,6 +988,67 @@ def test_checkpoint_orchestrator_falls_back_after_stage_retry_exhaustion(monkeyp
     assert decision["attempts"] == 2
 
 
+def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
+    object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
+    object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 123.0)
+    captured: dict[str, object] = {}
+
+    def fake_run(command_line, **kwargs):
+        captured["command_line"] = command_line
+        captured["env"] = kwargs["env"]
+        captured["timeout"] = kwargs["timeout"]
+        result = json.dumps(
+            {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "premium product",
+                "scene_goal": "commercial hero image",
+                "must_keep": ["premium lighting"],
+                "must_avoid": ["clutter"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.9,
+            }
+        )
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
+
+    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+
+    parsed = claude_orchestrator_service._invoke_claude_stage_json(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        prompt="Return JSON.",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+    )
+
+    assert parsed["stage"] == "intent"
+    assert "--json-schema" not in captured["command_line"]
+    assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
+    assert captured["timeout"] == 123.0
+
+
+def test_checkpoint_stage_rejects_missing_required_fields(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+
+    def fake_run(command_line, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": json.dumps({"stage": "intent"})}), stderr="")
+
+    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+
+    parsed = claude_orchestrator_service._invoke_claude_stage_json(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        prompt="Return JSON.",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+    )
+
+    assert parsed is None
+
+
 def test_checkpoint_intent_prompt_uses_bounded_context(tmp_path: Path) -> None:
     (tmp_path / "context.json").write_text(
         json.dumps(
@@ -1029,9 +1092,10 @@ def test_checkpoint_intent_prompt_uses_bounded_context(tmp_path: Path) -> None:
     payload = json.loads(prompt.split("\n", 1)[1])
 
     assert payload["candidate_cases"] == []
+    assert "output_contract" in payload
     assert "Think fully" not in prompt
     assert "bounded internal" in claude_orchestrator_service._checkpoint_system_prompt()
-    assert len(prompt) < 1800
+    assert len(prompt) < 2100
 
 
 def test_checkpoint_generation_prompt_uses_compact_checkpoints_only(tmp_path: Path) -> None:
@@ -1248,6 +1312,31 @@ def test_v2_native_generation_preserves_uploaded_logo_reference() -> None:
     assert output.metadata["input_images"][0]["role"] == "logo_reference"
     assert "logo_overlay" not in str(output.metadata)
     assert Path(output.metadata["storage_path"]).exists()
+
+
+def test_v2_generation_running_job_is_reused_for_final_result() -> None:
+    fresh_client()
+    request = CreateImageJobRequest(
+        run_id="run_observable_generation",
+        prompt_plan=ImagePromptPlan(
+            plan_id="plan_observable_generation",
+            mode="smart_enhance",
+            prompt="Create a premium tea poster.",
+            provider_parameters={"count": 1},
+        ),
+        provider_hint="mock_image",
+    )
+
+    running = asyncio.run(generation_service.create_running_image_job(request))
+    final = asyncio.run(
+        generation_service.create_image_job(request, job_id=running.job_id, created_at=running.created_at)
+    )
+
+    assert running.status == "running"
+    assert final.status == "completed"
+    assert final.job_id == running.job_id
+    assert final.created_at == running.created_at
+    assert repository.get_image_job(running.job_id).status == "completed"
 
 
 def test_v2_logo_notes_preserve_specific_right_chest_target() -> None:

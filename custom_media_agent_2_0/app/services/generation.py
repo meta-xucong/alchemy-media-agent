@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from app.config import settings
 from app.providers.images import (
     V2ImageProviderError,
@@ -8,6 +10,7 @@ from app.providers.images import (
     get_v2_image_provider,
 )
 from app.repositories import repository
+
 from app.repositories.memory import utc_now
 from app.schemas import CreateImageJobRequest, ImageJob, ImageOutput
 from app.services.ids import new_id
@@ -16,8 +19,46 @@ from app.services.output_review import review_image_job
 from app.services.output_storage import save_provider_output
 
 
-async def create_image_job(request: CreateImageJobRequest) -> ImageJob:
+async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
     provider = await get_v2_image_provider(request.provider_hint)
+    now = utc_now()
+    job = ImageJob(
+        job_id=new_id("job"),
+        run_id=request.run_id,
+        status="running",
+        provider_id=provider.name,
+        model=_requested_model(request.provider_hint) or "unknown",
+        prompt_plan=request.prompt_plan,
+        outputs=[],
+        created_at=now,
+        updated_at=now,
+    )
+    return repository.save_image_job(job)
+
+
+async def create_image_job(
+    request: CreateImageJobRequest,
+    *,
+    job_id: str | None = None,
+    created_at: datetime | None = None,
+) -> ImageJob:
+    provider = await get_v2_image_provider(request.provider_hint)
+    job_id = job_id or new_id("job")
+    created_at = created_at or utc_now()
+    if not repository.get_image_job(job_id):
+        repository.save_image_job(
+            ImageJob(
+                job_id=job_id,
+                run_id=request.run_id,
+                status="running",
+                provider_id=provider.name,
+                model=_requested_model(request.provider_hint) or "unknown",
+                prompt_plan=request.prompt_plan,
+                outputs=[],
+                created_at=created_at,
+                updated_at=utc_now(),
+            )
+        )
     try:
         result = await provider.generate(
             V2ImageProviderRequest(
@@ -36,8 +77,8 @@ async def create_image_job(request: CreateImageJobRequest) -> ImageJob:
                     input_images=request.input_images,
                 )
             )
-            return _save_job(_job_from_result(request, result, fallback_error=exc))
-        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc))
+            return _save_job(_job_from_result(request, result, fallback_error=exc, job_id=job_id, created_at=created_at))
+        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
     except V2ImageProviderError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
@@ -48,14 +89,20 @@ async def create_image_job(request: CreateImageJobRequest) -> ImageJob:
                     input_images=request.input_images,
                 )
             )
-            return _save_job(_job_from_result(request, result, fallback_error=exc))
-        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc))
-    return _save_job(_job_from_result(request, result))
+            return _save_job(_job_from_result(request, result, fallback_error=exc, job_id=job_id, created_at=created_at))
+        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
+    return _save_job(_job_from_result(request, result, job_id=job_id, created_at=created_at))
 
 
-def _job_from_result(request: CreateImageJobRequest, result, fallback_error: V2ImageProviderError | None = None) -> ImageJob:
+def _job_from_result(
+    request: CreateImageJobRequest,
+    result,
+    *,
+    job_id: str,
+    created_at: datetime,
+    fallback_error: V2ImageProviderError | None = None,
+) -> ImageJob:
     now = utc_now()
-    job_id = new_id("job")
     outputs: list[ImageOutput] = []
     for item in result.outputs:
         output = ImageOutput(
@@ -96,15 +143,22 @@ def _job_from_result(request: CreateImageJobRequest, result, fallback_error: V2I
         prompt_plan=request.prompt_plan,
         outputs=outputs,
         error=_provider_error_payload(fallback_error) if fallback_error else None,
-        created_at=now,
+        created_at=created_at,
         updated_at=now,
     )
 
 
-def _failed_job(request: CreateImageJobRequest, *, provider_id: str, error: V2ImageProviderError) -> ImageJob:
+def _failed_job(
+    request: CreateImageJobRequest,
+    *,
+    provider_id: str,
+    error: V2ImageProviderError,
+    job_id: str,
+    created_at: datetime,
+) -> ImageJob:
     now = utc_now()
     return ImageJob(
-        job_id=new_id("job"),
+        job_id=job_id,
         run_id=request.run_id,
         status="failed",
         provider_id=provider_id,
@@ -112,7 +166,7 @@ def _failed_job(request: CreateImageJobRequest, *, provider_id: str, error: V2Im
         prompt_plan=request.prompt_plan,
         outputs=[],
         error=_provider_error_payload(error),
-        created_at=now,
+        created_at=created_at,
         updated_at=now,
     )
 

@@ -16,7 +16,7 @@ from app.schemas import (
 from app.services.case_intelligence import build_case_profile, get_prompt_case, search_prompt_cases
 from app.services.claude_orchestrator import orchestrate_creative_request
 from app.services.asset_binding import build_asset_context, provider_input_images_from_context
-from app.services.generation import create_image_job
+from app.services.generation import create_image_job, create_running_image_job
 from app.services.ids import new_id
 from app.services.prompting import compose_prompt_plan, summarize_intent, summaries_from_cases
 from app.services.safety import run_safety_check
@@ -303,6 +303,15 @@ class CreativeManagerRuntime:
             status = "waiting_for_user"
             next_actions = ["Collect explicit user authorization before image generation."]
         else:
+            image_request = CreateImageJobRequest(
+                run_id=run_id,
+                prompt_plan=prompt_plan,
+                provider_hint=request.output.get("provider_hint")
+                or orchestrator_decision.generation_directives.get("provider_hint"),
+                input_images=provider_input_images_from_context(asset_context),
+            )
+            running_job = await create_running_image_job(image_request)
+            generation_jobs.append(running_job)
             self._save_run_stage(
                 request,
                 run_id=run_id,
@@ -315,18 +324,15 @@ class CreativeManagerRuntime:
                 prompt_plan=prompt_plan,
                 safety_decision=safety_decision,
                 orchestrator_decision=orchestrator_decision,
+                generation_jobs=generation_jobs,
                 next_actions=["Submitting the final prompt and required reference images to the selected image provider."],
             )
             job = await create_image_job(
-                CreateImageJobRequest(
-                    run_id=run_id,
-                    prompt_plan=prompt_plan,
-                    provider_hint=request.output.get("provider_hint")
-                    or orchestrator_decision.generation_directives.get("provider_hint"),
-                    input_images=provider_input_images_from_context(asset_context),
-                )
+                image_request,
+                job_id=running_job.job_id,
+                created_at=running_job.created_at,
             )
-            generation_jobs.append(job)
+            generation_jobs = [job]
             if job.status == "failed":
                 status = "failed"
                 next_actions = [_image_job_failure_action(job)]
