@@ -61,7 +61,7 @@ def compose_prompt_plan(
         negative_prompt = _remove_negative_terms(negative_prompt, {"text"})
     provider_parameters = _build_provider_parameters(output, orchestrator_decision)
     aspect_ratio = provider_parameters.get("aspect_ratio", "1:1")
-    count = int(provider_parameters.get("count", 4))
+    count = int(provider_parameters.get("count", 1))
     count = max(1, min(count, 8))
     provider_parameters["count"] = count
     style_basis = [
@@ -198,7 +198,7 @@ def _merge_negative_prompt(base: str, additions: list[str] | tuple[str, ...]) ->
 
 def _build_provider_parameters(output: dict, orchestrator_decision: CreativeOrchestratorDecision | None) -> dict:
     internal_keys = {"prompt", "negative_prompt", "revision_source"}
-    params = {str(key): value for key, value in dict(output).items() if str(key) not in internal_keys}
+    params: dict[str, object] = {}
     if orchestrator_decision:
         params.update(
             {
@@ -207,11 +207,12 @@ def _build_provider_parameters(output: dict, orchestrator_decision: CreativeOrch
                 if str(key) not in internal_keys
             }
         )
+    params.update({str(key): value for key, value in dict(output).items() if str(key) not in internal_keys})
     aspect_ratio = params.get("aspect_ratio", "1:1")
     try:
-        count = int(params.get("count", 4))
+        count = int(params.get("count", 1))
     except Exception:
-        count = 4
+        count = 1
     params["aspect_ratio"] = aspect_ratio
     params["count"] = max(1, min(count, 8))
     params["quality"] = params.get("quality", "high")

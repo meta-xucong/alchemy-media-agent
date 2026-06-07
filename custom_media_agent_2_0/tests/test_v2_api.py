@@ -51,6 +51,7 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
     object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 180.0)
+    object.__setattr__(settings, "claude_checkpoint_soft_stage_timeout_seconds", 60.0)
     object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_final_prompt_max_chars", 1400)
     object.__setattr__(settings, "claude_negative_prompt_max_chars", 320)
@@ -1297,12 +1298,16 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
 
 def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
+    (tmp_path / "fallback_decision.json").write_text(
+        json.dumps({"mode": "smart_enhance"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     def fake_run(command_line, **kwargs):
         result = json.dumps(
             {
                 "stage": "intent_micro",
-                "mode": "smart_enhance",
+                "mode": "direct",
                 "primary_subject": "premium product poster",
                 "scene_goal": "compact commercial hero image",
                 "must_keep": ["clean hierarchy"],
@@ -1325,6 +1330,7 @@ def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypa
     )
 
     assert parsed["stage"] == "intent"
+    assert parsed["mode"] == "smart_enhance"
     assert parsed["confidence"] == 0.9
     assert parsed["risk_notes"] == ["no specific product identity supplied"]
 
@@ -2423,6 +2429,58 @@ def test_creative_run_consumes_claude_orchestrator_decision(monkeypatch) -> None
     assert run["prompt_plan"]["provider_parameters"]["provider_hint"] == "mock_image"
     assert "avoid crowded background" in run["prompt_plan"]["negative_prompt"]
     assert "unlicensed third-party logos" in run["prompt_plan"]["negative_prompt"]
+    assert len(run["generation_jobs"][0]["outputs"]) == 1
+
+
+def test_creative_run_defaults_to_one_output_when_count_omitted() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Minimal ecommerce product image.", "output": {"provider_hint": "mock_image"}},
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
+    assert run["orchestrator_decision"]["generation_directives"]["count"] == 1
+    assert run["prompt_plan"]["provider_parameters"]["count"] == 1
+    assert len(run["generation_jobs"][0]["outputs"]) == 1
+
+
+def test_user_count_overrides_claude_provider_parameters(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+
+    def count_four_claude_decision(*, request, fallback, candidate_cases, candidate_case_details):
+        selected_case_id = candidate_cases[0].case_id if candidate_cases else "case_seed"
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [selected_case_id],
+            "final_prompt": "Claude final prompt: premium product poster with one refined hero composition.",
+            "negative_prompt": "watermark, clutter",
+            "provider_parameters": {"count": 4, "provider_hint": "mock_image", "quality": "high"},
+            "generation_directives": {"count": 4, "provider_hint": "mock_image"},
+            "prompt_rationale": "Claude tried to request multiple variants, but user output settings are authoritative.",
+            "confidence": 0.86,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", count_four_claude_decision)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Generate exactly one premium product poster.",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    decision = run["orchestrator_decision"]
+    assert decision["provider"] == "claude-code"
+    assert decision["provider_parameters"]["count"] == 1
+    assert decision["generation_directives"]["count"] == 1
+    assert run["prompt_plan"]["provider_parameters"]["count"] == 1
     assert len(run["generation_jobs"][0]["outputs"]) == 1
 
 

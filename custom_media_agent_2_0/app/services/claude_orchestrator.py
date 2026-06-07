@@ -686,7 +686,7 @@ def _invoke_claude_stage_json(
     parsed = _parse_structured_output(completed.stdout or "")
     if not isinstance(parsed, dict):
         return None
-    parsed = _coerce_checkpoint_payload(parsed, schema)
+    parsed = _coerce_checkpoint_payload(parsed, schema, workspace=workspace)
     return parsed if _matches_checkpoint_schema(parsed, schema) else None
 
 
@@ -711,7 +711,7 @@ def _is_checkpoint_soft_timeout(stage_name: str, timeout_seconds: float) -> bool
     return timeout_seconds < _checkpoint_stage_hard_timeout_seconds() and "_retry_" not in stage_name
 
 
-def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
     coerced = dict(payload)
     properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     stage_spec = properties.get("stage") if isinstance(properties.get("stage"), dict) else {}
@@ -738,6 +738,14 @@ def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any]) 
                     coerced[field] = float(label)
                 except ValueError:
                     pass
+    mode_spec = properties.get("mode") if isinstance(properties.get("mode"), dict) else {}
+    allowed_modes = mode_spec.get("enum") if isinstance(mode_spec.get("enum"), list) else []
+    if allowed_modes and coerced.get("mode") not in allowed_modes:
+        fallback_mode = ""
+        if workspace:
+            fallback = _read_json(workspace / "fallback_decision.json") or {}
+            fallback_mode = _text_value(fallback.get("mode"))
+        coerced["mode"] = fallback_mode if fallback_mode in allowed_modes else "smart_enhance"
     return coerced
 
 
@@ -1174,6 +1182,7 @@ def _normalize_decision(
     retrieval_plan = _normalize_retrieval_plan(raw.get("case_retrieval_plan"), fallback_retrieval_plan)
     generation_directives = raw.get("generation_directives") if isinstance(raw.get("generation_directives"), dict) else {}
     provider_parameters = _normalize_provider_parameters(raw.get("provider_parameters"), generation_directives)
+    provider_parameters = _apply_request_output_overrides(provider_parameters, fallback.generation_directives)
     final_prompt = _truncate(
         _sanitize_downstream_prompt(_text_value(raw.get("final_prompt")) or _text_value(generation_directives.get("prompt"))),
         settings.claude_final_prompt_max_chars,
@@ -1199,7 +1208,10 @@ def _normalize_decision(
         prompt_rationale=prompt_rationale,
         prompt_directives=_normalize_prompt_directives(raw.get("prompt_directives")),
         stage_commands=_normalize_stage_commands(raw.get("stage_commands")),
-        generation_directives={**fallback.generation_directives, **generation_directives, **provider_parameters},
+        generation_directives=_apply_request_output_overrides(
+            {**generation_directives, **provider_parameters},
+            fallback.generation_directives,
+        ),
         quality_gates={**fallback.quality_gates, **quality_gates},
         confidence=_bounded_float(raw.get("confidence"), 0.78 if raw.get("selected_case_ids") else fallback.confidence),
         created_at=utc_now(),
@@ -1303,6 +1315,20 @@ def _normalize_provider_parameters(raw: Any, generation_directives: dict[str, An
             merged["count"] = max(1, min(int(merged["count"]), 8))
         except Exception:
             merged.pop("count", None)
+    return merged
+
+
+def _apply_request_output_overrides(params: dict[str, Any], request_output: dict[str, Any] | None) -> dict[str, Any]:
+    merged = dict(params or {})
+    for key, value in (request_output or {}).items():
+        if value is not None:
+            merged[str(key)] = value
+    if "count" not in merged:
+        merged["count"] = 1
+    try:
+        merged["count"] = max(1, min(int(merged["count"]), 8))
+    except Exception:
+        merged["count"] = 1
     return merged
 
 

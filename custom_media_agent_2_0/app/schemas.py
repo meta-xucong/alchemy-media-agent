@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 RunStatus = Literal[
@@ -432,11 +432,31 @@ class CreateCreativeRunRequest(BaseModel):
     assets: list[str | CreativeRunAssetInput] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def normalize_output_defaults(self) -> "CreateCreativeRunRequest":
+        self.output = _normalize_run_output(self.output)
+        return self
+
 
 class CreateRevisionRunRequest(BaseModel):
     feedback: str = ""
     provider_hint: str | None = None
     output: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_output_defaults(self) -> "CreateRevisionRunRequest":
+        self.output = _normalize_run_output(self.output)
+        return self
+
+
+def _normalize_run_output(value: dict[str, Any] | None) -> dict[str, Any]:
+    output = dict(value or {})
+    try:
+        count = int(output.get("count", 1))
+    except Exception:
+        count = 1
+    output["count"] = max(1, min(count, 8))
+    return output
 
 
 class ImageOutput(BaseModel):

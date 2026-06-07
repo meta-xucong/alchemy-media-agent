@@ -296,7 +296,7 @@ class CreativeManagerRuntime:
             mode=mode,
             user_prompt=request.user_prompt,
             cases=full_cases,
-            output={**request.output, **orchestrator_decision.generation_directives},
+            output={**orchestrator_decision.generation_directives, **request.output},
             orchestrator_decision=orchestrator_decision,
             asset_context=asset_context,
         )
