@@ -1813,6 +1813,8 @@ def _parse_json_from_text(text: str) -> dict[str, Any] | None:
 
 
 def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode: int) -> str | None:
+    if returncode == 0 and _has_successful_structured_result(stdout):
+        return None
     text = f"{stdout or ''}\n{stderr or ''}".lower()
     if ("context canceled" in text or "context deadline exceeded" in text) and ("kimi" in text or "api.kimi.com" in text):
         return "kimi_context_canceled"
@@ -1836,6 +1838,22 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
     if returncode != 0:
         return f"claude_cli_exit_{returncode}"
     return None
+
+
+def _has_successful_structured_result(stdout: str | None) -> bool:
+    try:
+        parsed = json.loads(str(stdout or "").strip())
+    except Exception:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("type") == "result" and parsed.get("is_error") is False:
+        structured = parsed.get("structured_output")
+        if isinstance(structured, dict):
+            return True
+        result = parsed.get("result")
+        return isinstance(result, str) and isinstance(_parse_json_from_text(result), dict)
+    return False
 
 
 def _timeout_output(value: str | bytes | None) -> str:

@@ -2611,6 +2611,32 @@ def test_claude_failure_classifier_detects_kimi_context_cancel() -> None:
     assert failure == "kimi_context_canceled"
 
 
+def test_claude_failure_classifier_ignores_successful_result_text_noise() -> None:
+    stdout = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "api_error_status": None,
+            "result": json.dumps(
+                {
+                    "mode": "smart_enhance",
+                    "selected_case_ids": ["case_1"],
+                    "final_prompt": "Do not treat the words sub2api or 502 in successful content as an upstream error.",
+                    "negative_prompt": "watermark",
+                    "provider_parameters": {"count": 1},
+                    "prompt_rationale": "Successful compact JSON.",
+                    "confidence": 0.8,
+                }
+            ),
+        }
+    )
+
+    failure = claude_orchestrator_service._classify_claude_failure(stdout, "", 0)
+
+    assert failure is None
+
+
 def test_claude_failure_classifier_detects_output_token_limit() -> None:
     failure = claude_orchestrator_service._classify_claude_failure(
         "API Error: Claude's response exceeded the 2048 output token maximum. "
