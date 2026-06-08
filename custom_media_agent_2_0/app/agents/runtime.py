@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from app.config import settings
 from app.repositories import repository
@@ -176,6 +177,8 @@ class CreativeManagerRuntime:
         run_id = run_id or new_id("run")
         trace_id = trace_id or new_id("trace")
         fallback_mode = request.mode_hint or ("template_customize" if request.template_case_id else "smart_enhance")
+        progress_events: list[dict[str, Any]] = []
+        progress_summary: dict[str, Any] = {}
         self._save_run_stage(
             request,
             run_id=run_id,
@@ -234,13 +237,36 @@ class CreativeManagerRuntime:
             case_retrieval_plan=fallback_retrieval_plan,
             selected_cases=orchestrator_candidate_summaries,
             next_actions=["Claude Code is composing the final prompt from cases, user intent, and asset bindings."],
+            progress_events=progress_events,
+            progress_summary=progress_summary,
         )
+
+        def on_claude_progress(event: dict[str, Any]) -> None:
+            nonlocal progress_summary
+            compact_event = _compact_progress_event(event)
+            progress_events.append(compact_event)
+            progress_summary = _claude_progress_summary(progress_events)
+            self._save_run_stage(
+                request,
+                run_id=run_id,
+                trace_id=trace_id,
+                created_at=created,
+                status="composing_prompt",
+                mode=fallback_mode,
+                case_retrieval_plan=fallback_retrieval_plan,
+                selected_cases=orchestrator_candidate_summaries,
+                next_actions=[progress_summary.get("message") or "Claude Code is orchestrating the prompt."],
+                progress_events=progress_events,
+                progress_summary=progress_summary,
+            )
+
         orchestrator_decision = orchestrate_creative_request(
             request=request,
             fallback_mode=fallback_mode,
             fallback_retrieval_plan=fallback_retrieval_plan,
             candidate_cases=orchestrator_candidate_summaries,
             candidate_case_details=orchestrator_candidate_details,
+            progress_callback=on_claude_progress,
         )
         orchestrator_failure = _claude_required_failure_message(orchestrator_decision)
         if orchestrator_failure:
@@ -255,6 +281,8 @@ class CreativeManagerRuntime:
                 selected_cases=orchestrator_candidate_summaries,
                 orchestrator_decision=orchestrator_decision,
                 next_actions=[orchestrator_failure],
+                progress_events=progress_events,
+                progress_summary=progress_summary,
             )
         mode = orchestrator_decision.mode
         retrieval_plan = orchestrator_decision.case_retrieval_plan
@@ -312,6 +340,8 @@ class CreativeManagerRuntime:
             prompt_plan=prompt_plan,
             orchestrator_decision=orchestrator_decision,
             next_actions=["Checking safety and provider readiness before image generation."],
+            progress_events=progress_events,
+            progress_summary=progress_summary,
         )
         safety_decision = run_safety_check(
             scope="creative_run",
@@ -353,6 +383,8 @@ class CreativeManagerRuntime:
                 orchestrator_decision=orchestrator_decision,
                 generation_jobs=generation_jobs,
                 next_actions=["Submitting the final prompt and required reference images to the selected image provider."],
+                progress_events=progress_events,
+                progress_summary=progress_summary,
             )
             job = await create_image_job(
                 image_request,
@@ -378,6 +410,8 @@ class CreativeManagerRuntime:
                     orchestrator_decision=orchestrator_decision,
                     generation_jobs=generation_jobs,
                     next_actions=["Reviewing outputs and saving them into the independent V2 history."],
+                    progress_events=progress_events,
+                    progress_summary=progress_summary,
                 )
 
         run = CreativeRun(
@@ -393,6 +427,8 @@ class CreativeManagerRuntime:
             generation_jobs=generation_jobs,
             trace_id=trace_id,
             next_actions=next_actions,
+            progress_events=progress_events,
+            progress_summary=progress_summary,
             created_at=created,
             updated_at=utc_now(),
         )
@@ -414,6 +450,8 @@ class CreativeManagerRuntime:
         orchestrator_decision=None,
         generation_jobs=None,
         next_actions: list[str] | None = None,
+        progress_events: list[dict[str, Any]] | None = None,
+        progress_summary: dict[str, Any] | None = None,
     ) -> CreativeRun:
         run = CreativeRun(
             run_id=run_id,
@@ -428,6 +466,8 @@ class CreativeManagerRuntime:
             generation_jobs=list(generation_jobs or []),
             trace_id=trace_id,
             next_actions=next_actions or [],
+            progress_events=list(progress_events or []),
+            progress_summary=dict(progress_summary or {}),
             created_at=created_at,
             updated_at=utc_now(),
         )
@@ -549,6 +589,72 @@ def _dedupe(items: list[str]) -> list[str]:
 
 def _json_tool_result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _compact_progress_event(event: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "scope",
+        "stage",
+        "stage_label",
+        "status",
+        "provider",
+        "model",
+        "fallback_model",
+        "timeout_seconds",
+        "duration_ms",
+        "failure_code",
+        "attempt",
+        "after_compression_retries",
+        "created_at",
+        "message",
+    }
+    compact: dict[str, Any] = {}
+    for key in allowed:
+        value = event.get(key)
+        if value not in (None, "", []):
+            compact[key] = value
+    models = event.get("models")
+    if isinstance(models, list) and models:
+        compact["models"] = [str(item) for item in models[:5] if str(item).strip()]
+    return compact
+
+
+def _claude_progress_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {}
+    last = events[-1]
+    completed_events = [
+        item
+        for item in events
+        if item.get("status") in {"success", "missing_decision", "error", "failed"}
+        and isinstance(item.get("duration_ms"), (int, float))
+    ]
+    elapsed_ms = int(sum(float(item.get("duration_ms") or 0) for item in completed_events))
+    finished_stage_count = len([item for item in completed_events if item.get("status") == "success"])
+    retry_count = len(
+        [
+            item
+            for item in events
+            if "retry" in str(item.get("stage") or "") or item.get("after_compression_retries")
+        ]
+    )
+    fallback_count = len([item for item in events if item.get("provider") == "claude-code-model-fallback"])
+    return {
+        "scope": "claude_orchestration",
+        "stage": last.get("stage"),
+        "stage_label": last.get("stage_label"),
+        "status": last.get("status"),
+        "provider": last.get("provider"),
+        "model": last.get("model"),
+        "message": last.get("message") or "Claude Code is orchestrating the prompt.",
+        "elapsed_ms": elapsed_ms,
+        "last_duration_ms": last.get("duration_ms"),
+        "finished_stage_count": finished_stage_count,
+        "retry_count": retry_count,
+        "fallback_count": fallback_count,
+        "events_count": len(events),
+        "updated_at": last.get("created_at") or utc_now().isoformat(),
+    }
 
 
 def _asset_binding_failure(asset_context: dict | None) -> str | None:

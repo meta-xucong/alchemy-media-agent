@@ -202,7 +202,7 @@ class ImagePromptPlan(BaseModel):
     negative_constraints: list[str] = Field(default_factory=list)
     text: dict[str, Any] = Field(default_factory=dict)
     count: int = Field(default=1, ge=1, le=10)
-    size: str = "1024x1024"
+    size: str | None = None
     quality: Literal["low", "medium", "high", "auto"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
     transparent_background: bool = False
@@ -376,7 +376,7 @@ class CreateImageJobRequest(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
     asset_intents: list[AssetIntent] = Field(default_factory=list)
     count: int = Field(default=1, ge=1, le=10)
-    size: str = "1024x1024"
+    size: str | None = None
     quality: Literal["low", "medium", "high", "auto"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
     work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None

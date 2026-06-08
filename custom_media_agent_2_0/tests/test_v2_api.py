@@ -824,6 +824,65 @@ def test_checkpoint_orchestrator_runs_all_stages_and_compresses_output(monkeypat
     assert run["generation_jobs"][0]["provider_id"] == "mock_image"
 
 
+def test_creative_run_exposes_claude_progress_summary(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        candidate = json.loads((workspace / "candidate_cases.json").read_text(encoding="utf-8"))[0]["case_id"]
+        if stage_name.startswith("intent"):
+            return {
+                "stage": "intent",
+                "mode": "smart_enhance",
+                "primary_subject": "light meal poster",
+                "scene_goal": "redesign a food promotion image",
+                "must_keep": ["offer text", "QR code"],
+                "must_avoid": ["dropping policy text"],
+                "asset_requirements": [],
+                "risk_notes": [],
+                "confidence": 0.84,
+            }
+        if stage_name.startswith("visual_strategy"):
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [candidate],
+                "composition": "hero food image plus structured menu modules",
+                "lighting": "warm clean commercial light",
+                "palette": "cream, gold, fresh green",
+                "spatial_hierarchy": "hero first, offer and QR preserved in side modules",
+                "template_lock_notes": "preserve template frame",
+                "asset_fusion_notes": "uploaded poster supplies food, copy, QR",
+                "confidence": 0.88,
+            }
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate],
+            "final_prompt": "Commercial light meal poster with strong template hierarchy, hero food image, complete offer copy, QR module.",
+            "negative_prompt": "missing QR, dropped offer text, unreadable menu",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Preserve composition and information integrity.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "做一张轻食菜单海报，保留优惠政策和二维码", "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["progress_summary"]["scope"] == "claude_orchestration"
+    assert run["progress_summary"]["finished_stage_count"] == 3
+    assert run["progress_events"][0]["status"] == "running"
+    assert run["progress_events"][-1]["status"] == "success"
+    assert "Claude Code" in run["progress_summary"]["message"]
+    assert len(run["orchestrator_decision"]["claude_stage_trace"]) == 3
+
+
 def test_checkpoint_orchestrator_micro_retries_output_limit_stage(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
@@ -1312,8 +1371,8 @@ def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, 
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
     assert captured["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096"
     assert captured["timeout"] == 60.0
-    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 61.5
-    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 60.0
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 45.0
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 30.0
 
 
 def test_claude_checkpoint_timeout_salvages_valid_stdout(monkeypatch, tmp_path: Path) -> None:
@@ -2635,7 +2694,7 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert "purchase offers" in prompt
     assert "dedicated QR/CTA card" in prompt
     assert "expand the canvas" in prompt
-    assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "1024x1536"
+    assert "aspect_ratio" not in run["prompt_plan"]["provider_parameters"]
     assert "missing purchase offers" in run["prompt_plan"]["negative_prompt"]
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
@@ -2745,7 +2804,24 @@ def test_creative_run_defaults_to_one_output_when_count_omitted() -> None:
     assert run["orchestrator_decision"]["provider"] == "deterministic-fallback"
     assert run["orchestrator_decision"]["generation_directives"]["count"] == 1
     assert run["prompt_plan"]["provider_parameters"]["count"] == 1
+    assert "aspect_ratio" not in run["prompt_plan"]["provider_parameters"]
     assert len(run["generation_jobs"][0]["outputs"]) == 1
+
+
+def test_creative_run_preserves_manual_aspect_ratio_only() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Minimal ecommerce product image.",
+            "output": {"provider_hint": "mock_image", "aspect_ratio": "1536x1024"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "1536x1024"
 
 
 def test_user_count_overrides_claude_provider_parameters(monkeypatch) -> None:
@@ -3102,6 +3178,47 @@ def test_checkpoint_stage_soft_timeout_retries_kimi_before_model_fallback(monkey
         {"stage_name": "intent_micro_retry_1", "model_override": None},
     ]
     assert all(item.get("provider") != "claude-code-model-fallback" for item in trace)
+
+
+def test_checkpoint_stage_emits_progress_events(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "premium lunch poster",
+            "scene_goal": "redesign a food promotion image",
+            "must_keep": ["offer text", "QR code"],
+            "must_avoid": ["layout copying"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+        progress_callback=events.append,
+    )
+
+    assert result is not None
+    assert attempts == 1
+    assert events[0]["status"] == "running"
+    assert events[0]["stage_label"] == "意图与素材理解"
+    assert "Kimi 主源" in str(events[0]["message"])
+    assert events[-1]["status"] == "success"
+    assert events[-1]["duration_ms"] >= 0
+    assert "完成" in str(events[-1]["message"])
 
 
 def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(monkeypatch, tmp_path) -> None:

@@ -90,7 +90,7 @@ const state = {
   selectedAssetRoles: ["style_reference"],
   currentJob: null,
   selectedOutputId: null,
-  selectedSize: "1024x1536",
+  selectedSize: "",
   selectedFormat: "png",
   selectedQuality: "high",
   selectedIntensity: "balanced",
@@ -126,7 +126,7 @@ const v2State = {
   caseSearchQuery: "",
   templateRenderLimit: v2TemplatePageSize,
   historyRenderLimit: v2HistoryPageSize,
-  selectedRatio: "1024x1536",
+  selectedRatio: "",
   uploadedAssets: [],
   currentRun: null,
   progressStartedAt: null,
@@ -324,7 +324,7 @@ function bindControls() {
   document.querySelectorAll("[data-size]").forEach((button) => {
     button.addEventListener("click", () => {
       setActive(button, "[data-size]");
-      state.selectedSize = button.dataset.size;
+      state.selectedSize = button.dataset.size || "";
     });
   });
 
@@ -407,7 +407,7 @@ function bindControls() {
   document.querySelectorAll("[data-v2-ratio]").forEach((button) => {
     button.addEventListener("click", () => {
       setActive(button, "[data-v2-ratio]");
-      v2State.selectedRatio = button.dataset.v2Ratio;
+      v2State.selectedRatio = button.dataset.v2Ratio || "";
     });
   });
   if (els.v2ClearTemplateBtn) els.v2ClearTemplateBtn.addEventListener("click", clearV2Template);
@@ -1776,6 +1776,23 @@ function v2ProgressElapsedLabel() {
   return `${minutes}m ${seconds % 60}s`;
 }
 
+function v2ClaudeProgressSummary(run = v2State.currentRun) {
+  const summary = run?.progress_summary;
+  return summary && typeof summary === "object" ? summary : null;
+}
+
+function v2ClaudeProgressEvents(run = v2State.currentRun) {
+  return Array.isArray(run?.progress_events) ? run.progress_events : [];
+}
+
+function v2DurationFromMs(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function updateV2ProgressFromRun(run) {
   const statusStage = v2StatusStageMap[run?.status] || "planning";
   const stageKey = refineV2ProgressStage(statusStage, run);
@@ -1794,12 +1811,17 @@ function refineV2ProgressStage(stageKey, run) {
 
 function v2ProgressDetailForRun(stageKey, run) {
   const decision = run?.orchestrator_decision;
+  const claudeProgress = v2ClaudeProgressSummary(run);
   const jobs = run?.generation_jobs || [];
   const outputs = jobs.flatMap((job) => job.outputs || []);
   if (run?.status === "failed") return run.next_actions?.[0] || "任务失败，已停止生成。";
   if (run?.status === "blocked_by_policy") return "安全策略要求停止本次生成。";
   if (run?.status === "waiting_for_user") return "需要用户确认后继续。";
   if (run?.status === "completed") return outputs.length ? `流程完成，共得到 ${outputs.length} 张输出。` : "流程结束。";
+  if (stageKey === "composing_prompt" && claudeProgress?.message) {
+    const elapsed = v2DurationFromMs(claudeProgress.elapsed_ms);
+    return elapsed ? `${claudeProgress.message} · Claude累计 ${elapsed}` : claudeProgress.message;
+  }
   if (decision?.fallback_reason) return v2FallbackReasonLabel(decision.fallback_reason);
   if (decision?.semantic_cache_hit || decision?.cache_hit) return "命中中枢缓存，正在快速复用高质量提示词。";
   if (stageKey === "queued") return "任务已提交，正在进入 Agent 流程。";
@@ -1823,18 +1845,18 @@ function v2ProgressTypeForRun(run) {
 function v2FallbackReasonLabel(reason) {
   const text = String(reason || "");
   if (/claude_timeout|TimeoutExpired/i.test(text)) {
-    return "Claude 中枢响应超时，已切换本地安全回退继续出图。";
+    return "Claude 中枢触达时间边界，系统应压缩续跑；若仍无可恢复结果则停止出图。";
   }
   if (/claude_output_token_limit|output token maximum|MAX_OUTPUT_TOKENS/i.test(text)) {
-    return "Claude 中枢输出超限，已切换本地安全回退继续出图。";
+    return "Claude 中枢输出触达上限，系统应压缩续跑；若仍无可恢复结果则停止出图。";
   }
   if (/kimi_context_canceled|context canceled|kimi/i.test(text)) {
-    return "中枢上游连接波动，已切换本地安全回退继续出图。";
+    return "Kimi 主源连接波动，系统会尝试压缩续跑或备用源接力。";
   }
   if (/claude_api_error|api error/i.test(text)) {
-    return "Claude 中枢暂时不可用，已切换本地安全回退继续出图。";
+    return "Claude 中枢暂时不可用，系统会尝试备用源接力；无可恢复结果则停止出图。";
   }
-  return "中枢已启用安全回退，正在继续出图流程。";
+  return "Claude 中枢未产出可恢复结果，流程已按中枢原则处理。";
 }
 
 async function runV2Creative() {
@@ -1845,6 +1867,15 @@ async function runV2Creative() {
   startV2Progress("queued", "正在提交任务到 V2.0 Agent。");
   renderV2RunPlaceholder();
   try {
+    const output = {
+      count: Number(els.v2CountInput.value),
+      quality: "high",
+      output_format: "png",
+      provider_hint: imageProvider || "auto",
+    };
+    if (v2State.selectedRatio) {
+      output.aspect_ratio = v2State.selectedRatio;
+    }
     const queuedRun = await v2Request("/creative/runs/async", {
       method: "POST",
       body: {
@@ -1852,13 +1883,7 @@ async function runV2Creative() {
         mode_hint: v2State.selectedTemplateId ? "template_customize" : "smart_enhance",
         template_case_id: v2State.selectedTemplateId,
         assets: v2AssetPayload(),
-        output: {
-          count: Number(els.v2CountInput.value),
-          aspect_ratio: v2State.selectedRatio,
-          quality: "high",
-          output_format: "png",
-          provider_hint: imageProvider || "auto",
-        },
+        output,
       },
     });
     v2State.currentRun = queuedRun;
@@ -1911,7 +1936,7 @@ async function pollV2Run(runId) {
       const stage = refineV2ProgressStage(v2StatusStageMap[run.status] || "planning", run);
       setV2Progress(stage, "后台仍在运行，页面会持续刷新直到任务明确完成或失败；真实出图可能需要数分钟。", "info", { forceNotice: true });
     }
-    if (run.prompt_plan || run.orchestrator_decision || run.generation_jobs?.length) {
+    if (run.prompt_plan || run.orchestrator_decision || run.generation_jobs?.length || run.progress_summary?.message || run.progress_events?.length) {
       renderV2Run(run);
     }
     if (v2IsTerminalRun(run)) {
@@ -1981,7 +2006,7 @@ function renderV2Run(run) {
   els.v2TraceId.textContent = run.trace_id || run.run_id || "-";
   renderV2SelectedCases(run.selected_cases || []);
   renderV2Brain(run.orchestrator_decision, v2State.orchestratorStatus);
-  renderV2PromptPlan(run.prompt_plan);
+  renderV2PromptPlan(run.prompt_plan, run);
   const jobs = run.generation_jobs || [];
   const outputs = jobs.flatMap((job) => job.outputs || []);
   renderV2Outputs(outputs, jobs[0]);
@@ -2014,6 +2039,8 @@ function renderV2Brain(decision, status = null) {
   if (!els.v2BrainPanel) return;
   els.v2BrainPanel.innerHTML = "";
   const rows = [];
+  const claudeProgress = v2ClaudeProgressSummary();
+  const claudeEvents = v2ClaudeProgressEvents();
   if (decision) {
     const directives = decision.prompt_directives || {};
     const variables = v2State.currentRun?.prompt_plan?.user_variables || {};
@@ -2044,6 +2071,24 @@ function renderV2Brain(decision, status = null) {
     rows.push(["状态", status.enabled ? "待命" : "备用流程待命", status.enabled ? "ok" : "warn"]);
     rows.push(["案例", caseCount ? `${caseSource} · ${caseCount} 个案例` : caseSource, ""]);
   }
+  if (claudeProgress?.message) {
+    const isWarn = ["error", "failed", "missing_decision"].includes(claudeProgress.status);
+    rows.push(["Claude阶段", claudeProgress.message, isWarn ? "warn" : "ok"]);
+    const elapsed = v2DurationFromMs(claudeProgress.elapsed_ms);
+    const meta = [
+      elapsed ? `累计 ${elapsed}` : "",
+      claudeProgress.finished_stage_count ? `完成 ${claudeProgress.finished_stage_count} 段` : "",
+      claudeProgress.retry_count ? `压缩续跑 ${claudeProgress.retry_count} 次` : "",
+      claudeProgress.fallback_count ? `备用接力 ${claudeProgress.fallback_count} 次` : "",
+    ].filter(Boolean);
+    if (meta.length) rows.push(["Claude耗时", meta.join(" · "), isWarn ? "warn" : ""]);
+    claudeEvents.slice(-3).forEach((event) => {
+      const duration = v2DurationFromMs(event.duration_ms);
+      const value = `${event.stage_label || event.stage || "Claude"} · ${event.status || ""}${duration ? ` · ${duration}` : ""}`;
+      const tone = ["error", "failed", "missing_decision"].includes(event.status) ? "warn" : "";
+      rows.push(["最近", value, tone]);
+    });
+  }
   els.v2BrainPanel.classList.toggle("empty-v2-list", rows.length === 0);
   if (rows.length === 0) {
     els.v2BrainPanel.textContent = "等待 Agent 判断。";
@@ -2071,9 +2116,28 @@ function v2BrainStatusLabel(decision) {
   return status;
 }
 
-function renderV2PromptPlan(plan) {
+function renderV2PromptPlan(plan, run = v2State.currentRun) {
   if (!plan) {
-    els.v2PromptPlan.textContent = "没有生成提示词计划。";
+    const claudeProgress = v2ClaudeProgressSummary(run);
+    if (claudeProgress?.message) {
+      const events = v2ClaudeProgressEvents(run).slice(-5);
+      const elapsed = v2DurationFromMs(claudeProgress.elapsed_ms);
+      const lines = [
+        "Claude 调度进度",
+        claudeProgress.message,
+        elapsed ? `累计耗时: ${elapsed}` : "",
+        claudeProgress.retry_count ? `压缩续跑: ${claudeProgress.retry_count} 次` : "",
+        claudeProgress.fallback_count ? `备用接力: ${claudeProgress.fallback_count} 次` : "",
+        "",
+        ...events.map((event) => {
+          const duration = v2DurationFromMs(event.duration_ms);
+          return `- ${event.stage_label || event.stage || "Claude"} · ${event.status || "-"}${duration ? ` · ${duration}` : ""}`;
+        }),
+      ].filter((line, index, list) => line || list[index - 1]);
+      els.v2PromptPlan.textContent = lines.join("\n");
+      return;
+    }
+    els.v2PromptPlan.textContent = "正在等待提示词计划。";
     return;
   }
   const variables = plan.user_variables || plan.variables || {};
@@ -2789,19 +2853,22 @@ async function generateImage() {
   startImageProgress({ label: "生成中", count, providerName });
   renderSkeleton(count);
   try {
+    const body = {
+      session_id: state.sessionId,
+      prompt,
+      ...assetPayload,
+      count,
+      quality: state.selectedQuality,
+      work_intensity: state.selectedIntensity,
+      output_format: state.selectedFormat,
+      provider_preference: state.selectedProvider,
+    };
+    if (state.selectedSize) {
+      body.size = state.selectedSize;
+    }
     const job = await request("/v1/image/jobs", {
       method: "POST",
-      body: {
-        session_id: state.sessionId,
-        prompt,
-        ...assetPayload,
-        count,
-        size: state.selectedSize,
-        quality: state.selectedQuality,
-        work_intensity: state.selectedIntensity,
-        output_format: state.selectedFormat,
-        provider_preference: state.selectedProvider,
-      },
+      body,
     });
     stopImageProgress();
     state.currentJob = job;

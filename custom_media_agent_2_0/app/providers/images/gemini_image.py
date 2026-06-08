@@ -194,7 +194,10 @@ def _gemini_configuration_reason(*, has_key: bool, model_supports_images: bool) 
 
 def _payload(request: V2ImageProviderRequest, reference_paths: list) -> dict[str, Any]:
     plan = request.prompt_plan
-    image_config: dict[str, Any] = {"aspectRatio": _aspect_ratio(plan)}
+    aspect_ratio = _aspect_ratio(plan)
+    image_config: dict[str, Any] = {}
+    if aspect_ratio:
+        image_config["aspectRatio"] = aspect_ratio
     if _supports_image_size(settings.gemini_image_model):
         image_config["imageSize"] = "2K" if _quality(plan) == "high" else "1K"
     parts: list[dict[str, Any]] = [{"text": str(plan.user_variables.get("generation_prompt") or plan.prompt)}]
@@ -293,8 +296,10 @@ def _quality(plan) -> str:
     return value if value in {"auto", "low", "medium", "high"} else "high"
 
 
-def _aspect_ratio(plan) -> str:
-    size = (plan.provider_parameters or {}).get("size") or (plan.provider_parameters or {}).get("aspect_ratio") or "1:1"
+def _aspect_ratio(plan) -> str | None:
+    size = (plan.provider_parameters or {}).get("size") or (plan.provider_parameters or {}).get("aspect_ratio")
+    if not size or str(size).strip().lower() in {"auto", "default"}:
+        return None
     if isinstance(size, str) and ":" in size:
         return size
     if isinstance(size, str) and "x" in size:
@@ -305,8 +310,8 @@ def _aspect_ratio(plan) -> str:
             divisor = math.gcd(width, height)
             return f"{width // divisor}:{height // divisor}"
         except (ValueError, AttributeError):
-            return "1:1"
-    return "1:1"
+            return None
+    return None
 
 
 def _dimensions(plan) -> tuple[int | None, int | None]:

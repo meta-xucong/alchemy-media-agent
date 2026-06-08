@@ -89,7 +89,6 @@ def compose_prompt_plan(
         orchestrator_decision,
         visual_grammar_contract=visual_grammar_contract,
     )
-    aspect_ratio = provider_parameters.get("aspect_ratio", "1:1")
     count = int(provider_parameters.get("count", 1))
     count = max(1, min(count, 8))
     provider_parameters["count"] = count
@@ -251,14 +250,13 @@ def _build_provider_parameters(
         if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
         else {}
     )
-    if information_integrity.get("active") and not params.get("aspect_ratio") and not params.get("size"):
-        params["aspect_ratio"] = "1024x1536"
-    aspect_ratio = params.get("aspect_ratio", "1:1")
     try:
         count = int(params.get("count", 1))
     except Exception:
         count = 1
-    params["aspect_ratio"] = aspect_ratio
+    for key in ("aspect_ratio", "size"):
+        if params.get(key) in {"", "auto", "default", None}:
+            params.pop(key, None)
     params["count"] = max(1, min(count, 8))
     params["quality"] = params.get("quality", "high")
     return params

@@ -192,14 +192,13 @@ class V2OpenAIGPTImage2Provider:
                 model=settings.openai_image_model,
                 trace_id=request.run_id,
             )
+            kwargs = _openai_image_kwargs(plan)
             response = await client.images.generate(
                 model=settings.openai_image_model,
                 prompt=_prompt(plan),
                 n=1,
-                size=_size(plan),
-                quality=_quality(plan),
-                output_format=_output_format(plan),
                 timeout=settings.openai_image_timeout_seconds,
+                **kwargs,
             )
         except V2ImageProviderRateLimitError:
             raise
@@ -245,15 +244,14 @@ class V2OpenAIGPTImage2Provider:
             )
             with ExitStack() as stack:
                 image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
+                kwargs = _openai_image_kwargs(plan)
                 response = await client.images.edit(
                     model=settings.openai_image_model,
                     image=image_files,
                     prompt=_prompt(plan),
                     n=1,
-                    size=_size(plan),
-                    quality=_quality(plan),
-                    output_format=_output_format(plan),
                     timeout=settings.openai_image_timeout_seconds,
+                    **kwargs,
                 )
         except V2ImageProviderRateLimitError:
             raise
@@ -428,9 +426,22 @@ def _count(plan) -> int:
     return max(1, min(value, 8))
 
 
-def _size(plan) -> str:
+def _openai_image_kwargs(plan) -> dict[str, str]:
+    kwargs = {
+        "quality": _quality(plan),
+        "output_format": _output_format(plan),
+    }
+    size = _size(plan)
+    if size:
+        kwargs["size"] = size
+    return kwargs
+
+
+def _size(plan) -> str | None:
     params = plan.provider_parameters or {}
-    size = params.get("size") or params.get("aspect_ratio") or "1024x1024"
+    size = params.get("size") or params.get("aspect_ratio")
+    if not size or str(size).strip().lower() in {"auto", "default"}:
+        return None
     if isinstance(size, str) and "x" in size:
         return size
     mapping = {
@@ -442,12 +453,15 @@ def _size(plan) -> str:
         "9:16": "1024x1536",
         "16:9": "1536x1024",
     }
-    return mapping.get(str(size), "1024x1024")
+    return mapping.get(str(size))
 
 
 def _dimensions(plan) -> tuple[int | None, int | None]:
     try:
-        width, height = _size(plan).lower().split("x", 1)
+        size = _size(plan)
+        if not size:
+            return None, None
+        width, height = size.lower().split("x", 1)
         return int(width), int(height)
     except (AttributeError, ValueError):
         return None, None

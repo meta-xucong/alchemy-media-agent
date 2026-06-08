@@ -192,7 +192,10 @@ class GeminiImageProvider:
         return models
 
     def _payload(self, prompt: str, plan, reference_paths: list) -> dict[str, Any]:
-        image_config: dict[str, Any] = {"aspectRatio": self._aspect_ratio(plan.size)}
+        aspect_ratio = self._aspect_ratio(plan.size)
+        image_config: dict[str, Any] = {}
+        if aspect_ratio:
+            image_config["aspectRatio"] = aspect_ratio
         if self._supports_image_size(settings.gemini_image_model):
             image_config["imageSize"] = self._image_size(plan.quality)
         parts: list[dict[str, Any]] = [{"text": prompt}]
@@ -282,9 +285,9 @@ class GeminiImageProvider:
         ]
         return "\n".join(part for part in parts if part.strip())
 
-    def _aspect_ratio(self, size: str) -> str:
+    def _aspect_ratio(self, size: str | None) -> str | None:
         if not size or size == "auto":
-            return "1:1"
+            return None
         if ":" in size:
             return size
         try:
@@ -292,9 +295,9 @@ class GeminiImageProvider:
             width = int(width_text)
             height = int(height_text)
         except (AttributeError, ValueError):
-            return "1:1"
+            return None
         if width <= 0 or height <= 0:
-            return "1:1"
+            return None
         divisor = math.gcd(width, height)
         return f"{width // divisor}:{height // divisor}"
 

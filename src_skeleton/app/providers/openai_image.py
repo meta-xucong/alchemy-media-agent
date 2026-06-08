@@ -204,13 +204,12 @@ class OpenAIGPTImageProvider:
                     output_units=1,
                     model=self._model(),
                 )
+                kwargs = self._image_kwargs(plan)
                 response = await client.images.generate(
                     model=self._model(),
                     prompt=prompt,
                     n=1,
-                    size=plan.size,
-                    quality=plan.quality,
-                    output_format=plan.output_format,
+                    **kwargs,
                 )
                 break
             except ProviderRateLimitError:
@@ -293,14 +292,13 @@ class OpenAIGPTImageProvider:
                 )
                 with ExitStack() as stack:
                     image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
+                    kwargs = self._image_kwargs(plan)
                     response = await client.images.edit(
                         model=self._model(),
                         image=image_files,
                         prompt=prompt,
                         n=1,
-                        size=plan.size,
-                        quality=plan.quality,
-                        output_format=plan.output_format,
+                        **kwargs,
                     )
                 break
             except ProviderRateLimitError:
@@ -412,6 +410,15 @@ class OpenAIGPTImageProvider:
             return int(width), int(height)
         except (AttributeError, ValueError):
             return None, None
+
+    def _image_kwargs(self, plan) -> dict[str, str]:
+        kwargs = {
+            "quality": plan.quality,
+            "output_format": plan.output_format,
+        }
+        if plan.size:
+            kwargs["size"] = plan.size
+        return kwargs
 
     def _is_retryable_error(self, exc: Exception) -> bool:
         status_code = getattr(exc, "status_code", None)

@@ -51,10 +51,31 @@ def test_create_image_job_batch_outputs_and_persisted_metadata():
     assert job.provider == "mock_image"
     assert len(job.outputs) == 4
     assert job.prompt_plan is not None
-    assert job.prompt_plan.size == "1024x1536"
+    assert job.prompt_plan.size is None
     assert job.cost_estimate is not None
     assert job.outputs[0].score is not None
     assert job.outputs[0].url.startswith("/v1/outputs/")
+
+
+def test_create_image_job_preserves_manual_size_only():
+    default_job = asyncio.run(
+        create_image_job(
+            session_id="ses_test",
+            prompt="生成 1 张咖啡新品海报。",
+        )
+    )
+    manual_job = asyncio.run(
+        create_image_job(
+            session_id="ses_test",
+            prompt="生成 1 张咖啡新品海报。",
+            size="1536x1024",
+        )
+    )
+
+    assert default_job.prompt_plan is not None
+    assert default_job.prompt_plan.size is None
+    assert manual_job.prompt_plan is not None
+    assert manual_job.prompt_plan.size == "1536x1024"
 
 
 def test_image_job_idempotency_returns_existing_job():

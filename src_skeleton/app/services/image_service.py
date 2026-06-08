@@ -41,7 +41,7 @@ async def create_image_job(
     asset_ids: list[str] | None = None,
     asset_intents: list[AssetIntent] | None = None,
     count: int = 1,
-    size: str = "1024x1024",
+    size: str | None = None,
     quality: str = "auto",
     output_format: str = "png",
     work_intensity: str | None = None,

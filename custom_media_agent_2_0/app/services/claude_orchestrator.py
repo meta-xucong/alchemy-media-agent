@@ -7,9 +7,10 @@ import shutil
 import signal
 import subprocess
 import hashlib
+import inspect
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import settings
 from app.repositories.memory import utc_now
@@ -60,6 +61,16 @@ _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
 _CLAUDE_INLINE_RATIONALE_CHAR_BUDGET = 140
 _CLAUDE_CHECKPOINT_MAX_OUTPUT_TOKENS = 4096
+ClaudeProgressCallback = Callable[[dict[str, Any]], None]
+
+
+_CLAUDE_STAGE_LABELS = {
+    "intent": "意图与素材理解",
+    "visual_strategy": "视觉语法锁",
+    "generation_decision": "最终提示词压缩",
+    "generation_decision_recovery": "压缩恢复",
+    "single_stage_decision": "单阶段 Claude 决策",
+}
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -159,6 +170,7 @@ def orchestrate_creative_request(
     fallback_retrieval_plan: CaseRetrievalPlan,
     candidate_cases: list[PromptCaseSummary],
     candidate_case_details: list[PromptCase] | None = None,
+    progress_callback: ClaudeProgressCallback | None = None,
 ) -> CreativeOrchestratorDecision:
     started = time.perf_counter()
     fallback = _fallback_decision(
@@ -244,6 +256,7 @@ def orchestrate_creative_request(
                 fallback=fallback,
                 candidate_cases=candidate_cases,
                 candidate_case_details=candidate_case_details or [],
+                progress_callback=progress_callback,
             )
             used_attempts = int(checkpoint_meta.get("attempts") or 0)
         except ClaudeInvocationError as exc:
@@ -266,6 +279,7 @@ def orchestrate_creative_request(
                     "cache_hit": False,
                     "cache_key": cache_key,
                     "workspace_id": workspace_id,
+                    "claude_stage_trace": checkpoint_meta.get("trace") or [],
                 }
             )
             _record_invocation(decision)
@@ -279,6 +293,7 @@ def orchestrate_creative_request(
                 "attempts": used_attempts,
                 "cache_key": cache_key,
                 "workspace_id": workspace_id,
+                "claude_stage_trace": checkpoint_meta.get("trace") if "checkpoint_meta" in locals() else [],
             }
         )
         _record_invocation(decision)
@@ -291,11 +306,12 @@ def orchestrate_creative_request(
     for attempt in range(1, attempts + 1):
         used_attempts = attempt
         try:
-            raw_decision = _invoke_claude_file_mode(
+            raw_decision = _invoke_claude_file_mode_compat(
                 request=request,
                 fallback=fallback,
                 candidate_cases=candidate_cases,
                 candidate_case_details=candidate_case_details or [],
+                progress_callback=progress_callback,
             )
             if raw_decision:
                 break
@@ -427,6 +443,7 @@ def _invoke_claude_checkpoint_mode(
     fallback: CreativeOrchestratorDecision,
     candidate_cases: list[PromptCaseSummary],
     candidate_case_details: list[PromptCase],
+    progress_callback: ClaudeProgressCallback | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     command = _resolve_claude_command()
     if not command:
@@ -449,6 +466,7 @@ def _invoke_claude_checkpoint_mode(
         micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_micro"),
         ultra_micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_ultra_micro"),
         trace=trace,
+        progress_callback=progress_callback,
     )
     attempts += attempt_count
     if not intent:
@@ -470,6 +488,7 @@ def _invoke_claude_checkpoint_mode(
             checkpoints={"intent": intent},
         ),
         trace=trace,
+        progress_callback=progress_callback,
     )
     attempts += attempt_count
     if not visual:
@@ -494,6 +513,7 @@ def _invoke_claude_checkpoint_mode(
                 checkpoints={"intent": intent},
             ),
             trace=trace,
+            progress_callback=progress_callback,
         )
         attempts += attempt_count
         visual = _visual_strategy_from_partial(intent=intent, raw_decision=decision or {}, fallback=fallback)
@@ -540,6 +560,7 @@ def _invoke_claude_checkpoint_mode(
         ),
         trace=trace,
         stop_on_soft_timeout=True,
+        progress_callback=progress_callback,
     )
     attempts += attempt_count
     if not decision:
@@ -583,6 +604,7 @@ def _invoke_checkpoint_stage_with_micro(
     ultra_micro_prompt: str | None = None,
     trace: list[dict[str, Any]],
     stop_on_soft_timeout: bool = False,
+    progress_callback: ClaudeProgressCallback | None = None,
 ) -> tuple[dict[str, Any] | None, int]:
     attempts = 0
     max_retries = max(0, settings.claude_checkpoint_max_stage_retries)
@@ -595,6 +617,15 @@ def _invoke_checkpoint_stage_with_micro(
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
         started = time.perf_counter()
+        timeout_seconds = _checkpoint_stage_timeout_seconds(attempt_stage_name)
+        _emit_claude_progress(
+            progress_callback,
+            stage=attempt_stage_name,
+            status="running",
+            provider="kimi",
+            timeout_seconds=timeout_seconds,
+            attempt=attempts,
+        )
         try:
             result = _invoke_claude_stage_json(
                 command=command,
@@ -605,13 +636,24 @@ def _invoke_checkpoint_stage_with_micro(
             )
         except ClaudeInvocationError as exc:
             last_failure = str(exc)
+            duration_ms = _elapsed_ms(started)
             trace.append(
                 {
                     "stage": attempt_stage_name,
                     "status": "error",
                     "failure_code": last_failure,
-                    "duration_ms": _elapsed_ms(started),
+                    "duration_ms": duration_ms,
                 }
+            )
+            _emit_claude_progress(
+                progress_callback,
+                stage=attempt_stage_name,
+                status="error",
+                provider="kimi",
+                timeout_seconds=timeout_seconds,
+                duration_ms=duration_ms,
+                failure_code=last_failure,
+                attempt=attempts,
             )
             if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
                 raise
@@ -619,14 +661,24 @@ def _invoke_checkpoint_stage_with_micro(
                 return None, attempts
             if _should_try_claude_code_model_fallback(last_failure):
                 fallback_started = time.perf_counter()
+                _emit_claude_progress(
+                    progress_callback,
+                    stage=f"{attempt_stage_name}_model_fallback",
+                    status="running",
+                    provider="claude-code-model-fallback",
+                    models=_claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage],
+                    attempt=attempts + 1,
+                )
                 fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
                     command=command,
                     workspace=workspace,
                     stage_name=attempt_stage_name,
                     prompt=attempt_prompt,
                     schema=schema,
+                    progress_callback=progress_callback,
                 )
                 attempts += int(fallback_meta.get("attempts") or 0)
+                fallback_duration_ms = _elapsed_ms(fallback_started)
                 trace.append(
                     {
                         "stage": attempt_stage_name,
@@ -634,33 +686,65 @@ def _invoke_checkpoint_stage_with_micro(
                         "provider": "claude-code-model-fallback",
                         "model": fallback_meta.get("model"),
                         "failure_code": None if fallback_result else fallback_meta.get("failure_code"),
-                        "duration_ms": _elapsed_ms(fallback_started),
+                        "duration_ms": fallback_duration_ms,
                     }
+                )
+                _emit_claude_progress(
+                    progress_callback,
+                    stage=f"{attempt_stage_name}_model_fallback",
+                    status="success" if fallback_result else "error",
+                    provider="claude-code-model-fallback",
+                    model=fallback_meta.get("model"),
+                    duration_ms=fallback_duration_ms,
+                    failure_code=None if fallback_result else fallback_meta.get("failure_code"),
+                    attempt=attempts,
                 )
                 if fallback_result:
                     return fallback_result, attempts
             continue
+        duration_ms = _elapsed_ms(started)
         trace.append(
             {
                 "stage": attempt_stage_name,
                 "status": "success" if result else "missing_decision",
                 "failure_code": None if result else "missing_decision",
-                "duration_ms": _elapsed_ms(started),
+                "duration_ms": duration_ms,
             }
+        )
+        _emit_claude_progress(
+            progress_callback,
+            stage=attempt_stage_name,
+            status="success" if result else "missing_decision",
+            provider="kimi",
+            timeout_seconds=timeout_seconds,
+            duration_ms=duration_ms,
+            failure_code=None if result else "missing_decision",
+            attempt=attempts,
         )
         if result:
             return result, attempts
     if last_failure:
         if _should_try_claude_code_model_fallback(last_failure, after_compression_retries=True):
             fallback_started = time.perf_counter()
+            _emit_claude_progress(
+                progress_callback,
+                stage=f"{stage_name}_model_fallback_after_compression",
+                status="running",
+                provider="claude-code-model-fallback",
+                models=_claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage],
+                after_compression_retries=True,
+                attempt=attempts + 1,
+            )
             fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
                 command=command,
                 workspace=workspace,
                 stage_name=stage_name,
                 prompt=ultra_micro_prompt or micro_prompt,
                 schema=schema,
+                progress_callback=progress_callback,
             )
             attempts += int(fallback_meta.get("attempts") or 0)
+            fallback_duration_ms = _elapsed_ms(fallback_started)
             trace.append(
                 {
                     "stage": stage_name,
@@ -668,13 +752,32 @@ def _invoke_checkpoint_stage_with_micro(
                     "provider": "claude-code-model-fallback",
                     "model": fallback_meta.get("model"),
                     "failure_code": None if fallback_result else fallback_meta.get("failure_code"),
-                    "duration_ms": _elapsed_ms(fallback_started),
+                    "duration_ms": fallback_duration_ms,
                     "after_compression_retries": True,
                 }
+            )
+            _emit_claude_progress(
+                progress_callback,
+                stage=f"{stage_name}_model_fallback_after_compression",
+                status="success" if fallback_result else "error",
+                provider="claude-code-model-fallback",
+                model=fallback_meta.get("model"),
+                duration_ms=fallback_duration_ms,
+                failure_code=None if fallback_result else fallback_meta.get("failure_code"),
+                after_compression_retries=True,
+                attempt=attempts,
             )
             if fallback_result:
                 return fallback_result, attempts
         trace.append({"stage": stage_name, "status": "failed", "failure_code": last_failure})
+        _emit_claude_progress(
+            progress_callback,
+            stage=stage_name,
+            status="failed",
+            provider="kimi",
+            failure_code=last_failure,
+            attempt=attempts,
+        )
     return None, attempts
 
 
@@ -688,6 +791,111 @@ def _should_try_claude_code_model_fallback(
     if after_compression_retries:
         return failure_code in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES or "output_token_limit" in failure_code
     return failure_code in _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES
+
+
+def _emit_claude_progress(callback: ClaudeProgressCallback | None, **payload: Any) -> None:
+    if callback is None:
+        return
+    event = {
+        "scope": "claude_orchestration",
+        "stage": _text_value(payload.get("stage")),
+        "stage_label": _claude_stage_label(_text_value(payload.get("stage"))),
+        "status": _text_value(payload.get("status")) or "running",
+        "provider": _text_value(payload.get("provider")) or "kimi",
+        "model": _text_value(payload.get("model")),
+        "fallback_model": _text_value(payload.get("fallback_model")),
+        "timeout_seconds": payload.get("timeout_seconds"),
+        "duration_ms": payload.get("duration_ms"),
+        "failure_code": _text_value(payload.get("failure_code")),
+        "attempt": payload.get("attempt"),
+        "models": payload.get("models") if isinstance(payload.get("models"), list) else [],
+        "after_compression_retries": bool(payload.get("after_compression_retries")),
+        "created_at": utc_now().isoformat(),
+    }
+    event["message"] = _claude_progress_message(event)
+    try:
+        callback({key: value for key, value in event.items() if value not in (None, "", [])})
+    except Exception:
+        pass
+
+
+def _claude_stage_label(stage_name: str) -> str:
+    base = _claude_base_stage_name(stage_name)
+    label = _CLAUDE_STAGE_LABELS.get(base, base or "Claude 调度")
+    if "model_fallback" in stage_name:
+        return f"{label} · 备用源接力"
+    if "ultra_micro" in stage_name:
+        return f"{label} · 超短压缩续跑"
+    if "micro_retry" in stage_name:
+        return f"{label} · 压缩续跑"
+    return label
+
+
+def _claude_base_stage_name(stage_name: str) -> str:
+    for prefix in [
+        "generation_decision_recovery",
+        "generation_decision",
+        "visual_strategy",
+        "single_stage_decision",
+        "intent",
+    ]:
+        if stage_name.startswith(prefix):
+            return prefix
+    return stage_name.split("_micro_retry", 1)[0].split("_ultra_micro_retry", 1)[0].split("_model_fallback", 1)[0]
+
+
+def _claude_progress_message(event: dict[str, Any]) -> str:
+    label = _text_value(event.get("stage_label")) or "Claude 调度"
+    provider = _claude_progress_provider_label(_text_value(event.get("provider")), _text_value(event.get("model")))
+    status = _text_value(event.get("status"))
+    if status == "running":
+        timeout = event.get("timeout_seconds")
+        timeout_text = f"，阶段上限 {int(float(timeout))}s" if isinstance(timeout, (int, float)) and timeout else ""
+        return f"Claude Code · {label} · {provider}运行中{timeout_text}"
+    duration = _format_duration_ms(event.get("duration_ms"))
+    duration_text = f"，用时 {duration}" if duration else ""
+    failure = _text_value(event.get("failure_code"))
+    if status == "success":
+        return f"Claude Code · {label} · {provider}完成{duration_text}"
+    if status == "missing_decision":
+        return f"Claude Code · {label} · 未得到有效 JSON{duration_text}，准备压缩续跑"
+    if status in {"error", "failed"}:
+        return f"Claude Code · {label} · {provider}{_claude_failure_label(failure)}{duration_text}"
+    return f"Claude Code · {label} · {status}{duration_text}"
+
+
+def _claude_progress_provider_label(provider: str, model: str = "") -> str:
+    if provider == "claude-code-model-fallback":
+        return f"备用源 {model} " if model else "备用源 "
+    if provider == "kimi":
+        return "Kimi 主源 "
+    if provider:
+        return f"{provider} "
+    return ""
+
+
+def _claude_failure_label(failure_code: str) -> str:
+    if failure_code == "claude_soft_timeout":
+        return "触达软上限，进入压缩续跑"
+    if failure_code == "claude_timeout":
+        return "触达硬上限"
+    if failure_code == "claude_output_token_limit":
+        return "输出超限，进入压缩续跑"
+    if failure_code in {"kimi_context_canceled", "kimi_sub2api_502", "kimi_no_available_accounts", "kimi_upstream_error"}:
+        return "上游不可用，准备备用源接力"
+    if failure_code:
+        return f"失败（{failure_code}）"
+    return "失败"
+
+
+def _format_duration_ms(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+    seconds = max(0.0, float(value) / 1000)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    return f"{minutes}m {int(seconds % 60)}s"
 
 
 def _claude_code_model_fallback_configured() -> bool:
@@ -740,6 +948,7 @@ def _invoke_claude_code_model_fallbacks(
     stage_name: str,
     prompt: str,
     schema: dict[str, Any],
+    progress_callback: ClaudeProgressCallback | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = 0
     last_failure = "claude_code_model_fallback_unavailable"
@@ -748,11 +957,23 @@ def _invoke_claude_code_model_fallbacks(
     for index, model in enumerate(queue):
         attempts += 1
         next_model = queue[index + 1] if index + 1 < len(queue) else None
+        fallback_stage_name = f"{stage_name}_model_fallback_{index + 1}"
+        fallback_started = time.perf_counter()
+        _emit_claude_progress(
+            progress_callback,
+            stage=fallback_stage_name,
+            status="running",
+            provider="claude-code-model-fallback",
+            model=model,
+            fallback_model=next_model,
+            timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+            attempt=attempts,
+        )
         try:
             result = _invoke_claude_stage_json(
                 command=command,
                 workspace=workspace,
-                stage_name=f"{stage_name}_model_fallback_{index + 1}",
+                stage_name=fallback_stage_name,
                 prompt=prompt,
                 schema=schema,
                 model_override=model,
@@ -765,12 +986,47 @@ def _invoke_claude_code_model_fallbacks(
             )
         except ClaudeInvocationError as exc:
             last_failure = str(exc)
+            _emit_claude_progress(
+                progress_callback,
+                stage=fallback_stage_name,
+                status="error",
+                provider="claude-code-model-fallback",
+                model=model,
+                fallback_model=next_model,
+                timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                duration_ms=_elapsed_ms(fallback_started),
+                failure_code=last_failure,
+                attempt=attempts,
+            )
             if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
                 continue
             continue
         if result:
+            _emit_claude_progress(
+                progress_callback,
+                stage=fallback_stage_name,
+                status="success",
+                provider="claude-code-model-fallback",
+                model=model,
+                fallback_model=next_model,
+                timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                duration_ms=_elapsed_ms(fallback_started),
+                attempt=attempts,
+            )
             return result, {"attempts": attempts, "model": model}
         last_failure = "missing_decision"
+        _emit_claude_progress(
+            progress_callback,
+            stage=fallback_stage_name,
+            status="missing_decision",
+            provider="claude-code-model-fallback",
+            model=model,
+            fallback_model=next_model,
+            timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+            duration_ms=_elapsed_ms(fallback_started),
+            failure_code=last_failure,
+            attempt=attempts,
+        )
     return None, {"attempts": attempts, "failure_code": last_failure}
 
 
@@ -937,10 +1193,12 @@ def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
     hard_timeout = _checkpoint_stage_hard_timeout_seconds()
     soft_timeout = min(hard_timeout, settings.claude_checkpoint_soft_stage_timeout_seconds)
     if "_retry_" not in stage_name:
+        if stage_name.startswith("generation_decision"):
+            return min(soft_timeout, 60.0)
         return soft_timeout
     if "ultra_micro" in stage_name:
-        return soft_timeout
-    return min(hard_timeout, max(soft_timeout, hard_timeout * 0.5))
+        return min(hard_timeout, soft_timeout, 30.0)
+    return min(hard_timeout, soft_timeout, 45.0)
 
 
 def _checkpoint_stage_max_output_tokens() -> int:
@@ -1375,6 +1633,7 @@ def _invoke_claude_file_mode(
     fallback: CreativeOrchestratorDecision,
     candidate_cases: list[PromptCaseSummary],
     candidate_case_details: list[PromptCase],
+    progress_callback: ClaudeProgressCallback | None = None,
 ) -> dict[str, Any] | None:
     command = _resolve_claude_command()
     if not command:
@@ -1386,7 +1645,7 @@ def _invoke_claude_file_mode(
         candidate_case_details=candidate_case_details,
     )
     if not _uses_file_tools():
-        return _invoke_claude_inline_json(command=command, workspace=workspace)
+        return _invoke_claude_inline_json(command=command, workspace=workspace, progress_callback=progress_callback)
     prompt = _build_file_tool_prompt()
     command_line = [
         *command,
@@ -1416,6 +1675,15 @@ def _invoke_claude_file_mode(
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
+    started = time.perf_counter()
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="running",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        attempt=1,
+    )
     try:
         completed = _run_claude_subprocess(
             command_line,
@@ -1427,21 +1695,139 @@ def _invoke_claude_file_mode(
     except subprocess.TimeoutExpired as exc:
         _write_text(workspace / "claude_stdout.txt", _timeout_output(exc.stdout))
         _write_text(workspace / "claude_stderr.txt", _timeout_output(exc.stderr))
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="error",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code="claude_timeout",
+            attempt=1,
+        )
         raise ClaudeInvocationError("claude_timeout") from exc
     _write_text(workspace / "claude_stdout.txt", completed.stdout or "")
     _write_text(workspace / "claude_stderr.txt", completed.stderr or "")
     failure = _classify_claude_failure(completed.stdout, completed.stderr, completed.returncode)
     if failure:
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="error",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code=failure,
+            attempt=1,
+        )
         raise ClaudeInvocationError(failure)
     if completed.returncode != 0:
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="missing_decision",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code="nonzero_exit",
+            attempt=1,
+        )
         return None
     decision = _read_claude_decision(workspace)
     if isinstance(decision, dict):
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="success",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            attempt=1,
+        )
         return decision
-    return _parse_json_from_text(completed.stdout or "")
+    parsed = _parse_json_from_text(completed.stdout or "")
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="success" if parsed else "missing_decision",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        duration_ms=_elapsed_ms(started),
+        failure_code=None if parsed else "missing_decision",
+        attempt=1,
+    )
+    return parsed
 
 
-def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[str, Any] | None:
+def _invoke_claude_file_mode_compat(
+    *,
+    request: CreateCreativeRunRequest,
+    fallback: CreativeOrchestratorDecision,
+    candidate_cases: list[PromptCaseSummary],
+    candidate_case_details: list[PromptCase],
+    progress_callback: ClaudeProgressCallback | None = None,
+) -> dict[str, Any] | None:
+    kwargs = {
+        "request": request,
+        "fallback": fallback,
+        "candidate_cases": candidate_cases,
+        "candidate_case_details": candidate_case_details,
+    }
+    if _callable_accepts_keyword(_invoke_claude_file_mode, "progress_callback"):
+        return _invoke_claude_file_mode(**kwargs, progress_callback=progress_callback)
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="running",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        attempt=1,
+    )
+    started = time.perf_counter()
+    try:
+        result = _invoke_claude_file_mode(**kwargs)
+    except ClaudeInvocationError as exc:
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="error",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code=str(exc),
+            attempt=1,
+        )
+        raise
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="success" if result else "missing_decision",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        duration_ms=_elapsed_ms(started),
+        failure_code=None if result else "missing_decision",
+        attempt=1,
+    )
+    return result
+
+
+def _callable_accepts_keyword(func: Any, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    for parameter in parameters:
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == keyword:
+            return True
+    return False
+
+
+def _invoke_claude_inline_json(
+    *,
+    command: list[str],
+    workspace: Path,
+    progress_callback: ClaudeProgressCallback | None = None,
+) -> dict[str, Any] | None:
     prompt = _build_inline_json_prompt(workspace)
     command_line = [
         *command,
@@ -1471,6 +1857,15 @@ def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[s
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
+    started = time.perf_counter()
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="running",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        attempt=1,
+    )
     try:
         completed = _run_claude_subprocess(
             command_line,
@@ -1482,18 +1877,67 @@ def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[s
     except subprocess.TimeoutExpired as exc:
         _write_text(workspace / "claude_stdout.txt", _timeout_output(exc.stdout))
         _write_text(workspace / "claude_stderr.txt", _timeout_output(exc.stderr))
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="error",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code="claude_timeout",
+            attempt=1,
+        )
         raise ClaudeInvocationError("claude_timeout") from exc
     _write_text(workspace / "claude_stdout.txt", completed.stdout or "")
     _write_text(workspace / "claude_stderr.txt", completed.stderr or "")
     failure = _classify_claude_failure(completed.stdout, completed.stderr, completed.returncode)
     if failure:
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="error",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code=failure,
+            attempt=1,
+        )
         raise ClaudeInvocationError(failure)
     if completed.returncode != 0:
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="missing_decision",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            failure_code="nonzero_exit",
+            attempt=1,
+        )
         return None
     decision = _parse_structured_output(completed.stdout or "")
     if isinstance(decision, dict):
         _write_json(workspace / "decision.json", decision)
+        _emit_claude_progress(
+            progress_callback,
+            stage="single_stage_decision",
+            status="success",
+            provider="kimi",
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            duration_ms=_elapsed_ms(started),
+            attempt=1,
+        )
         return decision
+    _emit_claude_progress(
+        progress_callback,
+        stage="single_stage_decision",
+        status="missing_decision",
+        provider="kimi",
+        timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+        duration_ms=_elapsed_ms(started),
+        failure_code="missing_decision",
+        attempt=1,
+    )
     return None
 
 
@@ -2427,10 +2871,9 @@ def _cache_metadata(
     tokens = sorted(_prompt_cache_tokens(normalized_prompt))
     output = request.output or {}
     output_signature = {
-        "aspect_ratio": output.get("aspect_ratio"),
-        "count": output.get("count"),
-        "quality": output.get("quality"),
-        "provider_hint": output.get("provider_hint"),
+        key: output.get(key)
+        for key in ("aspect_ratio", "size", "count", "quality", "provider_hint")
+        if output.get(key) not in (None, "", "auto", "default")
     }
     return {
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,

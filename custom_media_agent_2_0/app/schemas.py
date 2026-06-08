@@ -348,6 +348,7 @@ class CreativeOrchestratorDecision(BaseModel):
     cache_hit: bool = False
     cache_key: str | None = None
     workspace_id: str | None = None
+    claude_stage_trace: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -525,6 +526,8 @@ class CreativeRun(BaseModel):
     generation_jobs: list[ImageJob] = Field(default_factory=list)
     trace_id: str
     next_actions: list[str] = Field(default_factory=list)
+    progress_events: list[dict[str, Any]] = Field(default_factory=list)
+    progress_summary: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

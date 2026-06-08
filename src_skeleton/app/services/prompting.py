@@ -9,7 +9,7 @@ def build_prompt_plan(
     *,
     prompt: str,
     count: int = 1,
-    size: str = "1024x1024",
+    size: str | None = None,
     quality: str = "auto",
     output_format: str = "png",
     asset_ids: list[str] | None = None,
@@ -52,14 +52,10 @@ def apply_patch_to_plan(base_plan: ImagePromptPlan, patch: PromptPatch) -> Image
     )
 
 
-def _infer_size(prompt: str, requested_size: str) -> str:
-    if requested_size != "1024x1024":
+def _infer_size(prompt: str, requested_size: str | None) -> str | None:
+    if requested_size:
         return requested_size
-    if any(token in prompt for token in ["竖版", "小红书", "9:16", "竖图"]):
-        return "1024x1536"
-    if any(token in prompt for token in ["横版", "16:9", "横图"]):
-        return "1536x1024"
-    return requested_size
+    return None
 
 
 def _infer_scene(prompt: str) -> str | None:
@@ -72,7 +68,7 @@ def _infer_style(prompt: str) -> str | None:
     return "，".join(styles) if styles else None
 
 
-def _infer_composition(prompt: str, size: str) -> str:
+def _infer_composition(prompt: str, size: str | None) -> str:
     if size == "1024x1536":
         return "竖版构图，主体清晰居中，预留安全标题区域。"
     if size == "1536x1024":
