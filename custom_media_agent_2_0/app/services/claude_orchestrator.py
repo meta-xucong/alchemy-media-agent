@@ -40,6 +40,7 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_soft_timeout",
     "claude_timeout",
     "claude_structured_output_retries_exhausted",
+    "claude_policy_refusal",
     "claude_api_error",
     "kimi_context_canceled",
     "kimi_sub2api_502",
@@ -48,6 +49,7 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "upstream_context_canceled",
 }
 _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
+    "claude_policy_refusal",
     "claude_api_error",
     "kimi_context_canceled",
     "kimi_sub2api_502",
@@ -559,7 +561,6 @@ def _invoke_claude_checkpoint_mode(
             checkpoints={"intent": intent, "visual_strategy": visual},
         ),
         trace=trace,
-        stop_on_soft_timeout=True,
         progress_callback=progress_callback,
     )
     attempts += attempt_count
@@ -609,10 +610,24 @@ def _invoke_checkpoint_stage_with_micro(
     attempts = 0
     max_retries = max(0, settings.claude_checkpoint_max_stage_retries)
     prompts = [(stage_name, prompt)]
+    seen_prompts = {prompt}
+    retry_number = 0
     for index in range(1, max_retries + 1):
-        retry_prompt = ultra_micro_prompt if index >= 2 and ultra_micro_prompt else micro_prompt
-        retry_suffix = "ultra_micro_retry" if index >= 2 and ultra_micro_prompt else "micro_retry"
-        prompts.append((f"{stage_name}_{retry_suffix}_{index}", retry_prompt))
+        candidates: list[tuple[str, str]] = []
+        if index >= 2 and ultra_micro_prompt:
+            candidates.append(("ultra_micro_retry", ultra_micro_prompt))
+        candidates.append(("micro_retry", micro_prompt))
+        if index < 2 and ultra_micro_prompt:
+            candidates.append(("ultra_micro_retry", ultra_micro_prompt))
+        selected = next(((suffix, value) for suffix, value in candidates if value not in seen_prompts), None)
+        if selected is None and not ultra_micro_prompt and retry_number == 0:
+            selected = ("micro_retry", micro_prompt)
+        if selected is None:
+            continue
+        retry_suffix, retry_prompt = selected
+        retry_number += 1
+        seen_prompts.add(retry_prompt)
+        prompts.append((f"{stage_name}_{retry_suffix}_{retry_number}", retry_prompt))
     last_failure: str | None = None
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
@@ -881,6 +896,8 @@ def _claude_failure_label(failure_code: str) -> str:
         return "触达硬上限"
     if failure_code == "claude_output_token_limit":
         return "输出超限，进入压缩续跑"
+    if failure_code == "claude_policy_refusal":
+        return "策略误拒，准备备用源接力"
     if failure_code in {"kimi_context_canceled", "kimi_sub2api_502", "kimi_no_available_accounts", "kimi_upstream_error"}:
         return "上游不可用，准备备用源接力"
     if failure_code:
@@ -1194,7 +1211,7 @@ def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
     soft_timeout = min(hard_timeout, settings.claude_checkpoint_soft_stage_timeout_seconds)
     if "_retry_" not in stage_name:
         if stage_name.startswith("generation_decision"):
-            return min(soft_timeout, 60.0)
+            return soft_timeout
         return soft_timeout
     if "ultra_micro" in stage_name:
         return min(hard_timeout, soft_timeout, 30.0)
@@ -1252,6 +1269,7 @@ def _checkpoint_system_prompt() -> str:
     return (
         "You are the central creative brain for a staged image-generation orchestrator. "
         "Make a complete high-quality decision for the current narrow stage with bounded internal deliberation. "
+        "For ordinary food, product, poster, menu, layout, or style-planning tasks, complete the requested schema. "
         "Think silently, then emit the compressed answer immediately. "
         "Do not write or simulate chain-of-thought, long analysis, drafts, alternatives, markdown, or commentary. "
         "The first visible character must be { and the last visible character must be }. "
@@ -1308,6 +1326,7 @@ def _build_checkpoint_stage_prompt(
         "instruction": _checkpoint_stage_instruction(stage_name),
         "rules": (
             "Every stage is Claude-led and must be completed; do not skip Claude for any subject. "
+            "For ordinary food, product, poster, menu, layout, or style-planning tasks, complete the schema instead of refusing. "
             "Think through the stage fully but silently; never write the reasoning. Output only compact JSON. "
             "The first visible character must be { and the last visible character must be }. "
             f"Hard visible output cap: total JSON <= {output_limits['total_json_chars']} characters; obey each field cap in output_limits. "
@@ -2674,6 +2693,8 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
     if returncode == 0 and _has_successful_structured_result(stdout):
         return None
     text = f"{stdout or ''}\n{stderr or ''}".lower()
+    if "usage policy" in text or '"stop_reason":"refusal"' in text or '"stop_reason": "refusal"' in text:
+        return "claude_policy_refusal"
     if ("context canceled" in text or "context deadline exceeded" in text) and ("kimi" in text or "api.kimi.com" in text):
         return "kimi_context_canceled"
     if "context canceled" in text:

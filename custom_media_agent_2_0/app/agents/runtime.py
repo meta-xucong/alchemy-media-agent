@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from app.config import settings
@@ -629,7 +630,7 @@ def _claude_progress_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         if item.get("status") in {"success", "missing_decision", "error", "failed"}
         and isinstance(item.get("duration_ms"), (int, float))
     ]
-    elapsed_ms = int(sum(float(item.get("duration_ms") or 0) for item in completed_events))
+    elapsed_ms = _claude_progress_elapsed_ms(events, completed_events)
     finished_stage_count = len([item for item in completed_events if item.get("status") == "success"])
     retry_count = len(
         [
@@ -655,6 +656,21 @@ def _claude_progress_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "events_count": len(events),
         "updated_at": last.get("created_at") or utc_now().isoformat(),
     }
+
+
+def _claude_progress_elapsed_ms(events: list[dict[str, Any]], completed_events: list[dict[str, Any]]) -> int:
+    timestamps: list[datetime] = []
+    for item in events:
+        raw = str(item.get("created_at") or "").strip()
+        if not raw:
+            continue
+        try:
+            timestamps.append(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    if len(timestamps) >= 2:
+        return max(0, int((timestamps[-1] - timestamps[0]).total_seconds() * 1000))
+    return int(sum(float(item.get("duration_ms") or 0) for item in completed_events))
 
 
 def _asset_binding_failure(asset_context: dict | None) -> str | None:

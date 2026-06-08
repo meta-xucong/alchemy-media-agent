@@ -17,6 +17,7 @@ from app.config import settings
 from app.providers.images.registry import get_v2_image_provider
 import app.main as main_module
 from app.main import app
+import app.agents.runtime as runtime_module
 from app.repositories import repository
 from app.schemas import CreateImageJobRequest, ImagePromptPlan, PromptCase, PromptCaseSummary
 from app.services.bootstrap import bootstrap_v2_repository
@@ -883,6 +884,46 @@ def test_creative_run_exposes_claude_progress_summary(monkeypatch) -> None:
     assert len(run["orchestrator_decision"]["claude_stage_trace"]) == 3
 
 
+def test_claude_progress_summary_uses_wall_clock_not_aggregate_duration() -> None:
+    events = [
+        {
+            "scope": "claude_orchestration",
+            "stage": "visual_strategy",
+            "status": "running",
+            "provider": "kimi",
+            "created_at": "2026-06-09T00:00:00+00:00",
+        },
+        {
+            "scope": "claude_orchestration",
+            "stage": "visual_strategy",
+            "status": "error",
+            "provider": "kimi",
+            "duration_ms": 120000,
+            "created_at": "2026-06-09T00:02:00+00:00",
+        },
+        {
+            "scope": "claude_orchestration",
+            "stage": "visual_strategy_model_fallback_1",
+            "status": "error",
+            "provider": "claude-code-model-fallback",
+            "duration_ms": 25000,
+            "created_at": "2026-06-09T00:02:25+00:00",
+        },
+        {
+            "scope": "claude_orchestration",
+            "stage": "visual_strategy_model_fallback",
+            "status": "success",
+            "provider": "claude-code-model-fallback",
+            "duration_ms": 36000,
+            "created_at": "2026-06-09T00:02:36+00:00",
+        },
+    ]
+
+    summary = runtime_module._claude_progress_summary(events)
+
+    assert summary["elapsed_ms"] == 156000
+
+
 def test_checkpoint_orchestrator_micro_retries_output_limit_stage(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
@@ -1114,14 +1155,14 @@ def test_checkpoint_orchestrator_compacts_from_checkpoints_after_final_output_li
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_micro_retry_1"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_ultra_micro_retry_1"]
     assert decision["provider"] == "claude-code"
     assert decision["invocation_status"] == "checkpoint_success"
     assert len(decision["final_prompt"]) <= 180
     assert "deterministic" not in decision["provider"]
 
 
-def test_checkpoint_orchestrator_compacts_after_final_soft_timeout_without_retries(monkeypatch) -> None:
+def test_checkpoint_orchestrator_continues_after_final_soft_timeout(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
@@ -1169,10 +1210,10 @@ def test_checkpoint_orchestrator_compacts_after_final_soft_timeout_without_retri
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "generation_decision"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_ultra_micro_retry_1"]
     assert decision["provider"] == "claude-code"
     assert decision["invocation_status"] == "checkpoint_success"
-    assert decision["attempts"] == 3
+    assert decision["attempts"] == 4
     assert decision["fallback_reason"] is None
 
 
@@ -1232,7 +1273,7 @@ def test_checkpoint_orchestrator_retries_structured_output_exhaustion(monkeypatc
 
     assert response.status_code == 202
     decision = response.json()["orchestrator_decision"]
-    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_micro_retry_1"]
+    assert calls == ["intent", "visual_strategy", "generation_decision", "generation_decision_ultra_micro_retry_1"]
     assert decision["invocation_status"] == "checkpoint_success"
     assert decision["attempts"] == 4
 
@@ -1322,7 +1363,7 @@ def test_checkpoint_orchestrator_stops_generation_after_initial_checkpoint_exhau
     run = response.json()
     assert run["status"] == "failed"
     assert run["generation_jobs"] == []
-    assert calls == ["intent", "intent_micro_retry_1"]
+    assert calls == ["intent", "intent_ultra_micro_retry_1"]
     assert decision["provider"] == "deterministic-fallback"
     assert decision["invocation_status"] == "checkpoint_fallback"
     assert decision["fallback_reason"] == "claude_checkpoint_missing_decision"
@@ -1371,8 +1412,70 @@ def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, 
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
     assert captured["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096"
     assert captured["timeout"] == 60.0
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("generation_decision") == 60.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 45.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 30.0
+
+
+def test_checkpoint_generation_decision_uses_configured_soft_timeout(monkeypatch) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
+    object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 180.0)
+    object.__setattr__(settings, "claude_checkpoint_soft_stage_timeout_seconds", 120.0)
+
+    assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("generation_decision") == 120.0
+
+
+def test_checkpoint_retry_plan_skips_duplicate_micro_prompt(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
+    calls: list[str] = []
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema):
+        calls.append(stage_name)
+        if stage_name == "intent":
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_timeout")
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "menu poster",
+            "scene_goal": "compact food poster",
+            "must_keep": ["price tiers"],
+            "must_avoid": ["duplicates"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="same micro prompt",
+        micro_prompt="same micro prompt",
+        ultra_micro_prompt="shorter ultra prompt",
+        trace=[],
+    )
+
+    assert result is not None
+    assert attempts == 2
+    assert calls == ["intent", "intent_ultra_micro_retry_1"]
+
+
+def test_claude_policy_refusal_is_classified_separately() -> None:
+    stdout = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "stop_reason": "refusal",
+            "result": "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy.",
+        }
+    )
+
+    assert claude_orchestrator_service._classify_claude_failure(stdout, "", 0) == "claude_policy_refusal"
 
 
 def test_claude_checkpoint_timeout_salvages_valid_stdout(monkeypatch, tmp_path: Path) -> None:
