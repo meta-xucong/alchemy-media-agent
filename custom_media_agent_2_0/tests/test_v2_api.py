@@ -3318,10 +3318,108 @@ def test_checkpoint_stage_emits_progress_events(monkeypatch, tmp_path) -> None:
     assert attempts == 1
     assert events[0]["status"] == "running"
     assert events[0]["stage_label"] == "意图与素材理解"
-    assert "Kimi 主源" in str(events[0]["message"])
+    assert "Claude Code 主源" in str(events[0]["message"])
     assert events[-1]["status"] == "success"
     assert events[-1]["duration_ms"] >= 0
     assert "完成" in str(events[-1]["message"])
+
+
+def test_checkpoint_stage_external_primary_uses_isolated_no_effort_mode(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    calls: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+                "setting_sources_override": kwargs.get("setting_sources_override"),
+                "include_effort": kwargs.get("include_effort"),
+                "strip_model_fallback_env": kwargs.get("strip_model_fallback_env"),
+            }
+        )
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "future product launch poster",
+            "scene_goal": "compose a complex commercial poster",
+            "must_keep": ["clear title", "product hierarchy"],
+            "must_avoid": ["garbled text"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.86,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+        progress_callback=events.append,
+    )
+
+    assert result is not None
+    assert attempts == 1
+    assert calls == [
+        {
+            "stage_name": "intent",
+            "model_override": None,
+            "setting_sources_override": "project,local",
+            "include_effort": False,
+            "strip_model_fallback_env": True,
+        }
+    ]
+    assert trace[-1]["provider"] == "claude-code-primary"
+    assert trace[-1]["model"] == "deepseek-v4-pro-260425"
+    assert events[0]["provider"] == "claude-code-primary"
+    assert events[0]["model"] == "deepseek-v4-pro-260425"
+    assert "主源 deepseek-v4-pro-260425" in str(events[0]["message"])
+    assert "Kimi 主源" not in str(events[0]["message"])
+
+
+def test_checkpoint_stage_kimi_primary_keeps_kimi_progress_label(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "kimi-for-coding")
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "premium lunch poster",
+            "scene_goal": "redesign a food promotion image",
+            "must_keep": ["offer text"],
+            "must_avoid": ["garbled text"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+
+    result, _ = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=[],
+        progress_callback=events.append,
+    )
+
+    assert result is not None
+    assert events[0]["provider"] == "kimi"
+    assert events[0]["model"] == "kimi-for-coding"
+    assert "Kimi 主源" in str(events[0]["message"])
 
 
 def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(monkeypatch, tmp_path) -> None:

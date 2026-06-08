@@ -629,6 +629,9 @@ def _invoke_checkpoint_stage_with_micro(
         seen_prompts.add(retry_prompt)
         prompts.append((f"{stage_name}_{retry_suffix}_{retry_number}", retry_prompt))
     last_failure: str | None = None
+    primary_provider = _claude_code_primary_provider()
+    primary_model = _claude_code_primary_model()
+    primary_kwargs = _claude_code_primary_stage_kwargs()
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
         started = time.perf_counter()
@@ -637,7 +640,8 @@ def _invoke_checkpoint_stage_with_micro(
             progress_callback,
             stage=attempt_stage_name,
             status="running",
-            provider="kimi",
+            provider=primary_provider,
+            model=primary_model,
             timeout_seconds=timeout_seconds,
             attempt=attempts,
         )
@@ -648,6 +652,7 @@ def _invoke_checkpoint_stage_with_micro(
                 stage_name=attempt_stage_name,
                 prompt=attempt_prompt,
                 schema=schema,
+                **primary_kwargs,
             )
         except ClaudeInvocationError as exc:
             last_failure = str(exc)
@@ -656,6 +661,8 @@ def _invoke_checkpoint_stage_with_micro(
                 {
                     "stage": attempt_stage_name,
                     "status": "error",
+                    "provider": primary_provider,
+                    "model": primary_model,
                     "failure_code": last_failure,
                     "duration_ms": duration_ms,
                 }
@@ -664,7 +671,8 @@ def _invoke_checkpoint_stage_with_micro(
                 progress_callback,
                 stage=attempt_stage_name,
                 status="error",
-                provider="kimi",
+                provider=primary_provider,
+                model=primary_model,
                 timeout_seconds=timeout_seconds,
                 duration_ms=duration_ms,
                 failure_code=last_failure,
@@ -722,6 +730,8 @@ def _invoke_checkpoint_stage_with_micro(
             {
                 "stage": attempt_stage_name,
                 "status": "success" if result else "missing_decision",
+                "provider": primary_provider,
+                "model": primary_model,
                 "failure_code": None if result else "missing_decision",
                 "duration_ms": duration_ms,
             }
@@ -730,7 +740,8 @@ def _invoke_checkpoint_stage_with_micro(
             progress_callback,
             stage=attempt_stage_name,
             status="success" if result else "missing_decision",
-            provider="kimi",
+            provider=primary_provider,
+            model=primary_model,
             timeout_seconds=timeout_seconds,
             duration_ms=duration_ms,
             failure_code=None if result else "missing_decision",
@@ -789,11 +800,48 @@ def _invoke_checkpoint_stage_with_micro(
             progress_callback,
             stage=stage_name,
             status="failed",
-            provider="kimi",
+            provider=primary_provider,
+            model=primary_model,
             failure_code=last_failure,
             attempt=attempts,
         )
     return None, attempts
+
+
+def _claude_code_primary_model() -> str:
+    return _text_value(settings.claude_orchestrator_model)
+
+
+def _claude_code_primary_provider() -> str:
+    model = _claude_code_primary_model()
+    if _is_kimi_model(model):
+        return "kimi"
+    if model:
+        return "claude-code-primary"
+    return "claude-code"
+
+
+def _claude_code_primary_stage_kwargs() -> dict[str, Any]:
+    if not _should_use_external_primary_invocation_mode(_claude_code_primary_model()):
+        return {}
+    return {
+        "setting_sources_override": "project,local",
+        "include_effort": False,
+        "strip_model_fallback_env": True,
+    }
+
+
+def _should_use_external_primary_invocation_mode(model: str) -> bool:
+    if not model or _is_kimi_model(model):
+        return False
+    lowered = model.lower()
+    if lowered.startswith("claude-"):
+        return False
+    return True
+
+
+def _is_kimi_model(model: str) -> bool:
+    return "kimi" in (model or "").lower()
 
 
 def _should_try_claude_code_model_fallback(
@@ -884,6 +932,10 @@ def _claude_progress_provider_label(provider: str, model: str = "") -> str:
         return f"备用源 {model} " if model else "备用源 "
     if provider == "kimi":
         return "Kimi 主源 "
+    if provider == "claude-code-primary":
+        return f"主源 {model} " if model else "Claude Code 主源 "
+    if provider == "claude-code":
+        return "Claude Code 主源 "
     if provider:
         return f"{provider} "
     return ""
