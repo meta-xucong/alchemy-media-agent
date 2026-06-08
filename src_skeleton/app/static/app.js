@@ -141,6 +141,7 @@ let providerSaveTimer = null;
 let providerChangeVersion = 0;
 let heroCarouselTimer = null;
 let heroCarouselIndex = 0;
+let activeTabName = "image";
 
 const els = {
   sessionLabel: document.querySelector("#sessionLabel"),
@@ -436,6 +437,7 @@ function bindControls() {
 }
 
 function switchTab(tabName) {
+  activeTabName = tabName || "image";
   els.tabs.forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("active", active);
@@ -675,15 +677,21 @@ async function startNewSession() {
   els.newSessionBtn.textContent = "创建中";
   showGlobalToast("正在创建新会话。");
   try {
-    await createSession();
-    switchTab("image");
-    els.promptInput.value = "";
-    els.countInput.value = defaultImageCount;
-    els.countValue.textContent = defaultImageCount;
-    setSize("1024x1536");
-    setFormat("png");
-    setQuality("high");
-    els.promptInput.focus();
+    if (activeTabName === "v2") {
+      resetV2Session();
+      switchTab("v2");
+      els.v2PromptInput?.focus();
+    } else {
+      await createSession();
+      switchTab("image");
+      els.promptInput.value = "";
+      els.countInput.value = defaultImageCount;
+      els.countValue.textContent = defaultImageCount;
+      setSize("");
+      setFormat("png");
+      setQuality("high");
+      els.promptInput.focus();
+    }
   } catch (error) {
     showNotice(`新会话创建失败：${friendlyError(error)}`, "error");
     showGlobalToast("新会话创建失败。", "error");
@@ -691,6 +699,33 @@ async function startNewSession() {
     els.newSessionBtn.disabled = false;
     els.newSessionBtn.textContent = originalText;
   }
+}
+
+function resetV2Session() {
+  v2State.selectedTemplateId = null;
+  v2State.selectedTemplateDetail = null;
+  v2State.templateAutoFields = { subject: "", style: "", useCase: "" };
+  v2State.selectedRatio = "";
+  v2State.uploadedAssets = [];
+  v2State.currentRun = null;
+  resetV2Progress();
+  if (els.v2PromptInput) els.v2PromptInput.value = "";
+  if (els.v2SubjectInput) els.v2SubjectInput.value = "";
+  if (els.v2StyleInput) els.v2StyleInput.value = "";
+  if (els.v2UseCaseInput) els.v2UseCaseInput.value = "";
+  if (els.v2CountInput) els.v2CountInput.value = defaultImageCount;
+  if (els.v2CountValue) els.v2CountValue.textContent = defaultImageCount;
+  const defaultRatioButton = document.querySelector('[data-v2-ratio=""]');
+  if (defaultRatioButton) setActive(defaultRatioButton, "[data-v2-ratio]");
+  if (els.v2SelectedTemplateLabel) els.v2SelectedTemplateLabel.textContent = "未选择模板";
+  if (els.v2ModeState) els.v2ModeState.textContent = "智能增强";
+  clearV2Asset({ keepNotice: true });
+  clearV2RunResult();
+  renderV2Templates(v2State.visibleTemplates);
+  renderV2AssetPanel();
+  renderHeroHistory(v2State.history, { source: "v2" });
+  updateV2Notice("V2.0 新会话已准备好。", "success");
+  showGlobalToast("V2.0 新会话已创建。");
 }
 
 async function loadProviders() {

@@ -22,7 +22,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260607-asset-contain-preview" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260609-desktop-h5-polish" />
   </head>
   <body>
     <div class="app-shell">
@@ -164,7 +164,7 @@
 
                   <div class="control-block">
                     <span>画幅</span>
-                    <div class="segmented" role="radiogroup" aria-label="画幅">
+                    <div class="segmented aspect-segmented" role="radiogroup" aria-label="画幅">
                       <button class="segment active" data-size="" type="button">默认</button>
                       <button class="segment" data-size="1024x1536" type="button">竖版</button>
                       <button class="segment" data-size="1024x1024" type="button">方图</button>
@@ -526,7 +526,7 @@
                   </label>
                   <div class="control-block">
                     <span>画幅</span>
-                    <div class="segmented" role="radiogroup" aria-label="2.0 画幅">
+                    <div class="segmented aspect-segmented" role="radiogroup" aria-label="2.0 画幅">
                       <button class="segment active" data-v2-ratio="" type="button">默认</button>
                       <button class="segment" data-v2-ratio="1024x1536" type="button">竖版</button>
                       <button class="segment" data-v2-ratio="1024x1024" type="button">方图</button>
@@ -620,19 +620,19 @@
               </div>
 
               <div class="v2-output-layout">
-                <div>
+                <div class="v2-result-block v2-result-cases">
                   <h4>选用案例</h4>
                   <div id="v2SelectedCases" class="v2-case-list empty-v2-list"></div>
                 </div>
-                <div>
+                <div class="v2-result-block v2-result-brain">
                   <h4>中枢判断</h4>
                   <div id="v2BrainPanel" class="v2-brain-panel empty-v2-list">等待 Agent 判断。</div>
                 </div>
-                <div>
+                <div class="v2-result-block v2-result-prompt">
                   <h4>组合提示词</h4>
                   <pre id="v2PromptPlan" class="v2-prompt-plan">等待 V2.0 Agent 输出。</pre>
                 </div>
-                <div>
+                <div class="v2-result-block v2-result-images">
                   <h4>生成结果</h4>
                   <div id="v2Outputs" class="v2-output-grid empty-v2-list"></div>
                 </div>
@@ -909,6 +909,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260607-asset-contain-preview" defer></script>
+    <script src="/static/app.js?v=20260609-desktop-h5-polish" defer></script>
   </body>
 </html>

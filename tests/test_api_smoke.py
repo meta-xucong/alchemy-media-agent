@@ -550,6 +550,9 @@ def test_frontend_static_app_is_served():
     assert "heroHistoryCarousel" in index.text
     assert "lightboxPromptPanel" in index.text
     assert "lightboxPromptText" in index.text
+    assert "aspect-segmented" in index.text
+    assert "v2-result-prompt" in index.text
+    assert "v2-result-block" in index.text
     assert "Your Work" not in index.text
     assert "assetPreview" in index.text
     assert 'accept="image/*"' in index.text
@@ -605,6 +608,11 @@ def test_frontend_static_app_is_served():
     assert "thinking-spinner" in styles.text
     assert "spinThinking" in styles.text
     assert "segmented.quality" in styles.text
+    assert "segmented.aspect-segmented" in styles.text
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles.text
+    assert "grid-template-areas:" in styles.text
+    assert "height: clamp(260px, 34vh, 430px)" in styles.text
+    assert "overscroll-behavior: contain" in styles.text
     assert "asset-preview" in styles.text
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles.text
 
@@ -623,6 +631,9 @@ def test_frontend_static_app_is_served():
     assert "scrollIntoView" in script.text
     assert "unhandledrejection" in script.text
     assert "startNewSession" in script.text
+    assert "resetV2Session" in script.text
+    assert 'if (activeTabName === "v2")' in script.text
+    assert 'setSize("")' in script.text
     assert 'const defaultImageCount = "1"' in script.text
     assert "openSampleGuide" in script.text
     assert "applyCoffeeSample" in script.text
