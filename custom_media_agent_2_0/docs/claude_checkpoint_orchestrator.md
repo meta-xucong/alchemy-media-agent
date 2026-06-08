@@ -64,7 +64,7 @@ app/agents/runtime.py
 - `tools=none` 时走 inline JSON。
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 已可通过 `V2_CLAUDE_ORCHESTRATOR_MAX_OUTPUT_TOKENS` 控制。
 - `MAX_STRUCTURED_OUTPUT_RETRIES=1` 可降低 Claude Code schema 重试膨胀。
-- 一旦 `claude_output_token_limit`，当前只能 fallback。
+- `claude_output_token_limit` 现在应先触发 checkpoint 压缩续跑；只有压缩重试耗尽后才进入 Claude Code 备用模型源。
 
 ## 新架构
 
@@ -276,7 +276,7 @@ V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED=true
 V2_CLAUDE_CHECKPOINT_MAX_ROUNDS=4
 V2_CLAUDE_CHECKPOINT_MAX_STAGE_RETRIES=2
 V2_CLAUDE_CHECKPOINT_STAGE_TIMEOUT_SECONDS=180
-V2_CLAUDE_CHECKPOINT_SOFT_STAGE_TIMEOUT_SECONDS=60
+V2_CLAUDE_CHECKPOINT_SOFT_STAGE_TIMEOUT_SECONDS=120
 V2_CLAUDE_CHECKPOINT_SAVE_STREAM_EVENTS=false
 V2_CLAUDE_FINAL_PROMPT_MAX_CHARS=1400
 V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS=320
@@ -288,6 +288,8 @@ V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=25
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-pro-260425,deepseek-v4-flash-260425,deepseek-v3-2-251201,doubao-seed-2-0-lite-260428,doubao-seed-2-0-lite-260215,doubao-seed-1-6-lite-251015,glm-4-7-251222,doubao-lite-128k-240428,doubao-lite-32k-240328,doubao-lite-4k-240328
 ```
+
+The soft stage timeout is deliberately wider than the earliest 60-second recovery draft. Production traces show Kimi can complete simple stages in roughly 30-50 seconds, while valid non-error checkpoint stages may take 80-150 seconds. A 120-second soft boundary keeps Kimi as the primary Claude Code source during normal latency spikes while still allowing the hard timeout and backup model queue to recover genuinely stuck stages.
 
 不建议主路径设置：
 
@@ -317,7 +319,7 @@ doubao-lite-32k-240428
 doubao-lite-4k-240328
 ```
 
-If Kimi returns temporary upstream failures such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries the next Claude Code model in the queue. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
+If Kimi returns temporary upstream/source failures such as quota exhaustion, no available accounts, 502, context cancellation, or upstream API errors, the controller tries the next Claude Code model in the queue immediately. Timeout, output-limit, and structured-output exhaustion first trigger Kimi checkpoint compression/retry; only after those compact retries are exhausted does the controller try the backup model queue. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
 
 ## Workspace 文件布局
 

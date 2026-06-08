@@ -130,7 +130,7 @@ class Settings:
     claude_checkpoint_orchestrator_enabled: bool = False
     claude_checkpoint_max_stage_retries: int = 2
     claude_checkpoint_stage_timeout_seconds: float = 180.0
-    claude_checkpoint_soft_stage_timeout_seconds: float = 60.0
+    claude_checkpoint_soft_stage_timeout_seconds: float = 120.0
     claude_checkpoint_cli_schema_enabled: bool = False
     claude_final_prompt_max_chars: int = 1400
     claude_negative_prompt_max_chars: int = 320
@@ -308,7 +308,7 @@ def load_settings() -> Settings:
         ),
         claude_checkpoint_soft_stage_timeout_seconds=max(
             15.0,
-            float(os.getenv("V2_CLAUDE_CHECKPOINT_SOFT_STAGE_TIMEOUT_SECONDS", "60")),
+            float(os.getenv("V2_CLAUDE_CHECKPOINT_SOFT_STAGE_TIMEOUT_SECONDS", "120")),
         ),
         claude_checkpoint_cli_schema_enabled=os.getenv(
             "V2_CLAUDE_CHECKPOINT_CLI_SCHEMA_ENABLED",

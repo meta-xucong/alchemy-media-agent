@@ -46,6 +46,14 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
+_CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
+    "claude_api_error",
+    "kimi_context_canceled",
+    "kimi_sub2api_502",
+    "kimi_no_available_accounts",
+    "kimi_upstream_error",
+    "upstream_context_canceled",
+}
 _CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v8_checkpoint_orchestrator"
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
@@ -607,6 +615,8 @@ def _invoke_checkpoint_stage_with_micro(
             )
             if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
                 raise
+            if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
+                return None, attempts
             if _should_try_claude_code_model_fallback(last_failure):
                 fallback_started = time.perf_counter()
                 fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
@@ -629,8 +639,6 @@ def _invoke_checkpoint_stage_with_micro(
                 )
                 if fallback_result:
                     return fallback_result, attempts
-            if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
-                return None, attempts
             continue
         trace.append(
             {
@@ -643,14 +651,43 @@ def _invoke_checkpoint_stage_with_micro(
         if result:
             return result, attempts
     if last_failure:
+        if _should_try_claude_code_model_fallback(last_failure, after_compression_retries=True):
+            fallback_started = time.perf_counter()
+            fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
+                command=command,
+                workspace=workspace,
+                stage_name=stage_name,
+                prompt=ultra_micro_prompt or micro_prompt,
+                schema=schema,
+            )
+            attempts += int(fallback_meta.get("attempts") or 0)
+            trace.append(
+                {
+                    "stage": stage_name,
+                    "status": "success" if fallback_result else "error",
+                    "provider": "claude-code-model-fallback",
+                    "model": fallback_meta.get("model"),
+                    "failure_code": None if fallback_result else fallback_meta.get("failure_code"),
+                    "duration_ms": _elapsed_ms(fallback_started),
+                    "after_compression_retries": True,
+                }
+            )
+            if fallback_result:
+                return fallback_result, attempts
         trace.append({"stage": stage_name, "status": "failed", "failure_code": last_failure})
     return None, attempts
 
 
-def _should_try_claude_code_model_fallback(failure_code: str | None) -> bool:
+def _should_try_claude_code_model_fallback(
+    failure_code: str | None,
+    *,
+    after_compression_retries: bool = False,
+) -> bool:
     if not failure_code or not _claude_code_model_fallback_configured():
         return False
-    return failure_code in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES or "output_token_limit" in failure_code
+    if after_compression_retries:
+        return failure_code in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES or "output_token_limit" in failure_code
+    return failure_code in _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES
 
 
 def _claude_code_model_fallback_configured() -> bool:

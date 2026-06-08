@@ -70,7 +70,7 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
     object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 180.0)
-    object.__setattr__(settings, "claude_checkpoint_soft_stage_timeout_seconds", 60.0)
+    object.__setattr__(settings, "claude_checkpoint_soft_stage_timeout_seconds", 120.0)
     object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_final_prompt_max_chars", 1400)
     object.__setattr__(settings, "claude_negative_prompt_max_chars", 320)
@@ -3053,6 +3053,57 @@ def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
     assert queue[-1] == "doubao-lite-4k-240328"
 
 
+def test_checkpoint_stage_soft_timeout_retries_kimi_before_model_fallback(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("deepseek-v4-pro-260425",))
+    calls: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+            }
+        )
+        if kwargs["stage_name"] == "intent":
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_soft_timeout")
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "premium lunch poster",
+            "scene_goal": "redesign a food promotion image",
+            "must_keep": ["offer text", "QR code"],
+            "must_avoid": ["layout copying"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+    )
+
+    assert result is not None
+    assert result["stage"] == "intent"
+    assert attempts == 2
+    assert calls == [
+        {"stage_name": "intent", "model_override": None},
+        {"stage_name": "intent_micro_retry_1", "model_override": None},
+    ]
+    assert all(item.get("provider") != "claude-code-model-fallback" for item in trace)
+
+
 def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(monkeypatch, tmp_path) -> None:
     fresh_client()
     object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
@@ -3114,6 +3165,61 @@ def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(
     assert calls[1]["strip_model_fallback_env"] is True
     assert trace[-1]["provider"] == "claude-code-model-fallback"
     assert trace[-1]["model"] == "deepseek-v4-pro-260425"
+
+
+def test_checkpoint_stage_uses_model_fallback_after_compressed_kimi_retries_exhaust(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("deepseek-v4-pro-260425",))
+    calls: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+            }
+        )
+        if kwargs.get("model_override") is None:
+            raise claude_orchestrator_service.ClaudeInvocationError("claude_soft_timeout")
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "premium lunch poster",
+            "scene_goal": "redesign a food promotion image",
+            "must_keep": ["offer text", "QR code"],
+            "must_avoid": ["layout copying"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+    )
+
+    assert result is not None
+    assert result["stage"] == "intent"
+    assert attempts == 3
+    assert calls == [
+        {"stage_name": "intent", "model_override": None},
+        {"stage_name": "intent_micro_retry_1", "model_override": None},
+        {"stage_name": "intent_model_fallback_1", "model_override": "deepseek-v4-pro-260425"},
+    ]
+    assert trace[-1]["provider"] == "claude-code-model-fallback"
+    assert trace[-1]["model"] == "deepseek-v4-pro-260425"
+    assert trace[-1]["after_compression_retries"] is True
 
 
 def test_claude_failure_classifier_ignores_successful_result_text_noise() -> None:

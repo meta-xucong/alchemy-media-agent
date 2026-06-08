@@ -7,7 +7,7 @@ Core rule:
 ```text
 Claude Code remains the creative brain.
 Kimi is the primary Claude Code source.
-When Kimi is unavailable, V2 re-invokes Claude Code with backup model sources.
+When Kimi is unavailable or compressed Kimi retries are exhausted, V2 re-invokes Claude Code with backup model sources.
 ```
 
 ## Why This Exists
@@ -22,7 +22,8 @@ Primary path:
 
 1. V2 starts a staged Claude checkpoint run through Claude Code.
 2. The normal Claude Code user settings can keep using the primary Kimi model, for example `kimi-for-coding`.
-3. Each stage has a soft boundary. If Kimi hits a retryable failure, V2 preserves checkpoint state and tries a shorter model fallback stage.
+3. Each stage has a soft boundary. A single soft timeout first triggers a shorter Kimi compression/retry stage.
+4. If Kimi is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries are exhausted, V2 preserves checkpoint state and tries a shorter backup-source stage.
 
 Fallback path:
 
@@ -94,19 +95,18 @@ This guard only applies to the backup source. The primary Kimi route keeps the n
 
 ## Retryable Failures
 
-Fallback is attempted when the primary Claude stage reports retryable Claude/Kimi boundary failures, including:
+Immediate fallback is attempted when the primary Claude stage reports Kimi/source availability failures, including:
 
 ```text
-claude_soft_timeout
-claude_timeout
-claude_output_token_limit
-claude_structured_output_retries_exhausted
+claude_api_error
 kimi_context_canceled
 kimi_sub2api_502
 kimi_no_available_accounts
 kimi_upstream_error
 upstream_context_canceled
 ```
+
+Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the Kimi micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the backup Claude Code model queue for that same compact stage.
 
 The fallback is not a separate OpenAI-compatible executor. It is still Claude Code.
 
@@ -158,4 +158,3 @@ Claude user settings with tokens
 ```
 
 Only commit code, docs, tests, and example environment keys without secret values.
-
