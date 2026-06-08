@@ -283,6 +283,10 @@ V2_CLAUDE_NEGATIVE_PROMPT_MAX_CHARS=320
 V2_CLAUDE_RATIONALE_MAX_CHARS=180
 V2_CLAUDE_ORCHESTRATOR_MAX_OUTPUT_TOKENS=32000
 MAX_STRUCTURED_OUTPUT_RETRIES=1
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=3
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=25
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-pro-260425,deepseek-v4-flash-260425,deepseek-v3-2-251201,doubao-seed-2-0-lite-260428,doubao-seed-2-0-lite-260215,doubao-seed-1-6-lite-251015,glm-4-7-251222,doubao-lite-128k-240428,doubao-lite-32k-240328,doubao-lite-4k-240328
 ```
 
 不建议主路径设置：
@@ -293,6 +297,27 @@ MAX_THINKING_TOKENS=0
 ```
 
 这些只能作为人工诊断或紧急降级。
+
+### Claude Code Model Fallback
+
+When the Claude Code route is available, it remains the only creative brain that V2 calls. The fallback does not call a separate OpenAI-compatible executor from the V2 backend. It re-invokes Claude Code for the same checkpoint stage with a different `--model` and optional `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` overrides.
+
+This keeps the external V2 framework unchanged: same Claude checkpoint prompts, same JSON schema, same visual grammar lock, same uploaded-asset fusion policy, same output caps, and same selected-template priority. Model order is deliberately strongest-first:
+
+```text
+deepseek-v4-pro-260425
+deepseek-v4-flash-260425
+deepseek-v3-2-251201
+doubao-seed-2-0-lite-260428
+doubao-seed-2-0-lite-260215
+doubao-seed-1-6-lite-251015
+glm-4-7-251222
+doubao-lite-128k-240428
+doubao-lite-32k-240428
+doubao-lite-4k-240328
+```
+
+If Kimi returns temporary upstream failures such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries the next Claude Code model in the queue. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
 
 ## Workspace 文件布局
 

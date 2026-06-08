@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import hashlib
 import time
@@ -27,6 +28,7 @@ from app.services.ids import new_id
 from app.services.asset_binding import build_asset_context
 from app.services.uploaded_assets import get_uploaded_asset
 from app.services.visual_signals import build_case_visual_signals
+from app.services.visual_grammar_lock import build_visual_grammar_contract
 
 
 _RECENT_INVOCATIONS: list[OrchestratorInvocationRecord] = []
@@ -40,6 +42,7 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_api_error",
     "kimi_context_canceled",
     "kimi_sub2api_502",
+    "kimi_no_available_accounts",
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
@@ -48,6 +51,7 @@ _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
 _CLAUDE_INLINE_RATIONALE_CHAR_BUDGET = 140
+_CLAUDE_CHECKPOINT_MAX_OUTPUT_TOKENS = 4096
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -395,6 +399,9 @@ def get_orchestrator_status() -> OrchestratorStatusResponse:
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         max_output_tokens=settings.claude_orchestrator_max_output_tokens,
         checkpoint_enabled=settings.claude_checkpoint_orchestrator_enabled,
+        fallback_models=_claude_code_model_fallback_queue(),
+        fallback_base_url_configured=bool(settings.claude_orchestrator_fallback_base_url),
+        fallback_auth_token_configured=bool(settings.claude_orchestrator_fallback_auth_token),
         recent_invocations=recent[:10],
         last_success_at=success_records[0].created_at if success_records else None,
         last_failure_at=failure_records[0].created_at if failure_records else None,
@@ -430,7 +437,7 @@ def _invoke_claude_checkpoint_mode(
         workspace=workspace,
         stage_name="intent",
         schema=CLAUDE_INTENT_CHECKPOINT_SCHEMA,
-        prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent"),
+        prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_micro"),
         micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_micro"),
         ultra_micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_ultra_micro"),
         trace=trace,
@@ -598,10 +605,32 @@ def _invoke_checkpoint_stage_with_micro(
                     "duration_ms": _elapsed_ms(started),
                 }
             )
-            if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
-                return None, attempts
             if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
                 raise
+            if _should_try_claude_code_model_fallback(last_failure):
+                fallback_started = time.perf_counter()
+                fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
+                    command=command,
+                    workspace=workspace,
+                    stage_name=attempt_stage_name,
+                    prompt=attempt_prompt,
+                    schema=schema,
+                )
+                attempts += int(fallback_meta.get("attempts") or 0)
+                trace.append(
+                    {
+                        "stage": attempt_stage_name,
+                        "status": "success" if fallback_result else "error",
+                        "provider": "claude-code-model-fallback",
+                        "model": fallback_meta.get("model"),
+                        "failure_code": None if fallback_result else fallback_meta.get("failure_code"),
+                        "duration_ms": _elapsed_ms(fallback_started),
+                    }
+                )
+                if fallback_result:
+                    return fallback_result, attempts
+            if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
+                return None, attempts
             continue
         trace.append(
             {
@@ -618,6 +647,160 @@ def _invoke_checkpoint_stage_with_micro(
     return None, attempts
 
 
+def _should_try_claude_code_model_fallback(failure_code: str | None) -> bool:
+    if not failure_code or not _claude_code_model_fallback_configured():
+        return False
+    return failure_code in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES or "output_token_limit" in failure_code
+
+
+def _claude_code_model_fallback_configured() -> bool:
+    return bool(
+        _claude_code_model_fallback_queue()
+        and (
+            settings.claude_orchestrator_fallback_base_url
+            or settings.claude_orchestrator_fallback_auth_token
+        )
+    )
+
+
+def _claude_code_model_fallback_queue() -> list[str]:
+    models: list[str] = []
+    if settings.claude_orchestrator_fallback_model:
+        models.append(settings.claude_orchestrator_fallback_model)
+    models.extend(settings.claude_orchestrator_fallback_models or [])
+    primary = settings.claude_orchestrator_model
+    return _dedupe(
+        [
+            _text_value(model)
+            for model in models
+            if _text_value(model) and _text_value(model) != _text_value(primary)
+        ]
+    )
+
+
+def _claude_code_fallback_env_overrides() -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    if settings.claude_orchestrator_fallback_base_url:
+        overrides["ANTHROPIC_BASE_URL"] = settings.claude_orchestrator_fallback_base_url
+    if settings.claude_orchestrator_fallback_auth_token:
+        overrides["ANTHROPIC_AUTH_TOKEN"] = settings.claude_orchestrator_fallback_auth_token
+        overrides["ANTHROPIC_API_KEY"] = settings.claude_orchestrator_fallback_auth_token
+    return overrides
+
+
+def _strip_claude_code_model_fallback_env(env: dict[str, str]) -> None:
+    for key in list(env):
+        if key in {"CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_SUBAGENT_MODEL"}:
+            env.pop(key, None)
+        elif "REASONING_EFFORT" in key:
+            env.pop(key, None)
+
+
+def _invoke_claude_code_model_fallbacks(
+    *,
+    command: list[str],
+    workspace: Path,
+    stage_name: str,
+    prompt: str,
+    schema: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    attempts = 0
+    last_failure = "claude_code_model_fallback_unavailable"
+    queue = _claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage]
+    env_overrides = _claude_code_fallback_env_overrides()
+    for index, model in enumerate(queue):
+        attempts += 1
+        next_model = queue[index + 1] if index + 1 < len(queue) else None
+        try:
+            result = _invoke_claude_stage_json(
+                command=command,
+                workspace=workspace,
+                stage_name=f"{stage_name}_model_fallback_{index + 1}",
+                prompt=prompt,
+                schema=schema,
+                model_override=model,
+                fallback_model_override=next_model,
+                env_overrides=env_overrides,
+                setting_sources_override="project,local",
+                include_effort=False,
+                strip_model_fallback_env=True,
+                timeout_override=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+            )
+        except ClaudeInvocationError as exc:
+            last_failure = str(exc)
+            if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
+                continue
+            continue
+        if result:
+            return result, {"attempts": attempts, "model": model}
+        last_failure = "missing_decision"
+    return None, {"attempts": attempts, "failure_code": last_failure}
+
+
+def _run_claude_subprocess(
+    command_line: list[str],
+    *,
+    input_text: str,
+    timeout_seconds: float,
+    cwd: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    popen_kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    process = subprocess.Popen(
+        command_line,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(cwd),
+        env=env,
+        **popen_kwargs,
+    )
+    try:
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
+        return subprocess.CompletedProcess(command_line, process.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            command_line,
+            timeout_seconds,
+            output=stdout or _timeout_output(exc.stdout),
+            stderr=stderr or _timeout_output(exc.stderr),
+        ) from exc
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except Exception:
+            process.kill()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except Exception:
+        process.kill()
+
+
 def _invoke_claude_stage_json(
     *,
     command: list[str],
@@ -625,6 +808,13 @@ def _invoke_claude_stage_json(
     stage_name: str,
     prompt: str,
     schema: dict[str, Any],
+    model_override: str | None = None,
+    fallback_model_override: str | None = None,
+    env_overrides: dict[str, str] | None = None,
+    setting_sources_override: str | None = None,
+    include_effort: bool = True,
+    strip_model_fallback_env: bool = False,
+    timeout_override: float | None = None,
 ) -> dict[str, Any] | None:
     safe_stage = re.sub(r"[^a-zA-Z0-9_.-]+", "_", stage_name).strip("_") or "stage"
     command_line = [
@@ -638,42 +828,51 @@ def _invoke_claude_stage_json(
         settings.claude_orchestrator_permission_mode,
         "--tools",
         "none",
-        "--effort",
-        settings.claude_orchestrator_effort,
         "--bare",
         "--no-session-persistence",
     ]
-    if settings.claude_checkpoint_cli_schema_enabled:
-        command_line.extend(["--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":"))])
-    _apply_claude_cli_acceleration_flags(command_line)
-    if settings.claude_orchestrator_model:
-        command_line.extend(["--model", settings.claude_orchestrator_model])
-    if settings.claude_orchestrator_fallback_model:
-        command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
+    if include_effort:
+        command_line.extend(["--effort", settings.claude_orchestrator_effort])
+    command_line.extend(["--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":"))])
+    _apply_claude_cli_acceleration_flags(command_line, include_effort=include_effort)
+    if setting_sources_override:
+        command_line.extend(["--setting-sources", setting_sources_override])
+    model = model_override or settings.claude_orchestrator_model
+    fallback_model = fallback_model_override or settings.claude_orchestrator_fallback_model
+    if model:
+        command_line.extend(["--model", model])
+    if fallback_model and fallback_model != model:
+        command_line.extend(["--fallback-model", fallback_model])
     env = dict(os.environ)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-    structured_retries = "1" if settings.claude_checkpoint_cli_schema_enabled else "0"
-    env["MAX_STRUCTURED_OUTPUT_RETRIES"] = structured_retries
-    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
+    if strip_model_fallback_env:
+        _strip_claude_code_model_fallback_env(env)
+    for key, value in (env_overrides or {}).items():
+        if value:
+            env[key] = value
+    env["MAX_STRUCTURED_OUTPUT_RETRIES"] = "0"
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(_checkpoint_stage_max_output_tokens())
     _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
-    timeout_seconds = _checkpoint_stage_timeout_seconds(stage_name)
+    timeout_seconds = timeout_override or _checkpoint_stage_timeout_seconds(stage_name)
     try:
-        completed = subprocess.run(
+        completed = _run_claude_subprocess(
             command_line,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_seconds,
-            check=False,
-            cwd=str(workspace),
+            input_text=prompt,
+            timeout_seconds=timeout_seconds,
+            cwd=workspace,
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
-        _write_text(workspace / f"{safe_stage}_stdout.json", _timeout_output(exc.stdout))
-        _write_text(workspace / f"{safe_stage}_stderr.txt", _timeout_output(exc.stderr))
+        stdout = _timeout_output(exc.stdout)
+        stderr = _timeout_output(exc.stderr)
+        _write_text(workspace / f"{safe_stage}_stdout.json", stdout)
+        _write_text(workspace / f"{safe_stage}_stderr.txt", stderr)
+        parsed = _parse_structured_output(stdout)
+        if isinstance(parsed, dict) and not _classify_claude_failure(stdout, stderr, 0):
+            parsed = _coerce_checkpoint_payload(parsed, schema, workspace=workspace)
+            if _matches_checkpoint_schema(parsed, schema):
+                return parsed
         failure_code = "claude_soft_timeout" if _is_checkpoint_soft_timeout(stage_name, timeout_seconds) else "claude_timeout"
         raise ClaudeInvocationError(failure_code) from exc
     _write_text(workspace / f"{safe_stage}_stdout.json", completed.stdout or "")
@@ -705,6 +904,11 @@ def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
     if "ultra_micro" in stage_name:
         return soft_timeout
     return min(hard_timeout, max(soft_timeout, hard_timeout * 0.5))
+
+
+def _checkpoint_stage_max_output_tokens() -> int:
+    configured = int(settings.claude_orchestrator_max_output_tokens or _CLAUDE_CHECKPOINT_MAX_OUTPUT_TOKENS)
+    return max(512, min(configured, _CLAUDE_CHECKPOINT_MAX_OUTPUT_TOKENS))
 
 
 def _is_checkpoint_soft_timeout(stage_name: str, timeout_seconds: float) -> bool:
@@ -753,7 +957,9 @@ def _checkpoint_system_prompt() -> str:
     return (
         "You are the central creative brain for a staged image-generation orchestrator. "
         "Make a complete high-quality decision for the current narrow stage with bounded internal deliberation. "
+        "Think silently, then emit the compressed answer immediately. "
         "Do not write or simulate chain-of-thought, long analysis, drafts, alternatives, markdown, or commentary. "
+        "The first visible character must be { and the last visible character must be }. "
         "The visible answer must be compact JSON matching the schema, with no internal ids, URLs, API names, repository names, or storage identifiers."
     )
 
@@ -768,6 +974,7 @@ def _build_checkpoint_stage_prompt(
     fallback = _read_json(workspace / "fallback_decision.json") or {}
     template_lock_contract = _read_json(workspace / "template_lock_contract.json") or {}
     asset_binding_policy = _read_json(workspace / "asset_binding_policy.json") or {}
+    visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
     template_case_id = (context.get("request") or {}).get("template_case_id")
     compact_cases = _compact_inline_cases(
@@ -788,42 +995,69 @@ def _build_checkpoint_stage_prompt(
     checkpoint_payload = checkpoints or {}
     if stage_name.startswith("generation_decision"):
         checkpoint_payload = _compact_generation_checkpoints(checkpoint_payload)
+    output_limits = _checkpoint_output_limits(stage_name)
+    request_payload = {
+        "user_prompt": (context.get("request") or {}).get("user_prompt", ""),
+        "template_case_id": template_case_id,
+        "output": (context.get("request") or {}).get("output", {}),
+    }
+    if stage_name.startswith("generation_decision"):
+        request_payload = {
+            "user_prompt_brief": _truncate(_text_value((context.get("request") or {}).get("user_prompt")), 260),
+            "template_case_id": template_case_id,
+            "output": (context.get("request") or {}).get("output", {}),
+        }
 
     payload = {
         "stage": stage_name,
         "instruction": _checkpoint_stage_instruction(stage_name),
         "rules": (
             "Every stage is Claude-led and must be completed; do not skip Claude for any subject. "
-            "Use compact internal judgment, not extended written analysis. Output only compact JSON. "
-            "Think through the stage fully, then compress the visible answer to the requested fields. "
-            "If template_case_id exists, it is the locked visual frame and must remain selected_case_ids[0]. "
-            "Uploaded assets fill slots and hard identity refs must remain provider input images. "
+            "Think through the stage fully but silently; never write the reasoning. Output only compact JSON. "
+            "The first visible character must be { and the last visible character must be }. "
+            f"Hard visible output cap: total JSON <= {output_limits['total_json_chars']} characters; obey each field cap in output_limits. "
+            "Follow visual_grammar_contract when present: grammar controls composition/hierarchy/mood/layout; user controls semantic content. "
+            "If visual_grammar_contract.info.active, keep key poster/menu info; use larger canvas/modules instead of dropping offers, prices, rules, QR, CTA, or item imagery. "
+            "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
+            "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
             "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers."
         ),
         "output_contract": _checkpoint_output_contract(stage_name),
-        "request": {
-            "user_prompt": (context.get("request") or {}).get("user_prompt", ""),
-            "template_case_id": template_case_id,
-            "output": (context.get("request") or {}).get("output", {}),
-        },
+        "request": request_payload,
         "fallback": {
             "mode": fallback.get("mode"),
             "selected_case_ids": [template_case_id] if template_case_id else fallback.get("selected_case_ids", [])[:4],
             "generation_directives": fallback.get("generation_directives", {}),
         },
         "template_lock_contract": _compact_template_lock(template_lock_contract),
+        "visual_grammar_contract": _compact_visual_grammar_contract(visual_grammar_contract),
         "uploaded_assets": _compact_uploaded_assets(uploaded_assets),
         "asset_binding_policy": _compact_asset_binding_policy(asset_binding_policy),
         "candidate_cases": compact_cases,
         "checkpoints": checkpoint_payload,
-        "visible_output_budget": {
+        "output_limits": output_limits,
+        "json_skeleton": _checkpoint_json_skeleton(stage_name),
+    }
+    if stage_name.startswith("generation_decision"):
+        payload["visible_output_budget"] = {
             "final_prompt_chars": settings.claude_final_prompt_max_chars,
             "negative_prompt_chars": settings.claude_negative_prompt_max_chars,
             "rationale_chars": settings.claude_rationale_max_chars,
-        },
-    }
+        }
+        payload.pop("template_lock_contract", None)
+        payload.pop("visual_grammar_contract", None)
+        payload.pop("uploaded_assets", None)
+        payload.pop("asset_binding_policy", None)
+        payload["rules"] = (
+            "Claude-led final compression stage. Treat intent and visual_strategy checkpoints as the completed reasoning record; "
+            "do not re-read or re-analyze the full source material. Emit one provider-ready JSON package only. "
+            "First char {, last char }. No analysis/prose/markdown. "
+            f"Total JSON <= {output_limits['total_json_chars']} chars; final_prompt <= {output_limits['final_prompt_chars']} chars. "
+            "Preserve template frame, information integrity, QR/CTA placement, and provider count from checkpoints/fallback."
+        )
     if "ultra_micro" in stage_name and not uploaded_assets and not template_case_id:
         payload.pop("template_lock_contract", None)
+        payload.pop("visual_grammar_contract", None)
         payload.pop("uploaded_assets", None)
         payload.pop("asset_binding_policy", None)
         payload["fallback"] = {
@@ -831,12 +1065,22 @@ def _build_checkpoint_stage_prompt(
             "selected_case_ids": fallback.get("selected_case_ids", [])[:2],
             "generation_directives": fallback.get("generation_directives", {}),
         }
-        payload["rules"] += " Ultra-micro context: do not compare cases or expand alternatives; decide from the user request and checkpoints only."
+        payload["rules"] = (
+            "Claude-led ultra-micro stage. Think silently, then output compact JSON only. "
+            "First char {, last char }. No analysis/prose/markdown. "
+            f"Total JSON <= {output_limits['total_json_chars']} chars; obey output_limits. "
+            "Use only request, fallback, and checkpoints; no case comparison, ids, URLs, APIs, or source markers."
+        )
+    elif not visual_grammar_contract:
+        payload.pop("visual_grammar_contract", None)
     if stage_name.startswith("generation_decision"):
         payload["rules"] += " Final stage: write one dense provider-ready prompt directly; no draft variants, no option analysis."
     if stage_name.endswith("_micro"):
         payload["rules"] += " This is a retry micro-stage: finish only the missing decision; no broad re-analysis."
-    return "Return schema-valid compact JSON only.\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "Return schema-valid compact JSON only. Start with { immediately. No prose, no markdown, no analysis.\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def _checkpoint_output_contract(stage_name: str) -> str:
@@ -854,6 +1098,72 @@ def _checkpoint_output_contract(stage_name: str) -> str:
         "Object keys: mode, selected_case_ids, final_prompt, negative_prompt, provider_parameters, "
         "prompt_rationale, confidence. final_prompt must be provider-ready and within visible_output_budget."
     )
+
+
+def _checkpoint_output_limits(stage_name: str) -> dict[str, Any]:
+    if stage_name.startswith("intent"):
+        return {
+            "total_json_chars": 1300,
+            "max_array_items": 5,
+            "primary_subject_chars": 120,
+            "scene_goal_chars": 180,
+            "list_item_chars": 70,
+            "risk_note_chars": 60,
+        }
+    if stage_name.startswith("visual_strategy"):
+        return {
+            "total_json_chars": 1200,
+            "selected_case_ids_items": 1 if "micro" in stage_name else 2,
+            "composition_chars": 170,
+            "lighting_chars": 90,
+            "palette_chars": 90,
+            "spatial_hierarchy_chars": 150,
+            "template_lock_notes_chars": 130,
+            "asset_fusion_notes_chars": 150,
+        }
+    return {
+        "total_json_chars": 1800,
+        "selected_case_ids_items": 1,
+        "final_prompt_chars": settings.claude_final_prompt_max_chars,
+        "negative_prompt_chars": settings.claude_negative_prompt_max_chars,
+        "prompt_rationale_chars": settings.claude_rationale_max_chars,
+    }
+
+
+def _checkpoint_json_skeleton(stage_name: str) -> dict[str, Any]:
+    if stage_name.startswith("intent"):
+        return {
+            "stage": "intent",
+            "mode": "template_customize",
+            "primary_subject": "...",
+            "scene_goal": "...",
+            "must_keep": ["..."],
+            "must_avoid": ["..."],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.8,
+        }
+    if stage_name.startswith("visual_strategy"):
+        return {
+            "stage": "visual_strategy",
+            "selected_case_ids": ["..."],
+            "composition": "...",
+            "lighting": "...",
+            "palette": "...",
+            "spatial_hierarchy": "...",
+            "template_lock_notes": "...",
+            "asset_fusion_notes": "...",
+            "confidence": 0.8,
+        }
+    return {
+        "mode": "template_customize",
+        "selected_case_ids": ["..."],
+        "final_prompt": "...",
+        "negative_prompt": "",
+        "provider_parameters": {"count": 1},
+        "prompt_rationale": "...",
+        "confidence": 0.8,
+    }
 
 
 def _matches_checkpoint_schema(payload: dict[str, Any], schema: dict[str, Any]) -> bool:
@@ -1070,16 +1380,11 @@ def _invoke_claude_file_mode(
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
-        completed = subprocess.run(
+        completed = _run_claude_subprocess(
             command_line,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=settings.claude_orchestrator_timeout_seconds,
-            check=False,
-            cwd=str(workspace),
+            input_text=prompt,
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            cwd=workspace,
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
@@ -1130,16 +1435,11 @@ def _invoke_claude_inline_json(*, command: list[str], workspace: Path) -> dict[s
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(settings.claude_orchestrator_max_output_tokens)
     try:
-        completed = subprocess.run(
+        completed = _run_claude_subprocess(
             command_line,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=settings.claude_orchestrator_timeout_seconds,
-            check=False,
-            cwd=str(workspace),
+            input_text=prompt,
+            timeout_seconds=settings.claude_orchestrator_timeout_seconds,
+            cwd=workspace,
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
@@ -1418,12 +1718,20 @@ def _build_workspace(
     workspace = settings.claude_orchestrator_workspace_dir / fallback.decision_id
     workspace.mkdir(parents=True, exist_ok=True)
     asset_context = build_asset_context(request)
+    visual_grammar_contract = build_visual_grammar_contract(
+        mode=fallback.mode,
+        user_prompt=request.user_prompt,
+        cases=candidate_case_details,
+        asset_context=asset_context,
+        orchestrator_decision=fallback,
+    )
     _write_json(workspace / "context.json", {"request": request.model_dump(mode="json")})
     _write_json(workspace / "candidate_cases.json", [item.model_dump(mode="json") for item in candidate_cases])
     _write_json(workspace / "candidate_case_details.json", [_case_detail_for_claude(item) for item in candidate_case_details])
     _write_json(workspace / "uploaded_assets.json", asset_context.get("uploaded_assets", []))
     _write_json(workspace / "template_lock_contract.json", asset_context.get("template_lock_contract") or {})
     _write_json(workspace / "asset_binding_policy.json", asset_context.get("asset_binding_plan") or {})
+    _write_json(workspace / "visual_grammar_contract.json", visual_grammar_contract or {})
     _write_json(workspace / "fallback_decision.json", fallback.model_dump(mode="json"))
     _write_json(workspace / "OUTPUT_CONTRACT.json", CLAUDE_DECISION_SCHEMA)
     _write_json(workspace / "decision_template.json", _decision_template(fallback))
@@ -1436,13 +1744,17 @@ def _build_workspace(
                 "- 你是 Custom Media Agent 2.0 的最高层中枢大脑，不是普通检索器。",
                 "- 你的任务是审美判断、案例取舍、提示词策略、生成调度和质量门禁。",
                 "- 本地结构化检索只提供候选证据；最终选择和组合由你裁决。",
-                "- 如果 context.request.template_case_id 非空，它是用户手选原型，优先级高于自动检索和补充风格。",
-                "- 有手选原型时，selected_case_ids[0] 必须保留该 template_case_id；final_prompt 必须在该原型的构图、背景、色彩、氛围、版式和主体关系基础上替换/改写用户主体。",
+                "- visual_grammar_contract.json 定义视觉语法锁：模板或主锚点控制构图、主体框架、视觉层级、氛围、光影、背景密度、排版节奏和设计语言；用户控制语义内容。",
+                "- 如果 context.request.template_case_id 非空，它是用户手选原型，视觉语法强锁，优先级高于自动检索、Claude 草稿和上传图布局。",
+                "- 有手选原型时，selected_case_ids[0] 必须保留该 template_case_id；final_prompt 必须在该原型的视觉语法基础上替换/改写用户主体，不得只借颜色/边框。",
                 "- 有手选原型时，不得把多卡片、信息图、海报版式、注释排版或复杂背景原型简化成普通单人肖像/纯背景棚拍；除非原型本身就是这种结构。",
+                "- 没有手选原型时，也必须选定一个主视觉语法锚点；不要平均融合多个案例导致无主构图。辅助案例只能提供局部光影、材质、配色或行业细节。",
                 "- 如果手选原型包含 typography、notes、cards、labels、feature sheet 或 infographic，negative_prompt 不要禁止 text；只禁止错误文字、乱码、品牌 logo、水印和签名。",
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
-                "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和模板 slot 变量；有手选原型时，上传图不得覆盖原型构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
+                "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
                 "- asset_binding_policy.json 中的 fusion_mode、placement_intent、target_surface 和 review_expectations 是硬素材意图约束；尤其是 Logo/主体/人脸/背景，不得被你改写成泛泛风格参考。",
+                "- 如果上传图是成品海报、菜单、周卡、信息表、截图，或 fusion_mode=composite_content_source，只提取语义内容和硬引用；不得继承其整体网格、背景和版式。",
+                "- 如果视觉语法需要大主图、主视觉场景、信息带或留白区，而上传素材没有对应图片，你必须自动生成符合用户主题的虚拟内容补齐。",
                 "- 如果 Logo 的 fusion_mode 是 logo_product_surface，必须把上传 Logo 作为真实参考图融入目标物体表面；不得输出为海报角标、页脚、水印、边框贴片或自行虚构的新 Logo。",
                 "- 如果上传图是主体、Logo、人脸或必须背景，请在 final_prompt 中把它称为 uploaded reference image，并要求 provider 使用图片输入；不要只把硬约束降级为文字描述。",
                 "- candidate_case_details.json 中的 visual_signal_brief 是系统提炼出的视觉 DNA，优先关注强调色、材质、光影、构图和审美方向。",
@@ -1464,17 +1776,20 @@ def _build_file_tool_prompt() -> str:
     return "\n".join(
         [
             "请阅读当前目录内的 MISSION.md、context.json、candidate_cases.json、candidate_case_details.json、fallback_decision.json、OUTPUT_CONTRACT.json、decision_template.json。",
-            "如果存在 uploaded_assets.json、template_lock_contract.json、asset_binding_policy.json，也必须读取。它们定义上传图视觉摘要、模板锁合同和素材绑定 slot。",
+            "如果存在 uploaded_assets.json、template_lock_contract.json、asset_binding_policy.json、visual_grammar_contract.json，也必须读取。它们定义上传图视觉摘要、模板锁合同、素材绑定 slot 和视觉语法锁。",
             "先独立判断用户真正想要的图片目标、审美方向、用途和风险，再从候选案例中选择最适合启发提示词的案例。",
             "candidate_cases.json 是轻量索引，candidate_case_details.json 包含可复用的 prompt atoms、视觉特征、visual_signal_brief 和截断后的原始提示词。",
             "visual_signal_brief 是系统预提炼的视觉 DNA：请特别判断强调色、材质、光影、构图和审美方向；不要只复用背景主色而忽略小面积但关键的点缀色或材质边缘。",
-            "如果 context.json 中 request.template_case_id 非空，它是用户手选原型，必须作为最高优先级视觉锚点，并保留为 selected_case_ids 的第一项。",
+            "如果 context.json 中 request.template_case_id 非空，它是用户手选原型，必须作为最高优先级视觉语法锚点，并保留为 selected_case_ids 的第一项。",
             "有手选原型时，不要改选其他案例作为主风格；只能在手选原型基础上融合用户主体和兼容的补充要求。",
-            "有手选原型时，必须迁移原型的版式结构、空间层级、背景密度、排版/注释处理和主体位置；不要把海报/信息图/多卡片原型改写成普通单人肖像。",
-            "有手选原型且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容或小道具；不得覆盖模板的构图、光影、整体风格和视觉节奏。",
+            "有手选原型时，必须迁移原型的视觉语法：主体框架、构图重心、空间层级、背景密度、排版/注释处理、主视觉强度和设计语言；不要把海报/信息图/多卡片原型改写成普通单人肖像。",
+            "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
+            "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、二维码或小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
+            "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度。",
+            "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
             "若 Logo 的 fusion_mode=logo_product_surface，final_prompt 必须要求 uploaded reference image 中的 Logo 被自然印刷/刺绣/贴附到目标物体表面，并明确禁止被放成海报下方、角标、水印或独立贴片。",
-            "无手选原型时，可以自由融合上传图和召回案例，但硬素材约束仍需要通过 provider input images 保真。",
+            "无手选原型时，可以灵活适配上传图和召回案例，但必须保留一个主视觉语法锚点；硬素材约束仍需要通过 provider input images 保真。",
             "没有手选原型时，你可以推翻 fallback_decision 的 selected_case_ids、prompt_directives 和 generation_directives，但必须保留安全边界。",
             "必须输出 final_prompt、negative_prompt、provider_parameters 和 prompt_rationale。final_prompt 要精简、原创、可直接用于 gpt-image-2。",
             "final_prompt 不得包含内部 case_id、asset_id、provider_id、source_url、API 或仓库工程标识。",
@@ -1491,6 +1806,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     fallback = _read_json(workspace / "fallback_decision.json") or {}
     asset_binding_policy = _read_json(workspace / "asset_binding_policy.json") or {}
     template_lock_contract = _read_json(workspace / "template_lock_contract.json") or {}
+    visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
     template_case_id = (context.get("request") or {}).get("template_case_id")
     fallback_selected_case_ids = fallback.get("selected_case_ids", [])
@@ -1499,10 +1815,12 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     payload = {
         "task": "Return one compact image prompt decision as JSON only.",
         "rules": (
-            "Template mode: selected_case_ids=[template_case_id] only. Template controls composition, layout, background, "
-            "palette, lighting, mood, text/card treatment, hierarchy, subject relation. User/assets fill slots only. Obey "
+            "Visual grammar lock: anchor controls composition, main visual presence, layout rhythm, hierarchy, background density, "
+            "palette, lighting, mood, text/card treatment, subject relation, and design language; user/assets control semantic content. "
+            "Template mode: selected_case_ids=[template_case_id] only. No-template mode: choose one primary grammar anchor, not an average hybrid. Obey "
             "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
-            f"badge/watermark/sticker. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
+            "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
+            f"If anchor needs a hero/key visual and uploads lack it, synthesize suitable virtual content. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
             f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
             f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying."
         ),
@@ -1515,6 +1833,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             "generation_directives": fallback.get("generation_directives"),
         },
         "template_lock_contract": _compact_template_lock(template_lock_contract),
+        "visual_grammar_contract": _compact_visual_grammar_contract(visual_grammar_contract),
         "uploaded_assets": _compact_uploaded_assets(uploaded_assets),
         "asset_binding_policy": _compact_asset_binding_policy(asset_binding_policy),
         "candidate_cases": _compact_inline_cases(
@@ -1619,6 +1938,33 @@ def _compact_template_lock(raw: Any) -> dict[str, Any]:
         "locked": (raw.get("locked_elements") or [])[:4],
         "slots": (raw.get("replaceable_slots") or [])[:4],
         "policy": raw.get("conflict_policy"),
+    }
+
+
+def _compact_visual_grammar_contract(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    source_risk = raw.get("source_layout_risk") if isinstance(raw.get("source_layout_risk"), dict) else {}
+    information_integrity = raw.get("information_integrity") if isinstance(raw.get("information_integrity"), dict) else {}
+    return {
+        "mode": raw.get("mode"),
+        "strength": raw.get("lock_strength"),
+        "primary_title": _truncate(_text_value(raw.get("primary_anchor_title")), 54),
+        "aux_titles": [_truncate(_text_value(item), 36) for item in (raw.get("auxiliary_case_titles") or [])[:2]],
+        "locked": (raw.get("locked_visual_grammar") or [])[:6],
+        "replaceable": (raw.get("replaceable_semantic_content") or [])[:5],
+        "anchor": _truncate(_text_value(raw.get("anchor_directive") or raw.get("visual_signal_brief")), 240),
+        "source_layout_risk": {
+            "detected": bool(source_risk.get("detected")),
+            "markers": (source_risk.get("markers") or [])[:5],
+        },
+        "info": {
+            "active": bool(information_integrity.get("active")),
+            "priority": information_integrity.get("priority"),
+            "fields": (information_integrity.get("critical_fields") or [])[:5],
+            "canvas": _truncate(_text_value(information_integrity.get("canvas_policy")), 110),
+        },
+        "policy": _truncate(_text_value(raw.get("conflict_policy")), 180),
     }
 
 
@@ -1805,9 +2151,10 @@ def _resolve_claude_command() -> list[str] | None:
     configured = str(settings.claude_orchestrator_cli or "claude").strip()
     if not configured:
         return None
-    resolved = shutil.which(configured)
-    if not resolved and os.name == "nt" and Path(configured).suffix.lower() not in {".cmd", ".exe", ".bat", ".ps1"}:
+    resolved = None
+    if os.name == "nt" and Path(configured).suffix.lower() not in {".cmd", ".exe", ".bat", ".ps1"}:
         resolved = shutil.which(f"{configured}.cmd") or shutil.which(f"{configured}.exe")
+    resolved = resolved or shutil.which(configured)
     if resolved:
         return [resolved]
     if Path(configured).exists():
@@ -1815,8 +2162,8 @@ def _resolve_claude_command() -> list[str] | None:
     return None
 
 
-def _apply_claude_cli_acceleration_flags(command_line: list[str]) -> None:
-    if "--effort" not in command_line:
+def _apply_claude_cli_acceleration_flags(command_line: list[str], *, include_effort: bool = True) -> None:
+    if include_effort and "--effort" not in command_line:
         command_line.extend(["--effort", settings.claude_orchestrator_effort])
     if settings.claude_orchestrator_disable_slash_commands and "--disable-slash-commands" not in command_line:
         command_line.append("--disable-slash-commands")
@@ -1850,6 +2197,8 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
         return "kimi_context_canceled"
     if "context canceled" in text:
         return "upstream_context_canceled"
+    if "no available accounts" in text or ("api_error_status" in text and "503" in text and "available" in text):
+        return "kimi_no_available_accounts"
     if "api.kimi.com" in text:
         return "kimi_upstream_error"
     if "502" in text and ("kimi" in text or "sub2api" in text):

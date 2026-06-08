@@ -6,6 +6,7 @@ from app.schemas import CreativeOrchestratorDecision, ImagePromptPlan, PromptCas
 from app.services.asset_binding import prompt_asset_context_block
 from app.services.ids import new_id
 from app.services.visual_signals import build_case_visual_signals
+from app.services.visual_grammar_lock import apply_visual_grammar_lock, build_visual_grammar_contract
 
 
 _BASE_NEGATIVE_TERMS = [
@@ -38,6 +39,13 @@ def compose_prompt_plan(
     primary = cases[0] if cases else None
     reference_cases = [primary] if mode == "template_customize" and primary else cases
     reusable = [] if mode == "template_customize" and primary else _reusable_elements(reference_cases)
+    visual_grammar_contract = build_visual_grammar_contract(
+        mode=mode,
+        user_prompt=user_prompt,
+        cases=reference_cases if reference_cases else cases,
+        asset_context=asset_context,
+        orchestrator_decision=orchestrator_decision,
+    )
     prompt_source = "local_prompt_composer"
     prompt = ""
     if _should_use_claude_final_prompt(orchestrator_decision):
@@ -48,6 +56,12 @@ def compose_prompt_plan(
     if mode == "template_customize" and primary:
         prompt = _apply_template_anchor(prompt, user_prompt=user_prompt, template=primary)
     prompt = _apply_asset_context_guard(prompt, asset_context=asset_context)
+    prompt = apply_visual_grammar_lock(prompt, contract=visual_grammar_contract, user_prompt=user_prompt)
+    information_integrity = (
+        visual_grammar_contract.get("information_integrity")
+        if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
+        else {}
+    )
     negative_prompt = _merge_negative_prompt(
         orchestrator_decision.negative_prompt if orchestrator_decision else "",
         _BASE_NEGATIVE_TERMS,
@@ -59,7 +73,22 @@ def compose_prompt_plan(
         )
     if mode == "template_customize" and primary and _template_allows_text_elements(primary, user_prompt=user_prompt):
         negative_prompt = _remove_negative_terms(negative_prompt, {"text"})
-    provider_parameters = _build_provider_parameters(output, orchestrator_decision)
+    if information_integrity.get("active"):
+        negative_prompt = _merge_negative_prompt(
+            negative_prompt,
+            [
+                "missing business-critical copy",
+                "missing purchase offers",
+                "missing prices or package rules",
+                "missing QR or CTA",
+                "over-simplified information layout",
+            ],
+        )
+    provider_parameters = _build_provider_parameters(
+        output,
+        orchestrator_decision,
+        visual_grammar_contract=visual_grammar_contract,
+    )
     aspect_ratio = provider_parameters.get("aspect_ratio", "1:1")
     count = int(provider_parameters.get("count", 1))
     count = max(1, min(count, 8))
@@ -105,6 +134,10 @@ def compose_prompt_plan(
             "revision_source": output.get("revision_source"),
             "template_lock_enabled": bool((asset_context or {}).get("template_lock_contract")),
             "template_lock_contract": (asset_context or {}).get("template_lock_contract"),
+            "visual_grammar_lock_enabled": bool(visual_grammar_contract),
+            "visual_grammar_contract": visual_grammar_contract,
+            "information_integrity_lock_enabled": bool(information_integrity.get("active")),
+            "information_integrity_contract": information_integrity,
             "asset_binding_plan": (asset_context or {}).get("asset_binding_plan"),
             "provider_input_plan": (asset_context or {}).get("provider_input_plan"),
             "uploaded_assets": (asset_context or {}).get("uploaded_assets", []),
@@ -196,7 +229,12 @@ def _merge_negative_prompt(base: str, additions: list[str] | tuple[str, ...]) ->
     return ", ".join(unique)
 
 
-def _build_provider_parameters(output: dict, orchestrator_decision: CreativeOrchestratorDecision | None) -> dict:
+def _build_provider_parameters(
+    output: dict,
+    orchestrator_decision: CreativeOrchestratorDecision | None,
+    *,
+    visual_grammar_contract: dict[str, object] | None = None,
+) -> dict:
     internal_keys = {"prompt", "negative_prompt", "revision_source"}
     params: dict[str, object] = {}
     if orchestrator_decision:
@@ -208,6 +246,13 @@ def _build_provider_parameters(output: dict, orchestrator_decision: CreativeOrch
             }
         )
     params.update({str(key): value for key, value in dict(output).items() if str(key) not in internal_keys})
+    information_integrity = (
+        visual_grammar_contract.get("information_integrity")
+        if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
+        else {}
+    )
+    if information_integrity.get("active") and not params.get("aspect_ratio") and not params.get("size"):
+        params["aspect_ratio"] = "1024x1536"
     aspect_ratio = params.get("aspect_ratio", "1:1")
     try:
         count = int(params.get("count", 1))

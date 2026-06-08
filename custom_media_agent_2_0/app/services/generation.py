@@ -121,6 +121,13 @@ def _job_from_result(
                 "user_prompt": request.prompt_plan.user_variables.get("user_prompt"),
                 "input_images": [image.model_dump(mode="json") for image in request.input_images],
                 "provider_input_plan": request.prompt_plan.user_variables.get("provider_input_plan"),
+                "visual_grammar_contract": request.prompt_plan.user_variables.get("visual_grammar_contract"),
+                "information_integrity_lock_enabled": request.prompt_plan.user_variables.get(
+                    "information_integrity_lock_enabled"
+                ),
+                "information_integrity_contract": request.prompt_plan.user_variables.get(
+                    "information_integrity_contract"
+                ),
                 "raw_response_summary": result.raw_response_summary,
             },
             score=_default_score(item.metadata, fallback_error=fallback_error),

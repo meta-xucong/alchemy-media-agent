@@ -377,6 +377,9 @@ class OrchestratorStatusResponse(BaseModel):
     timeout_seconds: float | None = None
     max_output_tokens: int | None = None
     checkpoint_enabled: bool = False
+    fallback_models: list[str] = Field(default_factory=list)
+    fallback_base_url_configured: bool = False
+    fallback_auth_token_configured: bool = False
     recent_invocations: list[OrchestratorInvocationRecord] = Field(default_factory=list)
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
@@ -403,6 +406,9 @@ class V2RuntimeModelSettingsResponse(BaseModel):
     claude_orchestrator_timeout_seconds: float
     claude_orchestrator_max_output_tokens: int
     claude_checkpoint_orchestrator_enabled: bool = False
+    claude_orchestrator_fallback_models: list[str] = Field(default_factory=list)
+    claude_orchestrator_fallback_base_url_configured: bool = False
+    claude_orchestrator_fallback_auth_token_configured: bool = False
     case_intelligence_provider: Literal["rules", "claude-code"]
     case_intelligence_model: str | None = None
     persisted: bool = False

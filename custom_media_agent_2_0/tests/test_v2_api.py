@@ -23,6 +23,7 @@ from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_intelligence import build_case_profile
 import app.services.claude_orchestrator as claude_orchestrator_service
 import app.services.generation as generation_service
+import app.services.qr_preservation as qr_preservation_service
 from app.services.prompting import compose_prompt_plan
 import app.services.queue_worker as queue_worker_service
 import app.services.task_queue as task_queue_service
@@ -48,6 +49,24 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_orchestrator_max_output_tokens", 32000)
     object.__setattr__(settings, "claude_orchestrator_effort", "low")
     object.__setattr__(settings, "claude_orchestrator_tools", "none")
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", None)
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", None)
+    object.__setattr__(
+        settings,
+        "claude_orchestrator_fallback_models",
+        (
+            "deepseek-v4-pro-260425",
+            "deepseek-v4-flash-260425",
+            "deepseek-v3-2-251201",
+            "doubao-seed-2-0-lite-260428",
+            "doubao-seed-2-0-lite-260215",
+            "doubao-seed-1-6-lite-251015",
+            "glm-4-7-251222",
+            "doubao-lite-128k-240428",
+            "doubao-lite-32k-240428",
+            "doubao-lite-4k-240328",
+        ),
+    )
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 2)
     object.__setattr__(settings, "claude_checkpoint_stage_timeout_seconds", 180.0)
@@ -665,7 +684,7 @@ def test_claude_inline_invocation_overrides_stale_output_token_env(monkeypatch, 
             stderr="",
         )
 
-    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_orchestrator_service, "_run_claude_subprocess", fake_run)
     try:
         decision = claude_orchestrator_service._invoke_claude_inline_json(
             command=["claude"],
@@ -1251,7 +1270,7 @@ def test_checkpoint_orchestrator_stops_generation_after_initial_checkpoint_exhau
     assert decision["attempts"] == 2
 
 
-def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(monkeypatch, tmp_path: Path) -> None:
+def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
     object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
@@ -1262,7 +1281,7 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
     def fake_run(command_line, **kwargs):
         captured["command_line"] = command_line
         captured["env"] = kwargs["env"]
-        captured["timeout"] = kwargs["timeout"]
+        captured["timeout"] = kwargs["timeout_seconds"]
         result = json.dumps(
             {
                 "stage": "intent",
@@ -1278,7 +1297,7 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
         )
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
 
-    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_orchestrator_service, "_run_claude_subprocess", fake_run)
 
     parsed = claude_orchestrator_service._invoke_claude_stage_json(
         command=["claude"],
@@ -1289,11 +1308,60 @@ def test_checkpoint_stage_uses_prompt_contract_without_cli_schema_by_default(mon
     )
 
     assert parsed["stage"] == "intent"
-    assert "--json-schema" not in captured["command_line"]
+    assert "--json-schema" in captured["command_line"]
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
+    assert captured["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096"
     assert captured["timeout"] == 60.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 61.5
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 60.0
+
+
+def test_claude_checkpoint_timeout_salvages_valid_stdout(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+
+    payload = {
+        "stage": "intent",
+        "mode": "smart_enhance",
+        "primary_subject": "premium menu poster",
+        "scene_goal": "information-dense commercial food poster",
+        "must_keep": ["QR code", "offer policy"],
+        "must_avoid": ["copying source layout"],
+        "asset_requirements": [],
+        "risk_notes": [],
+        "confidence": 0.86,
+    }
+    stdout = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": json.dumps(payload, ensure_ascii=False),
+        },
+        ensure_ascii=False,
+    )
+
+    def fake_run(command_line, **kwargs):
+        raise claude_orchestrator_service.subprocess.TimeoutExpired(
+            cmd=command_line,
+            timeout=kwargs["timeout_seconds"],
+            output=stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(claude_orchestrator_service, "_run_claude_subprocess", fake_run)
+
+    parsed = claude_orchestrator_service._invoke_claude_stage_json(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        prompt="Return JSON.",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+    )
+
+    assert parsed is not None
+    assert parsed["stage"] == "intent"
+    assert parsed["mode"] == "smart_enhance"
+    assert parsed["must_keep"] == ["QR code", "offer policy"]
 
 
 def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypatch, tmp_path: Path) -> None:
@@ -1319,7 +1387,7 @@ def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypa
         )
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
 
-    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_orchestrator_service, "_run_claude_subprocess", fake_run)
 
     parsed = claude_orchestrator_service._invoke_claude_stage_json(
         command=["claude"],
@@ -1341,7 +1409,7 @@ def test_checkpoint_stage_rejects_missing_required_fields(monkeypatch, tmp_path:
     def fake_run(command_line, **kwargs):
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": json.dumps({"stage": "intent"})}), stderr="")
 
-    monkeypatch.setattr(claude_orchestrator_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_orchestrator_service, "_run_claude_subprocess", fake_run)
 
     parsed = claude_orchestrator_service._invoke_claude_stage_json(
         command=["claude"],
@@ -1398,9 +1466,12 @@ def test_checkpoint_intent_prompt_uses_bounded_context(tmp_path: Path) -> None:
 
     assert payload["candidate_cases"] == []
     assert "output_contract" in payload
+    assert payload["output_limits"]["total_json_chars"] == 1300
+    assert payload["json_skeleton"]["stage"] == "intent"
+    assert "Start with { immediately" in prompt
     assert "Think fully" not in prompt
     assert "bounded internal" in claude_orchestrator_service._checkpoint_system_prompt()
-    assert len(prompt) < 2100
+    assert len(prompt) < 2500
 
 
 def test_checkpoint_generation_prompt_uses_compact_checkpoints_only(tmp_path: Path) -> None:
@@ -1462,9 +1533,11 @@ def test_checkpoint_generation_prompt_uses_compact_checkpoints_only(tmp_path: Pa
     payload = json.loads(prompt.split("\n", 1)[1])
 
     assert payload["candidate_cases"] == []
+    assert payload["output_limits"]["total_json_chars"] == 1800
+    assert payload["json_skeleton"]["final_prompt"] == "..."
     assert payload["checkpoints"]["intent"]["primary_subject"].endswith("...")
     assert payload["checkpoints"]["visual_strategy"]["composition"].endswith("...")
-    assert len(prompt) < 3500
+    assert len(prompt) < 4000
 
 
 def test_checkpoint_visual_ultra_micro_prompt_drops_candidate_context(tmp_path: Path) -> None:
@@ -1701,6 +1774,94 @@ def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset() -> None:
     assert preservation["applied"] is True
     assert preservation["source_asset_id"] == asset_id
     assert decode_qr_from_image(Path(output["metadata"]["storage_path"])) == qr_payload
+
+
+def test_information_dense_qr_preservation_repositions_unsafe_placeholder(tmp_path: Path) -> None:
+    client = fresh_client()
+    qr_payload = "https://alchemy.test/qr/info-dense-original"
+    asset_id = upload_image_asset(
+        client,
+        make_qr_reference_image(qr_payload),
+        role="subject_reference",
+        filename="source-menu-with-qr.png",
+    )
+
+    wrong_qr = qrcode.QRCode(border=4, box_size=10)
+    wrong_qr.add_data("https://alchemy.test/qr/generated-placeholder")
+    wrong_qr.make(fit=True)
+    wrong_qr_image = wrong_qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    output = Image.new("RGB", (1024, 1536), (250, 246, 238))
+    output.paste(wrong_qr_image.resize((260, 260), Image.Resampling.NEAREST), (382, 360))
+    encoded = BytesIO()
+    output.save(encoded, format="PNG")
+
+    result = qr_preservation_service.preserve_requested_qr_code(
+        content=encoded.getvalue(),
+        metadata={
+            "user_prompt": "做信息完整的菜单海报，保留上传图二维码和购买优惠政策。",
+            "input_images": [{"asset_id": asset_id, "role": "subject_reference"}],
+            "provider_input_plan": {"reference_image_asset_ids": [asset_id]},
+            "information_integrity_lock_enabled": True,
+            "information_integrity_contract": {"active": True, "priority": "hard"},
+        },
+        output_format="png",
+        mime_type="image/png",
+    )
+
+    assert result.metadata is not None
+    assert result.metadata["applied"] is True
+    assert result.metadata["method"] == "unsafe_output_qr_repositioned"
+    assert result.metadata["placement"] == "right_lower"
+    paste_box = result.metadata["paste_box"]
+    assert paste_box[1] > int(1536 * 0.52)
+    assert paste_box[2] - paste_box[0] <= int(1024 * 0.24)
+    saved = tmp_path / "repositioned-qr.png"
+    saved.write_bytes(result.content)
+    assert decode_qr_from_image(saved) == qr_payload
+
+
+def test_information_dense_qr_preservation_replaces_right_rail_placeholder(tmp_path: Path) -> None:
+    client = fresh_client()
+    qr_payload = "https://alchemy.test/qr/right-rail-original"
+    asset_id = upload_image_asset(
+        client,
+        make_qr_reference_image(qr_payload),
+        role="subject_reference",
+        filename="source-menu-with-right-rail-qr.png",
+    )
+
+    wrong_qr = qrcode.QRCode(border=4, box_size=8)
+    wrong_qr.add_data("https://alchemy.test/qr/generated-right-rail")
+    wrong_qr.make(fit=True)
+    wrong_qr_image = wrong_qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    output = Image.new("RGB", (1024, 1536), (250, 246, 238))
+    output.paste(wrong_qr_image.resize((176, 176), Image.Resampling.NEAREST), (812, 270))
+    encoded = BytesIO()
+    output.save(encoded, format="PNG")
+
+    result = qr_preservation_service.preserve_requested_qr_code(
+        content=encoded.getvalue(),
+        metadata={
+            "user_prompt": "做信息完整的菜单海报，右侧二维码卡片保留上传图原码。",
+            "input_images": [{"asset_id": asset_id, "role": "subject_reference"}],
+            "provider_input_plan": {"reference_image_asset_ids": [asset_id]},
+            "information_integrity_lock_enabled": True,
+            "information_integrity_contract": {"active": True, "priority": "hard"},
+        },
+        output_format="png",
+        mime_type="image/png",
+    )
+
+    assert result.metadata is not None
+    assert result.metadata["applied"] is True
+    assert result.metadata["method"] == "detected_output_qr_placeholder_overlay"
+    paste_box = result.metadata["paste_box"]
+    assert paste_box[0] >= int(1024 * 0.74)
+    assert paste_box[1] < int(1536 * 0.52)
+    assert result.metadata["verified_decoded"] is True
+    saved = tmp_path / "right-rail-qr.png"
+    saved.write_bytes(result.content)
+    assert decode_qr_from_image(saved) == qr_payload
 
 
 def test_v2_generation_running_job_is_reused_for_final_result() -> None:
@@ -2252,6 +2413,8 @@ def test_template_customize_forces_hand_selected_case_through_claude(monkeypatch
     assert run["prompt_plan"]["user_variables"]["primary_case_id"] == template_id
     prompt = run["prompt_plan"]["prompt"]
     assert prompt.startswith("TEMPLATE LOCK: the selected case is the highest-priority visual template.")
+    assert "Visual Grammar Lock" in prompt
+    assert "User semantic content controls" in prompt
     assert "TEMPLATE LOCK: use the hand-selected template 'Pastel Jellyfish Room Goods Poster'" in prompt
     assert "soft dreamy lavender jellyfish aesthetic" in run["prompt_plan"]["prompt"]
     assert "let the template win" in run["prompt_plan"]["prompt"]
@@ -2259,6 +2422,10 @@ def test_template_customize_forces_hand_selected_case_through_claude(monkeypatch
     negative_terms = {term.strip().lower() for term in run["prompt_plan"]["negative_prompt"].split(",")}
     assert "text" not in negative_terms
     assert "highest-priority visual anchor" in run["prompt_plan"]["risk_notes"][0]
+    grammar = run["prompt_plan"]["user_variables"]["visual_grammar_contract"]
+    assert grammar["mode"] == "template_visual_grammar_lock"
+    assert grammar["lock_strength"] == "strong"
+    assert grammar["primary_anchor_case_id"] == template_id
 
 
 def test_template_lock_claude_boundary_failure_keeps_template_but_stops_generation(monkeypatch) -> None:
@@ -2373,6 +2540,137 @@ def test_template_anchor_preserves_concrete_visual_skeleton_without_copying_bran
     assert [item["case_id"] for item in plan.style_basis] == [template.case_id]
 
 
+def test_smart_enhance_uses_auto_visual_grammar_anchor() -> None:
+    client = fresh_client()
+    repository.upsert_cases(
+        [
+            make_prompt_case(
+                "test_auto_food_anchor",
+                "Premium Healthy Meal Poster",
+                "poster",
+                (
+                    "A premium healthy meal poster with a large hero food scene in the upper half, refined typography, "
+                    "warm daylight, cream background, clear information modules, recipe-card hierarchy, and polished editorial layout."
+                ),
+                style_tags=["premium", "editorial", "food"],
+                use_case_tags=["poster"],
+            ),
+            make_prompt_case(
+                "test_auto_aux_color",
+                "Cool Blue Menu Card",
+                "poster",
+                "A clean blue restaurant menu card with compact typography and simple grid spacing.",
+                style_tags=["clean", "blue"],
+                use_case_tags=["poster"],
+            ),
+        ]
+    )
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Create a premium healthy meal food poster with rich composition and clear information hierarchy.",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["mode"] == "smart_enhance"
+    assert run["selected_cases"]
+    variables = run["prompt_plan"]["user_variables"]
+    grammar = variables["visual_grammar_contract"]
+    assert variables["visual_grammar_lock_enabled"] is True
+    assert grammar["mode"] == "auto_visual_grammar_lock"
+    assert grammar["lock_strength"] == "medium_strong"
+    assert grammar["primary_anchor_case_id"] == run["selected_cases"][0]["case_id"]
+    prompt = run["prompt_plan"]["prompt"]
+    assert prompt.startswith("AUTO VISUAL GRAMMAR LOCK:")
+    assert "one primary curated case as the main visual grammar anchor" in prompt
+    assert "Do not average multiple cases into a vague hybrid" in prompt
+
+
+def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(180, 220, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把上次的图片里面的食物部分摘取出来，对应的文案也摘取出来，匹配到新的海报上。二维码、页脚政策区、购买优惠和配送规则也完整保留。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "这是一张旧菜单海报整图，包含页脚政策区、优惠价格和二维码；只提取内容，不要沿用原版式。",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["binding_slot"] == "semantic_content"
+    assert binding["fusion_mode"] == "composite_content_source"
+    assert binding["target_surface"] == "semantic_content_slots"
+    assert "Do not copy its whole poster/menu/screenshot layout" in binding["prompt_instruction"]
+    assert "complete business-critical information" in binding["prompt_instruction"]
+    assert "uploaded_source_layout_not_copied" in binding["review_expectations"]
+    assert "uploaded_information_complete" in binding["review_expectations"]
+    assert "business_offer_policy_preserved" in binding["review_expectations"]
+    grammar = variables["visual_grammar_contract"]
+    assert grammar["source_layout_risk"]["detected"] is True
+    assert variables["information_integrity_lock_enabled"] is True
+    assert variables["information_integrity_contract"]["active"] is True
+    assert variables["information_integrity_contract"]["priority"] == "hard"
+    assert "purchase rules" in variables["information_integrity_contract"]["critical_fields"][3]
+    prompt = run["prompt_plan"]["prompt"]
+    assert "Source-layout risk detected" in prompt
+    assert "do not copy its overall grid" in prompt
+    assert "INFORMATION INTEGRITY LOCK" in prompt
+    assert "purchase offers" in prompt
+    assert "dedicated QR/CTA card" in prompt
+    assert "expand the canvas" in prompt
+    assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "1024x1536"
+    assert "missing purchase offers" in run["prompt_plan"]["negative_prompt"]
+    review = run["generation_jobs"][0]["outputs"][0]["review"]
+    assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
+
+
+def test_product_qr_preservation_stays_subject_identity_under_template_lock() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(240, 240, 255))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "保留上传图中的产品和二维码，版式使用选定案例，做成高级海报。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "产品和二维码必须沿用原图，不要重画二维码。",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    binding = run["prompt_plan"]["user_variables"]["asset_binding_plan"]["bindings"][0]
+    assert binding["binding_slot"] == "main_subject"
+    assert binding["fusion_mode"] == "subject_identity"
+    assert "uploaded_subject_identity_preserved" in binding["review_expectations"]
+    assert "uploaded_source_layout_not_copied" not in binding["review_expectations"]
+
+
 def test_creative_run_consumes_claude_orchestrator_decision(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
@@ -2423,7 +2721,9 @@ def test_creative_run_consumes_claude_orchestrator_decision(monkeypatch) -> None
     assert [item["case_id"] for item in run["selected_cases"]] == run["orchestrator_decision"]["selected_case_ids"]
     assert [item["case_id"] for item in run["prompt_plan"]["style_basis"]] == run["orchestrator_decision"]["selected_case_ids"]
     assert run["orchestrator_decision"]["final_prompt"].startswith("Claude final prompt")
-    assert run["prompt_plan"]["prompt"] == run["orchestrator_decision"]["final_prompt"]
+    assert run["orchestrator_decision"]["final_prompt"] in run["prompt_plan"]["prompt"]
+    assert run["prompt_plan"]["prompt"].startswith("AUTO VISUAL GRAMMAR LOCK:")
+    assert run["prompt_plan"]["user_variables"]["visual_grammar_contract"]["mode"] == "auto_visual_grammar_lock"
     assert run["prompt_plan"]["user_variables"]["prompt_source"] == "claude_final_prompt"
     assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "4:5"
     assert run["prompt_plan"]["provider_parameters"]["provider_hint"] == "mock_image"
@@ -2726,6 +3026,94 @@ def test_claude_failure_classifier_detects_kimi_context_cancel() -> None:
     )
 
     assert failure == "kimi_context_canceled"
+
+
+def test_claude_failure_classifier_detects_kimi_no_available_accounts() -> None:
+    failure = claude_orchestrator_service._classify_claude_failure(
+        '{"type":"result","subtype":"error","is_error":true,"api_error_status":503,'
+        '"error":"no available accounts"}',
+        "",
+        1,
+    )
+
+    assert failure == "kimi_no_available_accounts"
+
+
+def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_fallback_model", None)
+
+    queue = claude_orchestrator_service._claude_code_model_fallback_queue()
+
+    assert queue[:3] == [
+        "deepseek-v4-pro-260425",
+        "deepseek-v4-flash-260425",
+        "deepseek-v3-2-251201",
+    ]
+    assert queue[-1] == "doubao-lite-4k-240328"
+
+
+def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("deepseek-v4-pro-260425", "doubao-lite-4k-240328"))
+    calls: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+                "fallback_model_override": kwargs.get("fallback_model_override"),
+                "env_overrides": kwargs.get("env_overrides"),
+                "setting_sources_override": kwargs.get("setting_sources_override"),
+                "include_effort": kwargs.get("include_effort"),
+                "strip_model_fallback_env": kwargs.get("strip_model_fallback_env"),
+            }
+        )
+        if kwargs.get("model_override") is None:
+            raise claude_orchestrator_service.ClaudeInvocationError("kimi_no_available_accounts")
+        return {
+            "stage": "intent",
+            "mode": "smart_enhance",
+            "primary_subject": "premium lunch poster",
+            "scene_goal": "redesign a food promotion image",
+            "must_keep": ["offer text", "QR code"],
+            "must_avoid": ["layout copying"],
+            "asset_requirements": [],
+            "risk_notes": [],
+            "confidence": 0.82,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+    )
+
+    assert result is not None
+    assert result["stage"] == "intent"
+    assert attempts == 2
+    assert calls[1]["model_override"] == "deepseek-v4-pro-260425"
+    assert calls[1]["fallback_model_override"] == "doubao-lite-4k-240328"
+    assert calls[1]["env_overrides"] == {
+        "ANTHROPIC_BASE_URL": "https://aiself.vip",
+        "ANTHROPIC_AUTH_TOKEN": "sk-test-fallback",
+        "ANTHROPIC_API_KEY": "sk-test-fallback",
+    }
+    assert calls[1]["setting_sources_override"] == "project,local"
+    assert calls[1]["include_effort"] is False
+    assert calls[1]["strip_model_fallback_env"] is True
+    assert trace[-1]["provider"] == "claude-code-model-fallback"
+    assert trace[-1]["model"] == "deepseek-v4-pro-260425"
 
 
 def test_claude_failure_classifier_ignores_successful_result_text_noise() -> None:

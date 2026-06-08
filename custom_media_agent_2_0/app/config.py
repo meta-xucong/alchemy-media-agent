@@ -8,6 +8,19 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+DEFAULT_CLAUDE_CODE_FALLBACK_MODELS: tuple[str, ...] = (
+    "deepseek-v4-pro-260425",
+    "deepseek-v4-flash-260425",
+    "deepseek-v3-2-251201",
+    "doubao-seed-2-0-lite-260428",
+    "doubao-seed-2-0-lite-260215",
+    "doubao-seed-1-6-lite-251015",
+    "glm-4-7-251222",
+    "doubao-lite-128k-240428",
+    "doubao-lite-32k-240428",
+    "doubao-lite-4k-240328",
+)
+
 
 def _load_env_file(path: Path) -> None:
     if not path.exists():
@@ -109,6 +122,11 @@ class Settings:
     claude_orchestrator_tools: str = "none"
     claude_orchestrator_permission_mode: str = "bypassPermissions"
     claude_orchestrator_fallback_model: str | None = None
+    claude_orchestrator_fallback_models: tuple[str, ...] = DEFAULT_CLAUDE_CODE_FALLBACK_MODELS
+    claude_orchestrator_fallback_base_url: str | None = None
+    claude_orchestrator_fallback_auth_token: str | None = None
+    claude_orchestrator_fallback_max_models_per_stage: int = 3
+    claude_orchestrator_fallback_stage_timeout_seconds: float = 25.0
     claude_checkpoint_orchestrator_enabled: bool = False
     claude_checkpoint_max_stage_retries: int = 2
     claude_checkpoint_stage_timeout_seconds: float = 180.0
@@ -253,6 +271,28 @@ def load_settings() -> Settings:
             "bypassPermissions",
         ),
         claude_orchestrator_fallback_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODEL") or None,
+        claude_orchestrator_fallback_models=_parse_csv_env(
+            "V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS",
+            DEFAULT_CLAUDE_CODE_FALLBACK_MODELS,
+        ),
+        claude_orchestrator_fallback_base_url=(
+            os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") or ""
+        ).rstrip()
+        or None,
+        claude_orchestrator_fallback_auth_token=(
+            os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN")
+            or os.getenv("OPENAI_API_KEY")
+            or _codex_auth_value("OPENAI_API_KEY")
+            or None
+        ),
+        claude_orchestrator_fallback_max_models_per_stage=max(
+            1,
+            int(os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE", "3")),
+        ),
+        claude_orchestrator_fallback_stage_timeout_seconds=max(
+            5.0,
+            float(os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS", "25")),
+        ),
         claude_checkpoint_orchestrator_enabled=os.getenv(
             "V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED",
             "false",

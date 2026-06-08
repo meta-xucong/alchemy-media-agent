@@ -55,6 +55,25 @@ def review_output(output: ImageOutput, job: ImageJob) -> ImageReviewDecision:
     provider_input_plan = user_variables.get("provider_input_plan") if isinstance(user_variables.get("provider_input_plan"), dict) else {}
     if user_variables.get("template_lock_enabled"):
         notes.append("Template Lock was active; selected case should remain the highest-priority visual frame.")
+    visual_grammar = user_variables.get("visual_grammar_contract") if isinstance(user_variables.get("visual_grammar_contract"), dict) else {}
+    if visual_grammar:
+        mode = visual_grammar.get("mode") or "visual_grammar_lock"
+        strength = visual_grammar.get("lock_strength") or "unknown"
+        notes.append(f"Visual Grammar Lock active: {mode} with {strength} strength.")
+        if visual_grammar.get("source_layout_risk", {}).get("detected"):
+            risks.append("uploaded_source_layout_must_not_override_visual_grammar")
+            directives.append("Verify the output did not copy the uploaded source layout over the visual grammar anchor.")
+        information_integrity = (
+            visual_grammar.get("information_integrity")
+            if isinstance(visual_grammar.get("information_integrity"), dict)
+            else {}
+        )
+        if information_integrity.get("active"):
+            notes.append("Information Integrity Lock active; business-critical poster/menu content should be preserved.")
+            risks.append("information_dense_content_may_be_incomplete")
+            directives.append(
+                "Verify source item imagery, names, key copy, prices, counts, purchase offers, delivery/add-on/gift rules, CTA, and QR are retained or equivalently condensed."
+            )
     if provider_input_plan.get("requires_image_reference"):
         reference_count = int(provider_input_plan.get("reference_image_count") or 0)
         notes.append(f"Provider input image plan requires {reference_count} uploaded reference image(s).")

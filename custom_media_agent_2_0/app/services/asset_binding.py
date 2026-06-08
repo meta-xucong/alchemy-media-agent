@@ -300,7 +300,7 @@ def _binding_plan(
                 asset_id=item.asset_id,
                 role=role,
                 constraint_strength=strength,
-                binding_slot=ROLE_TO_SLOT.get(role, "minor_props"),
+                binding_slot=str(fusion_policy.get("binding_slot") or ROLE_TO_SLOT.get(role, "minor_props")),
                 fusion_mode=str(fusion_policy.get("fusion_mode") or "reference"),
                 placement_intent=fusion_policy.get("placement_intent") or {},
                 target_surface=fusion_policy.get("target_surface"),
@@ -350,8 +350,15 @@ def _prompt_instruction(
     fusion_mode = str(fusion_policy.get("fusion_mode") or "reference")
     placement = fusion_policy.get("placement_intent") if isinstance(fusion_policy.get("placement_intent"), dict) else {}
     target_label = placement.get("target_label") or fusion_policy.get("target_surface")
+    subject_rule = "Replace the template's original subject with the uploaded subject while preserving the selected template's visual frame."
+    if role == "subject_reference" and fusion_mode == "composite_content_source":
+        subject_rule = (
+            "Treat the uploaded image as a source of semantic content, food/product evidence, copy, QR, or business information. "
+            "Do not copy its whole poster/menu/screenshot layout, grid, background, density, or visual rhythm; fit extracted content into the selected visual grammar. "
+            "Preserve the complete business-critical information set where present: key food/product images, names, copy, prices, counts, dates, packages, discounts, purchase policies, delivery/add-on/gift rules, CTA, and QR."
+        )
     role_rule = {
-        "subject_reference": "Replace the template's original subject with the uploaded subject while preserving the selected template's visual frame.",
+        "subject_reference": subject_rule,
         "logo_reference": _logo_prompt_rule(fusion_mode=fusion_mode, target_label=target_label),
         "face_reference": "Preserve uploaded face identity cues while adapting pose, lighting, and scene to the selected template.",
         "background_reference": "Use background content only if compatible with the template lock or explicitly requested by the user.",
@@ -480,6 +487,7 @@ def _fusion_policy(
         "logo_canvas_brand_mark",
         "logo_template_slot",
         "subject_identity",
+        "composite_content_source",
         "face_identity",
         "background_identity",
     }:
@@ -492,6 +500,7 @@ def _fusion_policy(
     )
     return {
         "fusion_mode": fusion_mode,
+        "binding_slot": "semantic_content" if fusion_mode == "composite_content_source" else None,
         "placement_intent": placement,
         "target_surface": placement.get("target_surface"),
         "provider_input_required": provider_input_required,
@@ -510,6 +519,16 @@ def _intent_source_text(*, user_prompt: str, notes: str | None, brief: AssetBrie
 
 
 def _placement_intent(*, role: str, text: str, source: str, template_locked: bool) -> dict[str, Any]:
+    if role == "subject_reference" and _composite_source_requested(text):
+        return {
+            "mode": "content_evidence",
+            "target_surface": "semantic_content_slots",
+            "target_label": "内容、文案、二维码、菜品或业务信息槽",
+            "source": source,
+            "instruction": (
+                "Use the uploaded image as source evidence for replaceable content slots, not as the composition or layout frame."
+            ),
+        }
     scene = _scene_surface_target(text)
     canvas = _canvas_overlay_target(text)
     if scene:
@@ -580,6 +599,8 @@ def _fusion_mode(*, role: str, placement: dict[str, Any], text: str, template_lo
             return "logo_canvas_brand_mark"
         return "logo_template_slot" if template_locked else "logo_brand_mark"
     if role == "subject_reference":
+        if mode == "content_evidence" or _composite_source_requested(text):
+            return "composite_content_source"
         return "subject_identity"
     if role == "face_reference":
         return "face_identity"
@@ -679,6 +700,70 @@ def _background_replace_requested(text: str) -> bool:
     return bool(re.search(r"(替换背景|换背景|用上传.*背景|背景必须|background replacement|use uploaded background)", text, flags=re.IGNORECASE))
 
 
+def _composite_source_requested(text: str) -> bool:
+    extraction_markers = [
+        "摘取",
+        "提取",
+        "抽取",
+        "拆出",
+        "拆成",
+        "只取",
+        "只提取",
+        "只作为内容",
+        "copy text",
+        "extract",
+        "source content",
+    ]
+    source_layout_markers = [
+        "菜单",
+        "周卡",
+        "旧海报",
+        "成品海报",
+        "整页",
+        "信息表",
+        "整图",
+        "旧图",
+        "上次的图片",
+        "原图里面",
+        "图片里面",
+        "版式",
+        "截图",
+        "menu",
+        "weekly card",
+        "finished poster",
+        "source poster",
+        "flyer",
+        "screenshot",
+        "layout",
+        "source sheet",
+    ]
+    content_only_markers = [
+        "不要沿用原版式",
+        "不要沿用.*布局",
+        "不要复制.*布局",
+        "不要复制.*版式",
+        "只提取内容",
+        "只作为内容",
+        "只取内容",
+        "content only",
+        "do not copy.*layout",
+        "do not inherit.*layout",
+    ]
+    has_extraction = any(re.search(marker, text, flags=re.IGNORECASE) for marker in extraction_markers)
+    has_source_layout = any(re.search(marker, text, flags=re.IGNORECASE) for marker in source_layout_markers)
+    explicit_content_only = any(re.search(marker, text, flags=re.IGNORECASE) for marker in content_only_markers)
+    hard_single_subject = bool(
+        re.search(
+            r"(产品作为主体|商品作为主体|主体必须|保留.*产品|保留.*商品|产品.*保留|商品.*保留|保留.*包装|保留.*logo|保留.*人脸|preserve.*product identity|preserve.*product|use.*as main subject)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if explicit_content_only:
+        return True
+    return has_extraction and has_source_layout and not hard_single_subject
+
+
 def _logo_prompt_rule(*, fusion_mode: str, target_label: str | None) -> str:
     target = target_label or "the requested brand placement"
     collar_exclusion = ""
@@ -729,6 +814,15 @@ def _review_expectations(*, role: str, fusion_mode: str, placement: dict[str, An
         )
     elif fusion_mode in {"logo_canvas_brand_mark", "logo_template_slot", "logo_brand_mark"}:
         expectations.extend(["uploaded_logo_used_as_brand_mark", "no_invented_logo_text"])
+    elif fusion_mode == "composite_content_source":
+        expectations.extend(
+            [
+                "uploaded_content_evidence_used",
+                "uploaded_source_layout_not_copied",
+                "uploaded_information_complete",
+                "business_offer_policy_preserved",
+            ]
+        )
     elif role == "subject_reference":
         expectations.append("uploaded_subject_identity_preserved")
     elif role == "face_reference":
