@@ -687,6 +687,9 @@ def test_frontend_static_app_is_served():
     assert "work_intensity: state.selectedIntensity" in script.text
     assert "/runtime/model-settings" in script.text
     assert "applyV2ModelSettings" in script.text
+    assert "function v2RequestedImageProvider" in script.text
+    assert "const selected = els.v2ImageProviderInput?.value" in script.text
+    assert "const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {})" in script.text
     assert "v2CaseIntelligenceSourceLabel" in script.text
     assert "setV2CaseSearchThinking" in script.text
     assert "后台仍在运行，页面会持续刷新" in script.text
@@ -741,6 +744,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "参数、素材、修图、历史、模型/API 和事件" not in mobile_script.text
     assert "中枢输出、历史、Provider 和调度" not in mobile_script.text
     assert "runV2Creative" in mobile_script.text
+    assert "function v2RequestedImageProvider" in mobile_script.text
+    assert "const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {})" in mobile_script.text
     assert "imageAssetPayload" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
 
