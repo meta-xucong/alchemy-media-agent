@@ -57,6 +57,11 @@ def test_create_image_job_batch_outputs_and_persisted_metadata():
     assert job.outputs[0].url.startswith("/v1/outputs/")
 
 
+def test_create_image_job_rejects_blank_prompt():
+    with pytest.raises(ValueError, match="提示词"):
+        asyncio.run(create_image_job(session_id="ses_test", prompt="   "))
+
+
 def test_create_image_job_preserves_manual_size_only():
     default_job = asyncio.run(
         create_image_job(

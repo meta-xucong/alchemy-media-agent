@@ -48,6 +48,9 @@ async def create_image_job(
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
 ) -> GenerationJob:
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        raise ValueError("请先填写生图提示词。")
     asset_mode = asset_mode or "basic"
     asset_intents = asset_intents or []
     asset_ids = asset_ids or []

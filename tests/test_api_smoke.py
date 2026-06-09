@@ -140,6 +140,23 @@ def test_http_smoke_image_revision_video_and_providers():
     assert "job.status" in events.text
 
 
+def test_v1_image_job_rejects_blank_prompt():
+    client = TestClient(app)
+    session = client.post("/v1/sessions", json={"project_id": "proj_test", "title": "Blank Prompt"})
+    assert session.status_code == 200
+
+    response = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session.json()["id"],
+            "prompt": "   ",
+            "count": 1,
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_asset_upload_rejects_non_image_materials():
     client = TestClient(app)
 

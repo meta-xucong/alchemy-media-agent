@@ -436,14 +436,19 @@ class V2RuntimeModelSettingsRequest(BaseModel):
 
 
 class CreateCreativeRunRequest(BaseModel):
-    user_prompt: str = Field(min_length=1)
+    user_prompt: str = ""
     mode_hint: Literal["template_customize", "smart_enhance", "revision", "batch"] | None = None
     template_case_id: str | None = None
     assets: list[str | CreativeRunAssetInput] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def normalize_output_defaults(self) -> "CreateCreativeRunRequest":
+    def normalize_and_validate(self) -> "CreateCreativeRunRequest":
+        self.user_prompt = str(self.user_prompt or "").strip()
+        self.template_case_id = str(self.template_case_id or "").strip() or None
+        has_assets = bool(self.assets)
+        if not self.user_prompt and not self.template_case_id and not has_assets:
+            raise ValueError("请先填写提示词，或选择模板/上传素材。")
         self.output = _normalize_run_output(self.output)
         return self
 

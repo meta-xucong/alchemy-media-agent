@@ -1796,6 +1796,12 @@ function v2FallbackReasonLabel(reason) {
 
 async function runV2Creative() {
   const prompt = buildV2UserPrompt();
+  if (!v2HasGenerationInput(prompt)) {
+    updateV2Notice("信息不全：请先填写提示词，或选择案例模板/上传素材后再生成。", "warning");
+    showGlobalToast("请先补全生图信息。", "error");
+    els.v2PromptInput?.focus();
+    return;
+  }
   const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {});
   toggleV2Loading(true);
   startV2Progress("queued", "正在提交任务到 V2.0 Agent。");
@@ -1888,13 +1894,17 @@ function v2IsTerminalRun(run) {
 }
 
 function buildV2UserPrompt() {
-  const base = els.v2PromptInput.value.trim() || els.v2PromptInput.placeholder;
+  const base = els.v2PromptInput.value.trim();
   const variables = [
     els.v2SubjectInput?.value.trim() ? `替换主体：${els.v2SubjectInput.value.trim()}` : "",
     els.v2StyleInput?.value.trim() ? `想要的感觉：${els.v2StyleInput.value.trim()}` : "",
     els.v2UseCaseInput?.value.trim() ? `使用场景：${els.v2UseCaseInput.value.trim()}` : "",
   ].filter(Boolean);
   return variables.length ? `${base}\n${variables.join("\n")}` : base;
+}
+
+function v2HasGenerationInput(prompt = "") {
+  return Boolean(String(prompt || "").trim() || v2State.selectedTemplateId || v2State.uploadedAssets.length);
 }
 
 function v2RunNotice(run) {
@@ -2759,7 +2769,13 @@ function advancedAssetIntentPayload(assetId, role) {
 }
 
 async function generateImage() {
-  const prompt = els.promptInput.value.trim() || els.promptInput.placeholder;
+  const prompt = els.promptInput.value.trim();
+  if (!prompt) {
+    showNotice("信息不全：请先填写提示词后再生成图片。", "warning");
+    showGlobalToast("请先填写提示词。", "error");
+    els.promptInput.focus();
+    return;
+  }
   await ensureSession();
   await flushProviderSettingsSync({ silent: true });
   if (!state.imageProviderReady || els.openaiApiKeyInput.value.trim() || els.geminiImageApiKeyInput.value.trim() || els.anthropicApiKeyInput.value.trim()) {

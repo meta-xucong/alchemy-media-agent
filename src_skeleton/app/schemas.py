@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -371,7 +371,7 @@ class MessageResponse(BaseModel):
 
 class CreateImageJobRequest(BaseModel):
     session_id: str
-    prompt: str
+    prompt: str = Field(min_length=1)
     asset_mode: Literal["basic", "advanced"] = "basic"
     asset_ids: list[str] = Field(default_factory=list)
     asset_intents: list[AssetIntent] = Field(default_factory=list)
@@ -382,6 +382,14 @@ class CreateImageJobRequest(BaseModel):
     work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
     provider_preference: str | None = None
     idempotency_key: str | None = None
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_must_not_be_blank(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("请先填写生图提示词。")
+        return clean
 
 
 class ReviseImageRequest(BaseModel):

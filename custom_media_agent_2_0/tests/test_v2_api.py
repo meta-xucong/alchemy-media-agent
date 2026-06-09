@@ -208,6 +208,28 @@ def test_health_reports_v2_isolation() -> None:
     assert body["isolation"]["storage_prefix"] == "v2/"
 
 
+def test_v2_creative_run_rejects_empty_request() -> None:
+    client = fresh_client()
+
+    response = client.post("/api/v2/creative/runs/async", json={"user_prompt": "   ", "output": {"count": 1}})
+
+    assert response.status_code == 422
+    assert "提示词" in response.text
+
+
+def test_v2_creative_run_allows_template_without_prompt() -> None:
+    client = fresh_client()
+    template_id = client.get("/api/v2/templates", params={"limit": 1}).json()["templates"][0]["case_id"]
+
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={"user_prompt": "   ", "template_case_id": template_id, "output": {"count": 1}},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["run_id"].startswith("run_")
+
+
 def test_provider_sync_publishes_seed_cases() -> None:
     client = fresh_client()
     providers = client.get("/api/v2/resource-providers").json()["providers"]
