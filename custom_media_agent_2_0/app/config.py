@@ -115,6 +115,7 @@ class Settings:
     claude_orchestrator_enabled: bool = False
     claude_orchestrator_cli: str = "claude"
     claude_orchestrator_model: str | None = None
+    claude_orchestrator_multimodal_model: str | None = "doubao-seed-2-0-lite-260428"
     claude_orchestrator_timeout_seconds: float = 240.0
     claude_orchestrator_max_output_tokens: int = 32000
     claude_orchestrator_effort: str = "low"
@@ -254,6 +255,9 @@ def load_settings() -> Settings:
         in {"1", "true", "yes", "on"},
         claude_orchestrator_cli=os.getenv("V2_CLAUDE_ORCHESTRATOR_CLI", "claude"),
         claude_orchestrator_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL") or None,
+        claude_orchestrator_multimodal_model=(
+            os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL") or "doubao-seed-2-0-lite-260428"
+        ),
         claude_orchestrator_timeout_seconds=float(os.getenv("V2_CLAUDE_ORCHESTRATOR_TIMEOUT_SECONDS", "240")),
         claude_orchestrator_max_output_tokens=max(
             512,

@@ -45,6 +45,7 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "sync_github_on_startup", False)
     object.__setattr__(settings, "claude_orchestrator_enabled", False)
     object.__setattr__(settings, "claude_orchestrator_model", None)
+    object.__setattr__(settings, "claude_orchestrator_multimodal_model", "doubao-seed-2-0-lite-260428")
     object.__setattr__(settings, "claude_orchestrator_fallback_model", None)
     object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
     object.__setattr__(settings, "claude_orchestrator_max_output_tokens", 32000)
@@ -52,6 +53,8 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "claude_orchestrator_tools", "none")
     object.__setattr__(settings, "claude_orchestrator_fallback_base_url", None)
     object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", None)
+    object.__setattr__(settings, "claude_orchestrator_fallback_max_models_per_stage", 3)
+    object.__setattr__(settings, "claude_orchestrator_fallback_stage_timeout_seconds", 25.0)
     object.__setattr__(
         settings,
         "claude_orchestrator_fallback_models",
@@ -1754,6 +1757,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
             "output_review_agent_model": "gpt-4.1-mini",
             "claude_orchestrator_enabled": True,
             "claude_orchestrator_model": "claude-sonnet-test",
+            "claude_orchestrator_multimodal_model": "doubao-seed-2-0-lite-260428",
             "claude_orchestrator_fallback_model": "claude-haiku-test",
             "claude_orchestrator_effort": "medium",
             "claude_checkpoint_orchestrator_enabled": True,
@@ -1769,6 +1773,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert body["output_review_agent_enabled"] is True
     assert body["claude_orchestrator_enabled"] is True
     assert body["claude_orchestrator_model"] == "claude-sonnet-test"
+    assert body["claude_orchestrator_multimodal_model"] == "doubao-seed-2-0-lite-260428"
     assert body["claude_checkpoint_orchestrator_enabled"] is True
     assert body["case_intelligence_provider"] == "claude-code"
     assert body["case_intelligence_model"] == "claude-sonnet-test"
@@ -1776,6 +1781,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     status = client.get("/api/v2/orchestrator/status")
     assert status.status_code == 200
     assert status.json()["model"] == "claude-sonnet-test"
+    assert status.json()["multimodal_model"] == "doubao-seed-2-0-lite-260428"
     assert status.json()["timeout_seconds"] == settings.claude_orchestrator_timeout_seconds
     assert status.json()["max_output_tokens"] == settings.claude_orchestrator_max_output_tokens
     assert status.json()["checkpoint_enabled"] is True
@@ -3383,6 +3389,128 @@ def test_checkpoint_stage_external_primary_uses_isolated_no_effort_mode(monkeypa
     assert events[0]["model"] == "deepseek-v4-pro-260425"
     assert "主源 deepseek-v4-pro-260425" in str(events[0]["message"])
     assert "Kimi 主源" not in str(events[0]["message"])
+
+
+def test_claude_source_selection_keeps_deepseek_for_text_only() -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    object.__setattr__(settings, "claude_orchestrator_multimodal_model", "doubao-seed-2-0-lite-260428")
+
+    selection = claude_orchestrator_service._select_claude_source_for_request(
+        request=claude_orchestrator_service.CreateCreativeRunRequest(
+            user_prompt="生成一张高端科技产品发布海报",
+            output={"count": 1},
+        ),
+        asset_context={"uploaded_assets": [], "provider_input_images": [], "asset_binding_plan": {}},
+    )
+
+    assert selection["provider"] == "claude-code-primary"
+    assert selection["model"] == "deepseek-v4-pro-260425"
+    assert selection["reason"] == "default_text_primary"
+    assert selection["multimodal_requested"] is False
+
+
+def test_claude_source_selection_uses_doubao_for_uploaded_hard_reference() -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    object.__setattr__(settings, "claude_orchestrator_multimodal_model", "doubao-seed-2-0-lite-260428")
+
+    selection = claude_orchestrator_service._select_claude_source_for_request(
+        request=claude_orchestrator_service.CreateCreativeRunRequest(
+            user_prompt="保留上传图里的产品和二维码，按选定模板重做海报",
+            assets=["asset_test_product"],
+            output={"count": 1},
+        ),
+        asset_context={
+            "uploaded_assets": [{"asset_id": "asset_test_product", "role": "subject_reference"}],
+            "provider_input_plan": {"reference_image_count": 1, "requires_image_reference": True},
+            "provider_input_images": [
+                {
+                    "asset_id": "asset_test_product",
+                    "role": "subject_reference",
+                    "fusion_mode": "subject_identity",
+                    "provider_input_required": True,
+                }
+            ],
+            "asset_binding_plan": {"bindings": []},
+        },
+    )
+
+    assert selection["provider"] == "claude-code-primary"
+    assert selection["model"] == "doubao-seed-2-0-lite-260428"
+    assert selection["reason"] == "provider_input_images_required"
+    assert selection["multimodal_requested"] is True
+
+
+def test_checkpoint_stage_uses_workspace_multimodal_primary(monkeypatch, tmp_path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    (tmp_path / "claude_source_selection.json").write_text(
+        json.dumps(
+            {
+                "provider": "claude-code-primary",
+                "model": "doubao-seed-2-0-lite-260428",
+                "reason": "provider_input_images_required",
+                "multimodal_requested": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+                "setting_sources_override": kwargs.get("setting_sources_override"),
+                "include_effort": kwargs.get("include_effort"),
+                "strip_model_fallback_env": kwargs.get("strip_model_fallback_env"),
+            }
+        )
+        return {
+            "stage": "intent",
+            "mode": "template_customize",
+            "primary_subject": "uploaded menu poster content",
+            "scene_goal": "redesign while preserving product and QR information",
+            "must_keep": ["product identity", "QR code", "offer copy"],
+            "must_avoid": ["copying uploaded layout"],
+            "asset_requirements": ["use uploaded reference image"],
+            "risk_notes": [],
+            "confidence": 0.87,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+        progress_callback=events.append,
+    )
+
+    assert result is not None
+    assert attempts == 1
+    assert calls == [
+        {
+            "stage_name": "intent",
+            "model_override": "doubao-seed-2-0-lite-260428",
+            "setting_sources_override": "project,local",
+            "include_effort": False,
+            "strip_model_fallback_env": True,
+        }
+    ]
+    assert trace[-1]["provider"] == "claude-code-primary"
+    assert trace[-1]["model"] == "doubao-seed-2-0-lite-260428"
+    assert trace[-1]["source_reason"] == "provider_input_images_required"
+    assert events[0]["model"] == "doubao-seed-2-0-lite-260428"
+    assert "主源 doubao-seed-2-0-lite-260428" in str(events[0]["message"])
 
 
 def test_checkpoint_stage_kimi_primary_keeps_kimi_progress_label(monkeypatch, tmp_path) -> None:

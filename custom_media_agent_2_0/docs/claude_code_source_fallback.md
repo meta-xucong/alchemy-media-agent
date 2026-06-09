@@ -1,37 +1,42 @@
-# Claude Code Source Fallback
+# Claude Code Source Routing
 
-This document describes the V2 Claude Code routing strategy used by Custom Media Agent 2.0.
+This document describes the V2 Claude Code source-routing strategy used by Custom Media Agent 2.0.
 
 Core rule:
 
 ```text
 Claude Code remains the creative brain.
-Kimi is the primary Claude Code source.
-When Kimi is unavailable or compressed Kimi retries are exhausted, V2 re-invokes Claude Code with backup model sources.
+Text-only orchestration uses the fast text source.
+Uploaded-image / visual-understanding orchestration uses the multimodal source.
+Kimi remains the fallback Claude Code source.
 ```
 
 ## Why This Exists
 
-V2 depends on Claude Code for creative orchestration. The app must not bypass Claude and continue with a deterministic creative fallback when Kimi is overloaded, out of quota, or slow.
+V2 depends on Claude Code for creative orchestration. The app must not bypass Claude and continue with a deterministic creative fallback when any upstream source is overloaded, out of quota, or slow.
 
-The fallback path still calls `claude -p`. It only changes the temporary Claude Code source by injecting a backup base URL, token, and model queue for the failing checkpoint stage.
+Routing and fallback still call `claude -p`. V2 only changes the temporary Claude Code model and, for fallback, the injected Anthropic-compatible base URL/token for the failing checkpoint stage.
 
 ## Runtime Strategy
 
-Primary path:
+Primary routing:
 
 1. V2 starts a staged Claude checkpoint run through Claude Code.
-2. The normal Claude Code user settings can keep using the primary Kimi model, for example `kimi-for-coding`.
-3. Each stage has a soft boundary. A single soft timeout first triggers a shorter Kimi compression/retry stage.
-4. If Kimi is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries are exhausted, V2 preserves checkpoint state and tries a shorter backup-source stage.
+2. Text-only requests use `V2_CLAUDE_ORCHESTRATOR_MODEL`, currently `deepseek-v4-pro-260425`.
+3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
+4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
+5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
+6. If the selected source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source.
 
-Fallback path:
+Current production intent:
 
-1. V2 calls Claude Code again for the same checkpoint stage.
-2. V2 passes `--model <fallback_model>` from the configured fallback queue.
-3. V2 injects backup Anthropic-compatible credentials into the subprocess environment.
-4. The fallback stage must still return compact schema-shaped JSON.
-5. If a fallback model succeeds, its checkpoint is treated as a Claude Code checkpoint, not a local deterministic replacement.
+```text
+text source: deepseek-v4-pro-260425
+multimodal source: doubao-seed-2-0-lite-260428
+fallback source: kimi-for-coding
+```
+
+DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi remains the conservative fallback.
 
 ## Configuration
 
@@ -40,17 +45,34 @@ Set these in the V2 service environment, not in committed files:
 ```bash
 V2_CLAUDE_ORCHESTRATOR_ENABLED=true
 V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED=true
-V2_CLAUDE_ORCHESTRATOR_MODEL=kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
+V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-pro-260425,deepseek-v4-flash-260425,deepseek-v3-2-251201,doubao-seed-2-0-lite-260428,doubao-seed-2-0-lite-260215,doubao-seed-1-6-lite-251015,glm-4-7-251222,doubao-lite-128k-240428,doubao-lite-32k-240428,doubao-lite-4k-240328
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=3
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=25
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
 ```
 
-The fallback token should be the API key whose upstream group allows Anthropic-compatible `/v1/messages` dispatch for the listed backup models.
+The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. The fallback token should allow `kimi-for-coding`.
 
-## Important Claude Code Isolation Details
+## Source Selection
+
+V2 keeps text tasks on the text model when there are no uploaded assets or provider input images.
+
+V2 selects the multimodal model when the request or asset policy indicates visual understanding, including:
+
+```text
+provider input images are required
+subject / product / logo / face / required background references
+uploaded poster, menu, screenshot, QR, copy, offer, price, package, or food/product information
+logo-on-surface bindings
+composite content sources that must preserve business-critical information
+```
+
+The selected template still controls the frame. Uploaded assets fill replaceable slots and stay as provider input images when required.
+
+## Claude Code Isolation
 
 Claude Code can load user-level settings such as:
 
@@ -58,15 +80,15 @@ Claude Code can load user-level settings such as:
 ~/.claude/settings.json
 ```
 
-If that file contains a Kimi token, it can override a subprocess environment token and accidentally send backup-model requests to the Kimi group.
+If that file contains another token, it can override a subprocess environment token and send requests to the wrong upstream group.
 
-For backup stages, V2 therefore adds:
+For external primary sources and fallback stages, V2 adds:
 
 ```text
 --setting-sources project,local
 ```
 
-This excludes user-level Claude settings for the fallback subprocess while keeping normal primary Claude Code usage unchanged.
+This keeps source selection controlled by the V2 runtime environment and workspace routing file.
 
 ## Authentication Variables
 
@@ -83,19 +105,13 @@ This keeps the fallback source stable across Claude Code versions and gateway ad
 
 ## Reasoning Effort Guard
 
-Desktop Codex or shell environments may contain variables such as:
+Some Anthropic-compatible non-Claude models reject `reasoning.effort` request fields. V2 removes effort-related inherited environment variables and does not pass `--effort` for external primary sources and fallback stages.
 
-```text
-CLAUDE_CODE_EFFORT_LEVEL=max
-```
-
-Some Anthropic-compatible backup models reject the resulting `reasoning.effort=xhigh` request field. V2 removes effort-related inherited environment variables for fallback stages and does not pass `--effort` on those fallback calls.
-
-This guard only applies to the backup source. The primary Kimi route keeps the normal configured Claude Code behavior.
+This keeps DeepSeek/Doubao compatible with Claude Code while preserving compact schema-shaped output.
 
 ## Retryable Failures
 
-Immediate fallback is attempted when the primary Claude stage reports Kimi/source availability failures, including:
+Immediate fallback is attempted when the selected Claude source reports availability failures, including:
 
 ```text
 claude_api_error
@@ -106,7 +122,7 @@ kimi_upstream_error
 upstream_context_canceled
 ```
 
-Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the Kimi micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the backup Claude Code model queue for that same compact stage.
+Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the selected source's micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the fallback Claude Code model queue for that same compact stage.
 
 The fallback is not a separate OpenAI-compatible executor. It is still Claude Code.
 
@@ -124,25 +140,35 @@ Expected runtime flags:
 ```text
 claude_orchestrator_enabled=true
 claude_checkpoint_orchestrator_enabled=true
+claude_orchestrator_model=deepseek-v4-pro-260425
+claude_orchestrator_multimodal_model=doubao-seed-2-0-lite-260428
 claude_orchestrator_fallback_base_url_configured=true
 claude_orchestrator_fallback_auth_token_configured=true
 ```
 
-For a live run, inspect the Claude workspace trace:
+For a live run, inspect:
 
 ```text
+.v2_data/claude_orchestrator_runs/<workspace_id>/claude_source_selection.json
 .v2_data/claude_orchestrator_runs/<workspace_id>/orchestration_trace.json
 ```
 
-Successful backup use looks like:
+Text-only primary use:
 
 ```json
-{
-  "stage": "intent",
-  "status": "success",
-  "provider": "claude-code-model-fallback",
-  "model": "deepseek-v4-pro-260425"
-}
+{"provider":"claude-code-primary","model":"deepseek-v4-pro-260425","source_reason":"default_text_primary"}
+```
+
+Uploaded-image primary use:
+
+```json
+{"provider":"claude-code-primary","model":"doubao-seed-2-0-lite-260428","source_reason":"provider_input_images_required"}
+```
+
+Successful fallback use:
+
+```json
+{"provider":"claude-code-model-fallback","model":"kimi-for-coding"}
 ```
 
 ## Security Rules

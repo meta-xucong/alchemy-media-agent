@@ -370,6 +370,7 @@ class OrchestratorStatusResponse(BaseModel):
     enabled: bool
     cli: str
     model: str | None = None
+    multimodal_model: str | None = None
     tools: str
     fallback_model: str | None = None
     cache_enabled: bool
@@ -401,6 +402,7 @@ class V2RuntimeModelSettingsResponse(BaseModel):
     claude_orchestrator_enabled: bool
     claude_orchestrator_cli: str
     claude_orchestrator_model: str | None = None
+    claude_orchestrator_multimodal_model: str | None = None
     claude_orchestrator_fallback_model: str | None = None
     claude_orchestrator_effort: str
     claude_orchestrator_tools: str
@@ -424,6 +426,7 @@ class V2RuntimeModelSettingsRequest(BaseModel):
     output_review_agent_model: str | None = Field(default=None, max_length=120)
     claude_orchestrator_enabled: bool | None = None
     claude_orchestrator_model: str | None = Field(default=None, max_length=120)
+    claude_orchestrator_multimodal_model: str | None = Field(default=None, max_length=120)
     claude_orchestrator_fallback_model: str | None = Field(default=None, max_length=120)
     claude_orchestrator_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claude_orchestrator_tools: str | None = Field(default=None, max_length=80)

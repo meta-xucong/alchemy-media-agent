@@ -9,6 +9,7 @@ import subprocess
 import hashlib
 import inspect
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,6 +74,24 @@ _CLAUDE_STAGE_LABELS = {
     "generation_decision_recovery": "压缩恢复",
     "single_stage_decision": "单阶段 Claude 决策",
 }
+_MULTIMODAL_SOURCE_ROLES = {"subject_reference", "logo_reference", "face_reference", "background_reference"}
+_MULTIMODAL_FUSION_MODES = {
+    "subject_identity",
+    "logo_product_surface",
+    "logo_canvas_brand_mark",
+    "logo_template_slot",
+    "composite_content_source",
+    "face_identity",
+    "background_identity",
+}
+
+
+@dataclass(frozen=True)
+class ClaudeSourceSelection:
+    provider: str
+    model: str
+    stage_kwargs: dict[str, Any]
+    reason: str
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -417,6 +436,7 @@ def get_orchestrator_status() -> OrchestratorStatusResponse:
         enabled=settings.claude_orchestrator_enabled,
         cli=settings.claude_orchestrator_cli,
         model=settings.claude_orchestrator_model,
+        multimodal_model=settings.claude_orchestrator_multimodal_model,
         tools=settings.claude_orchestrator_tools,
         fallback_model=settings.claude_orchestrator_fallback_model,
         cache_enabled=settings.claude_orchestrator_cache_enabled,
@@ -629,9 +649,12 @@ def _invoke_checkpoint_stage_with_micro(
         seen_prompts.add(retry_prompt)
         prompts.append((f"{stage_name}_{retry_suffix}_{retry_number}", retry_prompt))
     last_failure: str | None = None
-    primary_provider = _claude_code_primary_provider()
-    primary_model = _claude_code_primary_model()
-    primary_kwargs = _claude_code_primary_stage_kwargs()
+    source = _claude_code_source_selection(workspace)
+    primary_provider = source.provider
+    primary_model = source.model
+    primary_kwargs = dict(source.stage_kwargs)
+    if primary_model and primary_model != _claude_code_primary_model():
+        primary_kwargs["model_override"] = primary_model
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
         started = time.perf_counter()
@@ -663,6 +686,7 @@ def _invoke_checkpoint_stage_with_micro(
                     "status": "error",
                     "provider": primary_provider,
                     "model": primary_model,
+                    "source_reason": source.reason,
                     "failure_code": last_failure,
                     "duration_ms": duration_ms,
                 }
@@ -689,7 +713,9 @@ def _invoke_checkpoint_stage_with_micro(
                     stage=f"{attempt_stage_name}_model_fallback",
                     status="running",
                     provider="claude-code-model-fallback",
-                    models=_claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage],
+                    models=_claude_code_model_fallback_queue(exclude_model=primary_model)[
+                        : settings.claude_orchestrator_fallback_max_models_per_stage
+                    ],
                     attempt=attempts + 1,
                 )
                 fallback_result, fallback_meta = _invoke_claude_code_model_fallbacks(
@@ -732,6 +758,7 @@ def _invoke_checkpoint_stage_with_micro(
                 "status": "success" if result else "missing_decision",
                 "provider": primary_provider,
                 "model": primary_model,
+                "source_reason": source.reason,
                 "failure_code": None if result else "missing_decision",
                 "duration_ms": duration_ms,
             }
@@ -757,7 +784,9 @@ def _invoke_checkpoint_stage_with_micro(
                 stage=f"{stage_name}_model_fallback_after_compression",
                 status="running",
                 provider="claude-code-model-fallback",
-                models=_claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage],
+                models=_claude_code_model_fallback_queue(exclude_model=primary_model)[
+                    : settings.claude_orchestrator_fallback_max_models_per_stage
+                ],
                 after_compression_retries=True,
                 attempt=attempts + 1,
             )
@@ -812,8 +841,8 @@ def _claude_code_primary_model() -> str:
     return _text_value(settings.claude_orchestrator_model)
 
 
-def _claude_code_primary_provider() -> str:
-    model = _claude_code_primary_model()
+def _claude_code_primary_provider(model: str | None = None) -> str:
+    model = _text_value(model) or _claude_code_primary_model()
     if _is_kimi_model(model):
         return "kimi"
     if model:
@@ -821,8 +850,8 @@ def _claude_code_primary_provider() -> str:
     return "claude-code"
 
 
-def _claude_code_primary_stage_kwargs() -> dict[str, Any]:
-    if not _should_use_external_primary_invocation_mode(_claude_code_primary_model()):
+def _claude_code_primary_stage_kwargs(model: str | None = None) -> dict[str, Any]:
+    if not _should_use_external_primary_invocation_mode(_text_value(model) or _claude_code_primary_model()):
         return {}
     return {
         "setting_sources_override": "project,local",
@@ -842,6 +871,20 @@ def _should_use_external_primary_invocation_mode(model: str) -> bool:
 
 def _is_kimi_model(model: str) -> bool:
     return "kimi" in (model or "").lower()
+
+
+def _claude_code_source_selection(workspace: Path | None = None) -> ClaudeSourceSelection:
+    persisted = _read_json(workspace / "claude_source_selection.json") if workspace else {}
+    model = _text_value(persisted.get("model")) if isinstance(persisted, dict) else ""
+    reason = _text_value(persisted.get("reason")) if isinstance(persisted, dict) else ""
+    if not model:
+        model = _claude_code_primary_model()
+    return ClaudeSourceSelection(
+        provider=_claude_code_primary_provider(model),
+        model=model,
+        stage_kwargs=_claude_code_primary_stage_kwargs(model),
+        reason=reason or "default_text_primary",
+    )
 
 
 def _should_try_claude_code_model_fallback(
@@ -977,12 +1020,12 @@ def _claude_code_model_fallback_configured() -> bool:
     )
 
 
-def _claude_code_model_fallback_queue() -> list[str]:
+def _claude_code_model_fallback_queue(*, exclude_model: str | None = None) -> list[str]:
     models: list[str] = []
     if settings.claude_orchestrator_fallback_model:
         models.append(settings.claude_orchestrator_fallback_model)
     models.extend(settings.claude_orchestrator_fallback_models or [])
-    primary = settings.claude_orchestrator_model
+    primary = _text_value(exclude_model) or _text_value(settings.claude_orchestrator_model)
     return _dedupe(
         [
             _text_value(model)
@@ -1021,7 +1064,10 @@ def _invoke_claude_code_model_fallbacks(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = 0
     last_failure = "claude_code_model_fallback_unavailable"
-    queue = _claude_code_model_fallback_queue()[: settings.claude_orchestrator_fallback_max_models_per_stage]
+    source = _claude_code_source_selection(workspace)
+    queue = _claude_code_model_fallback_queue(exclude_model=source.model)[
+        : settings.claude_orchestrator_fallback_max_models_per_stage
+    ]
     env_overrides = _claude_code_fallback_env_overrides()
     for index, model in enumerate(queue):
         attempts += 1
@@ -1717,6 +1763,7 @@ def _invoke_claude_file_mode(
     )
     if not _uses_file_tools():
         return _invoke_claude_inline_json(command=command, workspace=workspace, progress_callback=progress_callback)
+    source = _claude_code_source_selection(workspace)
     prompt = _build_file_tool_prompt()
     command_line = [
         *command,
@@ -1736,12 +1783,17 @@ def _invoke_claude_file_mode(
         "--add-dir",
         str(workspace),
     ]
-    _apply_claude_cli_acceleration_flags(command_line)
-    if settings.claude_orchestrator_model:
-        command_line.extend(["--model", settings.claude_orchestrator_model])
+    include_effort = bool(source.stage_kwargs.get("include_effort", True))
+    _apply_claude_cli_acceleration_flags(command_line, include_effort=include_effort)
+    if source.stage_kwargs.get("setting_sources_override"):
+        command_line.extend(["--setting-sources", str(source.stage_kwargs["setting_sources_override"])])
+    if source.model:
+        command_line.extend(["--model", source.model])
     if settings.claude_orchestrator_fallback_model:
         command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
     env = dict(os.environ)
+    if source.stage_kwargs.get("strip_model_fallback_env"):
+        _strip_claude_code_model_fallback_env(env)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
@@ -1751,7 +1803,8 @@ def _invoke_claude_file_mode(
         progress_callback,
         stage="single_stage_decision",
         status="running",
-        provider="kimi",
+        provider=source.provider,
+        model=source.model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         attempt=1,
     )
@@ -1770,7 +1823,8 @@ def _invoke_claude_file_mode(
             progress_callback,
             stage="single_stage_decision",
             status="error",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code="claude_timeout",
@@ -1785,7 +1839,8 @@ def _invoke_claude_file_mode(
             progress_callback,
             stage="single_stage_decision",
             status="error",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code=failure,
@@ -1797,7 +1852,8 @@ def _invoke_claude_file_mode(
             progress_callback,
             stage="single_stage_decision",
             status="missing_decision",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code="nonzero_exit",
@@ -1810,7 +1866,8 @@ def _invoke_claude_file_mode(
             progress_callback,
             stage="single_stage_decision",
             status="success",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             attempt=1,
@@ -1821,7 +1878,8 @@ def _invoke_claude_file_mode(
         progress_callback,
         stage="single_stage_decision",
         status="success" if parsed else "missing_decision",
-        provider="kimi",
+        provider=source.provider,
+        model=source.model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         duration_ms=_elapsed_ms(started),
         failure_code=None if parsed else "missing_decision",
@@ -1846,11 +1904,14 @@ def _invoke_claude_file_mode_compat(
     }
     if _callable_accepts_keyword(_invoke_claude_file_mode, "progress_callback"):
         return _invoke_claude_file_mode(**kwargs, progress_callback=progress_callback)
+    provider = _claude_code_primary_provider()
+    model = _claude_code_primary_model()
     _emit_claude_progress(
         progress_callback,
         stage="single_stage_decision",
         status="running",
-        provider="kimi",
+        provider=provider,
+        model=model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         attempt=1,
     )
@@ -1862,7 +1923,8 @@ def _invoke_claude_file_mode_compat(
             progress_callback,
             stage="single_stage_decision",
             status="error",
-            provider="kimi",
+            provider=provider,
+            model=model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code=str(exc),
@@ -1873,7 +1935,8 @@ def _invoke_claude_file_mode_compat(
         progress_callback,
         stage="single_stage_decision",
         status="success" if result else "missing_decision",
-        provider="kimi",
+        provider=provider,
+        model=model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         duration_ms=_elapsed_ms(started),
         failure_code=None if result else "missing_decision",
@@ -1900,6 +1963,8 @@ def _invoke_claude_inline_json(
     progress_callback: ClaudeProgressCallback | None = None,
 ) -> dict[str, Any] | None:
     prompt = _build_inline_json_prompt(workspace)
+    source = _claude_code_source_selection(workspace)
+    include_effort = bool(source.stage_kwargs.get("include_effort", True))
     command_line = [
         *command,
         "-p",
@@ -1913,17 +1978,21 @@ def _invoke_claude_inline_json(
         settings.claude_orchestrator_permission_mode,
         "--tools",
         "none",
-        "--effort",
-        settings.claude_orchestrator_effort,
         "--bare",
         "--no-session-persistence",
     ]
-    _apply_claude_cli_acceleration_flags(command_line)
-    if settings.claude_orchestrator_model:
-        command_line.extend(["--model", settings.claude_orchestrator_model])
+    if include_effort:
+        command_line.extend(["--effort", settings.claude_orchestrator_effort])
+    _apply_claude_cli_acceleration_flags(command_line, include_effort=include_effort)
+    if source.stage_kwargs.get("setting_sources_override"):
+        command_line.extend(["--setting-sources", str(source.stage_kwargs["setting_sources_override"])])
+    if source.model:
+        command_line.extend(["--model", source.model])
     if settings.claude_orchestrator_fallback_model:
         command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
     env = dict(os.environ)
+    if source.stage_kwargs.get("strip_model_fallback_env"):
+        _strip_claude_code_model_fallback_env(env)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
@@ -1933,7 +2002,8 @@ def _invoke_claude_inline_json(
         progress_callback,
         stage="single_stage_decision",
         status="running",
-        provider="kimi",
+        provider=source.provider,
+        model=source.model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         attempt=1,
     )
@@ -1952,7 +2022,8 @@ def _invoke_claude_inline_json(
             progress_callback,
             stage="single_stage_decision",
             status="error",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code="claude_timeout",
@@ -1967,7 +2038,8 @@ def _invoke_claude_inline_json(
             progress_callback,
             stage="single_stage_decision",
             status="error",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code=failure,
@@ -1979,7 +2051,8 @@ def _invoke_claude_inline_json(
             progress_callback,
             stage="single_stage_decision",
             status="missing_decision",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             failure_code="nonzero_exit",
@@ -1993,7 +2066,8 @@ def _invoke_claude_inline_json(
             progress_callback,
             stage="single_stage_decision",
             status="success",
-            provider="kimi",
+            provider=source.provider,
+            model=source.model,
             timeout_seconds=settings.claude_orchestrator_timeout_seconds,
             duration_ms=_elapsed_ms(started),
             attempt=1,
@@ -2003,7 +2077,8 @@ def _invoke_claude_inline_json(
         progress_callback,
         stage="single_stage_decision",
         status="missing_decision",
-        provider="kimi",
+        provider=source.provider,
+        model=source.model,
         timeout_seconds=settings.claude_orchestrator_timeout_seconds,
         duration_ms=_elapsed_ms(started),
         failure_code="missing_decision",
@@ -2270,6 +2345,7 @@ def _build_workspace(
     workspace = settings.claude_orchestrator_workspace_dir / fallback.decision_id
     workspace.mkdir(parents=True, exist_ok=True)
     asset_context = build_asset_context(request)
+    source_selection = _select_claude_source_for_request(request=request, asset_context=asset_context)
     visual_grammar_contract = build_visual_grammar_contract(
         mode=fallback.mode,
         user_prompt=request.user_prompt,
@@ -2284,6 +2360,7 @@ def _build_workspace(
     _write_json(workspace / "template_lock_contract.json", asset_context.get("template_lock_contract") or {})
     _write_json(workspace / "asset_binding_policy.json", asset_context.get("asset_binding_plan") or {})
     _write_json(workspace / "visual_grammar_contract.json", visual_grammar_contract or {})
+    _write_json(workspace / "claude_source_selection.json", source_selection)
     _write_json(workspace / "fallback_decision.json", fallback.model_dump(mode="json"))
     _write_json(workspace / "OUTPUT_CONTRACT.json", CLAUDE_DECISION_SCHEMA)
     _write_json(workspace / "decision_template.json", _decision_template(fallback))
@@ -2322,6 +2399,64 @@ def _build_workspace(
         ),
     )
     return workspace
+
+
+def _select_claude_source_for_request(*, request: CreateCreativeRunRequest, asset_context: dict[str, Any]) -> dict[str, Any]:
+    text_model = _claude_code_primary_model()
+    multimodal_model = _text_value(settings.claude_orchestrator_multimodal_model)
+    needs_multimodal, reason = _request_needs_multimodal_claude(request=request, asset_context=asset_context)
+    selected = multimodal_model if needs_multimodal and multimodal_model else text_model
+    if not selected:
+        return {
+            "provider": "claude-code",
+            "model": None,
+            "reason": "claude_default_model",
+            "multimodal_requested": needs_multimodal,
+        }
+    return {
+        "provider": _claude_code_primary_provider(selected),
+        "model": selected,
+        "reason": reason if needs_multimodal and selected == multimodal_model else "default_text_primary",
+        "multimodal_requested": needs_multimodal,
+        "default_text_model": text_model,
+        "multimodal_model": multimodal_model,
+    }
+
+
+def _request_needs_multimodal_claude(*, request: CreateCreativeRunRequest, asset_context: dict[str, Any]) -> tuple[bool, str]:
+    uploaded_assets = asset_context.get("uploaded_assets") if isinstance(asset_context.get("uploaded_assets"), list) else []
+    provider_images = (
+        asset_context.get("provider_input_images") if isinstance(asset_context.get("provider_input_images"), list) else []
+    )
+    provider_plan = asset_context.get("provider_input_plan") if isinstance(asset_context.get("provider_input_plan"), dict) else {}
+    binding_plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
+    bindings = binding_plan.get("bindings") if isinstance(binding_plan.get("bindings"), list) else []
+    if not uploaded_assets and not provider_images and not bindings and not request.assets:
+        return False, "no_uploaded_assets"
+    if provider_plan.get("reference_image_count") or provider_plan.get("requires_image_reference"):
+        return True, "provider_input_images_required"
+    for item in provider_images:
+        if not isinstance(item, dict):
+            continue
+        role = _text_value(item.get("role"))
+        fusion_mode = _text_value(item.get("fusion_mode"))
+        if item.get("provider_input_required") or role in _MULTIMODAL_SOURCE_ROLES or fusion_mode in _MULTIMODAL_FUSION_MODES:
+            return True, "hard_reference_input_image"
+    for item in bindings:
+        if not isinstance(item, dict):
+            continue
+        role = _text_value(item.get("role"))
+        fusion_mode = _text_value(item.get("fusion_mode"))
+        if item.get("provider_input_required") or role in _MULTIMODAL_SOURCE_ROLES or fusion_mode in _MULTIMODAL_FUSION_MODES:
+            return True, "asset_binding_requires_visual_understanding"
+    prompt = request.user_prompt.lower()
+    if uploaded_assets and re.search(
+        r"(识别|看图|读图|图片里|图中|保留.*图|二维码|qr|文案|菜单|海报|截图|产品|logo|商标|人脸|人物|食物|菜品|优惠|价格|套餐|购买)",
+        prompt,
+        flags=re.IGNORECASE,
+    ):
+        return True, "prompt_requests_uploaded_image_understanding"
+    return False, "uploaded_assets_soft_reference"
 
 
 def _build_file_tool_prompt() -> str:
