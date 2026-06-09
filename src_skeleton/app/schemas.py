@@ -334,7 +334,7 @@ class ImageHistoryItem(BaseModel):
     version_parent_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
-    source: Literal["repository", "manifest"] = "repository"
+    source: Literal["repository", "manifest", "filesystem"] = "repository"
 
 
 class ImageHistoryResponse(BaseModel):

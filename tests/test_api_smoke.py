@@ -1,5 +1,6 @@
-from pathlib import Path
 import base64
+import os
+from pathlib import Path
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -652,6 +653,8 @@ def test_frontend_static_app_is_served():
     assert "deleteHistoryItem" in script.text
     assert "compareHistoryItems" in script.text
     assert "historyTime" in script.text
+    assert "const historyPageSize = 24" in script.text
+    assert "const v2HistoryPageSize = 24" in script.text
     assert "/v1/image/history/" in script.text
     assert 'method: "DELETE"' in script.text
     assert "v2PromptTextFromHistory" in script.text
@@ -747,6 +750,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "function v2RequestedImageProvider" in mobile_script.text
     assert "const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {})" in mobile_script.text
     assert "imageAssetPayload" in mobile_script.text
+    assert "const historyPageSize = 24" in mobile_script.text
+    assert "const v2HistoryPageSize = 24" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
 
 
@@ -791,6 +796,48 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
     assert after_delete.status_code == 200
     assert after_delete.json()["total"] == 0
     assert client.get(output_url).status_code == 404
+
+
+def test_image_history_recovers_generated_files_missing_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    client = TestClient(app)
+
+    manifest_id = "out_manifest123456"
+    manifest_path = media_store.output_path(job_id="job_manifest123456", output_id=manifest_id, output_format="png")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": manifest_id,
+            "job_id": "job_manifest123456",
+            "url": f"/v1/outputs/{manifest_id}/download",
+            "thumbnail_url": f"/v1/outputs/{manifest_id}/thumbnail",
+            "format": "png",
+            "provider": "mock_image",
+            "model": "mock-image-v1",
+            "prompt": "manifest record",
+            "created_at": "2026-01-01T09:00:00+00:00",
+            "updated_at": "2026-01-01T09:00:00+00:00",
+        }
+    )
+
+    recovered_id = "out_recovered123456"
+    recovered_path = media_store.output_path(job_id="job_recovered123456", output_id=recovered_id, output_format="png")
+    recovered_path.parent.mkdir(parents=True, exist_ok=True)
+    recovered_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    os.utime(recovered_path, (2000000000, 2000000000))
+
+    response = client.get("/v1/image/history?limit=10")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [item["id"] for item in body["items"]] == [recovered_id, manifest_id]
+    assert body["items"][0]["source"] == "filesystem"
+    assert "从本地输出目录恢复" in body["items"][0]["prompt"]
+    assert client.get(body["items"][0]["url"]).status_code == 200
+    assert client.get(body["items"][0]["thumbnail_url"]).status_code == 200
 
 
 def test_image_history_excludes_v2_bridge_outputs(tmp_path, monkeypatch):

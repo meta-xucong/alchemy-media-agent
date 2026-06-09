@@ -156,8 +156,10 @@ def list_image_history(
 ):
     items: list[ImageHistoryItem] = []
     known_output_ids: set[str] = set()
+    blocked_output_ids: set[str] = set()
     for job in repository.list_jobs(job_type="image", session_id=session_id):
         if _is_v2_bridge_job(job):
+            blocked_output_ids.update(output.id for output in job.outputs)
             continue
         for output in job.outputs:
             if output.format not in {"png", "jpeg", "webp"}:
@@ -198,13 +200,21 @@ def list_image_history(
                 )
             )
 
-    if len(items) < limit:
-        for record in media_store.list_history_records(limit=limit, session_id=session_id):
-            if record["id"] in known_output_ids or record["format"] not in {"png", "jpeg", "webp"} or _is_v2_bridge_history_record(record):
+    for record in media_store.list_history_records(limit=limit, session_id=session_id):
+        if _is_v2_bridge_history_record(record):
+            blocked_output_ids.add(record["id"])
+            continue
+        if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
+            continue
+        known_output_ids.add(record["id"])
+        items.append(ImageHistoryItem(**record))
+
+    if not session_id:
+        for record in media_store.list_generated_output_records(limit=limit):
+            if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
                 continue
+            known_output_ids.add(record["id"])
             items.append(ImageHistoryItem(**record))
-            if len(items) >= limit:
-                break
 
     items.sort(key=_history_sort_key, reverse=True)
     return ImageHistoryResponse(items=items[:limit], total=len(items))

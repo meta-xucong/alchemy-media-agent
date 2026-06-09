@@ -127,6 +127,44 @@ class LocalMediaStore:
         records = sorted(records_by_output.values(), key=_record_timestamp, reverse=True)
         return records[:limit]
 
+    def list_generated_output_records(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        outputs_root = self.generated_root
+        if not outputs_root.exists():
+            return []
+        records: list[dict[str, Any]] = []
+        for path in outputs_root.glob("job_*/*"):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            output_format = _format_from_suffix(path.suffix)
+            if output_format not in {"png", "jpeg", "webp"}:
+                continue
+            job_id = path.parent.name
+            output_id = path.stem
+            if not _looks_like_generated_job_id(job_id) or not _looks_like_generated_output_id(output_id):
+                continue
+            try:
+                updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+            except OSError:
+                continue
+            records.append(
+                {
+                    "id": output_id,
+                    "job_id": job_id,
+                    "url": f"/v1/outputs/{output_id}/download",
+                    "thumbnail_url": self.thumbnail_url(output_id),
+                    "format": output_format,
+                    "provider": "local_filesystem",
+                    "model": "recovered-output",
+                    "prompt": "历史图片（从本地输出目录恢复，原始提示词不可用）",
+                    "final_prompt": "历史图片（从本地输出目录恢复，原始提示词不可用）",
+                    "created_at": updated_at,
+                    "updated_at": updated_at,
+                    "source": "filesystem",
+                }
+            )
+        records.sort(key=_record_timestamp, reverse=True)
+        return records[:limit]
+
     def delete_output_file(self, *, output_id: str, job_id: str | None = None, output_format: str | None = None) -> bool:
         target: Path | None = None
         if job_id and output_format:
@@ -207,6 +245,14 @@ def _format_from_suffix(suffix: str) -> str | None:
     if normalized in {"png", "jpeg", "webp", "mp4"}:
         return normalized
     return None
+
+
+def _looks_like_generated_job_id(value: str) -> bool:
+    return re.fullmatch(r"job_[A-Za-z0-9]{12,}", value or "") is not None
+
+
+def _looks_like_generated_output_id(value: str) -> bool:
+    return re.fullmatch(r"out_[A-Za-z0-9]{12,}", value or "") is not None
 
 
 def _safe_filename(filename: str) -> str:
