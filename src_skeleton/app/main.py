@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from io import BytesIO
 from datetime import datetime, timezone
+import hashlib
 from html import escape
 from pathlib import Path
 import textwrap
-from urllib.parse import quote, unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -70,17 +71,34 @@ def image_share_landing(
     page_url = str(request.url)
     safe_title = _share_text(title, "Alchemy 生成图片", 48)
     safe_desc = _share_text(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88)
-    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, target_url=image_url)
+    save_image_url = _share_save_image_url(request, image_url=image_url)
+    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, target_url=save_image_url)
     return HTMLResponse(
         _share_image_html(
             title=safe_title,
             desc=safe_desc,
             page_url=page_url,
             image_url=image_url,
-            thumb_url=poster_url or thumb_url,
+            thumb_url=save_image_url,
             poster_url=poster_url,
         )
     )
+
+
+@app.get("/share/save-image")
+def image_share_save_image(
+    request: Request,
+    image: str = Query(default=""),
+):
+    image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
+    cache_path = _share_save_image_cache_path(image_url)
+    if not cache_path.exists():
+        _write_share_save_image(request, image_url, cache_path)
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Disposition": 'inline; filename="alchemy-share-image.jpg"',
+    }
+    return FileResponse(cache_path, media_type="image/jpeg", headers=headers)
 
 
 @app.get("/share/poster")
@@ -95,7 +113,9 @@ def image_share_poster(
     safe_title = _share_text(title, "Alchemy Media Agent", 42)
     safe_desc = _share_text(desc, "扫码查看原图", 18)
     direct_image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
-    share_url = _safe_public_share_url(request, url, fallback="/static/showcase/city-poster.jpg") if url else direct_image_url
+    share_url = _safe_public_share_url(request, url, fallback="/share/save-image") if url else _share_save_image_url(request, image_url=direct_image_url)
+    if "/share/save-image?" in share_url:
+        _ensure_share_save_image_cached(request, share_url)
     poster = _render_share_poster(
         request=request,
         image_value=thumb or image,
@@ -451,6 +471,42 @@ def _share_poster_url(request: Request, *, image: str, thumb: str | None, title:
     return str(request.base_url).rstrip("/") + "/share/poster?" + urlencode(params)
 
 
+def _share_save_image_url(request: Request, *, image_url: str) -> str:
+    return str(request.base_url).rstrip("/") + "/share/save-image?" + urlencode({"image": image_url})
+
+
+def _share_save_image_cache_path(image_url: str) -> Path:
+    cache_key = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:32]
+    return media_store.root / "share_cache" / f"{cache_key}.jpg"
+
+
+def _write_share_save_image(request: Request, image_url: str, cache_path: Path) -> None:
+    from PIL import ImageOps
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    image = _load_share_preview_image(request, image_url)
+    image = ImageOps.exif_transpose(image)
+    image = _flatten_share_image_for_jpeg(image)
+    temporary_path = cache_path.with_suffix(".tmp.jpg")
+    image.save(temporary_path, "JPEG", quality=90, optimize=True, progressive=True)
+    temporary_path.replace(cache_path)
+
+
+def _ensure_share_save_image_cached(request: Request, share_url: str) -> None:
+    try:
+        split = urlsplit(share_url)
+        params = parse_qs(split.query)
+        image_value = params.get("image", [""])[0]
+        if not image_value:
+            return
+        image_url = _safe_public_share_url(request, image_value, fallback="/static/showcase/city-poster.jpg")
+        cache_path = _share_save_image_cache_path(image_url)
+        if not cache_path.exists():
+            _write_share_save_image(request, image_url, cache_path)
+    except Exception:
+        return
+
+
 def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str, poster_url: str) -> str:
     title_html = escape(title)
     desc_html = escape(desc)
@@ -590,7 +646,7 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
       <section class="copy">
         <h1>{title_html}</h1>
         <p>{desc_html}</p>
-        <p class="save-hint">长按分享图保存，扫码直接查看原图。</p>
+        <p class="save-hint">长按保存，勿用右上角。</p>
         <div class="actions">
           <a class="share-download-link" href="{poster_url_html}" download="alchemy-share-poster.png">下载分享图</a>
           <a href="/h5">打开 Alchemy</a>
@@ -721,6 +777,20 @@ def _round_image(image, radius: int):
     mask_draw.rounded_rectangle((0, 0, rounded.width, rounded.height), radius=radius, fill=255)
     rounded.putalpha(mask)
     return rounded
+
+
+def _flatten_share_image_for_jpeg(image):
+    from PIL import Image
+
+    if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        flattened = Image.new("RGB", rgba.size, (255, 255, 255))
+        flattened.paste(rgba, mask=alpha)
+        return flattened
+    if image.mode != "RGB":
+        return image.convert("RGB")
+    return image
 
 
 def _share_font(size: int, *, bold: bool = False):

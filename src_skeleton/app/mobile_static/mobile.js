@@ -3963,18 +3963,26 @@ function renderLightboxActions(actions = []) {
 
 async function shareCurrentLightboxImage() {
   const originalImageUrl = els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src;
-  const shareUrl = absoluteUrl(originalImageUrl);
+  const title = els.lightboxImage.dataset.shareTitle || els.lightboxTitle.textContent || "Alchemy 生成图片";
+  const desc = els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。";
+  const cardShareUrl = buildShareImageUrl({
+    imageUrl: originalImageUrl,
+    thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
+    title,
+    desc,
+  });
+  const saveImageUrl = buildShareSaveImageUrl(originalImageUrl);
   const posterUrl = buildSharePosterUrl({
     imageUrl: originalImageUrl,
     thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
     desc: "扫码查看原图",
-    shareUrl,
+    shareUrl: saveImageUrl,
   });
   showSharePosterPanel({
     posterUrl,
-    shareUrl,
+    shareUrl: cardShareUrl,
     title: "Alchemy Media Agent",
-    desc: "长按保存分享图，二维码直达原图。",
+    desc: "长按保存，扫码看图。",
   });
 }
 
@@ -3986,6 +3994,12 @@ function buildSharePosterUrl({ imageUrl, thumbUrl, desc, shareUrl }) {
   params.set("desc", compactShareText(desc, "扫码查看原图", 18));
   params.set("url", shareUrl);
   return `${window.location.origin}/share/poster?${params.toString()}`;
+}
+
+function buildShareSaveImageUrl(imageUrl) {
+  const params = new URLSearchParams();
+  params.set("image", absoluteUrl(imageUrl));
+  return `${window.location.origin}/share/save-image?${params.toString()}`;
 }
 
 function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
@@ -4006,34 +4020,41 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
         <img alt="分享海报预览" />
       </div>
       <div class="share-poster-actions">
-        <button class="button primary share-poster-copy-link" type="button">复制原图链接</button>
+        <button class="button primary share-poster-copy-link" type="button">分享链接</button>
         <button class="button ghost share-poster-close" type="button">关闭</button>
       </div>
     </article>
   `;
   sheet.querySelector("strong").textContent = title || "Alchemy Media Agent";
-  sheet.querySelector("p").textContent = desc || "长按图片保存，好友扫码看原图。";
+  sheet.querySelector("p").textContent = desc || "长按保存，扫码看图。";
   const image = sheet.querySelector("img");
   image.src = posterUrl;
   sheet.querySelector(".share-poster-backdrop").addEventListener("click", () => sheet.remove());
   sheet.querySelector(".share-poster-close").addEventListener("click", () => sheet.remove());
   sheet.querySelector(".share-poster-copy-link").addEventListener("click", async () => {
-    await copyShareUrl(shareUrl);
-    showGlobalToast("原图链接已复制。分享图请长按保存。");
+    await shareOrCopyLink(shareUrl, "Alchemy Media Agent");
   });
   document.body.appendChild(sheet);
-  copyShareUrl(shareUrl).catch(() => {});
   if (isWeChatBrowser()) {
     showWeChatShareGuide();
     return;
   }
-  showGlobalToast("分享图已生成，长按图片保存。");
+  showGlobalToast("长按保存分享图。");
 }
 
 function shareThumbFromImageUrl(url = "") {
   if (!url) return "/mobile-static/showcase/city-poster.jpg";
   if (url.includes("/download")) return url.replace(/\/download(?:\?.*)?$/, "/thumbnail");
   return url;
+}
+
+function buildShareImageUrl({ imageUrl, thumbUrl, title, desc }) {
+  const params = new URLSearchParams();
+  params.set("image", absoluteUrl(imageUrl));
+  params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
+  params.set("title", compactShareText(title, "Alchemy 生成图片", 48));
+  params.set("desc", compactShareText(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88));
+  return `${window.location.origin}/share/image?${params.toString()}`;
 }
 
 function shareDescriptionFromPrompt(promptText = "") {
@@ -4067,14 +4088,32 @@ async function copyShareUrl(url) {
   copyTextFallback(url);
 }
 
+async function shareOrCopyLink(url, title = "Alchemy Media Agent") {
+  if (navigator.share && !isWeChatBrowser()) {
+    try {
+      await navigator.share({ title, url });
+      showGlobalToast("分享面板已打开。");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+  try {
+    await copyShareUrl(url);
+    showGlobalToast("分享链接已复制。");
+  } catch (error) {
+    showGlobalToast("复制失败，请手动复制。", "error");
+  }
+}
+
 function showWeChatShareGuide() {
   const guide = document.createElement("button");
   guide.type = "button";
   guide.className = "wechat-share-guide";
   guide.innerHTML = `
     <span>微信分享</span>
-    <strong>长按保存分享图，再发送给朋友或朋友圈</strong>
-    <small>二维码直达原图，链接也已复制。</small>
+    <strong>长按保存，勿用右上角</strong>
+    <small>点“分享链接”可发卡片。</small>
   `;
   guide.addEventListener("click", () => guide.remove());
   document.body.appendChild(guide);
@@ -4192,8 +4231,9 @@ function copyTextFallback(text) {
   textarea.style.top = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("copy_failed");
 }
 
 function setPromptCopyState(label, copied = false) {
