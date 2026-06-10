@@ -2901,6 +2901,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     id: item.output_id,
     title: cardPrompt ? cardPrompt.slice(0, 34) : `2.0 历史图片 ${index + 1}`,
     url: v2MediaUrl(item.url),
+    thumbnailUrl: v2MediaUrl(item.thumbnail_url || item.url),
     format: v2HistoryFormat(item),
     meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
     promptText: v2PromptTextFromHistory(item),
@@ -3734,6 +3735,7 @@ function openActiveHeroHistorySlide() {
     id: item.id,
     title: item.title ? item.title.slice(0, 34) : "历史图片",
     url: item.url,
+    thumbnailUrl: item.thumbnailUrl || item.url,
     format: item.format,
     meta: item.meta,
     promptText: item.promptText,
@@ -3876,6 +3878,7 @@ function selectHistoryItem(item, card) {
     id: item.id,
     title: (item.original_prompt || item.prompt) ? (item.original_prompt || item.prompt).slice(0, 34) : "历史图片",
     url: item.url,
+    thumbnailUrl: item.thumbnail_url || item.url,
     format: item.format,
     meta: historyMetaText(item),
     promptText: promptTextFromHistoryItem(item),
@@ -3896,14 +3899,14 @@ function selectHistoryItem(item, card) {
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 
-function openImageLightbox({ id, title, url, format, meta, promptText, actions = [] }) {
+function openImageLightbox({ id, title, url, thumbnailUrl, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
   els.lightboxImage.src = url;
   els.lightboxImage.alt = title || "放大预览图";
   els.lightboxImage.dataset.fullUrl = url;
   els.lightboxImage.dataset.shareTitle = title || "Alchemy 生成图片";
   els.lightboxImage.dataset.shareImage = url || "";
-  els.lightboxImage.dataset.shareThumb = shareThumbFromImageUrl(url);
+  els.lightboxImage.dataset.shareThumb = thumbnailUrl || shareThumbFromImageUrl(url);
   els.lightboxImage.dataset.shareDesc = shareDescriptionFromPrompt(promptText);
   els.lightboxMeta.textContent = meta || id || "-";
   const fullPrompt = promptText || "";
@@ -3965,31 +3968,73 @@ async function shareCurrentLightboxImage() {
     title: els.lightboxImage.dataset.shareTitle || els.lightboxTitle.textContent,
     desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
   });
-  const payload = {
-    title: els.lightboxImage.dataset.shareTitle || "Alchemy 生成图片",
-    text: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
-    url: shareUrl,
-  };
-  if (isWeChatBrowser()) {
+  const posterUrl = buildSharePosterUrl({
+    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
+    thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
+    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
+    shareUrl,
+  });
+  showSharePosterPanel({
+    posterUrl,
+    shareUrl,
+    title: "Alchemy Media Agent",
+    desc: els.lightboxImage.dataset.shareDesc || "扫码查看完整图片。",
+  });
+}
+
+function buildSharePosterUrl({ imageUrl, thumbUrl, desc, shareUrl }) {
+  const params = new URLSearchParams();
+  params.set("image", absoluteUrl(imageUrl));
+  params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
+  params.set("title", "Alchemy Media Agent");
+  params.set("desc", compactShareText(desc, "扫码查看完整图片。", 70));
+  params.set("url", shareUrl);
+  return `${window.location.origin}/share/poster?${params.toString()}`;
+}
+
+function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
+  document.querySelector(".share-poster-sheet")?.remove();
+  const sheet = document.createElement("section");
+  sheet.className = "share-poster-sheet";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.innerHTML = `
+    <button class="share-poster-backdrop" type="button" aria-label="关闭分享海报"></button>
+    <article class="share-poster-card">
+      <div class="share-poster-copy">
+        <span>分享海报</span>
+        <strong></strong>
+        <p></p>
+      </div>
+      <div class="share-poster-preview">
+        <img alt="分享海报预览" />
+      </div>
+      <div class="share-poster-actions">
+        <a class="button primary share-poster-download" download="alchemy-share-poster.png">下载分享图</a>
+        <button class="button secondary share-poster-copy-link" type="button">复制链接</button>
+        <button class="button ghost share-poster-close" type="button">关闭</button>
+      </div>
+    </article>
+  `;
+  sheet.querySelector("strong").textContent = title || "Alchemy Media Agent";
+  sheet.querySelector("p").textContent = desc || "下载图片发到微信，好友扫码即可打开。";
+  const image = sheet.querySelector("img");
+  image.src = posterUrl;
+  const download = sheet.querySelector(".share-poster-download");
+  download.href = posterUrl;
+  sheet.querySelector(".share-poster-backdrop").addEventListener("click", () => sheet.remove());
+  sheet.querySelector(".share-poster-close").addEventListener("click", () => sheet.remove());
+  sheet.querySelector(".share-poster-copy-link").addEventListener("click", async () => {
     await copyShareUrl(shareUrl);
-    showGlobalToast("分享链接已复制，可点右上角转发。");
+    showGlobalToast("链接已复制，分享图也可以直接下载发送。");
+  });
+  document.body.appendChild(sheet);
+  copyShareUrl(shareUrl).catch(() => {});
+  if (isWeChatBrowser()) {
     showWeChatShareGuide();
     return;
   }
-  await copyShareUrl(shareUrl);
-  if (navigator.share) {
-    try {
-      await navigator.share(payload);
-      showGlobalToast("已打开系统分享，链接也已复制。");
-      return;
-    } catch (error) {
-      if (error?.name === "AbortError") {
-        showGlobalToast("分享链接已复制。");
-        return;
-      }
-    }
-  }
-  showGlobalToast("分享链接已复制。");
+  showGlobalToast("分享图已生成，可下载后发微信。");
 }
 
 function buildShareImageUrl({ imageUrl, thumbUrl, title, desc }) {

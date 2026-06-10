@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+import textwrap
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -68,15 +70,51 @@ def image_share_landing(
     page_url = str(request.url)
     safe_title = _share_text(title, "Alchemy 生成图片", 48)
     safe_desc = _share_text(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88)
+    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, page_url=page_url)
     return HTMLResponse(
         _share_image_html(
             title=safe_title,
             desc=safe_desc,
             page_url=page_url,
             image_url=image_url,
-            thumb_url=thumb_url,
+            thumb_url=poster_url or thumb_url,
+            poster_url=poster_url,
         )
     )
+
+
+@app.get("/share/poster")
+def image_share_poster(
+    request: Request,
+    image: str = Query(default=""),
+    thumb: str | None = Query(default=None),
+    title: str = Query(default="Alchemy Media Agent"),
+    desc: str = Query(default="来自 Alchemy Media Agent 的 AI 影像作品。"),
+    url: str | None = Query(default=None),
+):
+    safe_title = _share_text(title, "Alchemy Media Agent", 42)
+    safe_desc = _share_text(desc, "扫码查看完整图片", 70)
+    share_url = _safe_public_share_url(request, url, fallback="/share/image") if url else str(request.url_for("image_share_landing"))
+    if url is None:
+        params = {
+            "image": _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg"),
+            "thumb": _safe_public_share_url(request, thumb or image, fallback="/static/showcase/city-poster.jpg"),
+            "title": safe_title,
+            "desc": safe_desc,
+        }
+        share_url = str(request.base_url).rstrip("/") + "/share/image?" + urlencode(params)
+    poster = _render_share_poster(
+        request=request,
+        image_value=thumb or image,
+        title=safe_title,
+        desc=safe_desc,
+        share_url=share_url,
+    )
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Disposition": 'inline; filename="alchemy-share-poster.png"',
+    }
+    return StreamingResponse(BytesIO(poster), media_type="image/png", headers=headers)
 
 
 @app.get("/healthz")
@@ -388,6 +426,8 @@ def _resolve_output_file(output_id: str) -> tuple[Path, str]:
 def _safe_public_share_url(request: Request, value: str | None, *, fallback: str) -> str:
     fallback_url = str(request.url_for("static", path="showcase/city-poster.jpg"))
     if not value:
+        if fallback.startswith("/"):
+            return str(request.base_url).rstrip("/") + quote(fallback, safe="/:?&=%#.-_~")
         return fallback_url
     decoded = unquote(str(value).strip())
     if not decoded:
@@ -407,12 +447,24 @@ def _share_text(value: str | None, fallback: str, limit: int) -> str:
     return compact[:limit]
 
 
-def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str) -> str:
+def _share_poster_url(request: Request, *, image: str, thumb: str | None, title: str, desc: str, page_url: str) -> str:
+    params = {
+        "image": image,
+        "thumb": thumb or image,
+        "title": title,
+        "desc": desc,
+        "url": page_url,
+    }
+    return str(request.base_url).rstrip("/") + "/share/poster?" + urlencode(params)
+
+
+def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str, poster_url: str) -> str:
     title_html = escape(title)
     desc_html = escape(desc)
     page_url_html = escape(page_url, quote=True)
     image_url_html = escape(image_url, quote=True)
     thumb_url_html = escape(thumb_url, quote=True)
+    poster_url_html = escape(poster_url, quote=True)
     return f"""<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -434,6 +486,7 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         --ink: #24231f;
         --muted: #706b60;
         --sage: #748269;
+        --brass: #9a7535;
         --paper: #f7f3e8;
         --panel: rgba(255, 253, 247, 0.86);
         --line: rgba(55, 50, 41, 0.12);
@@ -452,7 +505,7 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
       main {{
         width: min(100%, 560px);
         display: grid;
-        gap: 14px;
+        gap: 16px;
       }}
       .preview {{
         overflow: hidden;
@@ -467,6 +520,20 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         display: block;
         object-fit: contain;
         background: #f1ecde;
+      }}
+      .poster {{
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: rgba(255, 253, 247, 0.72);
+      }}
+      .poster img {{
+        width: 100%;
+        display: block;
+        border-radius: 22px;
+        box-shadow: 0 18px 48px rgba(36, 35, 31, 0.16);
       }}
       .copy {{
         display: grid;
@@ -499,21 +566,196 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         font-size: 14px;
         text-decoration: none;
       }}
+      .actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }}
+      .actions a:nth-child(2) {{
+        color: var(--brass);
+        background: rgba(154, 117, 53, 0.12);
+      }}
     </style>
   </head>
   <body>
     <main>
+      <article class="poster">
+        <img src="{poster_url_html}" alt="{title_html} 分享海报" />
+      </article>
       <article class="preview">
         <img src="{image_url_html}" alt="{title_html}" />
       </article>
       <section class="copy">
         <h1>{title_html}</h1>
         <p>{desc_html}</p>
-        <a href="/h5">打开 Alchemy</a>
+        <div class="actions">
+          <a href="{poster_url_html}" download="alchemy-share-poster.png">下载分享图</a>
+          <a href="/h5">打开 Alchemy</a>
+        </div>
       </section>
     </main>
   </body>
 </html>"""
+
+
+def _render_share_poster(*, request: Request, image_value: str | None, title: str, desc: str, share_url: str) -> bytes:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+    import qrcode
+
+    width, height = 1080, 1500
+    image = Image.new("RGB", (width, height), "#efe8d8")
+    draw = ImageDraw.Draw(image)
+    _draw_soft_poster_background(draw, width, height)
+
+    card = Image.new("RGBA", (900, 1240), (255, 253, 247, 255))
+    card_shadow = Image.new("RGBA", card.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(card_shadow)
+    shadow_draw.rounded_rectangle((0, 0, card.width, card.height), radius=34, fill=(40, 34, 24, 72))
+    shadow = card_shadow.filter(ImageFilter.GaussianBlur(30))
+    image.paste(shadow, (92, 142), shadow)
+
+    card_draw = ImageDraw.Draw(card)
+    card_draw.rounded_rectangle((0, 0, card.width - 1, card.height - 1), radius=34, fill=(255, 253, 247, 255), outline=(223, 209, 179, 255), width=2)
+    card_draw.rounded_rectangle((38, 38, card.width - 39, card.height - 39), radius=24, outline=(237, 226, 202, 255), width=2)
+
+    preview = _load_share_preview_image(request, image_value)
+    preview = ImageOps.exif_transpose(preview).convert("RGB")
+    preview = _cover_image(preview, (804, 820))
+    preview = _round_image(preview, radius=24)
+    card.paste(preview, (48, 58), preview)
+
+    card_draw = ImageDraw.Draw(card)
+    title_font = _share_font(56, bold=True)
+    subtitle_font = _share_font(28)
+    small_font = _share_font(24)
+    mono_font = _share_font(23)
+    card_draw.text((58, 930), "ALCHEMY MEDIA AGENT", fill=(154, 117, 53), font=small_font)
+    for line_index, line in enumerate(_wrap_text_for_poster(title, 16, 2)):
+        card_draw.text((58, 970 + line_index * 64), line, fill=(36, 35, 31), font=title_font)
+    desc_y = 1100 if len(_wrap_text_for_poster(title, 16, 2)) <= 1 else 1158
+    for line_index, line in enumerate(_wrap_text_for_poster(desc or "扫码查看完整图片", 25, 2)):
+        card_draw.text((58, desc_y + line_index * 36), line, fill=(112, 107, 96), font=subtitle_font)
+
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
+    qr.add_data(share_url)
+    qr.make(fit=True)
+    qr_image = qr.make_image(fill_color="#24231f", back_color="#fffdf7").convert("RGB").resize((220, 220), Image.Resampling.NEAREST)
+    qr_box = Image.new("RGBA", (260, 260), (255, 253, 247, 255))
+    qr_draw = ImageDraw.Draw(qr_box)
+    qr_draw.rounded_rectangle((0, 0, 259, 259), radius=24, fill=(255, 253, 247, 255), outline=(223, 209, 179, 255), width=2)
+    qr_box.paste(qr_image, (20, 20))
+    card.paste(qr_box, (590, 930), qr_box)
+    card_draw.text((606, 1208), "SCAN TO VIEW", fill=(112, 107, 96), font=mono_font)
+
+    tape = Image.new("RGBA", (320, 76), (0, 0, 0, 0))
+    tape_draw = ImageDraw.Draw(tape)
+    tape_draw.rounded_rectangle((0, 0, 319, 75), radius=16, fill=(245, 235, 208, 184), outline=(228, 210, 170, 150), width=1)
+    tape = tape.rotate(-5, expand=True, resample=Image.Resampling.BICUBIC)
+    card.paste(tape, (294, -28), tape)
+
+    image.paste(card, (90, 130), card)
+
+    outer_draw = ImageDraw.Draw(image)
+    brand_font = _share_font(28)
+    outer_draw.text((90, 1408), "Share image · QR opens the original link", fill=(112, 107, 96), font=brand_font)
+
+    output = BytesIO()
+    image.save(output, "PNG", optimize=True)
+    return output.getvalue()
+
+
+def _draw_soft_poster_background(draw, width: int, height: int) -> None:
+    draw.rectangle((0, 0, width, height), fill="#efe8d8")
+    for index in range(0, width, 54):
+        color = "#eadfca" if (index // 54) % 2 == 0 else "#f5efdf"
+        draw.line((index, 0, index - 280, height), fill=color, width=2)
+    draw.ellipse((-220, -180, 460, 500), fill="#fff8e9")
+    draw.ellipse((720, 960, 1320, 1600), fill="#e3dcc8")
+    draw.rounded_rectangle((60, 80, width - 60, height - 80), radius=54, outline="#d8c69d", width=3)
+
+
+def _load_share_preview_image(request: Request, value: str | None):
+    from PIL import Image
+    import httpx
+
+    fallback = STATIC_DIR / "showcase" / "city-poster.jpg"
+    try:
+        decoded = unquote(str(value or "").strip())
+        split = urlsplit(decoded)
+        if split.path.startswith("/v1/outputs/"):
+            parts = split.path.strip("/").split("/")
+            if len(parts) >= 3:
+                output_id = parts[2]
+                path, _ = _resolve_output_file(output_id)
+                return Image.open(path)
+        if split.path.startswith("/static/"):
+            candidate = STATIC_DIR / split.path.removeprefix("/static/")
+            if candidate.exists() and candidate.is_file():
+                return Image.open(candidate)
+        if split.path.startswith("/mobile-static/"):
+            candidate = MOBILE_STATIC_DIR / split.path.removeprefix("/mobile-static/")
+            if candidate.exists() and candidate.is_file():
+                return Image.open(candidate)
+        if split.scheme in {"http", "https"}:
+            host = request.url.hostname
+            if split.hostname in {host, "127.0.0.1", "localhost", "testserver"}:
+                with httpx.Client(timeout=8, follow_redirects=True) as client:
+                    response = client.get(decoded)
+                    response.raise_for_status()
+                    return Image.open(BytesIO(response.content))
+    except Exception:
+        pass
+    return Image.open(fallback)
+
+
+def _cover_image(image, size: tuple[int, int]):
+    from PIL import Image, ImageOps
+
+    return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+
+def _round_image(image, radius: int):
+    from PIL import Image, ImageDraw
+
+    rounded = image.convert("RGBA")
+    mask = Image.new("L", rounded.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle((0, 0, rounded.width, rounded.height), radius=radius, fill=255)
+    rounded.putalpha(mask)
+    return rounded
+
+
+def _share_font(size: int, *, bold: bool = False):
+    from PIL import ImageFont
+
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "C:/Windows/Fonts/NotoSansSC-VF.ttf",
+        "C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap_text_for_poster(value: str, width: int, max_lines: int) -> list[str]:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return []
+    if all(ord(char) < 128 for char in compact):
+        lines = textwrap.wrap(compact, width=width) or [compact[:width]]
+    else:
+        lines = [compact[index : index + width] for index in range(0, len(compact), width)]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip(" .，。") + "..."
+    return lines
 
 
 def _job_prompt(job) -> str | None:

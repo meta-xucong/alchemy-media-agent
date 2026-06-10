@@ -790,8 +790,29 @@ def test_image_share_landing_page_has_wechat_friendly_metadata():
     assert "轻食海报 &lt;script&gt;" in response.text
     assert "<script>" not in response.text
     assert 'property="og:image"' in response.text
-    assert "http://testserver/v1/outputs/out_share/thumbnail" in response.text
+    assert "http://testserver/share/poster?" in response.text
     assert "打开 Alchemy" in response.text
+    assert "下载分享图" in response.text
+
+
+def test_image_share_poster_returns_downloadable_png():
+    client = TestClient(app)
+
+    response = client.get(
+        "/share/poster",
+        params={
+            "image": "/v1/outputs/out_missing/download",
+            "thumb": "/v1/outputs/out_missing/thumbnail",
+            "title": "轻食海报",
+            "desc": "微信扫码查看完整图片",
+            "url": "http://testserver/share/image?image=/static/showcase/city-poster.jpg",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(response.content) > 10_000
 
 
 def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_path, monkeypatch):

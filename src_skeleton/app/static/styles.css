@@ -2569,6 +2569,104 @@ button.v2-live-preview:focus-visible {
   font-size: 12px;
 }
 
+.share-poster-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 132;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.share-poster-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(255, 253, 247, 0.2), transparent 38%),
+    rgba(23, 20, 17, 0.58);
+  backdrop-filter: blur(16px);
+}
+
+.share-poster-card {
+  position: relative;
+  width: min(440px, calc(100vw - 36px));
+  max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 247, 0.98), rgba(246, 239, 222, 0.95)),
+    var(--paper);
+  box-shadow: 0 38px 120px rgba(23, 20, 17, 0.34);
+}
+
+.share-poster-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.share-poster-copy span {
+  color: var(--brass);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.share-poster-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-poster-copy p {
+  margin: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.share-poster-preview {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid rgba(154, 117, 53, 0.14);
+  border-radius: 22px;
+  background:
+    linear-gradient(45deg, rgba(154, 117, 53, 0.06) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(154, 117, 53, 0.06) 25%, transparent 25%),
+    #f7f1e2;
+  background-position: 0 0, 0 10px;
+  background-size: 20px 20px;
+}
+
+.share-poster-preview img {
+  width: 100%;
+  display: block;
+}
+
+.share-poster-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+}
+
+.share-poster-actions .button {
+  min-width: 0;
+  text-align: center;
+}
+
 @media (max-width: 1180px) {
   .lux-header {
     grid-template-columns: 1fr;
