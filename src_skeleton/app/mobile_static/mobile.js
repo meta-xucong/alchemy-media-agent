@@ -142,6 +142,9 @@ let providerSaveTimer = null;
 let providerChangeVersion = 0;
 let heroCarouselTimer = null;
 let heroCarouselIndex = 0;
+let mobileSummaryTimer = null;
+let mobileHistoryToken = 0;
+let activeLightboxActions = [];
 
 const els = {
   sessionLabel: document.querySelector("#sessionLabel"),
@@ -286,7 +289,10 @@ const els = {
   copyPromptBtn: document.querySelector("#copyPromptBtn"),
   closePromptPanelBtn: document.querySelector("#closePromptPanelBtn"),
   lightboxDownload: document.querySelector("#lightboxDownload"),
+  lightboxActionBar: document.querySelector("#lightboxActionBar"),
   closeImageLightboxBtn: document.querySelector("#closeImageLightboxBtn"),
+  mobileViewLayer: document.querySelector("#mobileViewLayer"),
+  mobileSheetLayer: document.querySelector("#mobileSheetLayer"),
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -434,10 +440,17 @@ function bindControls() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !els.sampleGuideModal.hidden) closeSampleGuide();
     if (event.key === "Escape" && !els.imageLightbox.hidden) closeImageLightbox();
+    if (event.key === "Escape" && document.body.dataset.mobileActiveSurface) closeMobileSurface();
+  });
+  window.addEventListener("popstate", (event) => {
+    if (document.body.dataset.mobileActiveSurface && event.state?.mobileSurface !== document.body.dataset.mobileActiveSurface) {
+      closeMobileSurface({ silent: true, fromHistory: true });
+    }
   });
 }
 
 function switchTab(tabName) {
+  if (document.body.dataset.mobileActiveSurface) closeMobileSurface({ silent: true });
   els.tabs.forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("active", active);
@@ -463,42 +476,17 @@ function setupH5AdvancedPanels() {
   if (document.body.dataset.h5AdvancedInit === "true") return;
   document.body.dataset.h5AdvancedInit = "true";
   document.body.classList.add("h5-simplified");
+  ensureMobileLayers();
   insertH5QuickGuide();
+  bindMobileHeroCards();
 
   const imageStack = document.querySelector("#imageTab .module-stack");
-  const imageAdvancedTargets = [
-    document.querySelector("#imageTab .tuning-section"),
-    document.querySelector("#imageTab .revision-section"),
-    document.querySelector("#imageTab .provider-panel"),
-    document.querySelector("#imageTab #eventList")?.closest(".panel"),
-  ].filter(Boolean);
-  createH5AdvancedPanel({
-    mode: "image",
-    stack: imageStack,
-    after: document.querySelector("#imageTab .studio-panel"),
-    eyebrow: "More controls",
-    title: "高级",
-    summary: "参数、素材、修图、模型/API 和事件。",
-    targets: imageAdvancedTargets,
-  });
+  createMobileV1Architecture(imageStack);
 
   const v2Stack = document.querySelector("#v2Tab .module-stack");
-  const v2AdvancedTargets = [
-    document.querySelector("#v2Tab .v2-side-controls"),
-    document.querySelector("#v2Tab .v2-asset-panel"),
-    document.querySelector("#v2Tab .gallery-wrap"),
-    document.querySelector("#v2Tab .v2-provider-area"),
-    document.querySelector("#v2Tab .v2-model-card-grid")?.closest(".studio-panel"),
-  ].filter(Boolean);
-  createH5AdvancedPanel({
-    mode: "v2",
-    stack: v2Stack,
-    after: document.querySelector("#v2Tab .v2-agent-area"),
-    eyebrow: "Advanced agent",
-    title: "高级",
-    summary: "素材、画幅、模板微调、中枢输出、Provider 和调度。",
-    targets: v2AdvancedTargets,
-  });
+  createMobileV2Architecture(v2Stack);
+  createMobileVideoArchitecture();
+  updateMobileSummaries();
 }
 
 function insertH5QuickGuide() {
@@ -515,6 +503,477 @@ function insertH5QuickGuide() {
     <span>3 点生成</span>
   `;
   hero.insertAdjacentElement("afterend", guide);
+}
+
+function ensureMobileLayers() {
+  if (!els.mobileViewLayer) {
+    const layer = document.createElement("div");
+    layer.id = "mobileViewLayer";
+    layer.className = "mobile-view-layer";
+    layer.hidden = true;
+    document.body.appendChild(layer);
+    els.mobileViewLayer = layer;
+  }
+  if (!els.mobileSheetLayer) {
+    const layer = document.createElement("div");
+    layer.id = "mobileSheetLayer";
+    layer.className = "mobile-sheet-layer";
+    layer.hidden = true;
+    layer.addEventListener("click", (event) => {
+      if (event.target === layer) closeMobileSurface();
+    });
+    document.body.appendChild(layer);
+    els.mobileSheetLayer = layer;
+  }
+}
+
+function bindMobileHeroCards() {
+  const historyCard = document.querySelector(".history-showcase");
+  if (historyCard && historyCard.dataset.mobileHeroBound !== "true") {
+    historyCard.dataset.mobileHeroBound = "true";
+    historyCard.id ||= "mobileHeroHistoryCard";
+    historyCard.setAttribute("role", "button");
+    historyCard.tabIndex = 0;
+    const openHistory = () => {
+      const isV2History = state.heroHistorySource === "v2" || activePanelName() === "v2";
+      switchTab(isV2History ? "v2" : "image");
+      openMobileSurface(isV2History ? "v2-history" : "v1-history", historyCard);
+    };
+    historyCard.addEventListener(
+      "click",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openHistory();
+      },
+      true
+    );
+    historyCard.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openHistory();
+      }
+    });
+  }
+
+  const caseCard = document.querySelector(".case-showcase");
+  if (caseCard && caseCard.dataset.mobileHeroBound !== "true") {
+    caseCard.dataset.mobileHeroBound = "true";
+    caseCard.id ||= "mobileHeroCaseCard";
+    caseCard.setAttribute("role", "button");
+    caseCard.tabIndex = 0;
+    const sourceLink = caseCard.querySelector(".case-source");
+    sourceLink?.addEventListener("click", (event) => event.stopPropagation());
+    const openCases = () => {
+      switchTab("v2");
+      openMobileSurface("v2-cases", caseCard);
+    };
+    caseCard.addEventListener(
+      "click",
+      (event) => {
+        if (event.target.closest(".case-source")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openCases();
+      },
+      true
+    );
+    caseCard.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openCases();
+      }
+    });
+  }
+}
+
+function createMobileV1Architecture(stack) {
+  if (!stack || document.querySelector(".mobile-v1-main-actions")) return;
+  const studio = document.querySelector("#imageTab .studio-panel");
+  const tuning = document.querySelector("#imageTab .tuning-section");
+  const revision = document.querySelector("#imageTab .revision-section");
+  const history = document.querySelector("#imageTab .history-section");
+  const provider = document.querySelector("#imageTab .provider-panel");
+  const events = document.querySelector("#imageTab #eventList")?.closest(".panel");
+  const gallery = document.querySelector("#imageTab .gallery-wrap");
+  const paramsCard = document.querySelector("#imageTab .params-card");
+  const materialCard = document.querySelector("#imageTab .material-card");
+
+  createMobileSheet({
+    id: "v1-params",
+    title: "基础参数",
+    eyebrow: "V1 Controls",
+    footerLabel: "完成",
+    targets: [paramsCard].filter(Boolean),
+  });
+  createMobileView({
+    id: "v1-material",
+    title: "高级素材",
+    eyebrow: "V1 Material",
+    footerLabel: "保存设置",
+    targets: [materialCard].filter(Boolean),
+  });
+  createMobileView({
+    id: "v1-revision",
+    title: "继续修改",
+    eyebrow: "Revision",
+    footerLabel: "返回工作台",
+    targets: [revision].filter(Boolean),
+  });
+  createMobileView({
+    id: "v1-history",
+    title: "历史图片",
+    eyebrow: "Archive",
+    footerLabel: "返回工作台",
+    targets: [history].filter(Boolean),
+  });
+  createMobileView({
+    id: "v1-settings",
+    title: "模型与 API",
+    eyebrow: "Settings",
+    footerLabel: "返回工作台",
+    targets: [provider].filter(Boolean),
+  });
+  createMobileView({
+    id: "v1-events",
+    title: "事件日志",
+    eyebrow: "Events",
+    footerLabel: "返回工作台",
+    targets: [events].filter(Boolean),
+  });
+
+  const actions = document.createElement("section");
+  actions.className = "mobile-action-panel mobile-v1-main-actions";
+  actions.innerHTML = `
+    <div class="mobile-summary-grid">
+      ${mobileEntryMarkup("v1-params", "参数", "默认参数", "mobileV1ParamsSummary")}
+      ${mobileEntryMarkup("v1-material", "高级素材", "未上传素材", "mobileV1MaterialSummary")}
+      ${mobileEntryMarkup("v1-history", "历史图片", "查看全部历史", "mobileV1HistorySummary")}
+      ${mobileEntryMarkup("v1-revision", "继续修改", "选择结果后可用", "mobileV1RevisionSummary")}
+      ${mobileEntryMarkup("v1-settings", "模型设置", "读取中", "mobileV1SettingsSummary")}
+      ${mobileEntryMarkup("v1-events", "事件", "暂无事件", "mobileV1EventsSummary")}
+    </div>
+  `;
+  bindMobileEntryButtons(actions);
+  studio?.insertAdjacentElement("afterend", actions);
+
+  if (gallery) {
+    gallery.classList.add("mobile-primary-results");
+    actions.insertAdjacentElement("afterend", gallery);
+  }
+  if (tuning) tuning.remove();
+}
+
+function createMobileV2Architecture(stack) {
+  if (!stack || document.querySelector(".mobile-v2-main-actions")) return;
+  const caseArea = document.querySelector("#v2Tab .v2-case-area");
+  const agent = document.querySelector("#v2Tab .v2-agent-area");
+  const sideControls = document.querySelector("#v2Tab .v2-side-controls");
+  const assetPanel = document.querySelector("#v2Tab .v2-asset-panel");
+  const outputArea = document.querySelector("#v2Tab .gallery-wrap");
+  const orchestrationDetail = document.querySelector("#v2Tab .v2-orchestration-detail");
+  const history = document.querySelector("#v2HistoryGrid")?.closest(".panel");
+  const provider = document.querySelector("#v2Tab .v2-provider-area");
+  const kernel = document.querySelector("#v2Tab .v2-model-card-grid")?.closest(".studio-panel");
+
+  createMobileView({
+    id: "v2-cases",
+    title: "案例模板",
+    eyebrow: "Case Gallery",
+    footerLabel: "返回工作台",
+    targets: [caseArea].filter(Boolean),
+  });
+  createMobileView({
+    id: "v2-assets",
+    title: "上传素材",
+    eyebrow: "Asset Binding",
+    footerLabel: "保存素材设置",
+    targets: [assetPanel].filter(Boolean),
+  });
+  createMobileSheet({
+    id: "v2-params",
+    title: "参数与模板微调",
+    eyebrow: "V2 Controls",
+    footerLabel: "完成",
+    targets: [sideControls].filter(Boolean),
+  });
+  createMobileView({
+    id: "v2-run-detail",
+    title: "中枢详情",
+    eyebrow: "Agent Trace",
+    footerLabel: "返回工作台",
+    targets: [orchestrationDetail].filter(Boolean),
+  });
+  createMobileView({
+    id: "v2-history",
+    title: "2.0 历史",
+    eyebrow: "V2 Archive",
+    footerLabel: "返回工作台",
+    targets: [history].filter(Boolean),
+  });
+  createMobileView({
+    id: "v2-settings",
+    title: "V2 设置",
+    eyebrow: "Provider & Kernel",
+    footerLabel: "返回工作台",
+    targets: [provider, kernel].filter(Boolean),
+  });
+
+  const actions = document.createElement("section");
+  actions.className = "mobile-action-panel mobile-v2-main-actions";
+  actions.innerHTML = `
+    <div class="mobile-summary-grid">
+      ${mobileEntryMarkup("v2-cases", "案例模板", "未选择模板", "mobileV2TemplateSummary")}
+      ${mobileEntryMarkup("v2-assets", "素材", "未上传素材", "mobileV2AssetSummary")}
+      ${mobileEntryMarkup("v2-params", "参数", "1 张 · 默认画幅", "mobileV2ParamsSummary")}
+      ${mobileEntryMarkup("v2-run-detail", "中枢详情", "等待 Agent 输出", "mobileV2RunSummary")}
+      ${mobileEntryMarkup("v2-history", "2.0 历史", "查看全部历史", "mobileV2HistorySummary")}
+      ${mobileEntryMarkup("v2-settings", "V2 设置", "读取中", "mobileV2SettingsSummary")}
+    </div>
+  `;
+  bindMobileEntryButtons(actions);
+  agent?.insertAdjacentElement("afterend", actions);
+  createV2HomeContext(agent, actions);
+  if (outputArea) {
+    outputArea.classList.add("mobile-v2-home-results");
+    actions.insertAdjacentElement("afterend", outputArea);
+  }
+}
+
+function createV2HomeContext(agent, actions) {
+  if (!agent || document.querySelector(".mobile-v2-context-strip")) return;
+  const context = document.createElement("section");
+  context.className = "mobile-v2-context-strip";
+  context.innerHTML = `
+    <div class="mobile-v2-context-copy">
+      <span>当前上下文</span>
+      <strong id="mobileV2ContextSummary">模板未选 · 素材未上传 · 1 张默认画幅</strong>
+    </div>
+    <div id="mobileV2AssetThumb" class="mobile-v2-asset-thumb empty" aria-hidden="true">素材</div>
+  `;
+  actions.insertAdjacentElement("beforebegin", context);
+}
+
+function createMobileVideoArchitecture() {
+  const video = document.querySelector("#videoTab .video-frame");
+  if (!video || document.querySelector(".mobile-video-summary")) return;
+  const summary = document.createElement("div");
+  summary.className = "mobile-video-summary notice-bar";
+  summary.textContent = "视频模块仍为 Demo，占位参数和 Provider 状态保留在本页。";
+  video.prepend(summary);
+}
+
+function mobileEntryMarkup(viewId, title, summary, summaryId) {
+  return `
+    <button class="mobile-entry-card" data-mobile-open="${escapeHtml(viewId)}" type="button">
+      <span>${escapeHtml(title)}</span>
+      <strong id="${escapeHtml(summaryId)}">${escapeHtml(summary)}</strong>
+    </button>
+  `;
+}
+
+function bindMobileEntryButtons(root = document) {
+  root.querySelectorAll("[data-mobile-open]").forEach((button) => {
+    if (button.dataset.mobileBound === "true") return;
+    button.dataset.mobileBound = "true";
+    button.addEventListener("click", () => openMobileSurface(button.dataset.mobileOpen, button));
+  });
+}
+
+function createMobileView({ id, title, eyebrow, footerLabel, targets }) {
+  if (!els.mobileViewLayer || !id || document.querySelector(`[data-mobile-view="${id}"]`)) return null;
+  const view = document.createElement("section");
+  view.className = "mobile-view";
+  view.dataset.mobileView = id;
+  view.hidden = true;
+  view.innerHTML = `
+    <header class="mobile-view-head">
+      <button class="mobile-back-button" type="button" data-mobile-close aria-label="返回">返回</button>
+      <div>
+        <p class="eyebrow">${escapeHtml(eyebrow || "Mobile")}</p>
+        <h3>${escapeHtml(title)}</h3>
+      </div>
+    </header>
+    <div class="mobile-view-body"></div>
+    <footer class="mobile-view-footer">
+      <button class="button secondary full-width" type="button" data-mobile-close data-mobile-primary-close>${escapeHtml(footerLabel || "完成")}</button>
+    </footer>
+  `;
+  const body = view.querySelector(".mobile-view-body");
+  targets.filter(Boolean).forEach((target) => {
+    target.classList.add("mobile-subpage-section");
+    body.appendChild(target);
+  });
+  view.querySelectorAll("[data-mobile-close]").forEach((button) => {
+    button.addEventListener("click", closeMobileSurface);
+  });
+  els.mobileViewLayer.appendChild(view);
+  return view;
+}
+
+function createMobileSheet({ id, title, eyebrow, footerLabel, targets }) {
+  if (!els.mobileSheetLayer || !id || document.querySelector(`[data-mobile-sheet="${id}"]`)) return null;
+  const sheet = document.createElement("section");
+  sheet.className = "mobile-sheet";
+  sheet.dataset.mobileSheet = id;
+  sheet.hidden = true;
+  sheet.innerHTML = `
+    <header class="mobile-sheet-head">
+      <span class="mobile-sheet-grabber" aria-hidden="true"></span>
+      <div>
+        <p class="eyebrow">${escapeHtml(eyebrow || "Mobile")}</p>
+        <h3>${escapeHtml(title)}</h3>
+      </div>
+    </header>
+    <div class="mobile-sheet-body"></div>
+    <footer class="mobile-sheet-footer">
+      <button class="button primary full-width" type="button" data-mobile-close data-mobile-primary-close>${escapeHtml(footerLabel || "完成")}</button>
+    </footer>
+  `;
+  const body = sheet.querySelector(".mobile-sheet-body");
+  targets.filter(Boolean).forEach((target) => {
+    target.classList.add("mobile-subpage-section");
+    body.appendChild(target);
+  });
+  sheet.querySelectorAll("[data-mobile-close]").forEach((button) => {
+    button.addEventListener("click", closeMobileSurface);
+  });
+  els.mobileSheetLayer.appendChild(sheet);
+  return sheet;
+}
+
+function openMobileSurface(id, opener = null) {
+  const view = document.querySelector(`[data-mobile-view="${id}"]`);
+  const sheet = document.querySelector(`[data-mobile-sheet="${id}"]`);
+  const surface = view || sheet;
+  if (!surface) return;
+  if (els.imageLightbox && !els.imageLightbox.hidden) closeImageLightbox();
+  if (els.sampleGuideModal && !els.sampleGuideModal.hidden) closeSampleGuide();
+  closeMobileSurface({ silent: true, fromHistory: true });
+  updateMobileSummaries();
+  if (view) {
+    els.mobileViewLayer.hidden = false;
+    view.hidden = false;
+  } else {
+    els.mobileSheetLayer.hidden = false;
+    sheet.hidden = false;
+  }
+  document.body.classList.add("mobile-surface-open");
+  document.body.dataset.mobileActiveSurface = id;
+  if (opener) document.body.dataset.mobileSurfaceOpener = opener.id || "";
+  const focusTarget = surface.querySelector("button, input, textarea, select, a[href]");
+  focusTarget?.focus({ preventScroll: true });
+  window.history.pushState(
+    { ...(window.history.state || {}), mobileSurface: id, mobileToken: ++mobileHistoryToken },
+    "",
+    window.location.href
+  );
+}
+
+function closeMobileSurface(options = {}) {
+  const closeOptions = options && typeof options === "object" && "type" in options && "target" in options ? {} : options;
+  const silent = Boolean(closeOptions?.silent);
+  const fromHistory = Boolean(closeOptions?.fromHistory);
+  const activeId = document.body.dataset.mobileActiveSurface;
+  document.querySelectorAll(".mobile-view, .mobile-sheet").forEach((surface) => {
+    surface.hidden = true;
+  });
+  if (els.mobileViewLayer) els.mobileViewLayer.hidden = true;
+  if (els.mobileSheetLayer) els.mobileSheetLayer.hidden = true;
+  document.body.classList.remove("mobile-surface-open");
+  const openerId = document.body.dataset.mobileSurfaceOpener;
+  document.body.dataset.mobileActiveSurface = "";
+  document.body.dataset.mobileSurfaceOpener = "";
+  updateMobileSummaries();
+  if (!silent && openerId) document.getElementById(openerId)?.focus({ preventScroll: true });
+  if (!silent && !fromHistory && activeId && window.history.state?.mobileSurface === activeId) {
+    window.history.back();
+  }
+}
+
+function scheduleMobileSummaryUpdate() {
+  window.clearTimeout(mobileSummaryTimer);
+  mobileSummaryTimer = window.setTimeout(updateMobileSummaries, 50);
+}
+
+function setSummaryText(id, text) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = text;
+}
+
+function updateMobileSummaries() {
+  setSummaryText(
+    "mobileV1ParamsSummary",
+    `${els.countInput?.value || defaultImageCount} 张 · ${sizeLabel(state.selectedSize)} · ${(state.selectedFormat || "png").toUpperCase()} · ${qualityMap[state.selectedQuality] || "高"}`
+  );
+  const v1Roles = state.selectedAssetRoles.map(assetRoleLabel).slice(0, 3).join("/");
+  setSummaryText(
+    "mobileV1MaterialSummary",
+    state.assetIds.length ? `${state.assetIds.length} 张 · ${v1Roles || "高级素材"}` : "未上传素材"
+  );
+  setSummaryText("mobileV1HistorySummary", state.historyItems.length ? `${state.historyItems.length} 张历史` : "暂无历史");
+  setSummaryText("mobileV1RevisionSummary", state.selectedOutputId ? "已选择结果，可继续修改" : "选择结果后可用");
+  setSummaryText("mobileV1SettingsSummary", `${providerLabel(state.selectedProvider)} · ${thinkingProviderLabel(state.selectedLlmProvider)}`);
+  setSummaryText("mobileV1EventsSummary", els.eventCount?.textContent ? `${els.eventCount.textContent} 条事件` : "暂无事件");
+
+  const template = v2State.templates.find((item) => item.case_id === v2State.selectedTemplateId);
+  setSummaryText("mobileV2TemplateSummary", template ? `${template.title || "已选模板"} · 框架锁定` : "未选择模板");
+  const v2Roles = v2SelectedAssetRoles().map(assetRoleLabel).slice(0, 3).join("/");
+  setSummaryText("mobileV2AssetSummary", v2State.uploadedAssets.length ? `${v2State.uploadedAssets.length} 张 · ${v2Roles || "素材约束"}` : "未上传素材");
+  setSummaryText("mobileV2ParamsSummary", `${els.v2CountInput?.value || "1"} 张 · ${sizeLabel(v2State.selectedRatio)}`);
+  const runStatus = v2State.currentRun?.status || v2State.progressStageKey;
+  setSummaryText("mobileV2RunSummary", v2State.currentRun ? `${v2RunStatusLabel(runStatus)} · ${els.v2TraceId?.textContent || "-"}` : "等待 Agent 输出");
+  setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2State.history.filter(isRenderableV2HistoryImage).length} 张历史` : "暂无历史");
+  const v2Provider = v2EffectiveImageProvider(v2State.modelSettings || {});
+  setSummaryText("mobileV2SettingsSummary", `${v2ImageChannelLabel(v2Provider)} · Claude Code`);
+  updateV2HomeContextSummary(template);
+}
+
+function updateV2HomeContextSummary(template = null) {
+  const summary = document.getElementById("mobileV2ContextSummary");
+  const thumb = document.getElementById("mobileV2AssetThumb");
+  const templateText = template ? `${template.title || "已选模板"} · 框架锁定` : "模板未选";
+  const roles = v2SelectedAssetRoles().map(assetRoleLabel).slice(0, 2).join("/");
+  const assetText = v2State.uploadedAssets.length ? `${v2State.uploadedAssets.length} 张素材${roles ? ` · ${roles}` : ""}` : "素材未上传";
+  const paramText = `${els.v2CountInput?.value || "1"} 张 · ${sizeLabel(v2State.selectedRatio)}`;
+  if (summary) summary.textContent = `${templateText} · ${assetText} · ${paramText}`;
+  if (!thumb) return;
+  const asset = v2State.uploadedAssets[0];
+  thumb.classList.toggle("empty", !asset);
+  thumb.style.backgroundImage = asset?.preview_url || asset?.url ? `url("${escapeCssUrl(asset.preview_url || asset.url)}")` : "";
+  thumb.textContent = asset ? "" : "素材";
+}
+
+function escapeCssUrl(value = "") {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function sizeLabel(value) {
+  const labels = {
+    "": "默认画幅",
+    "1024x1536": "竖版",
+    "1024x1024": "方图",
+    "1536x1024": "横版",
+  };
+  return labels[value || ""] || value;
+}
+
+function v2RunStatusLabel(value) {
+  const labels = {
+    queued: "排队中",
+    planning: "规划中",
+    retrieving_cases: "匹配案例",
+    composing_prompt: "组合提示词",
+    safety_checking: "安全检查",
+    generating: "生成中",
+    reviewing: "复检中",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+    blocked_by_policy: "已阻断",
+    waiting_for_user: "待确认",
+  };
+  return labels[value] || value || "待命";
 }
 
 function createH5AdvancedPanel({ mode, stack, after, eyebrow, title, summary, targets }) {
@@ -580,6 +1039,7 @@ function setAssetMode(mode) {
   if (els.assetState) {
     els.assetState.textContent = state.assetIds.length ? "高级" : "空";
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function selectedAssetRolesFromDom() {
@@ -600,6 +1060,7 @@ function setAdvancedAssetRoles(roles = ["style_reference"]) {
 function syncAdvancedAssetRoles() {
   state.selectedAssetRoles = selectedAssetRolesFromDom();
   renderAdvancedAssetRoles();
+  scheduleMobileSummaryUpdate();
 }
 
 function renderAdvancedAssetRoles() {
@@ -632,6 +1093,7 @@ function setSize(size) {
   if (!button) return;
   setActive(button, "[data-size]");
   state.selectedSize = size;
+  scheduleMobileSummaryUpdate();
 }
 
 function setFormat(format) {
@@ -639,6 +1101,7 @@ function setFormat(format) {
   if (!button) return;
   setActive(button, "[data-format]");
   state.selectedFormat = format;
+  scheduleMobileSummaryUpdate();
 }
 
 function setQuality(quality) {
@@ -647,6 +1110,7 @@ function setQuality(quality) {
   setActive(button, "[data-quality]");
   state.selectedQuality = quality;
   els.qualityValue.textContent = qualityMap[quality] || quality;
+  scheduleMobileSummaryUpdate();
 }
 
 function setIntensity(value) {
@@ -655,6 +1119,7 @@ function setIntensity(value) {
   setActive(button, "[data-intensity]");
   state.selectedIntensity = value;
   els.intensityValue.textContent = intensityMap[value].label;
+  scheduleMobileSummaryUpdate();
 }
 
 function setImageProvider(provider, { persist = false } = {}) {
@@ -669,6 +1134,7 @@ function setImageProvider(provider, { persist = false } = {}) {
     button.classList.toggle("active", button.dataset.imageProvider === state.selectedProvider);
   });
   els.imageActiveLabel.textContent = state.selectedProvider === "gemini_image" ? "Gemini 优先" : "GPT 优先";
+  scheduleMobileSummaryUpdate();
   if (persist) scheduleProviderSettingsSync({ immediate: true });
 }
 
@@ -678,6 +1144,7 @@ function setThinkingProvider(provider, { persist = false } = {}) {
     button.classList.toggle("active", button.dataset.llmProvider === state.selectedLlmProvider);
   });
   els.thinkingActiveLabel.textContent = state.selectedLlmProvider === "anthropic" ? "Kimi 优先" : "GPT 优先";
+  scheduleMobileSummaryUpdate();
   if (persist) scheduleProviderSettingsSync({ immediate: true });
 }
 
@@ -784,16 +1251,26 @@ async function startNewSession() {
   els.newSessionBtn.disabled = true;
   els.newSessionBtn.textContent = "创建中";
   showGlobalToast("正在创建新会话。");
+  const active = activePanelName();
   try {
-    await createSession();
-    switchTab("image");
-    els.promptInput.value = "";
-    els.countInput.value = defaultImageCount;
-    els.countValue.textContent = defaultImageCount;
-    setSize("1024x1536");
-    setFormat("png");
-    setQuality("high");
-    els.promptInput.focus();
+    if (active === "v2") {
+      resetV2SessionState();
+      switchTab("v2");
+      els.v2PromptInput?.focus();
+      updateV2Notice("已创建新的 V2.0 创作上下文。", "success");
+      showGlobalToast("新的 V2.0 会话已准备好。");
+    } else {
+      await createSession();
+      switchTab("image");
+      els.promptInput.value = "";
+      els.countInput.value = defaultImageCount;
+      els.countValue.textContent = defaultImageCount;
+      setSize("");
+      setFormat("png");
+      setQuality("high");
+      els.promptInput.focus();
+    }
+    scheduleMobileSummaryUpdate();
   } catch (error) {
     showNotice(`新会话创建失败：${friendlyError(error)}`, "error");
     showGlobalToast("新会话创建失败。", "error");
@@ -1652,11 +2129,13 @@ async function selectV2Template(caseId) {
   els.v2ModeState.textContent = "模板定制";
   renderV2Templates(v2State.visibleTemplates);
   renderV2AssetPanel();
+  scheduleMobileSummaryUpdate();
   try {
     const detail = await v2Request(`/prompt-cases/${encodeURIComponent(caseId)}`);
     v2State.selectedTemplateDetail = detail;
     hydrateV2TemplateVariables(detail);
     updateV2Notice(`已选择模板：${detail.title || caseId}，可以继续修改定制项。`, "success");
+    scheduleMobileSummaryUpdate();
   } catch (error) {
     updateV2Notice(`模板详情加载失败：${friendlyError(error)}`, "warning");
   }
@@ -1670,6 +2149,7 @@ function clearV2Template() {
   els.v2ModeState.textContent = "智能增强";
   renderV2Templates(v2State.visibleTemplates);
   renderV2AssetPanel();
+  scheduleMobileSummaryUpdate();
 }
 
 function hydrateV2TemplateVariables(detail) {
@@ -1732,6 +2212,7 @@ function resetV2Progress() {
 function finishV2Progress(stageKey, detail, type = "success") {
   setV2Progress(stageKey, detail, type, { forceNotice: true });
   clearV2ProgressTimer();
+  scheduleMobileSummaryUpdate();
 }
 
 function setV2Progress(stageKey = "planning", detail = "", type = "info", { forceNotice = false } = {}) {
@@ -1749,6 +2230,7 @@ function setV2Progress(stageKey = "planning", detail = "", type = "info", { forc
     v2State.progressNoticeKey = noticeKey;
     updateV2Notice(`${stage.label} · ${v2State.progressDetail}`, type);
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function renderV2Progress() {
@@ -1911,6 +2393,7 @@ async function runV2Creative() {
     updateV2Notice(notice.message, notice.type);
     finishV2Progress(v2StatusStageMap[run.status] || "completed", notice.message, notice.type);
     showGlobalToast("V2.0 Agent 已完成出图流程。");
+    scrollV2HomeResultsIntoView(run);
     await loadV2History({ silent: true });
   } catch (error) {
     const message = `V2.0 Agent 失败：${friendlyError(error)}`;
@@ -2029,6 +2512,14 @@ function renderV2Run(run) {
   const jobs = run.generation_jobs || [];
   const outputs = jobs.flatMap((job) => job.outputs || []);
   renderV2Outputs(outputs, jobs[0]);
+  scheduleMobileSummaryUpdate();
+}
+
+function scrollV2HomeResultsIntoView(run) {
+  const outputs = (run?.generation_jobs || []).flatMap((job) => job.outputs || []);
+  if (!outputs.length) return;
+  const resultSection = els.v2Outputs?.closest(".gallery-wrap");
+  resultSection?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderV2SelectedCases(cases) {
@@ -2260,6 +2751,7 @@ function renderV2Outputs(outputs, job) {
     error.textContent = job.error.message || "真实出图失败，已使用兜底输出。";
     els.v2Outputs.appendChild(error);
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function renderV2History(items) {
@@ -2288,7 +2780,7 @@ function renderV2History(items) {
       image.loading = "lazy";
       image.decoding = "async";
       preview.appendChild(image);
-      preview.addEventListener("click", () => openV2HistoryLightbox(item, index));
+      preview.addEventListener("click", () => openV2HistoryLightbox(item, index, card));
     }
 
     const meta = document.createElement("div");
@@ -2304,26 +2796,7 @@ function renderV2History(items) {
     const id = document.createElement("span");
     id.className = "output-id";
     id.textContent = item.output_id || item.job_id || "-";
-    const actions = document.createElement("div");
-    actions.className = "history-card-actions";
-    const link = document.createElement("a");
-    link.className = "download-link";
-    bindDownloadLink(
-      link,
-      v2MediaUrl(item.url),
-      `${item.output_id || "v2-image"}.${v2HistoryFormat(item) === "jpeg" ? "jpg" : v2HistoryFormat(item)}`,
-    );
-    link.textContent = "下载";
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "delete-link";
-    deleteButton.type = "button";
-    deleteButton.textContent = "删除";
-    deleteButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteV2HistoryItem(item, card);
-    });
-    actions.append(link, deleteButton);
-    footer.append(id, actions);
+    footer.append(id);
 
     card.append(preview, meta, footer);
     els.v2HistoryGrid.appendChild(card);
@@ -2350,6 +2823,7 @@ function renderV2History(items) {
     loadMore.append(text, button);
     els.v2HistoryGrid.appendChild(loadMore);
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function isRenderableV2HistoryImage(item) {
@@ -2359,7 +2833,7 @@ function isRenderableV2HistoryImage(item) {
   return Boolean(item.thumbnail_url || item.url);
 }
 
-function openV2HistoryLightbox(item, index = 0) {
+function openV2HistoryLightbox(item, index = 0, card = null) {
   const cardPrompt = v2HistoryCardPrompt(item);
   openImageLightbox({
     id: item.output_id,
@@ -2368,6 +2842,13 @@ function openV2HistoryLightbox(item, index = 0) {
     format: v2HistoryFormat(item),
     meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
     promptText: v2PromptTextFromHistory(item),
+    actions: [
+      {
+        label: "删除",
+        tone: "danger",
+        run: () => deleteV2HistoryItem(item, card),
+      },
+    ],
   });
 }
 
@@ -2493,6 +2974,34 @@ function clearV2RunResult() {
   els.v2PromptPlan.textContent = "等待 V2.0 Agent 输出。";
   els.v2Outputs.innerHTML = "";
   els.v2Outputs.classList.add("empty-v2-list");
+  scheduleMobileSummaryUpdate();
+}
+
+function resetV2SessionState() {
+  v2State.selectedTemplateId = null;
+  v2State.selectedTemplateDetail = null;
+  v2State.templateAutoFields = { subject: "", style: "", useCase: "" };
+  v2State.selectedRatio = "";
+  v2State.uploadedAssets = [];
+  v2State.currentRun = null;
+  resetV2Progress();
+  if (els.v2PromptInput) els.v2PromptInput.value = "";
+  if (els.v2CountInput) {
+    els.v2CountInput.value = "1";
+    els.v2CountValue.textContent = "1";
+  }
+  document.querySelectorAll("[data-v2-ratio]").forEach((button) => {
+    button.classList.toggle("active", (button.dataset.v2Ratio || "") === "");
+  });
+  if (els.v2SubjectInput) els.v2SubjectInput.value = "";
+  if (els.v2StyleInput) els.v2StyleInput.value = "";
+  if (els.v2UseCaseInput) els.v2UseCaseInput.value = "";
+  if (els.v2SelectedTemplateLabel) els.v2SelectedTemplateLabel.textContent = "未选择模板";
+  if (els.v2ModeState) els.v2ModeState.textContent = "智能增强";
+  clearV2Asset({ keepNotice: true });
+  clearV2RunResult();
+  renderV2Templates(v2State.visibleTemplates);
+  scheduleMobileSummaryUpdate();
 }
 
 function toggleV2Loading(isLoading) {
@@ -2576,11 +3085,13 @@ async function handleV2Asset() {
     ];
     renderV2AssetPanel();
     updateV2Notice("V2 素材已分析完成；生成时会交给 Claude 中枢按当前用途绑定。", "success");
+    scheduleMobileSummaryUpdate();
   } catch (error) {
     v2State.uploadedAssets = [];
     if (els.v2AssetState) els.v2AssetState.textContent = "失败";
     renderV2AssetPanel();
     updateV2Notice(`V2 素材上传失败：${friendlyError(error)}`, "error");
+    scheduleMobileSummaryUpdate();
   }
 }
 
@@ -2670,6 +3181,7 @@ function renderV2AssetPanel() {
       ? "已选案例优先锁定画面；上传素材只填入主体、Logo、人脸等可替换位置。"
       : "未选案例时，中枢会自由结合素材与案例库。";
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function clearV2Asset(options = {}) {
@@ -2679,6 +3191,7 @@ function clearV2Asset(options = {}) {
   resetV2AssetPreview();
   renderV2AssetPanel();
   if (!options.keepNotice) updateV2Notice("已清空 V2 上传素材。", "info");
+  scheduleMobileSummaryUpdate();
 }
 
 function v2ConstraintStrengthLabel(value) {
@@ -2737,6 +3250,7 @@ async function handleAsset() {
   } else {
     els.assetState.textContent = asset.status;
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function isImageAssetFile(file) {
@@ -3009,6 +3523,7 @@ function renderGallery(outputs) {
     });
     els.gallery.appendChild(node);
   });
+  scheduleMobileSummaryUpdate();
 }
 
 function renderSkeleton(count) {
@@ -3085,24 +3600,9 @@ function renderHistory(items) {
     const id = document.createElement("span");
     id.className = "output-id";
     id.textContent = item.id;
-    const link = document.createElement("a");
-    link.className = "download-link";
-    bindDownloadLink(link, item.url, `${item.id}.${item.format === "jpeg" ? "jpg" : item.format}`);
-    link.textContent = "下载";
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "delete-link";
-    deleteButton.type = "button";
-    deleteButton.textContent = "删除";
-    deleteButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteHistoryItem(item, card);
-    });
 
     preview.addEventListener("click", () => selectHistoryItem(item, card));
-    const actions = document.createElement("div");
-    actions.className = "history-card-actions";
-    actions.append(link, deleteButton);
-    footer.append(id, actions);
+    footer.append(id);
     meta.append(prompt, details);
     card.append(preview, meta, footer);
     els.historyGallery.appendChild(card);
@@ -3123,6 +3623,7 @@ function renderHistory(items) {
     loadMore.append(text, button);
     els.historyGallery.appendChild(loadMore);
   }
+  scheduleMobileSummaryUpdate();
 }
 
 function renderHeroHistory(items, { source = "v1" } = {}) {
@@ -3158,6 +3659,7 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
     els.heroHistoryCarousel.appendChild(slide);
   });
   restartHeroCarousels();
+  scheduleMobileSummaryUpdate();
 }
 
 function openActiveHeroHistorySlide() {
@@ -3292,6 +3794,22 @@ async function deleteHistoryItem(item, card) {
 function selectHistoryItem(item, card) {
   document.querySelectorAll(".output-card, .history-card").forEach((node) => node.classList.remove("selected"));
   card.classList.add("selected");
+  const actions = [];
+  if (item.source === "repository") {
+    actions.push({
+      label: "用于继续修改",
+      tone: "secondary",
+      run: () => {
+        closeImageLightbox();
+        openMobileSurface("v1-revision", card);
+      },
+    });
+  }
+  actions.push({
+    label: "删除",
+    tone: "danger",
+    run: () => deleteHistoryItem(item, card),
+  });
   openImageLightbox({
     id: item.id,
     title: (item.original_prompt || item.prompt) ? (item.original_prompt || item.prompt).slice(0, 34) : "历史图片",
@@ -3299,6 +3817,7 @@ function selectHistoryItem(item, card) {
     format: item.format,
     meta: historyMetaText(item),
     promptText: promptTextFromHistoryItem(item),
+    actions,
   });
   if (item.source !== "repository") {
     state.currentJob = null;
@@ -3315,7 +3834,7 @@ function selectHistoryItem(item, card) {
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 
-function openImageLightbox({ id, title, url, format, meta, promptText }) {
+function openImageLightbox({ id, title, url, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
   els.lightboxImage.src = url;
   els.lightboxImage.alt = title || "放大预览图";
@@ -3331,6 +3850,7 @@ function openImageLightbox({ id, title, url, format, meta, promptText }) {
   closeLightboxPrompt();
   resetLightboxZoom();
   bindDownloadLink(els.lightboxDownload, url, `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
+  renderLightboxActions(actions);
   els.imageLightbox.hidden = false;
   document.body.classList.add("modal-open");
   els.closeImageLightboxBtn.focus();
@@ -3342,7 +3862,30 @@ function closeImageLightbox() {
   els.lightboxImage.removeAttribute("data-full-url");
   resetLightboxZoom();
   closeLightboxPrompt();
+  renderLightboxActions([]);
   document.body.classList.remove("modal-open");
+}
+
+function renderLightboxActions(actions = []) {
+  activeLightboxActions = Array.isArray(actions) ? actions.filter((action) => action && action.label && typeof action.run === "function") : [];
+  if (!els.lightboxActionBar) return;
+  els.lightboxActionBar.innerHTML = "";
+  els.lightboxActionBar.hidden = activeLightboxActions.length === 0;
+  activeLightboxActions.forEach((action, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `button ${action.tone === "danger" ? "ghost lightbox-danger-action" : "secondary"}`;
+    button.textContent = action.label;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await activeLightboxActions[index]?.run();
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    });
+    els.lightboxActionBar.appendChild(button);
+  });
 }
 
 function toggleLightboxZoom(event) {
@@ -3651,6 +4194,7 @@ function renderEvents(events) {
     row.innerHTML = `<strong>${event.event}</strong><span>${escapeHtml(String(event.data))}</span>`;
     els.eventList.appendChild(row);
   });
+  scheduleMobileSummaryUpdate();
 }
 
 function startImageProgress({ label, count, providerName, traceId = "pending" }) {
@@ -3685,6 +4229,7 @@ function setStatus(status, outputs, traceId) {
   els.jobStatus.textContent = status;
   els.outputCount.textContent = String(outputs);
   els.traceId.textContent = traceId || "-";
+  scheduleMobileSummaryUpdate();
 }
 
 function toggleBusy(isBusy) {

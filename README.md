@@ -33,6 +33,7 @@
 - `docs/25_V1素材高级版_API与数据模型.md`：V1 素材高级版 API 扩展、请求 schema、视觉画像、复检结果、数据表、状态机和 provider capability 契约。
 - `docs/26_V1素材高级版_测试验收与风控.md`：V1 素材高级版测试矩阵、真实图片输入验收、视觉画像/复检、历史验收、限流、上传安全、授权与内容风控。
 - `docs/27_V1素材高级版_实施任务拆解.md`：V1 素材高级版从开关、schema、vision analyzer、Kimi planner、provider 图片输入、后处理到测试上线的任务拆解。
+- `docs/28_移动H5前端交互重构开发文档.md`：移动 H5 前端信息架构重构方案，把高级设置、案例库、历史、运行详情和设置页改为更适合手机操作的独立层级。
 - `specs/openapi.yaml`：第一版后端 API 草案。
 - `diagrams/*.mmd`：Mermaid 架构图。
 - `src_skeleton/`：最小代码骨架，方便研发快速起项目。

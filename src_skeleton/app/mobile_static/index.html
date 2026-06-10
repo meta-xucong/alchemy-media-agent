@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f3e8" />
     <title>Alchemy H5 · Gallery Ritual</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260607-h5-apple-polish" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260610-v2-home-results" />
   </head>
   <body>
     <div class="app-shell">
@@ -595,28 +595,35 @@
             <section class="gallery-wrap flow-section">
               <div class="panel-head section-title">
                 <div>
-                  <p class="eyebrow">03 / Agent Output</p>
+                  <p class="eyebrow">03 / Result</p>
                   <h3>生成结果</h3>
                 </div>
                 <span id="v2TraceId" class="state-pill">-</span>
               </div>
 
-              <div class="v2-output-layout">
+              <div id="v2Outputs" class="v2-output-grid empty-v2-list"></div>
+            </section>
+
+            <section class="panel flow-section v2-orchestration-detail">
+              <div class="panel-head section-title">
                 <div>
+                  <p class="eyebrow">04 / Agent Trace</p>
+                  <h3>中枢详情</h3>
+                </div>
+              </div>
+
+              <div class="v2-output-layout">
+                <div class="v2-detail-block">
                   <h4>选用案例</h4>
                   <div id="v2SelectedCases" class="v2-case-list empty-v2-list"></div>
                 </div>
-                <div>
+                <div class="v2-detail-block">
                   <h4>中枢判断</h4>
                   <div id="v2BrainPanel" class="v2-brain-panel empty-v2-list">等待 Agent 判断。</div>
                 </div>
-                <div>
+                <div class="v2-detail-block">
                   <h4>组合提示词</h4>
                   <pre id="v2PromptPlan" class="v2-prompt-plan">等待 V2.0 Agent 输出。</pre>
-                </div>
-                <div>
-                  <h4>生成结果</h4>
-                  <div id="v2Outputs" class="v2-output-grid empty-v2-list"></div>
                 </div>
               </div>
             </section>
@@ -624,7 +631,7 @@
             <section class="panel flow-section">
               <div class="panel-head section-title">
                 <div>
-                  <p class="eyebrow">04 / V2 History</p>
+                  <p class="eyebrow">05 / V2 History</p>
                   <h3>2.0 历史</h3>
                 </div>
                 <div class="history-actions">
@@ -638,7 +645,7 @@
             <section class="panel flow-section v2-provider-area">
               <div class="panel-head section-title">
                 <div>
-                  <p class="eyebrow">05 / Providers</p>
+                  <p class="eyebrow">06 / Providers</p>
                   <h3>外接 Provider</h3>
                 </div>
                 <span id="v2InheritedProviderState" class="state-pill">读取中</span>
@@ -866,6 +873,7 @@
           </button>
           <a id="lightboxDownload" class="download-link" href="#">下载</a>
         </div>
+        <div id="lightboxActionBar" class="lightbox-action-bar" hidden></div>
         <div id="lightboxPromptPanel" class="lightbox-prompt-panel" hidden>
           <div class="prompt-card">
             <div class="prompt-card-head">
@@ -891,6 +899,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260609-history-24-recovery" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260610-v2-home-results" defer></script>
   </body>
 </html>
