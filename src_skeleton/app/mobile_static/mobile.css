@@ -315,14 +315,35 @@ body.h5-simplified .hero-card-head .case-source {
 
 body.h5-simplified .hero-gallery-lane .case-carousel {
   display: block;
+  position: relative;
   overflow: hidden;
   padding-bottom: 0;
 }
 
 body.h5-simplified .hero-gallery-lane .case-slide {
+  width: 100%;
   min-height: 0;
   aspect-ratio: 1 / 1;
   border-radius: 14px;
+}
+
+body.h5-simplified .hero-gallery-lane .synced-carousel .case-slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(1.015);
+  transition: opacity 520ms ease, transform 620ms ease;
+}
+
+body.h5-simplified .hero-gallery-lane .synced-carousel .case-slide:first-child {
+  position: relative;
+}
+
+body.h5-simplified .hero-gallery-lane .synced-carousel .case-slide.active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
 }
 
 body.h5-simplified .hero-gallery-lane .case-slide img {
@@ -333,12 +354,36 @@ body.h5-simplified .hero-gallery-lane .case-slide div {
   left: 8px;
   right: 8px;
   bottom: 8px;
-  padding: 7px 8px;
-  border-radius: 10px;
+  display: grid;
+  gap: 1px;
+  padding: 6px 7px;
+  border-color: rgba(255, 253, 247, 0.36);
+  border-radius: 9px;
+  background: rgba(31, 35, 28, 0.34);
+  backdrop-filter: blur(10px);
 }
 
-body.h5-simplified .hero-gallery-lane .case-slide:nth-child(n + 2) {
-  display: none;
+body.h5-simplified .hero-gallery-lane .case-slide div span,
+body.h5-simplified .hero-gallery-lane .case-slide div strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 253, 247, 0.9);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+body.h5-simplified .hero-gallery-lane .case-slide div span {
+  font-size: 9px;
+  line-height: 1.25;
+  font-weight: 420;
+  opacity: 0.78;
+}
+
+body.h5-simplified .hero-gallery-lane .case-slide div strong {
+  font-size: 10px;
+  line-height: 1.22;
+  font-weight: 520;
 }
 
 .hero-actions,
@@ -682,22 +727,56 @@ body.h5-simplified .hero-gallery-lane .case-slide:nth-child(n + 2) {
   border-top: 1px solid var(--line);
 }
 
-.mobile-v2-context-copy {
+.mobile-v2-context-icons {
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.v2-context-chip {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
-}
-
-.mobile-v2-context-copy span {
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
   color: var(--muted);
-  font-size: 12px;
+  background: rgba(255, 255, 252, 0.48);
 }
 
-.mobile-v2-context-copy strong {
-  min-width: 0;
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.45;
+.v2-context-chip.ready {
+  border-color: rgba(125, 139, 111, 0.34);
+  color: var(--sage-deep);
+  background: rgba(125, 139, 111, 0.08);
+}
+
+.v2-context-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--quiet);
+}
+
+.v2-context-chip.ready .v2-context-dot {
+  background: var(--sage-deep);
+}
+
+.v2-context-label {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.v2-context-chip strong {
+  max-width: 62px;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
   font-weight: 560;
 }
 
@@ -714,7 +793,17 @@ body.h5-simplified .hero-gallery-lane .case-slide:nth-child(n + 2) {
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
-  font-size: 11px;
+  font-size: 19px;
+  font-weight: 300;
+}
+
+button.mobile-v2-asset-thumb {
+  padding: 0;
+  cursor: pointer;
+}
+
+.v2-upload-button {
+  margin-top: 10px;
 }
 
 .mobile-view-layer,

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f3e8" />
     <title>Alchemy H5 · Gallery Ritual</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260610-v2-home-results" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260610-v2-asset-context" />
   </head>
   <body>
     <div class="app-shell">
@@ -540,10 +540,11 @@
                   <div id="v2AssetPreview" class="asset-preview v2-asset-preview empty-asset-preview">
                     <span id="v2AssetPreviewLabel">未选择素材</span>
                   </div>
+                  <button id="v2AssetUploadBtn" class="button secondary full-width v2-upload-button" type="button">上传图片</button>
                   <label class="file-drop v2-file-drop" for="v2AssetInput">
                     <input id="v2AssetInput" type="file" accept="image/*" />
-                    <span class="file-title">选择参考图片</span>
-                    <span id="v2AssetName" class="file-meta">可与案例、提示词协作生效</span>
+                    <span class="file-title">点此选择参考图片</span>
+                    <span id="v2AssetName" class="file-meta">PNG / JPEG / WebP</span>
                   </label>
                   <div class="advanced-role-checks v2-asset-role-checks" aria-label="V2素材用途">
                     <label class="role-check">
@@ -899,6 +900,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260610-v2-home-results" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260610-v2-asset-context" defer></script>
   </body>
 </html>

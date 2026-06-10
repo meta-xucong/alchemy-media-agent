@@ -196,6 +196,7 @@ const els = {
   v2SelectedTemplateLabel: document.querySelector("#v2SelectedTemplateLabel"),
   v2CountInput: document.querySelector("#v2CountInput"),
   v2CountValue: document.querySelector("#v2CountValue"),
+  v2AssetUploadBtn: document.querySelector("#v2AssetUploadBtn"),
   v2AssetInput: document.querySelector("#v2AssetInput"),
   v2AssetName: document.querySelector("#v2AssetName"),
   v2AssetPreview: document.querySelector("#v2AssetPreview"),
@@ -405,6 +406,9 @@ function bindControls() {
     });
   }
   if (els.v2AssetInput) els.v2AssetInput.addEventListener("change", handleV2Asset);
+  if (els.v2AssetUploadBtn) {
+    els.v2AssetUploadBtn.addEventListener("click", () => els.v2AssetInput?.click());
+  }
   document.querySelectorAll("[data-v2-asset-role]").forEach((input) => {
     input.addEventListener("change", renderV2AssetPanel);
   });
@@ -745,13 +749,74 @@ function createV2HomeContext(agent, actions) {
   const context = document.createElement("section");
   context.className = "mobile-v2-context-strip";
   context.innerHTML = `
-    <div class="mobile-v2-context-copy">
-      <span>当前上下文</span>
-      <strong id="mobileV2ContextSummary">模板未选 · 素材未上传 · 1 张默认画幅</strong>
-    </div>
-    <div id="mobileV2AssetThumb" class="mobile-v2-asset-thumb empty" aria-hidden="true">素材</div>
+    <div id="mobileV2ContextSummary" class="mobile-v2-context-icons" aria-label="当前上下文"></div>
+    <button id="mobileV2AssetThumb" class="mobile-v2-asset-thumb empty" data-mobile-open="v2-assets" type="button" aria-label="打开上传素材">+</button>
   `;
   actions.insertAdjacentElement("beforebegin", context);
+  bindMobileEntryButtons(context);
+}
+
+function v2ContextChipMarkup({ key, label, value, state = "idle" }) {
+  return `
+    <span class="v2-context-chip ${escapeHtml(state)}" data-context-key="${escapeHtml(key)}">
+      <span class="v2-context-dot" aria-hidden="true"></span>
+      <span class="v2-context-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </span>
+  `;
+}
+
+function v2RenderContextChips(template) {
+  const roles = v2SelectedAssetRoles().map(assetRoleLabel).slice(0, 2).join("/");
+  const assetCount = v2State.uploadedAssets.length;
+  return [
+    {
+      key: "template",
+      label: "模板",
+      value: template ? "已锁" : "未选",
+      state: template ? "ready" : "idle",
+    },
+    {
+      key: "asset",
+      label: "素材",
+      value: assetCount ? `${assetCount}张` : "未传",
+      state: assetCount ? "ready" : "idle",
+    },
+    {
+      key: "count",
+      label: "数量",
+      value: `${els.v2CountInput?.value || "1"}张`,
+      state: "ready",
+    },
+    {
+      key: "ratio",
+      label: "画幅",
+      value: shortSizeLabel(v2State.selectedRatio),
+      state: v2State.selectedRatio ? "ready" : "idle",
+    },
+    ...(assetCount && roles
+      ? [
+          {
+            key: "role",
+            label: "用途",
+            value: roles,
+            state: "ready",
+          },
+        ]
+      : []),
+  ]
+    .map(v2ContextChipMarkup)
+    .join("");
+}
+
+function shortSizeLabel(value) {
+  const labels = {
+    "": "默认",
+    "1024x1536": "竖",
+    "1024x1024": "方",
+    "1536x1024": "横",
+  };
+  return labels[value || ""] || "自定";
 }
 
 function createMobileVideoArchitecture() {
@@ -932,16 +997,13 @@ function updateMobileSummaries() {
 function updateV2HomeContextSummary(template = null) {
   const summary = document.getElementById("mobileV2ContextSummary");
   const thumb = document.getElementById("mobileV2AssetThumb");
-  const templateText = template ? `${template.title || "已选模板"} · 框架锁定` : "模板未选";
-  const roles = v2SelectedAssetRoles().map(assetRoleLabel).slice(0, 2).join("/");
-  const assetText = v2State.uploadedAssets.length ? `${v2State.uploadedAssets.length} 张素材${roles ? ` · ${roles}` : ""}` : "素材未上传";
-  const paramText = `${els.v2CountInput?.value || "1"} 张 · ${sizeLabel(v2State.selectedRatio)}`;
-  if (summary) summary.textContent = `${templateText} · ${assetText} · ${paramText}`;
+  if (summary) summary.innerHTML = v2RenderContextChips(template);
   if (!thumb) return;
   const asset = v2State.uploadedAssets[0];
   thumb.classList.toggle("empty", !asset);
   thumb.style.backgroundImage = asset?.preview_url || asset?.url ? `url("${escapeCssUrl(asset.preview_url || asset.url)}")` : "";
-  thumb.textContent = asset ? "" : "素材";
+  thumb.textContent = asset ? "" : "+";
+  thumb.title = asset ? "查看或更换素材" : "上传素材";
 }
 
 function escapeCssUrl(value = "") {
@@ -3187,7 +3249,7 @@ function renderV2AssetPanel() {
 function clearV2Asset(options = {}) {
   v2State.uploadedAssets = [];
   if (els.v2AssetInput) els.v2AssetInput.value = "";
-  if (els.v2AssetName) els.v2AssetName.textContent = "可与案例、提示词协作生效";
+  if (els.v2AssetName) els.v2AssetName.textContent = "PNG / JPEG / WebP";
   resetV2AssetPreview();
   renderV2AssetPanel();
   if (!options.keepNotice) updateV2Notice("已清空 V2 上传素材。", "info");
