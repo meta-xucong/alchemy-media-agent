@@ -772,6 +772,28 @@ def test_mobile_h5_app_is_served_independently():
     assert "deleteV2HistoryItem" in mobile_script.text
 
 
+def test_image_share_landing_page_has_wechat_friendly_metadata():
+    client = TestClient(app)
+
+    response = client.get(
+        "/share/image",
+        params={
+            "image": "/v1/outputs/out_share/download",
+            "thumb": "/v1/outputs/out_share/thumbnail",
+            "title": "轻食海报 <script>",
+            "desc": "分享给微信好友",
+        },
+    )
+
+    assert response.status_code == 200
+    assert 'property="og:title"' in response.text
+    assert "轻食海报 &lt;script&gt;" in response.text
+    assert "<script>" not in response.text
+    assert 'property="og:image"' in response.text
+    assert "http://testserver/v1/outputs/out_share/thumbnail" in response.text
+    assert "打开 Alchemy" in response.text
+
+
 def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     client = TestClient(app)

@@ -2356,6 +2356,25 @@ button.v2-live-preview:focus-visible {
   padding: 16px 18px;
 }
 
+.lightbox-action-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 18px 16px;
+}
+
+.lightbox-action-bar[hidden] {
+  display: none;
+}
+
+.lightbox-action-bar .button {
+  min-width: 96px;
+}
+
+.lightbox-danger-action {
+  color: var(--red);
+}
+
 .lightbox-head {
   padding-right: 68px;
 }
@@ -2446,7 +2465,7 @@ button.v2-live-preview:focus-visible {
   position: absolute;
   left: 18px;
   right: 18px;
-  bottom: 72px;
+  bottom: 124px;
   z-index: 3;
 }
 
@@ -2515,6 +2534,39 @@ button.v2-live-preview:focus-visible {
 .prompt-scroll-box:focus {
   outline: 3px solid rgba(201, 161, 95, 0.24);
   outline-offset: -3px;
+}
+
+.wechat-share-guide {
+  position: fixed;
+  z-index: 130;
+  top: calc(18px + env(safe-area-inset-top));
+  right: 18px;
+  max-width: min(320px, calc(100vw - 32px));
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  border-radius: 18px;
+  color: var(--ink);
+  background: rgba(255, 253, 250, 0.94);
+  box-shadow: 0 20px 70px rgba(23, 20, 17, 0.2);
+  text-align: left;
+}
+
+.wechat-share-guide span {
+  color: var(--brass);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.wechat-share-guide strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.wechat-share-guide small {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @media (max-width: 1180px) {

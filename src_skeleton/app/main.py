@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
@@ -51,6 +53,30 @@ def frontend_app():
 @app.get("/mobile")
 def mobile_frontend_app():
     return FileResponse(MOBILE_STATIC_DIR / "index.html")
+
+
+@app.get("/share/image", response_class=HTMLResponse)
+def image_share_landing(
+    request: Request,
+    image: str = Query(default=""),
+    thumb: str | None = Query(default=None),
+    title: str = Query(default="Alchemy 生成图片"),
+    desc: str = Query(default="来自 Alchemy Media Agent 的 AI 影像作品。"),
+):
+    image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
+    thumb_url = _safe_public_share_url(request, thumb or image, fallback="/static/showcase/city-poster.jpg")
+    page_url = str(request.url)
+    safe_title = _share_text(title, "Alchemy 生成图片", 48)
+    safe_desc = _share_text(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88)
+    return HTMLResponse(
+        _share_image_html(
+            title=safe_title,
+            desc=safe_desc,
+            page_url=page_url,
+            image_url=image_url,
+            thumb_url=thumb_url,
+        )
+    )
 
 
 @app.get("/healthz")
@@ -357,6 +383,137 @@ def _resolve_output_file(output_id: str) -> tuple[Path, str]:
         path, output_format, _ = fallback
         return path, output_format
     return path, output.format
+
+
+def _safe_public_share_url(request: Request, value: str | None, *, fallback: str) -> str:
+    fallback_url = str(request.url_for("static", path="showcase/city-poster.jpg"))
+    if not value:
+        return fallback_url
+    decoded = unquote(str(value).strip())
+    if not decoded:
+        return fallback_url
+    split = urlsplit(decoded)
+    if split.scheme in {"http", "https"}:
+        return decoded
+    if decoded.startswith("/"):
+        return str(request.base_url).rstrip("/") + quote(decoded, safe="/:?&=%#.-_~")
+    return str(request.base_url).rstrip("/") + quote(fallback, safe="/:?&=%#.-_~")
+
+
+def _share_text(value: str | None, fallback: str, limit: int) -> str:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        compact = fallback
+    return compact[:limit]
+
+
+def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str) -> str:
+    title_html = escape(title)
+    desc_html = escape(desc)
+    page_url_html = escape(page_url, quote=True)
+    image_url_html = escape(image_url, quote=True)
+    thumb_url_html = escape(thumb_url, quote=True)
+    return f"""<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="{desc_html}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{title_html}" />
+    <meta property="og:description" content="{desc_html}" />
+    <meta property="og:url" content="{page_url_html}" />
+    <meta property="og:image" content="{thumb_url_html}" />
+    <meta itemprop="name" content="{title_html}" />
+    <meta itemprop="description" content="{desc_html}" />
+    <meta itemprop="image" content="{thumb_url_html}" />
+    <title>{title_html}</title>
+    <style>
+      :root {{
+        color-scheme: light;
+        --ink: #24231f;
+        --muted: #706b60;
+        --sage: #748269;
+        --paper: #f7f3e8;
+        --panel: rgba(255, 253, 247, 0.86);
+        --line: rgba(55, 50, 41, 0.12);
+      }}
+      * {{ box-sizing: border-box; }}
+      body {{
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        color: var(--ink);
+        background: radial-gradient(circle at 50% 0%, #fffdf7 0, var(--paper) 58%, #ede6d5 100%);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }}
+      main {{
+        width: min(100%, 560px);
+        display: grid;
+        gap: 14px;
+      }}
+      .preview {{
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--panel);
+        box-shadow: 0 24px 80px rgba(36, 35, 31, 0.14);
+      }}
+      .preview img {{
+        width: 100%;
+        max-height: 70vh;
+        display: block;
+        object-fit: contain;
+        background: #f1ecde;
+      }}
+      .copy {{
+        display: grid;
+        gap: 9px;
+        padding: 2px 2px 0;
+      }}
+      h1 {{
+        margin: 0;
+        font-size: clamp(24px, 7vw, 40px);
+        line-height: 1.05;
+        letter-spacing: 0;
+        font-weight: 650;
+      }}
+      p {{
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.7;
+      }}
+      a {{
+        width: fit-content;
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 18px;
+        border-radius: 999px;
+        color: #fffdf8;
+        background: var(--sage);
+        font-size: 14px;
+        text-decoration: none;
+      }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <article class="preview">
+        <img src="{image_url_html}" alt="{title_html}" />
+      </article>
+      <section class="copy">
+        <h1>{title_html}</h1>
+        <p>{desc_html}</p>
+        <a href="/h5">打开 Alchemy</a>
+      </section>
+    </main>
+  </body>
+</html>"""
 
 
 def _job_prompt(job) -> str | None:

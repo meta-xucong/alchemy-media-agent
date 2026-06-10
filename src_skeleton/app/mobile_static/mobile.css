@@ -1732,6 +1732,7 @@ body.h5-simplified .mobile-v2-home-results {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
+  padding-bottom: 2px;
 }
 
 .lightbox-action-bar[hidden] {
@@ -1740,6 +1741,42 @@ body.h5-simplified .mobile-v2-home-results {
 
 .lightbox-danger-action {
   color: var(--danger);
+}
+
+.wechat-share-guide {
+  position: fixed;
+  z-index: 150;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 16px;
+  right: 16px;
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 253, 247, 0.56);
+  border-radius: 20px;
+  color: var(--ink);
+  background: rgba(255, 253, 247, 0.94);
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  backdrop-filter: blur(14px);
+}
+
+.wechat-share-guide span {
+  color: var(--sage-deep);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wechat-share-guide strong {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.wechat-share-guide small {
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .prompt-trigger {

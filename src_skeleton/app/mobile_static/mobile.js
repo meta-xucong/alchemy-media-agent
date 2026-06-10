@@ -3901,6 +3901,10 @@ function openImageLightbox({ id, title, url, format, meta, promptText, actions =
   els.lightboxImage.src = url;
   els.lightboxImage.alt = title || "放大预览图";
   els.lightboxImage.dataset.fullUrl = url;
+  els.lightboxImage.dataset.shareTitle = title || "Alchemy 生成图片";
+  els.lightboxImage.dataset.shareImage = url || "";
+  els.lightboxImage.dataset.shareThumb = shareThumbFromImageUrl(url);
+  els.lightboxImage.dataset.shareDesc = shareDescriptionFromPrompt(promptText);
   els.lightboxMeta.textContent = meta || id || "-";
   const fullPrompt = promptText || "";
   els.lightboxPromptText.textContent = fullPrompt || "这张图片没有记录到提示词。";
@@ -3912,7 +3916,7 @@ function openImageLightbox({ id, title, url, format, meta, promptText, actions =
   closeLightboxPrompt();
   resetLightboxZoom();
   bindDownloadLink(els.lightboxDownload, url, `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
-  renderLightboxActions(actions);
+  renderLightboxActions([{ label: "分享", tone: "primary", run: shareCurrentLightboxImage }, ...actions]);
   els.imageLightbox.hidden = false;
   document.body.classList.add("modal-open");
   els.closeImageLightboxBtn.focus();
@@ -3922,6 +3926,10 @@ function closeImageLightbox() {
   els.imageLightbox.hidden = true;
   els.lightboxImage.removeAttribute("src");
   els.lightboxImage.removeAttribute("data-full-url");
+  els.lightboxImage.removeAttribute("data-share-title");
+  els.lightboxImage.removeAttribute("data-share-image");
+  els.lightboxImage.removeAttribute("data-share-thumb");
+  els.lightboxImage.removeAttribute("data-share-desc");
   resetLightboxZoom();
   closeLightboxPrompt();
   renderLightboxActions([]);
@@ -3936,7 +3944,7 @@ function renderLightboxActions(actions = []) {
   activeLightboxActions.forEach((action, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `button ${action.tone === "danger" ? "ghost lightbox-danger-action" : "secondary"}`;
+    button.className = `button ${action.tone === "danger" ? "ghost lightbox-danger-action" : action.tone === "primary" ? "primary" : "secondary"}`;
     button.textContent = action.label;
     button.addEventListener("click", async () => {
       button.disabled = true;
@@ -3948,6 +3956,102 @@ function renderLightboxActions(actions = []) {
     });
     els.lightboxActionBar.appendChild(button);
   });
+}
+
+async function shareCurrentLightboxImage() {
+  const shareUrl = buildShareImageUrl({
+    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
+    thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
+    title: els.lightboxImage.dataset.shareTitle || els.lightboxTitle.textContent,
+    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
+  });
+  const payload = {
+    title: els.lightboxImage.dataset.shareTitle || "Alchemy 生成图片",
+    text: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
+    url: shareUrl,
+  };
+  if (isWeChatBrowser()) {
+    await copyShareUrl(shareUrl);
+    showGlobalToast("分享链接已复制，可点右上角转发。");
+    showWeChatShareGuide();
+    return;
+  }
+  await copyShareUrl(shareUrl);
+  if (navigator.share) {
+    try {
+      await navigator.share(payload);
+      showGlobalToast("已打开系统分享，链接也已复制。");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        showGlobalToast("分享链接已复制。");
+        return;
+      }
+    }
+  }
+  showGlobalToast("分享链接已复制。");
+}
+
+function buildShareImageUrl({ imageUrl, thumbUrl, title, desc }) {
+  const params = new URLSearchParams();
+  params.set("image", absoluteUrl(imageUrl));
+  params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
+  params.set("title", compactShareText(title, "Alchemy 生成图片", 48));
+  params.set("desc", compactShareText(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88));
+  return `${window.location.origin}/share/image?${params.toString()}`;
+}
+
+function shareThumbFromImageUrl(url = "") {
+  if (!url) return "/mobile-static/showcase/city-poster.jpg";
+  if (url.includes("/download")) return url.replace(/\/download(?:\?.*)?$/, "/thumbnail");
+  return url;
+}
+
+function shareDescriptionFromPrompt(promptText = "") {
+  const text = compactShareText(promptText, "来自 Alchemy Media Agent 的 AI 影像作品。", 88);
+  return text.replace(/^(原始提示词|Agent 最终提示词|Claude 思考后的最终提示词)\s*/i, "") || "来自 Alchemy Media Agent 的 AI 影像作品。";
+}
+
+function absoluteUrl(url = "") {
+  if (!url) return `${window.location.origin}/mobile-static/showcase/city-poster.jpg`;
+  try {
+    return new URL(url, window.location.origin).href;
+  } catch {
+    return `${window.location.origin}/mobile-static/showcase/city-poster.jpg`;
+  }
+}
+
+function compactShareText(value, fallback, limit) {
+  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  return (compact || fallback).slice(0, limit);
+}
+
+function isWeChatBrowser() {
+  return /MicroMessenger/i.test(navigator.userAgent || "");
+}
+
+async function copyShareUrl(url) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(url);
+    return;
+  }
+  copyTextFallback(url);
+}
+
+function showWeChatShareGuide() {
+  const guide = document.createElement("button");
+  guide.type = "button";
+  guide.className = "wechat-share-guide";
+  guide.innerHTML = `
+    <span>微信分享</span>
+    <strong>点击右上角 ··· 分享给朋友或朋友圈</strong>
+    <small>链接已复制，也可以直接粘贴发送。</small>
+  `;
+  guide.addEventListener("click", () => guide.remove());
+  document.body.appendChild(guide);
+  window.setTimeout(() => {
+    if (guide.isConnected) guide.remove();
+  }, 5200);
 }
 
 function toggleLightboxZoom(event) {
