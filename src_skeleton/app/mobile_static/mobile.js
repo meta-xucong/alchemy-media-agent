@@ -3962,23 +3962,19 @@ function renderLightboxActions(actions = []) {
 }
 
 async function shareCurrentLightboxImage() {
-  const shareUrl = buildShareImageUrl({
-    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
-    thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
-    title: els.lightboxImage.dataset.shareTitle || els.lightboxTitle.textContent,
-    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
-  });
+  const originalImageUrl = els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src;
+  const shareUrl = absoluteUrl(originalImageUrl);
   const posterUrl = buildSharePosterUrl({
-    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
+    imageUrl: originalImageUrl,
     thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
-    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
+    desc: "扫码查看原图",
     shareUrl,
   });
   showSharePosterPanel({
     posterUrl,
     shareUrl,
     title: "Alchemy Media Agent",
-    desc: els.lightboxImage.dataset.shareDesc || "扫码查看完整图片。",
+    desc: "长按保存分享图，二维码直达原图。",
   });
 }
 
@@ -3987,7 +3983,7 @@ function buildSharePosterUrl({ imageUrl, thumbUrl, desc, shareUrl }) {
   params.set("image", absoluteUrl(imageUrl));
   params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
   params.set("title", "Alchemy Media Agent");
-  params.set("desc", compactShareText(desc, "扫码查看完整图片。", 70));
+  params.set("desc", compactShareText(desc, "扫码查看原图", 18));
   params.set("url", shareUrl);
   return `${window.location.origin}/share/poster?${params.toString()}`;
 }
@@ -4010,23 +4006,20 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
         <img alt="分享海报预览" />
       </div>
       <div class="share-poster-actions">
-        <a class="button primary share-poster-download" download="alchemy-share-poster.png">下载分享图</a>
-        <button class="button secondary share-poster-copy-link" type="button">复制链接</button>
+        <button class="button primary share-poster-copy-link" type="button">复制原图链接</button>
         <button class="button ghost share-poster-close" type="button">关闭</button>
       </div>
     </article>
   `;
   sheet.querySelector("strong").textContent = title || "Alchemy Media Agent";
-  sheet.querySelector("p").textContent = desc || "下载图片发到微信，好友扫码即可打开。";
+  sheet.querySelector("p").textContent = desc || "长按图片保存，好友扫码看原图。";
   const image = sheet.querySelector("img");
   image.src = posterUrl;
-  const download = sheet.querySelector(".share-poster-download");
-  download.href = posterUrl;
   sheet.querySelector(".share-poster-backdrop").addEventListener("click", () => sheet.remove());
   sheet.querySelector(".share-poster-close").addEventListener("click", () => sheet.remove());
   sheet.querySelector(".share-poster-copy-link").addEventListener("click", async () => {
     await copyShareUrl(shareUrl);
-    showGlobalToast("链接已复制，分享图也可以直接下载发送。");
+    showGlobalToast("原图链接已复制。分享图请长按保存。");
   });
   document.body.appendChild(sheet);
   copyShareUrl(shareUrl).catch(() => {});
@@ -4034,16 +4027,7 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
     showWeChatShareGuide();
     return;
   }
-  showGlobalToast("分享图已生成，可下载后发微信。");
-}
-
-function buildShareImageUrl({ imageUrl, thumbUrl, title, desc }) {
-  const params = new URLSearchParams();
-  params.set("image", absoluteUrl(imageUrl));
-  params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
-  params.set("title", compactShareText(title, "Alchemy 生成图片", 48));
-  params.set("desc", compactShareText(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88));
-  return `${window.location.origin}/share/image?${params.toString()}`;
+  showGlobalToast("分享图已生成，长按图片保存。");
 }
 
 function shareThumbFromImageUrl(url = "") {
@@ -4089,8 +4073,8 @@ function showWeChatShareGuide() {
   guide.className = "wechat-share-guide";
   guide.innerHTML = `
     <span>微信分享</span>
-    <strong>点击右上角 ··· 分享给朋友或朋友圈</strong>
-    <small>链接已复制，也可以直接粘贴发送。</small>
+    <strong>长按保存分享图，再发送给朋友或朋友圈</strong>
+    <small>二维码直达原图，链接也已复制。</small>
   `;
   guide.addEventListener("click", () => guide.remove());
   document.body.appendChild(guide);

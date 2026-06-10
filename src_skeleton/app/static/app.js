@@ -3308,23 +3308,19 @@ function renderLightboxActions(actions = []) {
 }
 
 async function shareCurrentLightboxImage() {
-  const shareUrl = buildShareImageUrl({
-    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
-    thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
-    title: els.lightboxImage.dataset.shareTitle || els.lightboxTitle.textContent,
-    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
-  });
+  const originalImageUrl = els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src;
+  const shareUrl = absoluteUrl(originalImageUrl);
   const posterUrl = buildSharePosterUrl({
-    imageUrl: els.lightboxImage.dataset.shareImage || els.lightboxImage.dataset.fullUrl || els.lightboxImage.src,
+    imageUrl: originalImageUrl,
     thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
-    desc: els.lightboxImage.dataset.shareDesc || "来自 Alchemy Media Agent 的 AI 影像作品。",
+    desc: "扫码查看原图",
     shareUrl,
   });
   showSharePosterPanel({
     posterUrl,
     shareUrl,
     title: "Alchemy Media Agent",
-    desc: els.lightboxImage.dataset.shareDesc || "扫码查看完整图片。",
+    desc: "下载分享图发送到微信，二维码直达原图。",
   });
 }
 
@@ -3333,7 +3329,7 @@ function buildSharePosterUrl({ imageUrl, thumbUrl, desc, shareUrl }) {
   params.set("image", absoluteUrl(imageUrl));
   params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
   params.set("title", "Alchemy Media Agent");
-  params.set("desc", compactShareText(desc, "扫码查看完整图片。", 70));
+  params.set("desc", compactShareText(desc, "扫码查看原图", 18));
   params.set("url", shareUrl);
   return `${window.location.origin}/share/poster?${params.toString()}`;
 }
@@ -3383,15 +3379,6 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
   showGlobalToast("分享图已生成，可下载后发微信。");
 }
 
-function buildShareImageUrl({ imageUrl, thumbUrl, title, desc }) {
-  const params = new URLSearchParams();
-  params.set("image", absoluteUrl(imageUrl));
-  params.set("thumb", absoluteUrl(thumbUrl || imageUrl));
-  params.set("title", compactShareText(title, "Alchemy 生成图片", 48));
-  params.set("desc", compactShareText(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88));
-  return `${window.location.origin}/share/image?${params.toString()}`;
-}
-
 function shareThumbFromImageUrl(url = "") {
   if (!url) return "/static/showcase/city-poster.jpg";
   if (url.includes("/download")) return url.replace(/\/download(?:\?.*)?$/, "/thumbnail");
@@ -3435,8 +3422,8 @@ function showWeChatShareGuide(shareUrl) {
   guide.className = "wechat-share-guide";
   guide.innerHTML = `
     <span>微信分享</span>
-    <strong>点击右上角 ··· 分享给朋友或朋友圈</strong>
-    <small>链接已复制，也可以直接粘贴发送。</small>
+    <strong>长按保存分享图，再发送给朋友或朋友圈</strong>
+    <small>二维码直达原图，链接也已复制。</small>
   `;
   guide.addEventListener("click", () => guide.remove());
   document.body.appendChild(guide);

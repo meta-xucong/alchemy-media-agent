@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
+import app.main as main_module
 from app.main import app
 from app.repositories import repository
 from app.storage import media_store
@@ -770,6 +771,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "const historyPageSize = 24" in mobile_script.text
     assert "const v2HistoryPageSize = 24" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
+    assert "share-poster-download" not in mobile_script.text
+    assert "长按图片保存" in mobile_script.text
+    assert "复制原图链接" in mobile_script.text
 
 
 def test_image_share_landing_page_has_wechat_friendly_metadata():
@@ -793,6 +797,7 @@ def test_image_share_landing_page_has_wechat_friendly_metadata():
     assert "http://testserver/share/poster?" in response.text
     assert "打开 Alchemy" in response.text
     assert "下载分享图" in response.text
+    assert "长按分享图保存，扫码直接查看原图。" in response.text
 
 
 def test_image_share_poster_returns_downloadable_png():
@@ -813,6 +818,28 @@ def test_image_share_poster_returns_downloadable_png():
     assert response.headers["content-type"].startswith("image/png")
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(response.content) > 10_000
+
+
+def test_image_share_poster_qr_defaults_to_direct_image_url(monkeypatch):
+    client = TestClient(app)
+    captured = {}
+
+    def fake_render_share_poster(**kwargs):
+        captured["share_url"] = kwargs["share_url"]
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    monkeypatch.setattr(main_module, "_render_share_poster", fake_render_share_poster)
+
+    response = client.get(
+        "/share/poster",
+        params={
+            "image": "/v1/outputs/out_share/download",
+            "thumb": "/v1/outputs/out_share/thumbnail",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["share_url"] == "http://testserver/v1/outputs/out_share/download"
 
 
 def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_path, monkeypatch):

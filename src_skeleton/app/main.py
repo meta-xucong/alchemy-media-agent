@@ -70,7 +70,7 @@ def image_share_landing(
     page_url = str(request.url)
     safe_title = _share_text(title, "Alchemy 生成图片", 48)
     safe_desc = _share_text(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88)
-    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, page_url=page_url)
+    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, target_url=image_url)
     return HTMLResponse(
         _share_image_html(
             title=safe_title,
@@ -93,16 +93,9 @@ def image_share_poster(
     url: str | None = Query(default=None),
 ):
     safe_title = _share_text(title, "Alchemy Media Agent", 42)
-    safe_desc = _share_text(desc, "扫码查看完整图片", 70)
-    share_url = _safe_public_share_url(request, url, fallback="/share/image") if url else str(request.url_for("image_share_landing"))
-    if url is None:
-        params = {
-            "image": _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg"),
-            "thumb": _safe_public_share_url(request, thumb or image, fallback="/static/showcase/city-poster.jpg"),
-            "title": safe_title,
-            "desc": safe_desc,
-        }
-        share_url = str(request.base_url).rstrip("/") + "/share/image?" + urlencode(params)
+    safe_desc = _share_text(desc, "扫码查看原图", 18)
+    direct_image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
+    share_url = _safe_public_share_url(request, url, fallback="/static/showcase/city-poster.jpg") if url else direct_image_url
     poster = _render_share_poster(
         request=request,
         image_value=thumb or image,
@@ -447,13 +440,13 @@ def _share_text(value: str | None, fallback: str, limit: int) -> str:
     return compact[:limit]
 
 
-def _share_poster_url(request: Request, *, image: str, thumb: str | None, title: str, desc: str, page_url: str) -> str:
+def _share_poster_url(request: Request, *, image: str, thumb: str | None, title: str, desc: str, target_url: str) -> str:
     params = {
         "image": image,
         "thumb": thumb or image,
         "title": title,
         "desc": desc,
-        "url": page_url,
+        "url": target_url,
     }
     return str(request.base_url).rstrip("/") + "/share/poster?" + urlencode(params)
 
@@ -575,6 +568,15 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         color: var(--brass);
         background: rgba(154, 117, 53, 0.12);
       }}
+      .save-hint {{
+        color: var(--brass);
+        font-size: 13px;
+      }}
+      @media (max-width: 720px) {{
+        .share-download-link {{
+          display: none;
+        }}
+      }}
     </style>
   </head>
   <body>
@@ -588,8 +590,9 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
       <section class="copy">
         <h1>{title_html}</h1>
         <p>{desc_html}</p>
+        <p class="save-hint">长按分享图保存，扫码直接查看原图。</p>
         <div class="actions">
-          <a href="{poster_url_html}" download="alchemy-share-poster.png">下载分享图</a>
+          <a class="share-download-link" href="{poster_url_html}" download="alchemy-share-poster.png">下载分享图</a>
           <a href="/h5">打开 Alchemy</a>
         </div>
       </section>
@@ -633,8 +636,7 @@ def _render_share_poster(*, request: Request, image_value: str | None, title: st
     for line_index, line in enumerate(_wrap_text_for_poster(title, 16, 2)):
         card_draw.text((58, 970 + line_index * 64), line, fill=(36, 35, 31), font=title_font)
     desc_y = 1100 if len(_wrap_text_for_poster(title, 16, 2)) <= 1 else 1158
-    for line_index, line in enumerate(_wrap_text_for_poster(desc or "扫码查看完整图片", 25, 2)):
-        card_draw.text((58, desc_y + line_index * 36), line, fill=(112, 107, 96), font=subtitle_font)
+    card_draw.text((58, desc_y), "长按保存 · 扫码看原图", fill=(112, 107, 96), font=subtitle_font)
 
     qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
     qr.add_data(share_url)
@@ -645,7 +647,7 @@ def _render_share_poster(*, request: Request, image_value: str | None, title: st
     qr_draw.rounded_rectangle((0, 0, 259, 259), radius=24, fill=(255, 253, 247, 255), outline=(223, 209, 179, 255), width=2)
     qr_box.paste(qr_image, (20, 20))
     card.paste(qr_box, (590, 930), qr_box)
-    card_draw.text((606, 1208), "SCAN TO VIEW", fill=(112, 107, 96), font=mono_font)
+    card_draw.text((612, 1208), "SCAN ORIGINAL", fill=(112, 107, 96), font=mono_font)
 
     tape = Image.new("RGBA", (320, 76), (0, 0, 0, 0))
     tape_draw = ImageDraw.Draw(tape)
@@ -654,10 +656,6 @@ def _render_share_poster(*, request: Request, image_value: str | None, title: st
     card.paste(tape, (294, -28), tape)
 
     image.paste(card, (90, 130), card)
-
-    outer_draw = ImageDraw.Draw(image)
-    brand_font = _share_font(28)
-    outer_draw.text((90, 1408), "Share image · QR opens the original link", fill=(112, 107, 96), font=brand_font)
 
     output = BytesIO()
     image.save(output, "PNG", optimize=True)

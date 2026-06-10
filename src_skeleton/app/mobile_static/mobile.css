@@ -1878,10 +1878,6 @@ body.h5-simplified .mobile-v2-home-results {
   padding-inline: 10px;
 }
 
-.share-poster-close {
-  grid-column: 1 / -1;
-}
-
 .prompt-trigger {
   min-width: 0;
   flex: 1;
