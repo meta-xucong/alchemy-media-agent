@@ -3971,18 +3971,17 @@ async function shareCurrentLightboxImage() {
     title,
     desc,
   });
-  const saveImageUrl = buildShareSaveImageUrl(originalImageUrl);
   const posterUrl = buildSharePosterUrl({
     imageUrl: originalImageUrl,
     thumbUrl: els.lightboxImage.dataset.shareThumb || els.lightboxImage.dataset.shareImage,
     desc: "扫码查看原图",
-    shareUrl: saveImageUrl,
+    shareUrl: cardShareUrl,
   });
   showSharePosterPanel({
     posterUrl,
     shareUrl: cardShareUrl,
     title: "Alchemy Media Agent",
-    desc: "长按保存，扫码看图。",
+    desc: "长按保存，扫码打开。",
   });
 }
 
@@ -3994,12 +3993,6 @@ function buildSharePosterUrl({ imageUrl, thumbUrl, desc, shareUrl }) {
   params.set("desc", compactShareText(desc, "扫码查看原图", 18));
   params.set("url", shareUrl);
   return `${window.location.origin}/share/poster?${params.toString()}`;
-}
-
-function buildShareSaveImageUrl(imageUrl) {
-  const params = new URLSearchParams();
-  params.set("image", absoluteUrl(imageUrl));
-  return `${window.location.origin}/share/save-image?${params.toString()}`;
 }
 
 function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
@@ -4015,6 +4008,7 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
         <span>分享海报</span>
         <strong></strong>
         <p></p>
+        <small class="share-poster-note"></small>
       </div>
       <div class="share-poster-preview">
         <img alt="分享海报预览" />
@@ -4026,7 +4020,8 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
     </article>
   `;
   sheet.querySelector("strong").textContent = title || "Alchemy Media Agent";
-  sheet.querySelector("p").textContent = desc || "长按保存，扫码看图。";
+  sheet.querySelector("p").textContent = desc || "长按保存，扫码打开。";
+  sheet.querySelector(".share-poster-note").textContent = isWeChatBrowser() ? "微信内请用右上角分享" : "二维码进入分享页";
   const image = sheet.querySelector("img");
   image.src = posterUrl;
   sheet.querySelector(".share-poster-backdrop").addEventListener("click", () => sheet.remove());
@@ -4035,11 +4030,9 @@ function showSharePosterPanel({ posterUrl, shareUrl, title, desc }) {
     await shareOrCopyLink(shareUrl, "Alchemy Media Agent");
   });
   document.body.appendChild(sheet);
-  if (isWeChatBrowser()) {
-    showWeChatShareGuide();
-    return;
+  if (!isWeChatBrowser()) {
+    showGlobalToast("长按保存分享图。");
   }
-  showGlobalToast("长按保存分享图。");
 }
 
 function shareThumbFromImageUrl(url = "") {
@@ -4089,6 +4082,16 @@ async function copyShareUrl(url) {
 }
 
 async function shareOrCopyLink(url, title = "Alchemy Media Agent") {
+  if (isWeChatBrowser()) {
+    try {
+      await copyShareUrl(url);
+      showGlobalToast("链接已复制。");
+    } catch (error) {
+      showGlobalToast("复制失败，请手动复制。", "error");
+    }
+    showWeChatShareGuide();
+    return;
+  }
   if (navigator.share && !isWeChatBrowser()) {
     try {
       await navigator.share({ title, url });
@@ -4112,8 +4115,8 @@ function showWeChatShareGuide() {
   guide.className = "wechat-share-guide";
   guide.innerHTML = `
     <span>微信分享</span>
-    <strong>长按保存，勿用右上角</strong>
-    <small>点“分享链接”可发卡片。</small>
+    <strong>请用右上角分享</strong>
+    <small>按钮会复制链接。</small>
   `;
   guide.addEventListener("click", () => guide.remove());
   document.body.appendChild(guide);

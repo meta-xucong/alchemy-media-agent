@@ -71,8 +71,7 @@ def image_share_landing(
     page_url = str(request.url)
     safe_title = _share_text(title, "Alchemy 生成图片", 48)
     safe_desc = _share_text(desc, "来自 Alchemy Media Agent 的 AI 影像作品。", 88)
-    save_image_url = _share_save_image_url(request, image_url=image_url)
-    poster_url = _share_poster_url(request, image=image, thumb=thumb, title=safe_title, desc=safe_desc, target_url=save_image_url)
+    save_image_url = _share_save_image_url(request, image_url=thumb_url)
     return HTMLResponse(
         _share_image_html(
             title=safe_title,
@@ -80,7 +79,6 @@ def image_share_landing(
             page_url=page_url,
             image_url=image_url,
             thumb_url=save_image_url,
-            poster_url=poster_url,
         )
     )
 
@@ -113,7 +111,15 @@ def image_share_poster(
     safe_title = _share_text(title, "Alchemy Media Agent", 42)
     safe_desc = _share_text(desc, "扫码查看原图", 18)
     direct_image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
-    share_url = _safe_public_share_url(request, url, fallback="/share/save-image") if url else _share_save_image_url(request, image_url=direct_image_url)
+    direct_thumb_url = _safe_public_share_url(request, thumb or image, fallback="/static/showcase/city-poster.jpg")
+    default_share_url = _share_image_url(
+        request,
+        image_url=direct_image_url,
+        thumb_url=direct_thumb_url,
+        title=safe_title,
+        desc="来自 Alchemy Media Agent 的 AI 影像作品。",
+    )
+    share_url = _safe_public_share_url(request, url, fallback="/share/image") if url else default_share_url
     if "/share/save-image?" in share_url:
         _ensure_share_save_image_cached(request, share_url)
     poster = _render_share_poster(
@@ -471,6 +477,16 @@ def _share_poster_url(request: Request, *, image: str, thumb: str | None, title:
     return str(request.base_url).rstrip("/") + "/share/poster?" + urlencode(params)
 
 
+def _share_image_url(request: Request, *, image_url: str, thumb_url: str, title: str, desc: str) -> str:
+    params = {
+        "image": image_url,
+        "thumb": thumb_url,
+        "title": title,
+        "desc": desc,
+    }
+    return str(request.base_url).rstrip("/") + "/share/image?" + urlencode(params)
+
+
 def _share_save_image_url(request: Request, *, image_url: str) -> str:
     return str(request.base_url).rstrip("/") + "/share/save-image?" + urlencode({"image": image_url})
 
@@ -507,13 +523,12 @@ def _ensure_share_save_image_cached(request: Request, share_url: str) -> None:
         return
 
 
-def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str, poster_url: str) -> str:
+def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, thumb_url: str) -> str:
     title_html = escape(title)
     desc_html = escape(desc)
     page_url_html = escape(page_url, quote=True)
     image_url_html = escape(image_url, quote=True)
     thumb_url_html = escape(thumb_url, quote=True)
-    poster_url_html = escape(poster_url, quote=True)
     return f"""<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -570,20 +585,6 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         object-fit: contain;
         background: #f1ecde;
       }}
-      .poster {{
-        display: grid;
-        gap: 10px;
-        padding: 12px;
-        border: 1px solid var(--line);
-        border-radius: 28px;
-        background: rgba(255, 253, 247, 0.72);
-      }}
-      .poster img {{
-        width: 100%;
-        display: block;
-        border-radius: 22px;
-        box-shadow: 0 18px 48px rgba(36, 35, 31, 0.16);
-      }}
       .copy {{
         display: grid;
         gap: 9px;
@@ -628,28 +629,20 @@ def _share_image_html(*, title: str, desc: str, page_url: str, image_url: str, t
         color: var(--brass);
         font-size: 13px;
       }}
-      @media (max-width: 720px) {{
-        .share-download-link {{
-          display: none;
-        }}
-      }}
     </style>
   </head>
   <body>
     <main>
-      <article class="poster">
-        <img src="{poster_url_html}" alt="{title_html} 分享海报" />
-      </article>
       <article class="preview">
         <img src="{image_url_html}" alt="{title_html}" />
       </article>
       <section class="copy">
         <h1>{title_html}</h1>
         <p>{desc_html}</p>
-        <p class="save-hint">长按保存，勿用右上角。</p>
+        <p class="save-hint">长按保存 · 右上角分享</p>
         <div class="actions">
-          <a class="share-download-link" href="{poster_url_html}" download="alchemy-share-poster.png">下载分享图</a>
           <a href="/h5">打开 Alchemy</a>
+          <a href="{image_url_html}" target="_blank" rel="noopener">查看原图</a>
         </div>
       </section>
     </main>

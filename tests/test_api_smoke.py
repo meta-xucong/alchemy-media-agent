@@ -772,7 +772,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "const v2HistoryPageSize = 24" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
     assert "share-poster-download" not in mobile_script.text
-    assert "长按保存，扫码看图。" in mobile_script.text
+    assert "长按保存，扫码打开。" in mobile_script.text
+    assert "微信内请用右上角分享" in mobile_script.text
     assert "分享链接" in mobile_script.text
 
 
@@ -794,11 +795,13 @@ def test_image_share_landing_page_has_wechat_friendly_metadata():
     assert "轻食海报 &lt;script&gt;" in response.text
     assert "<script>" not in response.text
     assert 'property="og:image"' in response.text
-    assert "http://testserver/share/poster?" in response.text
+    assert "http://testserver/share/save-image?" in response.text
+    assert "http://testserver/share/poster?" not in response.text
     assert "打开 Alchemy" in response.text
-    assert "下载分享图" in response.text
-    assert "长按保存，勿用右上角。" in response.text
-    assert "share%2Fsave-image" in response.text
+    assert "查看原图" in response.text
+    assert "下载分享图" not in response.text
+    assert "长按保存 · 右上角分享" in response.text
+    assert "分享海报" not in response.text
 
 
 def test_image_share_save_image_returns_lightweight_jpeg():
@@ -835,7 +838,7 @@ def test_image_share_poster_returns_downloadable_png():
     assert len(response.content) > 10_000
 
 
-def test_image_share_poster_qr_defaults_to_share_save_image_url(monkeypatch):
+def test_image_share_poster_qr_defaults_to_share_landing_page(monkeypatch):
     client = TestClient(app)
     captured = {}
 
@@ -854,7 +857,7 @@ def test_image_share_poster_qr_defaults_to_share_save_image_url(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert captured["share_url"].startswith("http://testserver/share/save-image?")
+    assert captured["share_url"].startswith("http://testserver/share/image?")
     assert "image=http%3A%2F%2Ftestserver%2Fv1%2Foutputs%2Fout_share%2Fdownload" in captured["share_url"]
 
 

@@ -1848,6 +1848,12 @@ body.h5-simplified .mobile-v2-home-results {
   -webkit-line-clamp: 2;
 }
 
+.share-poster-note {
+  color: var(--sage-deep);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .share-poster-preview {
   min-height: 0;
   overflow: auto;
