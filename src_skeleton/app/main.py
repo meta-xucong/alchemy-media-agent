@@ -34,7 +34,14 @@ from app.services.asset_service import complete_asset_upload, create_asset_mask,
 from app.services.events import format_sse_events
 from app.services.image_service import create_image_job, revise_image_job
 from app.services.session_service import create_session, handle_message
-from app.services.veyra_auth import VeyraAuthDisabled, VeyraAuthError, VeyraAuthMisconfigured, VeyraAuthUnauthorized, verify_session_token
+from app.services.veyra_auth import (
+    VeyraAuthDisabled,
+    VeyraAuthError,
+    VeyraAuthMisconfigured,
+    VeyraAuthUnauthorized,
+    load_account,
+    verify_session_token,
+)
 from app.services.video_service import create_video_job
 from app.storage import media_store
 
@@ -163,6 +170,30 @@ def _veyra_user_id_from_authorization(authorization: str) -> int | None:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra auth failed."}) from exc
 
 
+async def _veyra_history_context(authorization: str) -> dict:
+    if not settings.veyra_auth_enabled:
+        return {"authenticated": False, "user_id": None, "is_admin": False}
+    scheme, _, token = str(authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return {"authenticated": False, "user_id": None, "is_admin": False}
+    user_id = _veyra_user_id_from_authorization(authorization)
+    account = await _veyra_account(user_id)
+    return {"authenticated": True, "user_id": user_id, "is_admin": _is_veyra_admin_account(account)}
+
+
+async def _veyra_account(user_id: int):
+    try:
+        return await load_account(user_id)
+    except VeyraAuthMisconfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+    except VeyraAuthError as exc:
+        raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
+
+
+def _is_veyra_admin_account(account) -> bool:
+    return str(getattr(account, "role", "") or "").lower() == "admin"
+
+
 @app.post("/v1/sessions")
 def create_session_endpoint(body: CreateSessionRequest):
     return create_session(body)
@@ -256,10 +287,12 @@ async def create_image_job_endpoint(body: CreateImageJobRequest, authorization: 
 
 
 @app.get("/v1/image/history")
-def list_image_history(
+async def list_image_history(
     session_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=1000),
+    authorization: str = Header(default=""),
 ):
+    veyra_context = await _veyra_history_context(authorization)
     items: list[ImageHistoryItem] = []
     known_output_ids: set[str] = set()
     blocked_output_ids: set[str] = set()
@@ -300,6 +333,7 @@ def list_image_history(
                     prompt=_job_prompt(job),
                     size=job.prompt_plan.size if job.prompt_plan else None,
                     version_parent_id=output.version_parent_id,
+                    veyra_user_id=_history_output_veyra_user_id(output.metadata),
                     created_at=job.created_at,
                     updated_at=job.updated_at,
                     source="repository",
@@ -322,6 +356,7 @@ def list_image_history(
             known_output_ids.add(record["id"])
             items.append(ImageHistoryItem(**record))
 
+    items = [item for item in items if _history_visible_to_veyra(item, veyra_context)]
     items.sort(key=_history_sort_key, reverse=True)
     return ImageHistoryResponse(items=items[:limit], total=len(items))
 
@@ -918,6 +953,33 @@ def _job_requested_model(job) -> str | None:
 def _history_sort_key(item: ImageHistoryItem) -> tuple[float, str, str]:
     timestamp = _parse_history_timestamp(item.created_at or item.updated_at)
     return (timestamp, item.job_id, item.id)
+
+
+def _history_visible_to_veyra(item: ImageHistoryItem, context: dict) -> bool:
+    if not context.get("authenticated"):
+        return True
+    if context.get("is_admin"):
+        return True
+    owner_id = _history_item_veyra_user_id(item)
+    return owner_id is None or owner_id == context.get("user_id")
+
+
+def _history_item_veyra_user_id(item: ImageHistoryItem) -> int | None:
+    return _positive_int_or_none(getattr(item, "veyra_user_id", None))
+
+
+def _history_output_veyra_user_id(metadata: dict | None) -> int | None:
+    if not isinstance(metadata, dict):
+        return None
+    return _positive_int_or_none(metadata.get("veyra_user_id"))
+
+
+def _positive_int_or_none(value) -> int | None:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _parse_history_timestamp(value: str | None) -> float:

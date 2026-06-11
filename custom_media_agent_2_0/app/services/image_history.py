@@ -40,7 +40,13 @@ def persist_image_job_history(job: ImageJob) -> None:
             handle.write("\n")
 
 
-def list_image_history(limit: int = 50, *, veyra_user_id: int | None = None) -> ImageHistoryResponse:
+def list_image_history(
+    limit: int = 50,
+    *,
+    veyra_user_id: int | None = None,
+    include_public: bool = False,
+    include_all: bool = False,
+) -> ImageHistoryResponse:
     if not settings.image_history_path.exists():
         return ImageHistoryResponse(items=[], total=0)
     records_by_output: dict[str, ImageHistoryItem] = {}
@@ -51,8 +57,10 @@ def list_image_history(limit: int = 50, *, veyra_user_id: int | None = None) -> 
             item = ImageHistoryItem.model_validate(json.loads(line))
         except (json.JSONDecodeError, ValueError):
             continue
-        if veyra_user_id is not None and _veyra_user_id(item.metadata) != veyra_user_id:
-            continue
+        if not include_all and veyra_user_id is not None:
+            owner_id = _veyra_user_id(item.metadata)
+            if owner_id != veyra_user_id and not (include_public and owner_id is None):
+                continue
         item = _normalize_thumbnail_url(item)
         existing = records_by_output.get(item.output_id)
         if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):

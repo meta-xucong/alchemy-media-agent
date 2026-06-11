@@ -180,17 +180,24 @@ def test_veyra_billing_settings_support_versioned_rules(tmp_path, monkeypatch: p
     assert public_v1.json()["charge_amount"] == 0.15
 
 
-def test_veyra_history_filters_by_session_user(tmp_path) -> None:
+def test_veyra_history_filters_by_session_user_and_public_history(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", True)
     object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
     object.__setattr__(settings, "veyra_session_secret", "session-secret")
     object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
     object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
+
+    async def fake_account(self, user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role=role, balance=9.5, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
     settings.image_history_path.write_text(
         "\n".join(
             [
                 _history_line("out_1", 42),
                 _history_line("out_2", 77),
+                _history_line("out_public", None),
             ]
         )
         + "\n",
@@ -198,15 +205,19 @@ def test_veyra_history_filters_by_session_user(tmp_path) -> None:
     )
     client = TestClient(app)
     token = issue_session_token(42)
+    admin_token = issue_session_token(99)
 
     all_history = client.get("/api/v2/image/history")
     own_history = client.get("/api/v2/veyra/history", headers={"Authorization": f"Bearer {token}"})
+    admin_history = client.get("/api/v2/veyra/history", headers={"Authorization": f"Bearer {admin_token}"})
 
     assert all_history.status_code == 200
-    assert all_history.json()["total"] == 2
+    assert all_history.json()["total"] == 3
     assert own_history.status_code == 200
-    assert own_history.json()["total"] == 1
-    assert own_history.json()["items"][0]["output_id"] == "out_1"
+    assert own_history.json()["total"] == 2
+    assert {item["output_id"] for item in own_history.json()["items"]} == {"out_1", "out_public"}
+    assert admin_history.status_code == 200
+    assert admin_history.json()["total"] == 3
 
 
 def test_veyra_usage_filters_by_session_user(tmp_path) -> None:
@@ -537,7 +548,7 @@ def test_veyra_generation_provider_failure_does_not_debit(monkeypatch: pytest.Mo
     assert job.error["error_code"] == "provider_error"
 
 
-def _history_line(output_id: str, user_id: int) -> str:
+def _history_line(output_id: str, user_id: int | None) -> str:
     import json
 
     payload = {

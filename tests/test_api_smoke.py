@@ -716,6 +716,11 @@ def test_frontend_static_app_is_served():
     assert "后台仍在运行，页面会持续刷新" in script.text
     assert "openV2HistoryLightbox" in script.text
     assert "v2PromptTextFromJob" in script.text
+    assert "mergeAccountHistory" in script.text
+    assert "account_history_source" in script.text
+    assert "/veyra/history?limit=1000" in script.text
+    assert "管理员可见全部账户" in script.text
+    assert "当前账户与旧公共记录" in script.text
     assert "生成修改版本" in script.text
     assert "后续接入" not in script.text
 
@@ -770,6 +775,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "imageAssetPayload" in mobile_script.text
     assert "const historyPageSize = 24" in mobile_script.text
     assert "const v2HistoryPageSize = 24" in mobile_script.text
+    assert "const veyraTokenStorageKey" in mobile_script.text
+    assert "loadV2HistoryResponse" in mobile_script.text
+    assert "/veyra/history?limit=1000" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
     assert "share-poster-download" not in mobile_script.text
     assert "长按保存，扫码打开。" in mobile_script.text
@@ -1028,6 +1036,123 @@ def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatc
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["items"]] == ["out_new", "out_mid", "out_old"]
+
+
+def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+
+    from app.services.veyra_auth import verify_session_token
+
+    try:
+        client = TestClient(app)
+        session_id = client.post("/v1/sessions", json={"project_id": "proj_account_history"}).json()["id"]
+        user_token = _issue_test_veyra_session_token(42)
+        admin_token = _issue_test_veyra_session_token(99)
+        assert verify_session_token(user_token) == 42
+
+        user_id = "out_user_account"
+        user_path = media_store.output_path(job_id="job_user_account", output_id=user_id, output_format="png")
+        user_path.parent.mkdir(parents=True, exist_ok=True)
+        user_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": user_id,
+                "job_id": "job_user_account",
+                "session_id": session_id,
+                "url": f"/v1/outputs/{user_id}/download",
+                "thumbnail_url": f"/v1/outputs/{user_id}/thumbnail",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "user owned image",
+                "veyra_user_id": 42,
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "updated_at": "2026-06-11T00:00:00+00:00",
+            }
+        )
+
+        other_id = "out_other_account"
+        other_path = media_store.output_path(job_id="job_other_account", output_id=other_id, output_format="png")
+        other_path.parent.mkdir(parents=True, exist_ok=True)
+        other_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": other_id,
+                "job_id": "job_other_account",
+                "session_id": session_id,
+                "url": f"/v1/outputs/{other_id}/download",
+                "thumbnail_url": f"/v1/outputs/{other_id}/thumbnail",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "other account image",
+                "veyra_user_id": 77,
+                "created_at": "2026-06-11T00:01:00+00:00",
+                "updated_at": "2026-06-11T00:01:00+00:00",
+            }
+        )
+        public_id = "out_public_before_accounts"
+        public_path = media_store.output_path(job_id="job_public_before_accounts", output_id=public_id, output_format="png")
+        public_path.parent.mkdir(parents=True, exist_ok=True)
+        public_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": public_id,
+                "job_id": "job_public_before_accounts",
+                "session_id": session_id,
+                "url": f"/v1/outputs/{public_id}/download",
+                "thumbnail_url": f"/v1/outputs/{public_id}/thumbnail",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "public image before accounts",
+                "created_at": "2026-06-11T00:02:00+00:00",
+                "updated_at": "2026-06-11T00:02:00+00:00",
+            }
+        )
+
+        user_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {user_token}"})
+        admin_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {admin_token}"})
+
+        assert user_history.status_code == 200
+        user_ids = {item["id"] for item in user_history.json()["items"]}
+        assert public_id in user_ids
+        assert other_id not in user_ids
+        assert user_id in user_ids
+        assert admin_history.status_code == 200
+        admin_ids = {item["id"] for item in admin_history.json()["items"]}
+        assert {user_id, other_id, public_id}.issubset(admin_ids)
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def _issue_test_veyra_session_token(user_id: int) -> str:
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    secret = str(settings.veyra_session_secret or settings.veyra_internal_token).encode("utf-8")
+    now = int(time.time())
+    payload = {"user_id": int(user_id), "iat": now, "exp": now + 3600}
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii").rstrip("=")
+    signature = base64.urlsafe_b64encode(hmac.new(secret, raw.encode("utf-8"), hashlib.sha256).digest()).decode("ascii").rstrip("=")
+    return raw + "." + signature
 
 
 def test_image_quality_request_is_preserved_in_prompt_plan():

@@ -236,6 +236,8 @@ const els = {
   veyraAccountStatus: document.querySelector("#veyraAccountStatus"),
   veyraAccountUserId: document.querySelector("#veyraAccountUserId"),
   veyraAccountHistoryCount: document.querySelector("#veyraAccountHistoryCount"),
+  veyraAccountHistoryScope: document.querySelector("#veyraAccountHistoryScope"),
+  veyraAccountHistoryTitle: document.querySelector("#veyraAccountHistoryTitle"),
   veyraAccountUsageTotal: document.querySelector("#veyraAccountUsageTotal"),
   veyraRefreshAccountBtn: document.querySelector("#veyraRefreshAccountBtn"),
   veyraAccountHistoryGrid: document.querySelector("#veyraAccountHistoryGrid"),
@@ -2670,6 +2672,8 @@ function renderVeyraSignedOut() {
   if (els.veyraAccountStatus) els.veyraAccountStatus.textContent = "等待登录";
   if (els.veyraAccountUserId) els.veyraAccountUserId.textContent = "-";
   if (els.veyraAccountHistoryCount) els.veyraAccountHistoryCount.textContent = "0";
+  if (els.veyraAccountHistoryScope) els.veyraAccountHistoryScope.textContent = "当前账户与旧公共记录";
+  if (els.veyraAccountHistoryTitle) els.veyraAccountHistoryTitle.textContent = "我的生成记录";
   if (els.veyraAccountUsageTotal) els.veyraAccountUsageTotal.textContent = "-";
   renderVeyraAccountHistory([]);
   renderVeyraUsageList([]);
@@ -2694,6 +2698,12 @@ function renderVeyraAccountSummary() {
     els.veyraAccountUserId.textContent = `User #${user.user_id || "-"}${role}`;
   }
   if (els.veyraAccountHistoryCount) els.veyraAccountHistoryCount.textContent = String(veyraState.history.length);
+  if (els.veyraAccountHistoryScope) {
+    els.veyraAccountHistoryScope.textContent = isVeyraAdmin() ? "管理员可见全部账户" : "当前账户与旧公共记录";
+  }
+  if (els.veyraAccountHistoryTitle) {
+    els.veyraAccountHistoryTitle.textContent = isVeyraAdmin() ? "全部生成记录" : "我的生成记录";
+  }
   if (els.veyraAccountUsageTotal) els.veyraAccountUsageTotal.textContent = formatVeyraMoney(veyraUsageTotal(veyraState.usage));
 }
 
@@ -2723,18 +2733,26 @@ function renderVeyraAccountHistory(items = []) {
     renderAccountEmpty(els.veyraAccountHistoryGrid, "登录后这里会按账户展示你自己的生图记录。");
     return;
   }
+  const adminView = isVeyraAdmin();
   if (!items.length) {
-    renderAccountEmpty(els.veyraAccountHistoryGrid, "当前账户还没有生成记录。", "去 V2.0 生图", () => switchTab("v2"));
+    renderAccountEmpty(
+      els.veyraAccountHistoryGrid,
+      adminView ? "当前还没有任何账户生成记录。" : "当前账户还没有生成记录。",
+      "去 V2.0 生图",
+      () => switchTab("v2"),
+    );
     return;
   }
-  items.slice(0, 24).forEach((item, index) => {
+  const sortedItems = [...items].sort(compareHistoryItems);
+  sortedItems.slice(0, 24).forEach((item, index) => {
     const card = document.createElement("article");
     card.className = "account-history-card";
-    const cardPrompt = v2HistoryCardPrompt(item);
-    const imageUrl = v2HistoryImageUrl(item);
-    const preview = document.createElement(item.metadata?.mock || !imageUrl ? "div" : "button");
-    preview.className = item.metadata?.mock || !imageUrl ? "account-mock-preview" : "account-live-preview";
-    if (item.metadata?.mock || !imageUrl) {
+    const cardPrompt = accountHistoryCardPrompt(item);
+    const imageUrl = accountHistoryImageUrl(item);
+    const mock = accountHistoryIsMock(item);
+    const preview = document.createElement(mock || !imageUrl ? "div" : "button");
+    preview.className = mock || !imageUrl ? "account-mock-preview" : "account-live-preview";
+    if (mock || !imageUrl) {
       preview.textContent = `H${index + 1}`;
     } else {
       preview.type = "button";
@@ -2744,7 +2762,7 @@ function renderVeyraAccountHistory(items = []) {
       image.loading = "lazy";
       image.decoding = "async";
       preview.appendChild(image);
-      preview.addEventListener("click", () => openV2HistoryLightbox(item, index));
+      preview.addEventListener("click", () => openAccountHistoryLightbox(item, index));
     }
 
     const meta = document.createElement("div");
@@ -2752,10 +2770,61 @@ function renderVeyraAccountHistory(items = []) {
     const title = document.createElement("strong");
     title.textContent = cardPrompt || item.output_id || `生成记录 ${index + 1}`;
     const detail = document.createElement("span");
-    detail.textContent = `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`;
+    detail.textContent = `${accountHistorySourceLabel(item)} · ${accountHistoryProviderText(item)} · ${formatDate(item.created_at || item.updated_at)}`;
     meta.append(title, detail);
     card.append(preview, meta);
     els.veyraAccountHistoryGrid.appendChild(card);
+  });
+}
+
+function mergeAccountHistory(v1Items = [], v2Items = []) {
+  const normalized = [
+    ...v1Items.map((item) => ({ ...item, account_history_source: "v1" })),
+    ...v2Items.map((item) => ({ ...item, account_history_source: "v2" })),
+  ];
+  return normalized.sort(compareHistoryItems);
+}
+
+function accountHistorySourceLabel(item) {
+  return item?.account_history_source === "v1" ? "V1" : "V2";
+}
+
+function accountHistoryIsV1(item) {
+  return item?.account_history_source === "v1" || Boolean(item?.id && !item?.output_id);
+}
+
+function accountHistoryIsMock(item) {
+  if (accountHistoryIsV1(item)) return false;
+  return Boolean(item?.metadata?.mock || item?.provider_id === "mock_image");
+}
+
+function accountHistoryCardPrompt(item) {
+  return accountHistoryIsV1(item) ? promptTextFromHistoryItem(item).split("\n").find(Boolean) || item?.prompt || "" : v2HistoryCardPrompt(item);
+}
+
+function accountHistoryImageUrl(item, { thumbnail = true } = {}) {
+  if (!accountHistoryIsV1(item)) return v2HistoryImageUrl(item, { thumbnail });
+  return (thumbnail && item?.thumbnail_url) || item?.url || "";
+}
+
+function accountHistoryProviderText(item) {
+  return accountHistoryIsV1(item) ? historyProviderResultText(item) : v2HistoryProviderResultText(item);
+}
+
+function openAccountHistoryLightbox(item, index = 0) {
+  if (!accountHistoryIsV1(item)) {
+    openV2HistoryLightbox(item, index);
+    return;
+  }
+  const title = accountHistoryCardPrompt(item);
+  openImageLightbox({
+    id: item.id,
+    title: title ? title.slice(0, 34) : `历史图片 ${index + 1}`,
+    url: accountHistoryImageUrl(item, { thumbnail: false }),
+    thumbnailUrl: accountHistoryImageUrl(item),
+    format: item.format || "png",
+    meta: historyMetaText(item),
+    promptText: promptTextFromHistoryItem(item),
   });
 }
 
@@ -2802,13 +2871,14 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
   if (veyraState.loading && !force) return veyraState.account;
   setVeyraAccountLoading(true);
   try {
-    const [account, historyResponse, usageResponse] = await Promise.all([
+    const [account, v1HistoryResponse, v2HistoryResponse, usageResponse] = await Promise.all([
       refreshVeyraAccount(),
+      request("/v1/image/history?limit=1000"),
       loadV2HistoryResponse(),
       v2Request("/veyra/usage?limit=100"),
     ]);
     veyraState.account = account;
-    veyraState.history = historyResponse.items || [];
+    veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
     veyraState.usage = usageResponse.items || [];
     renderVeyraAccountSummary();
     renderVeyraAccountHistory(veyraState.history);

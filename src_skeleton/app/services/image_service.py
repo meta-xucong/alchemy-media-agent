@@ -438,6 +438,7 @@ def _persist_history_records(job: GenerationJob) -> None:
                 "prompt": _history_prompt(job),
                 "size": job.prompt_plan.size if job.prompt_plan else None,
                 "version_parent_id": output.version_parent_id,
+                "veyra_user_id": output.metadata.get("veyra_user_id"),
                 "created_at": job.created_at,
                 "updated_at": job.updated_at,
             }

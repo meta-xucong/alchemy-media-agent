@@ -25,6 +25,7 @@ const v2LocalApiBase = "http://127.0.0.1:8020/api/v2";
 const v2ApiBase =
   window.ALCHEMY_V2_API_BASE ||
   (window.location.port === "8017" ? v2LocalApiBase : `${window.location.origin}/api/v2`);
+const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const v2ProgressStages = [
   { key: "queued", label: "任务排队", short: "排队中", percent: 8 },
   { key: "planning", label: "中枢规划", short: "规划中", percent: 22 },
@@ -1625,7 +1626,7 @@ async function initV2({ silent = true, force = false } = {}) {
       v2Request("/resource-providers"),
       v2Request("/provider-capabilities"),
       v2Request("/templates?limit=1000"),
-      v2Request("/image/history?limit=1000"),
+      loadV2HistoryResponse(),
       v2Request("/orchestrator/status"),
       v2Request("/runtime/model-settings"),
     ]);
@@ -1919,7 +1920,7 @@ async function loadV2History({ silent = true } = {}) {
   if (!silent) updateV2Notice("正在刷新 2.0 历史。", "info");
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = true;
   try {
-    const response = await v2Request("/image/history?limit=1000");
+    const response = await loadV2HistoryResponse();
     v2State.history = response.items || [];
     v2State.historyRenderLimit = v2HistoryPageSize;
     renderV2History(v2State.history);
@@ -3092,17 +3093,57 @@ function updateV2Notice(message, type = "info") {
   els.v2NoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
 }
 
+function v2HistoryPath() {
+  return getVeyraToken() ? "/veyra/history?limit=1000" : "/image/history?limit=1000";
+}
+
+async function loadV2HistoryResponse() {
+  try {
+    return await v2Request(v2HistoryPath());
+  } catch (error) {
+    if (String(error?.message || error).includes("401") && !getVeyraToken()) {
+      return v2Request("/image/history?limit=1000", { skipVeyraAuth: true });
+    }
+    throw error;
+  }
+}
+
 async function v2Request(path, options = {}) {
+  const headers = {};
+  if (options.body) headers["Content-Type"] = "application/json";
+  if (options.headers) Object.assign(headers, options.headers);
+  const token = getVeyraToken();
+  if (token && !options.skipVeyraAuth && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const response = await fetch(`${v2ApiBase}${path}`, {
     method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   if (!response.ok) {
     const detail = await response.text();
+    if (response.status === 401 && !options.skipVeyraAuth) setVeyraToken("");
     throw new Error(detail);
   }
   return response.json();
+}
+
+function getVeyraToken() {
+  try {
+    return localStorage.getItem(veyraTokenStorageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setVeyraToken(token) {
+  try {
+    if (token) localStorage.setItem(veyraTokenStorageKey, token);
+    else localStorage.removeItem(veyraTokenStorageKey);
+  } catch {
+    // Ignore unavailable storage; the backend remains the source of truth.
+  }
 }
 
 async function handleV2Asset() {

@@ -166,9 +166,15 @@ async def veyra_me(authorization: str = Header(default="")):
 
 
 @app.get("/api/v2/veyra/history", response_model=ImageHistoryResponse)
-def veyra_history(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+async def veyra_history(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
     user_id = _veyra_user_id_from_authorization(authorization)
-    return list_image_history(limit=limit, veyra_user_id=user_id)
+    account = await _veyra_account(user_id)
+    return list_image_history(
+        limit=limit,
+        veyra_user_id=user_id,
+        include_public=True,
+        include_all=_is_veyra_admin_account(account),
+    )
 
 
 @app.get("/api/v2/veyra/usage")
@@ -211,15 +217,24 @@ def _veyra_user_id_from_authorization(authorization: str) -> int:
 
 async def _require_veyra_admin(authorization: str):
     user_id = _veyra_user_id_from_authorization(authorization)
+    account = await _veyra_account(user_id)
+    if not _is_veyra_admin_account(account):
+        raise HTTPException(status_code=403, detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."})
+    return account
+
+
+async def _veyra_account(user_id: int):
     try:
         account = await VeyraSub2APIClient().account(user_id)
     except VeyraAuthMisconfigured as exc:
         raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
     except VeyraAuthError as exc:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
-    if str(account.role).lower() != "admin":
-        raise HTTPException(status_code=403, detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."})
     return account
+
+
+def _is_veyra_admin_account(account) -> bool:
+    return str(getattr(account, "role", "") or "").lower() == "admin"
 
 
 def _with_veyra_user(body: CreateCreativeRunRequest, authorization: str) -> CreateCreativeRunRequest:
