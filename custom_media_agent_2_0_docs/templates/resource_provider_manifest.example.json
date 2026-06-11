@@ -1,0 +1,40 @@
+{
+  "provider_id": "github_evolinkai_gpt_image_cases",
+  "provider_type": "github_repository",
+  "source_uri": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+  "display_name": "EvoLinkAI GPT Image Cases",
+  "enabled": true,
+  "sync_mode": "scheduled_and_manual",
+  "sync_interval_minutes": 360,
+  "update_detection": {
+    "type": "git_commit_sha",
+    "branch": "main"
+  },
+  "parser": {
+    "type": "markdown_case_parser",
+    "include_paths": [
+      "cases/*.md",
+      "images/**",
+      "data/ingested_tweets.json"
+    ],
+    "canonical_language": "en",
+    "dedupe_multilingual_duplicates": true
+  },
+  "capabilities": {
+    "template_gallery": true,
+    "smart_retrieval": true,
+    "asset_preview": true,
+    "prompt_atoms": true
+  },
+  "license_policy": {
+    "source_license": "CC0 or repository declared license",
+    "raw_image_final_use_allowed": false,
+    "style_learning_allowed": true,
+    "commercial_use_requires_safety_check": true
+  },
+  "risk_policy": {
+    "default_for_unknown_assets": "inspiration_only",
+    "block_protected_ip_copying": true,
+    "block_unlicensed_logo_copying": true
+  }
+}

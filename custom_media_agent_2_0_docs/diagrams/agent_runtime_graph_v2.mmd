@@ -1,0 +1,16 @@
+flowchart LR
+  USER["User request"] --> MANAGER["CreativeManagerAgent"]
+  MANAGER --> MODE{"Choose mode"}
+  MODE --> TEMPLATE["template_customize"]
+  MODE --> SMART["smart_enhance"]
+  MODE --> REVISION["revision"]
+  TEMPLATE --> GUIDE["TemplateGuideAgent<br/>handoff when needed"]
+  SMART --> STRATEGIST["CaseStrategistAgent<br/>as tool"]
+  STRATEGIST --> SEARCH["search_prompt_cases"]
+  SEARCH --> COMPOSER["PromptComposerAgent<br/>as tool"]
+  TEMPLATE --> COMPOSER
+  REVISION --> REVISION_AGENT["RevisionAgent<br/>handoff when needed"]
+  COMPOSER --> SAFETY["run_safety_check"]
+  SAFETY --> GENERATE["create_image_job"]
+  GENERATE --> CRITIC["VisualCriticAgent<br/>as tool"]
+  CRITIC --> RESULT["CreativeRunResult"]

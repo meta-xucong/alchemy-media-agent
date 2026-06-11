@@ -229,6 +229,7 @@ class ImageGenerationRequest(BaseModel):
     idempotency_key: str | None = None
     trace_id: str | None = None
     source_output_id: str | None = None
+    veyra_user_id: int | None = None
 
 
 class ImageGenerationResult(BaseModel):

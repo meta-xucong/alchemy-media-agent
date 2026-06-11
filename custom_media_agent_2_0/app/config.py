@@ -78,6 +78,7 @@ class Settings:
     storage_dir: Path = PROJECT_ROOT / ".v2_storage"
     case_index_path: Path = PROJECT_ROOT / ".v2_data" / "case_index.json"
     image_history_path: Path = PROJECT_ROOT / ".v2_data" / "image_history.jsonl"
+    veyra_usage_path: Path = PROJECT_ROOT / ".v2_data" / "veyra_usage.jsonl"
     remote_snapshot_dir: Path = PROJECT_ROOT / ".v2_data" / "remote_snapshots"
     case_thumbnail_dir: Path = PROJECT_ROOT / ".v2_data" / "case_thumbnails"
     history_thumbnail_dir: Path = PROJECT_ROOT / ".v2_data" / "history_thumbnails"
@@ -143,6 +144,14 @@ class Settings:
     claude_orchestrator_cache_path: Path = PROJECT_ROOT / ".v2_data" / "claude_orchestrator_cache.json"
     claude_orchestrator_max_attempts: int = 2
     claude_orchestrator_retry_delay_seconds: float = 2.0
+    veyra_auth_enabled: bool = False
+    veyra_sub2api_base_url: str = "http://127.0.0.1:8080"
+    veyra_internal_token: str | None = None
+    veyra_request_timeout_seconds: float = 10.0
+    veyra_session_secret: str | None = None
+    veyra_session_ttl_seconds: int = 86400
+    veyra_billing_enabled: bool = True
+    veyra_generation_charge_amount: float = 0.0
     cors_allow_origins: tuple[str, ...] = (
         "http://127.0.0.1:8017",
         "http://localhost:8017",
@@ -185,6 +194,7 @@ def load_settings() -> Settings:
         image_history_path=Path(
             os.getenv("V2_IMAGE_HISTORY_PATH", str(PROJECT_ROOT / ".v2_data" / "image_history.jsonl"))
         ),
+        veyra_usage_path=Path(os.getenv("VEYRA_USAGE_PATH", str(PROJECT_ROOT / ".v2_data" / "veyra_usage.jsonl"))),
         remote_snapshot_dir=Path(
             os.getenv("V2_REMOTE_SNAPSHOT_DIR", str(PROJECT_ROOT / ".v2_data" / "remote_snapshots"))
         ),
@@ -347,6 +357,14 @@ def load_settings() -> Settings:
         ),
         claude_orchestrator_max_attempts=max(1, int(os.getenv("V2_CLAUDE_ORCHESTRATOR_MAX_ATTEMPTS", "2"))),
         claude_orchestrator_retry_delay_seconds=float(os.getenv("V2_CLAUDE_ORCHESTRATOR_RETRY_DELAY_SECONDS", "2.0")),
+        veyra_auth_enabled=os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        veyra_sub2api_base_url=(os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080") or "").rstrip("/"),
+        veyra_internal_token=os.getenv("VEYRA_INTERNAL_TOKEN") or None,
+        veyra_request_timeout_seconds=max(1.0, float(os.getenv("VEYRA_REQUEST_TIMEOUT_SECONDS", "10"))),
+        veyra_session_secret=os.getenv("VEYRA_SESSION_SECRET") or None,
+        veyra_session_ttl_seconds=max(300, int(os.getenv("VEYRA_SESSION_TTL_SECONDS", "86400"))),
+        veyra_billing_enabled=os.getenv("VEYRA_BILLING_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
+        veyra_generation_charge_amount=max(0.0, float(os.getenv("VEYRA_GENERATION_CHARGE_AMOUNT", "0"))),
         cors_allow_origins=_parse_csv_env(
             "V2_CORS_ALLOW_ORIGINS",
             (
@@ -366,6 +384,7 @@ def ensure_runtime_dirs() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.image_history_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.veyra_usage_path.parent.mkdir(parents=True, exist_ok=True)
     settings.remote_snapshot_dir.mkdir(parents=True, exist_ok=True)
     settings.case_thumbnail_dir.mkdir(parents=True, exist_ok=True)
     settings.history_thumbnail_dir.mkdir(parents=True, exist_ok=True)

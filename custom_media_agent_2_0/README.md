@@ -1,6 +1,20 @@
 # Custom Media Agent 2.0
 
-Independent v2 implementation package for the OpenAI Agents SDK-first creative image agent.
+Independent v2 implementation package for the Alchemy creative image agent.
+
+Current architecture note: V2 has evolved from the early OpenAI Agents SDK-first plan into a hybrid runtime:
+
+```text
+deterministic business pipeline
++ Claude Code creative orchestrator
++ pluggable model sources
++ SDK-compatible tool boundary
++ V2-native provider/storage/history/review
+```
+
+Claude Code remains the creative decision orchestrator; Kimi, Volcengine, DeepSeek, Doubao, and similar sources are model sources behind Claude Code, not independent default orchestrators. OpenAI Agents SDK remains a useful tool/planner/tracing boundary, but it is not the current end-to-end execution engine. The authoritative architecture baseline is:
+
+- [Current Architecture](../custom_media_agent_2_0_docs/docs/00_CURRENT_ARCHITECTURE.md)
 
 This package is intentionally separate from `custom_media_agent_docs/src_skeleton`. It exposes `/api/v2/*` only and uses v2-specific runtime, data, provider, and storage boundaries.
 
@@ -56,10 +70,10 @@ cd D:\AI\AlchemyOS\custom_media_agent_2_0
 - Creative run orchestration through a CreativeManager runtime boundary
 - SQLite-backed async task queue with a standalone worker entry point
 - Standalone ResourceProvider sync worker for periodic GitHub updates
-- OpenAI Agents SDK function-tool boundary for case search, case detail, and prompt safety checks
+- OpenAI Agents SDK-compatible function-tool boundary for case search, case detail, and prompt safety checks
 - Safety decision, prompt plan, mock image job, output provenance, feedback
 - Output review decisions with a VisualCriticAgent boundary for future vision/LLM review
-- Deterministic fallback when OpenAI Agents SDK or provider keys are not available
+- Deterministic main pipeline with optional external creative orchestration and SDK planning boundary
 
 ## Isolation
 

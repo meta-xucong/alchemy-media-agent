@@ -1,0 +1,933 @@
+openapi: 3.1.0
+info:
+  title: Custom Media Agent 2.0 API
+  version: 0.1.0
+  description: Independent /api/v2 contract for the OpenAI Agents SDK based creative image system.
+servers:
+  - url: /api/v2
+tags:
+  - name: health
+  - name: creative
+  - name: orchestration
+  - name: task-queue
+  - name: prompt-cases
+  - name: resource-providers
+  - name: image
+  - name: review
+  - name: feedback
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Check v2 service health
+      operationId: getV2Health
+      responses:
+        "200":
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /creative/runs:
+    post:
+      tags: [creative]
+      summary: Create a v2 creative run
+      operationId: createCreativeRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCreativeRunRequest"
+      responses:
+        "202":
+          description: Creative run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreativeRun"
+  /creative/runs/async:
+    post:
+      tags: [creative]
+      summary: Queue a v2 creative run
+      operationId: queueCreativeRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCreativeRunRequest"
+      responses:
+        "202":
+          description: Creative run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreativeRun"
+  /creative/runs/{run_id}:
+    get:
+      tags: [creative]
+      summary: Get a creative run
+      operationId: getCreativeRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Creative run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreativeRun"
+  /orchestrator/status:
+    get:
+      tags: [orchestration]
+      summary: Get Claude Code orchestrator status
+      operationId: getOrchestratorStatus
+      responses:
+        "200":
+          description: Orchestrator status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorStatusResponse"
+  /task-queue/status:
+    get:
+      tags: [task-queue]
+      summary: Get v2 task queue status
+      operationId: getTaskQueueStatus
+      responses:
+        "200":
+          description: Task queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskQueueStatus"
+  /review-agent/status:
+    get:
+      tags: [review]
+      summary: Get VisualCriticAgent status
+      operationId: getReviewAgentStatus
+      responses:
+        "200":
+          description: Review agent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewAgentStatus"
+  /prompt-cases/search:
+    post:
+      tags: [prompt-cases]
+      summary: Search structured prompt cases
+      operationId: searchPromptCases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchPromptCasesRequest"
+      responses:
+        "200":
+          description: Prompt case search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchPromptCasesResponse"
+  /prompt-cases/{case_id}:
+    get:
+      tags: [prompt-cases]
+      summary: Get prompt case detail
+      operationId: getPromptCase
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          description: Prompt case detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptCase"
+  /templates:
+    get:
+      tags: [prompt-cases]
+      summary: List template-ready prompt cases
+      operationId: listTemplates
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: use_case
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 24
+      responses:
+        "200":
+          description: Template list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [templates]
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PromptCaseSummary"
+  /resource-providers:
+    get:
+      tags: [resource-providers]
+      summary: List v2 resource providers
+      operationId: listResourceProviders
+      responses:
+        "200":
+          description: Resource providers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers]
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResourceProvider"
+  /resource-providers/{provider_id}/sync:
+    post:
+      tags: [resource-providers]
+      summary: Request a provider sync
+      operationId: requestProviderSync
+      parameters:
+        - $ref: "#/components/parameters/ProviderId"
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [auto, seed, remote]
+            default: auto
+          description: Use seed for offline development, remote for GitHub archive sync, or auto to follow server configuration.
+      responses:
+        "202":
+          description: Sync request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderSyncRun"
+  /resource-providers/{provider_id}/sync-runs/{sync_run_id}:
+    get:
+      tags: [resource-providers]
+      summary: Get provider sync run
+      operationId: getProviderSyncRun
+      parameters:
+        - $ref: "#/components/parameters/ProviderId"
+        - name: sync_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Provider sync run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderSyncRun"
+  /image/jobs:
+    post:
+      tags: [image]
+      summary: Create an image generation job
+      operationId: createImageJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImageJobRequest"
+      responses:
+        "202":
+          description: Image job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageJob"
+  /image/jobs/{job_id}:
+    get:
+      tags: [image]
+      summary: Get image job status
+      operationId: getImageJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageJob"
+  /outputs/{output_id}/feedback:
+    post:
+      tags: [feedback]
+      summary: Store output feedback
+      operationId: storeOutputFeedback
+      parameters:
+        - name: output_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFeedbackRequest"
+      responses:
+        "201":
+          description: Feedback stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackEvent"
+  /outputs/{output_id}/revisions:
+    post:
+      tags: [creative]
+      summary: Create a revision run from an output
+      operationId: createOutputRevision
+      parameters:
+        - name: output_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRevisionRunRequest"
+      responses:
+        "202":
+          description: Revision run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreativeRun"
+  /outputs/{output_id}/revisions/async:
+    post:
+      tags: [creative]
+      summary: Queue a revision run from an output
+      operationId: queueOutputRevision
+      parameters:
+        - name: output_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRevisionRunRequest"
+      responses:
+        "202":
+          description: Revision run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreativeRun"
+components:
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+    CaseId:
+      name: case_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ProviderId:
+      name: provider_id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, version, isolation]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        isolation:
+          type: object
+          required: [api_prefix, db_namespace, storage_prefix]
+          properties:
+            api_prefix:
+              type: string
+              example: /api/v2
+            db_namespace:
+              type: string
+              example: alchemy_v2
+            storage_prefix:
+              type: string
+              example: v2/
+    CreateCreativeRunRequest:
+      type: object
+      required: [user_prompt]
+      properties:
+        user_prompt:
+          type: string
+        mode_hint:
+          type: string
+          enum: [template_customize, smart_enhance, revision, batch]
+        template_case_id:
+          type: string
+        assets:
+          type: array
+          items:
+            type: string
+        output:
+          type: object
+          properties:
+            aspect_ratio:
+              type: string
+            count:
+              type: integer
+              minimum: 1
+              maximum: 8
+    CreativeRun:
+      type: object
+      required: [run_id, status, mode, created_at]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [created, planning, retrieving_cases, composing_prompt, safety_checking, generating, reviewing, completed, failed, cancelled, blocked_by_policy, waiting_for_user]
+        mode:
+          type: string
+        intent_summary:
+          type: string
+        selected_cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/PromptCaseSummary"
+        prompt_plan:
+          $ref: "#/components/schemas/ImagePromptPlan"
+        safety_decision:
+          $ref: "#/components/schemas/SafetyDecision"
+        orchestrator_decision:
+          $ref: "#/components/schemas/CreativeOrchestratorDecision"
+        generation_jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageJob"
+        trace_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreativeOrchestratorDecision:
+      type: object
+      required: [decision_id, provider, mode, case_retrieval_plan, prompt_directives, created_at]
+      properties:
+        decision_id:
+          type: string
+        provider:
+          type: string
+          enum: [claude-code, deterministic-fallback]
+        mode:
+          type: string
+          enum: [template_customize, smart_enhance, revision, batch]
+        selected_case_ids:
+          type: array
+          items:
+            type: string
+        case_retrieval_plan:
+          $ref: "#/components/schemas/CaseRetrievalPlan"
+        final_prompt:
+          type: string
+          description: Claude Code final gpt-image-2-ready prompt. Preferred input for ImagePromptPlan.prompt when valid.
+        negative_prompt:
+          type: string
+          description: Claude Code negative prompt. The application may append fixed safety negative terms.
+        provider_parameters:
+          type: object
+          additionalProperties: true
+          description: Preferred provider parameters such as count, quality, aspect_ratio, provider_hint, and output_format.
+        prompt_rationale:
+          type: string
+          description: Short user/operator-facing reason for the prompt package; not sent to the image provider.
+        prompt_directives:
+          $ref: "#/components/schemas/PromptDirectives"
+        stage_commands:
+          type: array
+          items:
+            $ref: "#/components/schemas/StageCommand"
+        generation_directives:
+          type: object
+        quality_gates:
+          type: object
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        fallback_reason:
+          type: string
+        invocation_status:
+          type: string
+        latency_ms:
+          type: integer
+        attempts:
+          type: integer
+        cache_hit:
+          type: boolean
+        cache_key:
+          type: string
+        workspace_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    OrchestratorStatusResponse:
+      type: object
+      required: [enabled, cli, tools, cache_enabled, cache_entries, max_attempts]
+      properties:
+        enabled:
+          type: boolean
+        cli:
+          type: string
+        tools:
+          type: string
+        fallback_model:
+          type: string
+        cache_enabled:
+          type: boolean
+        cache_entries:
+          type: integer
+        max_attempts:
+          type: integer
+        timeout_seconds:
+          type: number
+        max_output_tokens:
+          type: integer
+        recent_invocations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        last_success_at:
+          type: string
+          format: date-time
+        last_failure_at:
+          type: string
+          format: date-time
+        average_latency_ms:
+          type: integer
+    TaskQueueStatus:
+      type: object
+      required: [db_path, inline_worker_enabled, counts]
+      properties:
+        db_path:
+          type: string
+        inline_worker_enabled:
+          type: boolean
+        counts:
+          type: object
+          additionalProperties:
+            type: integer
+        oldest_active_task_at:
+          type: string
+          format: date-time
+    ReviewAgentStatus:
+      type: object
+      required: [enabled, sdk_available, agent_name, model, analysis_mode]
+      properties:
+        enabled:
+          type: boolean
+        sdk_available:
+          type: boolean
+        agent_name:
+          type: string
+        model:
+          type: string
+        analysis_mode:
+          type: string
+    CaseRetrievalPlan:
+      type: object
+      properties:
+        query_text:
+          type: string
+        category_filters:
+          type: array
+          items:
+            type: string
+        use_case_filters:
+          type: array
+          items:
+            type: string
+        style_filters:
+          type: array
+          items:
+            type: string
+        risk_filters:
+          type: array
+          items:
+            type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        diversity_level:
+          type: string
+          enum: [low, medium, high]
+    PromptDirectives:
+      type: object
+      properties:
+        visual_strategy:
+          type: string
+        case_selection_rationale:
+          type: string
+        reusable_prompt_atoms:
+          type: array
+          items:
+            type: string
+        composition:
+          type: string
+        lighting:
+          type: string
+        color_palette:
+          type: string
+        negative_prompt_additions:
+          type: array
+          items:
+            type: string
+        safety_notes:
+          type: array
+          items:
+            type: string
+    StageCommand:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum: [retrieve_cases, compose_prompt, safety_check, generate, review_outputs]
+        action:
+          type: string
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 100
+        reason:
+          type: string
+        payload:
+          type: object
+    SearchPromptCasesRequest:
+      type: object
+      properties:
+        query_text:
+          type: string
+        category_filters:
+          type: array
+          items:
+            type: string
+        style_filters:
+          type: array
+          items:
+            type: string
+        use_case_filters:
+          type: array
+          items:
+            type: string
+        risk_filters:
+          type: array
+          items:
+            type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 10
+        diversity_level:
+          type: string
+          enum: [low, medium, high]
+          default: medium
+    SearchPromptCasesResponse:
+      type: object
+      required: [cases, index_version]
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/PromptCaseSummary"
+        ranking_explanation:
+          type: string
+        index_version:
+          type: string
+    PromptCaseSummary:
+      type: object
+      required: [case_id, title, category]
+      properties:
+        case_id:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        summary:
+          type: string
+        preview_url:
+          type: string
+        style_tags:
+          type: array
+          items:
+            type: string
+        use_case_tags:
+          type: array
+          items:
+            type: string
+        risk_tags:
+          type: array
+          items:
+            type: string
+        score:
+          type: number
+    PromptCase:
+      allOf:
+        - $ref: "#/components/schemas/PromptCaseSummary"
+        - type: object
+          required: [provider_id, source_url, license_policy]
+          properties:
+            provider_id:
+              type: string
+            source_url:
+              type: string
+            raw_prompt:
+              type: string
+            prompt_atoms:
+              type: object
+              additionalProperties: true
+            visual_features:
+              type: object
+              additionalProperties: true
+            license_policy:
+              type: object
+              additionalProperties: true
+    ImagePromptPlan:
+      type: object
+      properties:
+        prompt:
+          type: string
+        negative_prompt:
+          type: string
+        style_basis:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        user_variables:
+          type: object
+          additionalProperties: true
+        provider_parameters:
+          type: object
+          additionalProperties: true
+        risk_notes:
+          type: array
+          items:
+            type: string
+    SafetyDecision:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [allow, allow_with_warning, transform_required, blocked, need_user_confirmation]
+        reasons:
+          type: array
+          items:
+            type: string
+        blocked_terms:
+          type: array
+          items:
+            type: string
+        required_transforms:
+          type: array
+          items:
+            type: string
+    ResourceProvider:
+      type: object
+      required: [provider_id, provider_type, enabled]
+      properties:
+        provider_id:
+          type: string
+        provider_type:
+          type: string
+        source_uri:
+          type: string
+        enabled:
+          type: boolean
+        last_sync_at:
+          type: string
+          format: date-time
+        active_index_version:
+          type: string
+    ProviderSyncRun:
+      type: object
+      required: [sync_run_id, provider_id, status]
+      properties:
+        sync_run_id:
+          type: string
+        provider_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, fetching, parsing, classifying, indexing, validating, publishing, completed, failed, partially_completed, skipped_no_change]
+        stats:
+          type: object
+          additionalProperties: true
+        error:
+          type: object
+          additionalProperties: true
+    CreateImageJobRequest:
+      type: object
+      required: [run_id, prompt_plan]
+      properties:
+        run_id:
+          type: string
+        prompt_plan:
+          $ref: "#/components/schemas/ImagePromptPlan"
+        provider_hint:
+          type: string
+    CreateRevisionRunRequest:
+      type: object
+      properties:
+        feedback:
+          type: string
+        provider_hint:
+          type: string
+        output:
+          type: object
+          additionalProperties: true
+    ImageJob:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        provider_id:
+          type: string
+        model:
+          type: string
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageOutput"
+        error:
+          type: object
+          additionalProperties: true
+    ImageOutput:
+      type: object
+      required: [output_id, job_id, url, created_at]
+      properties:
+        output_id:
+          type: string
+        job_id:
+          type: string
+        url:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        score:
+          type: object
+          additionalProperties: true
+        review:
+          $ref: "#/components/schemas/ImageReviewDecision"
+        selected_by_user:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    ImageReviewDecision:
+      type: object
+      required: [review_id, output_id, decision, score, created_at]
+      properties:
+        review_id:
+          type: string
+        output_id:
+          type: string
+        decision:
+          type: string
+          enum: [pass, needs_review, retry_recommended, failed]
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        notes:
+          type: array
+          items:
+            type: string
+        detected_risks:
+          type: array
+          items:
+            type: string
+        revision_directives:
+          type: array
+          items:
+            type: string
+        reviewer:
+          type: string
+        analysis_mode:
+          type: string
+        agent_trace_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    CreateFeedbackRequest:
+      type: object
+      required: [feedback_type]
+      properties:
+        feedback_type:
+          type: string
+          enum: [selected, downloaded, liked, disliked, revise, report_issue]
+        payload:
+          type: object
+          additionalProperties: true
+    FeedbackEvent:
+      type: object
+      required: [feedback_id, output_id, feedback_type, created_at]
+      properties:
+        feedback_id:
+          type: string
+        output_id:
+          type: string
+        feedback_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time

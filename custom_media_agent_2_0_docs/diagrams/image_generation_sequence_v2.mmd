@@ -1,0 +1,34 @@
+sequenceDiagram
+  participant U as User
+  participant FE as Frontend /v2
+  participant API as V2 API
+  participant RT as CreativeManagerRuntime
+  participant ORC as Claude Code Orchestrator
+  participant DS as Domain Services
+  participant IP as Image Provider
+  participant DB as V2 Storage
+
+  U->>FE: Submit prompt or template customization
+  FE->>API: POST /api/v2/creative/runs
+  API->>DB: Create CreativeRun snapshot
+  API->>RT: run deterministic pipeline
+  RT->>DS: search_prompt_cases
+  DS->>DB: Query active case index
+  DB-->>DS: Matching cases
+  DS-->>RT: Ranked cases
+  RT->>DS: build asset context and template lock
+  RT->>ORC: request CreativeOrchestratorDecision via Claude Code model source
+  ORC-->>RT: decision or deterministic fallback
+  RT->>DS: compose_prompt_plan
+  RT->>DS: run_safety_check
+  alt safety passed
+    RT->>DS: create_image_job
+    DS->>IP: Generate image with V2-native provider
+    IP-->>DS: Output assets
+    DS->>DB: Store outputs, history, provenance, review
+    RT->>DB: Save completed CreativeRun
+  else blocked or confirmation needed
+    RT->>DB: Save blocked/waiting CreativeRun
+  end
+  API-->>FE: CreativeRun snapshot
+  FE-->>U: Show progress and outputs

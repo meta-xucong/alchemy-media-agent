@@ -1725,11 +1725,12 @@ function renderV2ModelCards(settings = v2State.modelSettings || {}) {
 
 function v2EffectiveImageProvider(settings = v2State.modelSettings || {}) {
   const configured = settings.image_generation_provider;
-  if (["openai_gpt_image", "gemini_image", "mock_image"].includes(configured) && v2ImageProviderConfigured(configured, settings)) {
+  if (["openai_gpt_image", "gemini_image"].includes(configured) && v2ImageProviderConfigured(configured, settings)) {
     return configured;
   }
-  if (settings.openai_api_key_configured) return "openai_gpt_image";
-  if (settings.gemini_api_key_configured) return "gemini_image";
+  if (configured === "mock_image" && settings.persisted) return "mock_image";
+  const liveProvider = v2PreferredLiveImageProvider(settings);
+  if (liveProvider) return liveProvider;
   return "mock_image";
 }
 
@@ -1739,6 +1740,12 @@ function v2RequestedImageProvider(settings = v2State.modelSettings || {}) {
     return selected;
   }
   return v2EffectiveImageProvider(settings);
+}
+
+function v2PreferredLiveImageProvider(settings = v2State.modelSettings || {}) {
+  if (v2ImageProviderConfigured("openai_gpt_image", settings)) return "openai_gpt_image";
+  if (v2ImageProviderConfigured("gemini_image", settings)) return "gemini_image";
+  return "";
 }
 
 function v2ImageProviderConfigured(provider, settings = v2State.modelSettings || {}) {
@@ -2421,6 +2428,9 @@ async function runV2Creative() {
     return;
   }
   const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {});
+  if (imageProvider === "mock_image") {
+    updateV2Notice("当前选择的是 Mock 测试通道，会快速生成占位图；需要真实生图请切换到 OpenAI 或 Gemini。", "warning");
+  }
   expandH5AdvancedPanel("v2");
   toggleV2Loading(true);
   startV2Progress("queued", "正在提交任务到 V2.0 Agent。");

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents import AGENTS_SDK_AVAILABLE, CreativeManagerRuntime
@@ -25,6 +25,8 @@ from app.schemas import (
     SearchPromptCasesRequest,
     V2RuntimeModelSettingsRequest,
     V2RuntimeModelSettingsResponse,
+    VeyraBillingSettingsRequest,
+    VeyraBillingSettingsResponse,
 )
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_assets import read_case_asset, read_case_thumbnail
@@ -41,6 +43,11 @@ from app.services.runtime_model_settings import (
     get_runtime_model_settings,
     update_runtime_model_settings,
 )
+from app.services.veyra_billing_settings import (
+    apply_persisted_billing_settings,
+    get_billing_settings,
+    update_billing_settings,
+)
 from app.services.queue_worker import QueueWorker
 from app.services.task_queue import enqueue_creative_task, get_run_snapshot, initialize_task_queue, task_queue_stats
 from app.services.uploaded_assets import (
@@ -50,6 +57,16 @@ from app.services.uploaded_assets import (
     read_uploaded_asset_content,
     store_uploaded_asset_content,
 )
+from app.services.veyra_auth import (
+    VeyraAuthDisabled,
+    VeyraAuthError,
+    VeyraAuthMisconfigured,
+    VeyraAuthUnauthorized,
+    VeyraSub2APIClient,
+    login_with_ticket,
+    verify_session_token,
+)
+from app.services.veyra_usage import list_veyra_usage
 from app.services.visual_review_agent import get_visual_review_agent_status, refresh_visual_review_agent
 from app.repositories.memory import utc_now
 from app.providers.images import list_v2_image_provider_capabilities
@@ -63,6 +80,7 @@ creative_manager = CreativeManagerRuntime()
 async def lifespan(_: FastAPI):
     ensure_runtime_dirs()
     apply_persisted_runtime_model_settings()
+    apply_persisted_billing_settings()
     creative_manager.refresh_runtime_config()
     refresh_visual_review_agent()
     bootstrap_v2_repository(seed_cases=True)
@@ -115,13 +133,115 @@ def health() -> HealthResponse:
     )
 
 
+@app.post("/api/v2/veyra/login")
+async def veyra_login(body: dict):
+    try:
+        ticket = str(body.get("ticket") or "").strip()
+    except AttributeError:
+        ticket = ""
+    if not ticket:
+        raise HTTPException(status_code=400, detail={"error_code": "veyra_ticket_required", "message": "Ticket is required."})
+    try:
+        return await login_with_ticket(ticket)
+    except VeyraAuthDisabled as exc:
+        raise HTTPException(status_code=404, detail={"error_code": exc.code, "message": "Veyra auth is disabled."}) from exc
+    except VeyraAuthMisconfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+    except VeyraAuthUnauthorized as exc:
+        raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Ticket is invalid or expired."}) from exc
+    except VeyraAuthError as exc:
+        raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
+
+
+@app.get("/api/v2/veyra/me")
+async def veyra_me(authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_authorization(authorization)
+    try:
+        account = await VeyraSub2APIClient().account(user_id)
+    except VeyraAuthMisconfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+    except VeyraAuthError as exc:
+        raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
+    return {"user": account.__dict__}
+
+
+@app.get("/api/v2/veyra/history", response_model=ImageHistoryResponse)
+def veyra_history(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_authorization(authorization)
+    return list_image_history(limit=limit, veyra_user_id=user_id)
+
+
+@app.get("/api/v2/veyra/usage")
+def veyra_usage(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_authorization(authorization)
+    return list_veyra_usage(user_id, limit=limit)
+
+
+@app.get("/api/v2/veyra/billing/settings", response_model=VeyraBillingSettingsResponse)
+async def veyra_billing_settings(rule_key: str | None = Query(default=None), authorization: str = Header(default="")):
+    await _require_veyra_admin(authorization)
+    return get_billing_settings(rule_key)
+
+
+@app.get("/api/v2/veyra/billing/settings/public", response_model=VeyraBillingSettingsResponse)
+def public_veyra_billing_settings(rule_key: str | None = Query(default=None)):
+    return get_billing_settings(rule_key)
+
+
+@app.post("/api/v2/veyra/billing/settings", response_model=VeyraBillingSettingsResponse)
+async def update_veyra_billing_settings(
+    body: VeyraBillingSettingsRequest,
+    authorization: str = Header(default=""),
+):
+    await _require_veyra_admin(authorization)
+    return update_billing_settings(body)
+
+
+def _veyra_user_id_from_authorization(authorization: str) -> int:
+    scheme, _, token = str(authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
+    try:
+        return verify_session_token(token.strip())
+    except VeyraAuthUnauthorized as exc:
+        raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Veyra session is invalid."}) from exc
+    except (VeyraAuthDisabled, VeyraAuthMisconfigured) as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+
+
+async def _require_veyra_admin(authorization: str):
+    user_id = _veyra_user_id_from_authorization(authorization)
+    try:
+        account = await VeyraSub2APIClient().account(user_id)
+    except VeyraAuthMisconfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+    except VeyraAuthError as exc:
+        raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
+    if str(account.role).lower() != "admin":
+        raise HTTPException(status_code=403, detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."})
+    return account
+
+
+def _with_veyra_user(body: CreateCreativeRunRequest, authorization: str) -> CreateCreativeRunRequest:
+    if not settings.veyra_auth_enabled:
+        return body.model_copy(update={"veyra_user_id": None})
+    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_authorization(authorization)})
+
+
+def _image_job_with_veyra_user(body: CreateImageJobRequest, authorization: str) -> CreateImageJobRequest:
+    if not settings.veyra_auth_enabled:
+        return body.model_copy(update={"veyra_user_id": None})
+    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_authorization(authorization)})
+
+
 @app.post("/api/v2/creative/runs", status_code=202)
-async def create_creative_run(body: CreateCreativeRunRequest):
-    return await creative_manager.run(body)
+async def create_creative_run(body: CreateCreativeRunRequest, authorization: str = Header(default="")):
+    return await creative_manager.run(_with_veyra_user(body, authorization))
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
-async def create_creative_run_async(body: CreateCreativeRunRequest):
+async def create_creative_run_async(body: CreateCreativeRunRequest, authorization: str = Header(default="")):
+    body = _with_veyra_user(body, authorization)
     queued = creative_manager.queue_run(body)
     enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
     return queued
@@ -281,8 +401,8 @@ def provider_sync_run(provider_id: str, sync_run_id: str):
 
 
 @app.post("/api/v2/image/jobs", status_code=202)
-async def image_job(body: CreateImageJobRequest):
-    return await create_image_job(body)
+async def image_job(body: CreateImageJobRequest, authorization: str = Header(default="")):
+    return await create_image_job(_image_job_with_veyra_user(body, authorization))
 
 
 @app.get("/api/v2/image/history", response_model=ImageHistoryResponse)

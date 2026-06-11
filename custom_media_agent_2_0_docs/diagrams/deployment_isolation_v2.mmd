@@ -1,0 +1,13 @@
+flowchart TD
+  DOMAIN["same domain"] --> FRONTEND["shared frontend shell"]
+  FRONTEND --> V1_ROUTE["legacy routes"]
+  FRONTEND --> V2_ROUTE["/v2 routes"]
+  V1_ROUTE --> V1_API["/api/v1 old backend"]
+  V2_ROUTE --> V2_API["/api/v2 v2 backend"]
+  V1_API --> V1_DB["old database"]
+  V1_API --> V1_REDIS["old redis namespace"]
+  V1_API --> V1_STORE["old object storage prefix"]
+  V2_API --> V2_DB["alchemy_v2 schema / v2_ tables"]
+  V2_API --> V2_REDIS["alchemy:v2:*"]
+  V2_API --> V2_STORE["v2/* object prefix"]
+  V2_API --> V2_TRACE["alchemy-media-agent-v2 traces"]

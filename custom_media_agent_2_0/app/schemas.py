@@ -435,12 +435,45 @@ class V2RuntimeModelSettingsRequest(BaseModel):
     case_intelligence_model: str | None = Field(default=None, max_length=120)
 
 
+class VeyraBillingRule(BaseModel):
+    key: str
+    label: str = ""
+    agent: str = "alchemy"
+    version: str = ""
+    enabled: bool
+    charge_amount: float
+    source: str = "alchemy"
+
+
+class VeyraBillingSettingsResponse(BaseModel):
+    enabled: bool
+    charge_amount: float
+    rules: list[VeyraBillingRule] = Field(default_factory=list)
+    currency_label: str = "sub2api_balance"
+    persisted: bool = False
+
+
+class VeyraBillingRuleUpdate(BaseModel):
+    key: str = Field(min_length=1, max_length=120)
+    label: str | None = Field(default=None, max_length=120)
+    enabled: bool | None = None
+    charge_amount: float | None = Field(default=None, ge=0, le=100000)
+
+
+class VeyraBillingSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    charge_amount: float | None = Field(default=None, ge=0, le=100000)
+    rule_key: str | None = Field(default=None, max_length=120)
+    rules: list[VeyraBillingRuleUpdate] | None = None
+
+
 class CreateCreativeRunRequest(BaseModel):
     user_prompt: str = ""
     mode_hint: Literal["template_customize", "smart_enhance", "revision", "batch"] | None = None
     template_case_id: str | None = None
     assets: list[str | CreativeRunAssetInput] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
+    veyra_user_id: int | None = None
 
     @model_validator(mode="after")
     def normalize_and_validate(self) -> "CreateCreativeRunRequest":
@@ -545,6 +578,7 @@ class CreateImageJobRequest(BaseModel):
     prompt_plan: ImagePromptPlan
     provider_hint: str | None = None
     input_images: list[ProviderInputImage] = Field(default_factory=list)
+    veyra_user_id: int | None = None
 
 
 class CreateFeedbackRequest(BaseModel):

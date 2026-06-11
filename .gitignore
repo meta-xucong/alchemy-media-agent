@@ -7,12 +7,11 @@
 
 # Runtime-generated media, history, and logs
 src_skeleton/.media_storage/*
-!src_skeleton/.media_storage/generated_images/
-!src_skeleton/.media_storage/generated_images/**
-!src_skeleton/.media_storage/history/
-!src_skeleton/.media_storage/history/outputs.jsonl
+src_skeleton/.media_storage/generated_images/
+src_skeleton/.media_storage/history/
 src_skeleton/.media_storage/history/*.bak*
 src_skeleton/.media_storage/outputs/
+design-qa-*.png
 src_skeleton/.server_*.log
 src_skeleton/.server_*.err.log
 custom_media_agent_2_0/.env

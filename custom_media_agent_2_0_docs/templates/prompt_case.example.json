@@ -1,0 +1,37 @@
+{
+  "case_id": "case_github_evolinkai_ad_0001",
+  "provider_id": "github_evolinkai_gpt_image_cases",
+  "index_version": "github_evolinkai_2026-06-04T12:00:00Z",
+  "source_url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/ad-creative.md",
+  "title": "Premium product hero image with dramatic studio lighting",
+  "category": "ad-creative",
+  "summary": "A polished advertising composition for a premium product, using controlled lighting, clear subject emphasis, and space for campaign text.",
+  "raw_prompt": "Original prompt text from the provider snapshot, stored for provenance and parsing only.",
+  "prompt_atoms": {
+    "subject": "premium skincare bottle",
+    "scene": "minimal studio set",
+    "composition": "centered hero product with negative space for text",
+    "lighting": "dramatic softbox rim light and clean highlight",
+    "color_palette": ["ivory", "deep green", "warm gold"],
+    "material_texture": "glossy glass, subtle condensation, satin backdrop",
+    "mood": "luxury, calm, high trust",
+    "typography": "reserved text area, high contrast, no tiny unreadable text",
+    "constraints": ["no copied brand logo", "no protected character"]
+  },
+  "visual_features": {
+    "primary_subject_type": "product",
+    "background_complexity": "low",
+    "contains_text": false,
+    "commercial_fit": "high",
+    "composition_type": "centered_hero"
+  },
+  "style_tags": ["premium", "studio-lighting", "minimal", "luxury"],
+  "use_case_tags": ["ecommerce", "ad-creative", "social-media"],
+  "risk_tags": ["raw_image_not_final_asset"],
+  "license_policy": {
+    "template_reuse_allowed": true,
+    "raw_image_final_use_allowed": false,
+    "commercial_use_status": "requires_case_level_safety_check"
+  },
+  "quality_score": 0.86
+}

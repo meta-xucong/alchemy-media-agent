@@ -40,7 +40,7 @@ def persist_image_job_history(job: ImageJob) -> None:
             handle.write("\n")
 
 
-def list_image_history(limit: int = 50) -> ImageHistoryResponse:
+def list_image_history(limit: int = 50, *, veyra_user_id: int | None = None) -> ImageHistoryResponse:
     if not settings.image_history_path.exists():
         return ImageHistoryResponse(items=[], total=0)
     records_by_output: dict[str, ImageHistoryItem] = {}
@@ -50,6 +50,8 @@ def list_image_history(limit: int = 50) -> ImageHistoryResponse:
         try:
             item = ImageHistoryItem.model_validate(json.loads(line))
         except (json.JSONDecodeError, ValueError):
+            continue
+        if veyra_user_id is not None and _veyra_user_id(item.metadata) != veyra_user_id:
             continue
         item = _normalize_thumbnail_url(item)
         existing = records_by_output.get(item.output_id)
@@ -179,3 +181,11 @@ def _thumbnail_endpoint(output_id: str) -> str:
 
 def _timestamp(value: datetime) -> float:
     return value.timestamp()
+
+
+def _veyra_user_id(metadata: dict[str, Any]) -> int | None:
+    try:
+        value = int(metadata.get("veyra_user_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Veyra Billing Admin</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260611-share-page" />
+  </head>
+  <body>
+    <div class="app-shell billing-admin-shell">
+      <header class="lux-header">
+        <a id="brandHomeLink" class="brand-lockup brand-home-link" href="https://aiself.vip/" aria-label="返回 Veyra Agent 总导航">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <p class="eyebrow">Veyra Agent</p>
+            <h1>Billing Admin</h1>
+          </div>
+        </a>
+        <div class="module-tabs billing-admin-title" aria-label="管理模块">
+          <button class="tab active" type="button">Alchemy 计费参数</button>
+        </div>
+        <div class="header-status">
+          <a class="surface-switch-link" href="/">返回 Alchemy</a>
+          <span id="adminState" class="state-pill">检查中</span>
+        </div>
+      </header>
+
+      <main class="homepage billing-admin-page">
+        <section class="panel flow-section billing-console-panel">
+          <div class="panel-head section-title">
+            <div>
+              <p class="eyebrow">Sub2API Balance</p>
+              <h3>生图计费控制台</h3>
+            </div>
+            <div class="v2-status-actions">
+              <span id="billingConsoleState" class="state-pill">未加载</span>
+              <button id="billingRefreshBtn" class="button secondary" type="button">刷新设置</button>
+            </div>
+          </div>
+
+          <form id="billingSettingsForm" class="billing-rule-list" aria-live="polite">
+            <div id="billingRulesGrid" class="billing-rules-grid"></div>
+            <div class="billing-actions">
+              <button id="billingSaveBtn" class="button primary" type="submit">保存全部设置</button>
+              <span id="billingSettingsHint" class="micro-copy">只有 sub2api 管理员可以修改。</span>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <div id="globalToast" class="global-toast" role="status" aria-live="polite" hidden></div>
+    <script src="/static/billing-admin.js?v=20260611-share-page" defer></script>
+  </body>
+</html>

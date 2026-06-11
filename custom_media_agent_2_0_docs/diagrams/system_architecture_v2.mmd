@@ -1,0 +1,19 @@
+flowchart TD
+  FE["Frontend Shell<br/>same domain, /v2 route"] --> API["V2 API Gateway<br/>/api/v2"]
+  API --> AUTH["Veyra/Auth Bridge"]
+  API --> RUNTIME["CreativeManagerRuntime<br/>deterministic pipeline"]
+  RUNTIME --> CASES["Case Intelligence<br/>case index/search/profile"]
+  RUNTIME --> ASSETS["Uploaded Asset Binding<br/>template lock / fusion policy"]
+  RUNTIME --> ORC["Claude Code Orchestrator<br/>creative decision center"]
+  ORC --> CLI["Claude Code CLI"]
+  CLI --> MODEL_POOL["Pluggable Model Sources<br/>Kimi / Volcengine / DeepSeek / Doubao / GLM"]
+  ORC --> CACHE["Checkpoint Compression<br/>semantic cache"]
+  RUNTIME --> PROMPT["Prompt Composer<br/>final prompt guard / visual grammar lock"]
+  RUNTIME --> SAFETY["Safety Service<br/>hard gate"]
+  RUNTIME --> GEN["Generation Service"]
+  GEN --> IMAGE_PROVIDER["V2-native Image Providers<br/>OpenAI / Gemini / Mock"]
+  GEN --> STORE["V2 Storage / History / Review"]
+  RUNTIME --> SDK["OpenAI Agents SDK Boundary<br/>optional planner tools / tracing"]
+  SDK -. future capsule .-> RUNTIME
+  CASES --> RESOURCE["Resource Sync Service<br/>GitHub provider index"]
+  RESOURCE --> STORE

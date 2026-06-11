@@ -35,11 +35,12 @@ except Exception:
 
 
 class CreativeManagerRuntime:
-    """OpenAI Agents SDK integration boundary with a deterministic local fallback.
+    """Deterministic V2 business pipeline with an SDK-compatible tool boundary.
 
-    The first MVP keeps business execution deterministic so local tests do not
-    require model credentials. When the SDK and provider credentials are wired,
-    this class is the single place to replace planning with Runner.run().
+    OpenAI Agents SDK tools are kept as a future planner/tracing capsule, but
+    the current end-to-end execution path deliberately stays in domain services
+    so template lock, asset binding, safety, providers, storage, and billing
+    remain deterministic and auditable.
     """
 
     def __init__(self) -> None:
@@ -367,6 +368,7 @@ class CreativeManagerRuntime:
                 provider_hint=request.output.get("provider_hint")
                 or orchestrator_decision.generation_directives.get("provider_hint"),
                 input_images=provider_input_images_from_context(asset_context),
+                veyra_user_id=request.veyra_user_id,
             )
             running_job = await create_running_image_job(image_request)
             generation_jobs.append(running_job)

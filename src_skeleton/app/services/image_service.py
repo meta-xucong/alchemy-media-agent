@@ -29,6 +29,14 @@ from app.services.prompting import apply_patch_to_plan, build_prompt_plan, build
 from app.services.safety import check_generation_prompt
 from app.services.utils import make_id, now_iso
 from app.services.visual_review import review_image_output
+from app.services.veyra_auth import (
+    VeyraAuthError,
+    VeyraInsufficientBalance,
+    debit_balance,
+    ensure_sufficient_balance,
+    load_billing_rule,
+)
+from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
 from app.services.work_intensity import apply_work_intensity
 from app.storage import media_store
 
@@ -47,6 +55,7 @@ async def create_image_job(
     work_intensity: str | None = None,
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
+    veyra_user_id: int | None = None,
 ) -> GenerationJob:
     prompt = str(prompt or "").strip()
     if not prompt:
@@ -159,11 +168,12 @@ async def create_image_job(
         provider_preference=provider_preference,
         idempotency_key=key,
         trace_id=trace_id,
+        veyra_user_id=veyra_user_id,
     )
     return await _run_image_request(job, request, edit=False)
 
 
-async def revise_image_job(job_id: str, request: ReviseImageRequest) -> GenerationJob | None:
+async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> GenerationJob | None:
     source_job = repository.get_job(job_id)
     source_output = repository.get_output(request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
@@ -193,6 +203,7 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest) -> Generati
         provider_preference=request.provider_preference,
         trace_id=trace_id,
         source_output_id=request.output_id,
+        veyra_user_id=veyra_user_id,
     )
     return await _run_image_request(revision, image_request, edit=True)
 
@@ -206,6 +217,22 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
         "requested_image_provider": requested_provider,
         "requested_image_model": _requested_image_model(requested_provider),
     }
+    billing_result = None
+    billing_rule = None
+    billing_required = False
+    try:
+        billing_rule = await load_billing_rule(settings.veyra_billing_rule_key_v1)
+        billing_required = _should_bill_veyra(request, billing_rule)
+        if billing_required:
+            await ensure_sufficient_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
+    except (VeyraInsufficientBalance, VeyraAuthError) as exc:
+        job.status = JobStatus.failed
+        job.error = _billing_provider_error(exc)
+        job.updated_at = now_iso()
+        saved = repository.save_job(job)
+        _emit_image_events(saved)
+        return saved
+
     try:
         provider = await registry.select_image(request.provider_preference)
         result = await _try_image_provider(job, request, provider, edit=edit)
@@ -227,9 +254,44 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
             )
             if not job.cost_estimate:
                 job.cost_estimate = CostEstimate(provider=fallback_error.provider or "unknown", model="unknown")
+
+    if job.status == JobStatus.ready and billing_required and billing_rule:
+        try:
+            billing_result = await debit_balance(
+                user_id=int(request.veyra_user_id or 0),
+                amount=billing_rule.charge_amount,
+                idempotency_key=f"{billing_rule.key}:image:{job.id}",
+                source=billing_rule.source,
+                reference_id=job.id,
+            )
+            job.raw_response_summary = {
+                **job.raw_response_summary,
+                "veyra_billing": _billing_metadata(billing_result),
+            }
+            _attach_billing_metadata(job, billing_result)
+        except (VeyraInsufficientBalance, VeyraAuthError) as exc:
+            _discard_job_outputs(job)
+            job.status = JobStatus.failed
+            job.error = _billing_provider_error(exc)
+            job.updated_at = now_iso()
+            saved = repository.save_job(job)
+            _emit_image_events(saved)
+            return saved
     job.updated_at = now_iso()
     saved = repository.save_job(job)
     if saved.status == JobStatus.ready:
+        if billing_result:
+            record_veyra_usage(
+                VeyraUsageRecord(
+                    user_id=billing_result.user_id,
+                    amount=billing_result.amount,
+                    balance_after=billing_result.balance_after,
+                    idempotency_key=billing_result.idempotency_key,
+                    reference_id=job.id,
+                    source=billing_result.source,
+                    replayed=billing_result.replayed,
+                )
+            )
         _persist_history_records(saved)
     _emit_image_events(saved)
     return saved
@@ -244,7 +306,7 @@ async def _try_image_provider(job: GenerationJob, request: ImageGenerationReques
     result = await provider.edit(request) if edit else await provider.generate(request)
     job.provider = result.provider
     job.model = result.model
-    job.outputs = _store_outputs(job, result.outputs)
+    job.outputs = _store_outputs(job, result.outputs, request=request)
     return result
 
 
@@ -297,7 +359,7 @@ async def _try_image_fallback(
         return fallback_error
 
 
-def _store_outputs(job: GenerationJob, provider_outputs: list[dict]) -> list[GenerationOutput]:
+def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request: ImageGenerationRequest) -> list[GenerationOutput]:
     stored: list[GenerationOutput] = []
     for item in provider_outputs:
         output_id = make_id("out")
@@ -327,6 +389,8 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict]) -> list[Gen
                     "actual_model": job.model,
                     "requested_provider": _requested_history_provider(job),
                     "requested_model": _requested_history_model(job),
+                    "veyra_user_id": request.veyra_user_id,
+                    "veyra_billing": job.raw_response_summary.get("veyra_billing"),
                 },
             )
         )
@@ -459,6 +523,59 @@ def _requested_image_model(provider: str | None) -> str | None:
     if provider == "openai_gpt_image":
         return settings.openai_image_model
     return settings.default_image_model
+
+
+def _should_bill_veyra(request: ImageGenerationRequest, billing_rule) -> bool:
+    return bool(settings.veyra_auth_enabled and billing_rule.enabled and request.veyra_user_id and billing_rule.charge_amount > 0)
+
+
+def _billing_metadata(result) -> dict | None:
+    if not result:
+        return None
+    return {
+        "amount": result.amount,
+        "balance_after": result.balance_after,
+        "idempotency_key": result.idempotency_key,
+        "source": result.source,
+        "replayed": result.replayed,
+    }
+
+
+def _attach_billing_metadata(job: GenerationJob, billing_result) -> None:
+    metadata = _billing_metadata(billing_result)
+    if not metadata:
+        return
+    for output in job.outputs:
+        output.metadata = {
+            **output.metadata,
+            "veyra_billing": metadata,
+        }
+
+
+def _discard_job_outputs(job: GenerationJob) -> None:
+    for output in list(job.outputs):
+        media_store.delete_output_file(output_id=output.id, job_id=job.id, output_format=output.format)
+        media_store.delete_history_record(output.id)
+        repository.delete_output(output.id)
+    job.outputs = []
+
+
+def _billing_provider_error(error: Exception) -> ProviderError:
+    if isinstance(error, VeyraInsufficientBalance):
+        return ProviderError(
+            code="veyra_insufficient_balance",
+            message="Sub2api balance is insufficient.",
+            provider="veyra_billing",
+            retryable=False,
+            detail={},
+        )
+    return ProviderError(
+        code=getattr(error, "code", "veyra_billing_error"),
+        message="Veyra billing failed.",
+        provider="veyra_billing",
+        retryable=True,
+        detail={},
+    )
 
 
 def _idempotency_key(

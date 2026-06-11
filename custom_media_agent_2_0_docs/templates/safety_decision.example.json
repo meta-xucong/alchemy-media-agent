@@ -1,0 +1,17 @@
+{
+  "decision_id": "safety_01HYPERREAL_001",
+  "scope": "prompt_plan",
+  "decision": "allow_with_warning",
+  "reasons": [
+    "No prohibited content detected.",
+    "Referenced cases are used for abstract composition and lighting only.",
+    "Raw provider images are not allowed as final commercial assets."
+  ],
+  "blocked_terms": [],
+  "required_transforms": [
+    "Do not reproduce original case brand marks.",
+    "Do not claim the output is an exact copy of the reference."
+  ],
+  "user_confirmation_required": false,
+  "commercial_use_status": "allowed_after_generation_review"
+}

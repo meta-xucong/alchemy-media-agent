@@ -8,7 +8,7 @@ from pathlib import Path
 import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -34,6 +34,7 @@ from app.services.asset_service import complete_asset_upload, create_asset_mask,
 from app.services.events import format_sse_events
 from app.services.image_service import create_image_job, revise_image_job
 from app.services.session_service import create_session, handle_message
+from app.services.veyra_auth import VeyraAuthDisabled, VeyraAuthError, VeyraAuthMisconfigured, VeyraAuthUnauthorized, verify_session_token
 from app.services.video_service import create_video_job
 from app.storage import media_store
 
@@ -56,6 +57,11 @@ def frontend_app():
 @app.get("/mobile")
 def mobile_frontend_app():
     return FileResponse(MOBILE_STATIC_DIR / "index.html")
+
+
+@app.get("/admin/billing")
+def billing_admin_app():
+    return FileResponse(STATIC_DIR / "billing-admin.html")
 
 
 @app.get("/share/image", response_class=HTMLResponse)
@@ -141,6 +147,22 @@ def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
 
 
+def _veyra_user_id_from_authorization(authorization: str) -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    scheme, _, token = str(authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
+    try:
+        return verify_session_token(token.strip())
+    except VeyraAuthUnauthorized as exc:
+        raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Veyra session is invalid."}) from exc
+    except (VeyraAuthDisabled, VeyraAuthMisconfigured) as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+    except VeyraAuthError as exc:
+        raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra auth failed."}) from exc
+
+
 @app.post("/v1/sessions")
 def create_session_endpoint(body: CreateSessionRequest):
     return create_session(body)
@@ -215,7 +237,7 @@ def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest):
 
 
 @app.post("/v1/image/jobs")
-async def create_image_job_endpoint(body: CreateImageJobRequest):
+async def create_image_job_endpoint(body: CreateImageJobRequest, authorization: str = Header(default="")):
     return await create_image_job(
         session_id=body.session_id,
         prompt=body.prompt,
@@ -229,6 +251,7 @@ async def create_image_job_endpoint(body: CreateImageJobRequest):
         work_intensity=body.work_intensity,
         provider_preference=body.provider_preference,
         idempotency_key=body.idempotency_key,
+        veyra_user_id=_veyra_user_id_from_authorization(authorization),
     )
 
 
@@ -341,8 +364,8 @@ def get_image_job(job_id: str):
 
 
 @app.post("/v1/image/jobs/{job_id}/revise")
-async def revise_image_job_endpoint(job_id: str, body: ReviseImageRequest):
-    job = await revise_image_job(job_id, body)
+async def revise_image_job_endpoint(job_id: str, body: ReviseImageRequest, authorization: str = Header(default="")):
+    job = await revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_authorization(authorization))
     if not job:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
     return job

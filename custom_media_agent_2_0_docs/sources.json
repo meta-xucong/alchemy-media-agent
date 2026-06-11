@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-06-04",
+  "project": "Custom Media Agent 2.0",
+  "source_policy": "Use official OpenAI documentation for Agents SDK behavior. Use the local Veyra Agent project only as a light architectural reference, not as an implementation frame.",
+  "official_openai_sources": [
+    {
+      "name": "OpenAI Agents guide",
+      "url": "https://developers.openai.com/api/docs/guides/agents"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Agents",
+      "url": "https://openai.github.io/openai-agents-python/agents/"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Tools",
+      "url": "https://openai.github.io/openai-agents-python/tools/"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Handoffs",
+      "url": "https://openai.github.io/openai-agents-python/handoffs/"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Sessions",
+      "url": "https://openai.github.io/openai-agents-python/sessions/"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Tracing",
+      "url": "https://openai.github.io/openai-agents-python/tracing/"
+    },
+    {
+      "name": "OpenAI Agents SDK Python - Models",
+      "url": "https://openai.github.io/openai-agents-python/models/"
+    }
+  ],
+  "resource_provider_sources": [
+    {
+      "name": "EvoLinkAI awesome-gpt-image-2-API-and-Prompts",
+      "url": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"
+    }
+  ],
+  "local_reference_sources": [
+    {
+      "name": "Veyra Agent local project",
+      "path": "D:/AI/Veyra Agent",
+      "usage": "Reference only the valuable ideas: manifest, provider capability declaration, timeouts, fallback, JSON contracts, provenance, and Claude/Kimi environment pattern."
+    },
+    {
+      "name": "Previous SDK-first plan",
+      "path": "D:/AI/AlchemyOS/custom_media_agent_docs/docs/23_2.0_OpenAI_Agents_SDK优先架构方案.md",
+      "usage": "Content seed for this formal 2.0 documentation package."
+    }
+  ]
+}

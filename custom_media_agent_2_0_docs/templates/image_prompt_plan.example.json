@@ -1,0 +1,30 @@
+{
+  "plan_id": "plan_01HYPERREAL_SKINCARE_001",
+  "mode": "smart_enhance",
+  "prompt": "Create a premium ecommerce hero image for a matte white skincare serum bottle on a minimal studio set. Use a centered product composition with soft rim lighting, a clean ivory and deep green palette, subtle glass reflections, and enough negative space on the right for short campaign copy. The image should feel luxurious, trustworthy, modern, and suitable for a high-conversion product landing page.",
+  "negative_prompt": "avoid distorted packaging, unreadable text, copied logos, celebrity faces, protected characters, cluttered background, low-resolution artifacts",
+  "style_basis": [
+    {
+      "case_id": "case_github_evolinkai_ad_0001",
+      "reused_elements": ["centered hero composition", "soft studio rim light", "premium color discipline"],
+      "excluded_elements": ["original brand marks", "raw image content"]
+    }
+  ],
+  "user_variables": {
+    "prompt_source": "claude_final_prompt",
+    "product": "matte white skincare serum bottle",
+    "brand_tone": "premium and trustworthy",
+    "output_use": "ecommerce landing page",
+    "aspect_ratio": "4:5"
+  },
+  "provider_parameters": {
+    "aspect_ratio": "4:5",
+    "count": 4,
+    "quality": "high"
+  },
+  "risk_notes": [
+    "Template cases are used for visual structure only.",
+    "No third-party brand mark should be reproduced."
+  ],
+  "explanation": "The plan borrows the reusable composition, lighting, and palette logic from relevant ad-creative cases while replacing all subject and brand-specific elements with the user's product."
+}

@@ -98,6 +98,14 @@ class Settings(BaseModel):
     persist_runtime_settings: bool = os.getenv("MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS", "true").lower() in {"1", "true", "yes", "on"}
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
     media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
+    veyra_auth_enabled: bool = os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    veyra_sub2api_base_url: str = os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080")
+    veyra_internal_token: str | None = os.getenv("VEYRA_INTERNAL_TOKEN")
+    veyra_session_secret: str | None = os.getenv("VEYRA_SESSION_SECRET")
+    veyra_request_timeout_seconds: float = _float_env("VEYRA_REQUEST_TIMEOUT_SECONDS", 10.0)
+    veyra_billing_settings_url: str = os.getenv("VEYRA_BILLING_SETTINGS_URL", "http://127.0.0.1:8020/api/v2/veyra/billing/settings/public")
+    veyra_billing_rule_key_v1: str = os.getenv("VEYRA_BILLING_RULE_KEY_V1", "alchemy:v1")
+    veyra_usage_path: Path = Field(default_factory=lambda: Path(os.getenv("VEYRA_USAGE_PATH", ".media_storage/veyra_usage.jsonl")))
 
     @property
     def live_mode(self) -> bool:

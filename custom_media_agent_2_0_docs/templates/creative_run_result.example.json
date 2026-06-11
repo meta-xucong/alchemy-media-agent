@@ -1,0 +1,105 @@
+{
+  "run_id": "run_01HYPERREAL_001",
+  "mode": "smart_enhance",
+  "status": "generating",
+  "intent_summary": "Create a premium ecommerce image for a skincare serum bottle.",
+  "case_retrieval_plan": {
+    "query_text": "premium ecommerce skincare serum hero image studio lighting",
+    "category_filters": ["ad-creative", "ecommerce"],
+    "use_case_filters": ["ecommerce", "social-media"],
+    "style_filters": ["premium", "minimal", "studio-lighting"],
+    "risk_filters": ["exclude_protected_ip", "exclude_unlicensed_logo"],
+    "limit": 6,
+    "diversity_level": "medium"
+  },
+  "selected_cases": [
+    {
+      "case_id": "case_github_evolinkai_ad_0001",
+      "title": "Premium product hero image with dramatic studio lighting",
+      "category": "ad-creative",
+      "score": 0.91,
+      "why_selected": "Matches ecommerce product hero composition, premium lighting, and commercial use case."
+    }
+  ],
+  "prompt_plan": {
+    "plan_id": "plan_01HYPERREAL_SKINCARE_001",
+    "prompt": "Create a premium ecommerce hero image for a matte white skincare serum bottle on a minimal studio set...",
+    "negative_prompt": "avoid distorted packaging, unreadable text, copied logos, celebrity faces, protected characters",
+    "provider_parameters": {
+      "aspect_ratio": "4:5",
+      "count": 4,
+      "quality": "high"
+    }
+  },
+  "safety_decision": {
+    "decision": "allow_with_warning",
+    "reasons": [
+      "No prohibited content detected.",
+      "Reference cases used for visual structure only."
+    ]
+  },
+  "orchestrator_decision": {
+    "decision_id": "orc_01HYPERREAL_001",
+    "provider": "claude-code",
+    "mode": "smart_enhance",
+    "selected_case_ids": ["case_github_evolinkai_ad_0001"],
+    "case_retrieval_plan": {
+      "query_text": "premium ecommerce skincare serum hero image studio lighting",
+      "category_filters": ["ad-creative", "ecommerce"],
+      "use_case_filters": ["ecommerce", "social-media"],
+      "style_filters": ["premium", "minimal", "studio-lighting"],
+      "risk_filters": ["exclude_protected_ip", "exclude_unlicensed_logo"],
+      "limit": 6,
+      "diversity_level": "medium"
+    },
+    "final_prompt": "Create a premium ecommerce hero image for a matte white skincare serum bottle on a minimal studio set. Use centered product hierarchy, soft clinical-luxury key light, subtle rim highlights, controlled negative space for landing-page copy, clean ivory and pale gold tones, refined glass reflections, accurate packaging geometry, and a polished commercial finish. Treat the selected case only as abstract evidence for composition and lighting; do not copy its product, brand marks, text, props, or layout.",
+    "negative_prompt": "crowded background, copied logo, celebrity face, protected character, unreadable text, distorted packaging, low-resolution artifacts, direct reference reproduction",
+    "provider_parameters": {
+      "aspect_ratio": "4:5",
+      "count": 4,
+      "quality": "high"
+    },
+    "prompt_rationale": "Claude selected the case for product hierarchy and studio lighting, then rewrote the final prompt around the user's skincare serum.",
+    "prompt_directives": {
+      "visual_strategy": "premium skincare hero image with soft clinical luxury",
+      "case_selection_rationale": "Claude selected the case for product hierarchy, studio lighting, and ecommerce composition.",
+      "reusable_prompt_atoms": ["soft key light", "controlled negative space", "matte packaging texture"],
+      "composition": "centered product hero with copy-safe margin",
+      "lighting": "soft studio key light with rim highlights",
+      "color_palette": "warm white, pale gold, clean shadow",
+      "negative_prompt_additions": ["avoid crowded background"],
+      "safety_notes": ["use cases as visual structure only"]
+    },
+    "stage_commands": [
+      {
+        "stage": "retrieve_cases",
+        "action": "run",
+        "priority": 90,
+        "reason": "Local retrieval provides evidence; Claude makes final selection.",
+        "payload": {}
+      }
+    ],
+    "generation_directives": {
+      "count": 4,
+      "quality": "high"
+    },
+    "quality_gates": {
+      "no_raw_case_image_copying": true,
+      "premium_finish_required": true
+    },
+    "confidence": 0.9,
+    "created_at": "2026-06-05T05:30:00+08:00"
+  },
+  "generation_jobs": [
+    {
+      "job_id": "job_01HYPERREAL_001",
+      "provider_id": "openai_images",
+      "status": "queued"
+    }
+  ],
+  "trace_id": "trace_01HYPERREAL_001",
+  "next_actions": [
+    "Wait for generated outputs.",
+    "Let the user select a favorite output or request revisions."
+  ]
+}

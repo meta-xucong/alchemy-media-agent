@@ -17,6 +17,9 @@ from app.services.ids import new_id
 from app.services.image_history import persist_image_job_history
 from app.services.output_review import review_image_job
 from app.services.output_storage import save_provider_output
+from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
+from app.services.veyra_billing_settings import get_billing_rule
+from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
 
 
 async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
@@ -59,6 +62,16 @@ async def create_image_job(
                 updated_at=utc_now(),
             )
         )
+    billing_result = None
+    billing_rule = get_billing_rule("alchemy:v2")
+    billing_required = _should_bill_veyra(request, billing_rule=billing_rule)
+    if billing_required:
+        try:
+            await _ensure_veyra_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
+        except (VeyraInsufficientBalance, VeyraAuthError) as exc:
+            return _save_job(_failed_job(request, provider_id=provider.name, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
+
+    fallback_error = None
     try:
         result = await provider.generate(
             V2ImageProviderRequest(
@@ -77,8 +90,9 @@ async def create_image_job(
                     input_images=request.input_images,
                 )
             )
-            return _save_job(_job_from_result(request, result, fallback_error=exc, job_id=job_id, created_at=created_at))
-        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
+            fallback_error = exc
+        else:
+            return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
     except V2ImageProviderError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
@@ -89,9 +103,45 @@ async def create_image_job(
                     input_images=request.input_images,
                 )
             )
-            return _save_job(_job_from_result(request, result, fallback_error=exc, job_id=job_id, created_at=created_at))
-        return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
-    return _save_job(_job_from_result(request, result, job_id=job_id, created_at=created_at))
+            fallback_error = exc
+        else:
+            return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
+
+    if billing_required:
+        try:
+            billing_result = await VeyraSub2APIClient().debit(
+                user_id=int(request.veyra_user_id or 0),
+                amount=billing_rule.charge_amount,
+                idempotency_key=f"{billing_rule.key}:image:{job_id}",
+                source=billing_rule.source,
+                reference_id=job_id,
+            )
+        except (VeyraInsufficientBalance, VeyraAuthError) as exc:
+            return _save_job(_failed_job(request, provider_id=result.provider, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
+
+    saved = _save_job(
+        _job_from_result(
+            request,
+            result,
+            fallback_error=fallback_error,
+            job_id=job_id,
+            created_at=created_at,
+            billing_result=billing_result,
+        )
+    )
+    if billing_result:
+        record_veyra_usage(
+            VeyraUsageRecord(
+                user_id=billing_result.user_id,
+                amount=billing_result.amount,
+                balance_after=billing_result.balance_after,
+                idempotency_key=billing_result.idempotency_key,
+                reference_id=job_id,
+                source=billing_rule.source,
+                replayed=billing_result.replayed,
+            )
+        )
+    return saved
 
 
 def _job_from_result(
@@ -101,6 +151,7 @@ def _job_from_result(
     job_id: str,
     created_at: datetime,
     fallback_error: V2ImageProviderError | None = None,
+    billing_result=None,
 ) -> ImageJob:
     now = utc_now()
     outputs: list[ImageOutput] = []
@@ -129,6 +180,8 @@ def _job_from_result(
                     "information_integrity_contract"
                 ),
                 "raw_response_summary": result.raw_response_summary,
+                "veyra_user_id": request.veyra_user_id,
+                "veyra_billing": _billing_metadata(billing_result),
             },
             score=_default_score(item.metadata, fallback_error=fallback_error),
             created_at=now,
@@ -258,3 +311,63 @@ def _save_job(job: ImageJob) -> ImageJob:
     saved = repository.save_image_job(reviewed)
     persist_image_job_history(saved)
     return saved
+
+
+def _should_bill_veyra(request: CreateImageJobRequest, *, billing_rule=None) -> bool:
+    billing_rule = billing_rule or get_billing_rule("alchemy:v2")
+    return bool(
+        settings.veyra_auth_enabled
+        and billing_rule.enabled
+        and request.veyra_user_id
+        and billing_rule.charge_amount > 0
+    )
+
+
+async def _ensure_veyra_balance(*, user_id: int, amount: float) -> None:
+    account = await VeyraSub2APIClient().account(user_id)
+    if float(account.balance) + 1e-9 < float(amount):
+        raise VeyraInsufficientBalance("Insufficient sub2api balance.")
+
+
+def _billing_metadata(result) -> dict | None:
+    if not result:
+        return None
+    return {
+        "amount": result.amount,
+        "balance_after": result.balance_after,
+        "idempotency_key": result.idempotency_key,
+        "replayed": result.replayed,
+    }
+
+
+def _billing_provider_error(error: Exception) -> V2ImageProviderError:
+    if isinstance(error, VeyraInsufficientBalance):
+        return VeyraBillingProviderError(
+            "Sub2api balance is insufficient.",
+            provider="veyra_billing",
+            code="veyra_insufficient_balance",
+            retryable=False,
+            detail={},
+        )
+    return VeyraBillingProviderError(
+        "Veyra billing failed.",
+        provider="veyra_billing",
+        code=getattr(error, "code", "veyra_billing_error"),
+        retryable=True,
+        detail={},
+    )
+
+
+class VeyraBillingProviderError(V2ImageProviderError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        code: str = "veyra_billing_error",
+        retryable: bool = False,
+        detail: dict | None = None,
+    ):
+        super().__init__(message, provider=provider, detail=detail)
+        self.code = code
+        self.retryable = retryable
