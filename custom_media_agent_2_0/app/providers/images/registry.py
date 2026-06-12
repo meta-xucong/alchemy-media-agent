@@ -20,9 +20,14 @@ def _providers() -> dict[str, V2ImageProvider]:
 async def get_v2_image_provider(provider_hint: str | None = None) -> V2ImageProvider:
     providers = _providers()
     requested = _normalize_provider(provider_hint)
+    if requested == "gemini_image" and not settings.gemini_image_generation_enabled:
+        requested = "auto"
     if requested != "auto":
         return providers.get(requested) or providers["mock_image"]
-    for provider_id in ["openai_gpt_image", "gemini_image"]:
+    provider_order = ["openai_gpt_image"]
+    if settings.gemini_image_generation_enabled:
+        provider_order.append("gemini_image")
+    for provider_id in provider_order:
         provider = providers[provider_id]
         capabilities = await provider.capabilities()
         if capabilities.configured:
@@ -39,6 +44,8 @@ def _normalize_provider(provider_hint: str | None) -> str:
     requested = provider_hint
     if requested in {None, "", "auto"}:
         requested = settings.image_generation_provider or "auto"
+    if requested == "gemini_image" and not settings.gemini_image_generation_enabled:
+        return "auto"
     if requested == "":
         return "auto"
     if requested not in {"auto", "openai_gpt_image", "gemini_image", "mock_image"}:

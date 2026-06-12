@@ -159,8 +159,8 @@ def test_explicit_unconfigured_provider_is_not_silently_bypassed():
     assert job.status == "provider_not_configured"
     assert job.error is not None
     assert job.error.code == "provider_not_configured"
-    assert job.provider in {"openai_gpt_image", "gemini_image"}
-    assert job.error.detail["primary_provider"] == "openai_gpt_image"
+    assert job.provider == "openai_gpt_image"
+    assert "primary_provider" not in job.error.detail
 
 
 def test_gemini_runtime_failure_records_openai_fallback(monkeypatch):

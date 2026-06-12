@@ -323,10 +323,10 @@
                       <strong>GPT Image</strong>
                       <small id="openaiImageState">检查中</small>
                     </button>
-                    <button class="model-option" data-image-provider="gemini_image" type="button">
+                    <button class="model-option temporarily-disabled" data-image-provider="gemini_image" type="button" disabled aria-disabled="true" title="Gemini 生图暂不可用">
                       <span>Gemini</span>
                       <strong>Gemini Image</strong>
-                      <small id="geminiImageState">检查中</small>
+                      <small id="geminiImageState">暂不可用</small>
                     </button>
                   </div>
                 </section>
@@ -689,7 +689,7 @@
                     <select id="v2ImageProviderInput">
                       <option value="auto">自动：V2 可用通道优先</option>
                       <option value="openai_gpt_image">OpenAI GPT Image</option>
-                      <option value="gemini_image">Gemini Image</option>
+                      <option value="gemini_image" disabled>Gemini Image（暂不可用）</option>
                       <option value="mock_image">Mock 测试图</option>
                     </select>
                   </label>
@@ -761,10 +761,10 @@
                       <strong>GPT Image 2</strong>
                       <small id="v2OpenaiImageState">检查中</small>
                     </button>
-                    <button class="model-option" data-v2-image-provider="gemini_image" type="button">
+                    <button class="model-option temporarily-disabled" data-v2-image-provider="gemini_image" type="button" disabled aria-disabled="true" title="Gemini 生图暂不可用">
                       <span>Gemini</span>
                       <strong>Gemini Image</strong>
-                      <small id="v2GeminiImageState">检查中</small>
+                      <small id="v2GeminiImageState">暂不可用</small>
                     </button>
                   </div>
                 </section>

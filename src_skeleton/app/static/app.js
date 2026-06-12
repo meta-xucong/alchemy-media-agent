@@ -12,6 +12,9 @@ const qualityMap = {
   high: "高",
 };
 
+const geminiImageGenerationTemporarilyDisabled = true;
+const geminiImageUnavailableReason = "Gemini 生图暂不可用，恢复后会重新开放。";
+const geminiImageUnavailableShortLabel = "暂不可用";
 const coffeeSamplePrompt = "生成 4 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
 const coffeeSampleCount = "4";
@@ -150,6 +153,14 @@ const veyraState = {
   loading: false,
   authPolicy: null,
 };
+
+function isGeminiImageTemporarilyDisabled(provider) {
+  return geminiImageGenerationTemporarilyDisabled && provider === "gemini_image";
+}
+
+function safeImageProviderPreference(provider, fallback = "openai_gpt_image") {
+  return isGeminiImageTemporarilyDisabled(provider) ? fallback : provider;
+}
 
 let providerSaveTimer = null;
 let providerChangeVersion = 0;
@@ -619,7 +630,10 @@ function setIntensity(value) {
 
 function setImageProvider(provider, { persist = false } = {}) {
   const requested = provider === "gemini_image" ? "gemini_image" : "openai_gpt_image";
-  if (requested === "gemini_image" && !isImageProviderUsable("gemini_image")) {
+  if (isGeminiImageTemporarilyDisabled(requested)) {
+    state.selectedProvider = "openai_gpt_image";
+    showNotice(geminiImageUnavailableReason, "warning");
+  } else if (requested === "gemini_image" && !isImageProviderUsable("gemini_image")) {
     state.selectedProvider = isImageProviderUsable("openai_gpt_image") ? "openai_gpt_image" : requested;
     showNotice("Gemini 生图 API 尚未配置；保存 Gemini API Key 后即可切换。", "warning");
   } else {
@@ -803,7 +817,7 @@ async function loadProviders() {
   ]);
   state.providerSettings = runtime;
   state.imageProviderCapabilities = Object.fromEntries((providers.image || []).map((provider) => [provider.provider, provider]));
-  state.selectedProvider = runtime.default_image_provider || "openai_gpt_image";
+  state.selectedProvider = safeImageProviderPreference(runtime.default_image_provider || "openai_gpt_image");
   state.selectedLlmProvider = runtime.default_llm_provider || "openai";
   state.selectedIntensity = runtime.image_work_intensity || "balanced";
   els.openaiImageModelInput.value = runtime.openai_image_model || "gpt-image-2";
@@ -825,10 +839,15 @@ async function loadProviders() {
     state.selectedProvider = "openai_gpt_image";
   }
   const selectedImage = providers.image.find((provider) => provider.provider === state.selectedProvider);
-  const fallbackImage = providers.image.find((provider) => provider.provider !== state.selectedProvider && ["openai_gpt_image", "gemini_image"].includes(provider.provider));
+  const selectableImageProviders = ["openai_gpt_image", "gemini_image"].filter((provider) => !isGeminiImageTemporarilyDisabled(provider));
+  const fallbackImage = providers.image.find((provider) => provider.provider !== state.selectedProvider && selectableImageProviders.includes(provider.provider));
   state.imageProviderReady = Boolean(selectedImage?.configured || fallbackImage?.configured);
   els.openaiImageState.textContent = openai?.configured ? runtime.openai_image_model : "需 API";
-  els.geminiImageState.textContent = gemini?.configured ? runtime.gemini_image_model : "需 API";
+  els.geminiImageState.textContent = isGeminiImageTemporarilyDisabled("gemini_image")
+    ? geminiImageUnavailableShortLabel
+    : gemini?.configured
+      ? runtime.gemini_image_model
+      : "需 API";
   els.openaiThinkingState.textContent = runtime.openai_api_key_configured ? runtime.openai_llm_model : "需 API";
   els.agentThinkingState.textContent = runtime.anthropic_api_key_configured ? runtime.kimi_llm_model || "已配置" : "需 Kimi API";
   els.providerState.textContent = state.imageProviderReady ? `${providerLabel(state.selectedProvider)} ready` : "需要 API";
@@ -837,14 +856,18 @@ async function loadProviders() {
   setImageProviderAvailability("openai_gpt_image", Boolean(openai?.configured), "");
   setImageProviderAvailability(
     "gemini_image",
-    Boolean(gemini?.configured),
-    gemini?.configured ? "" : "填写 Gemini API Key 后即可选择。"
+    !isGeminiImageTemporarilyDisabled("gemini_image") && Boolean(gemini?.configured),
+    isGeminiImageTemporarilyDisabled("gemini_image")
+      ? geminiImageUnavailableReason
+      : gemini?.configured
+        ? ""
+        : "填写 Gemini API Key 后即可选择。"
   );
 
   if (state.imageProviderReady) {
     showNotice(`模型已就绪：生图 ${providerLabel(state.selectedProvider)}；思考 ${thinkingProviderLabel(state.selectedLlmProvider)}。`, "success");
   } else {
-    showNotice("请在高级 API 配置里保存 OpenAI 或 Gemini API Key 后生成图片。", "warning");
+    showNotice("请在高级 API 配置里保存 OpenAI API Key 后生成图片。", "warning");
   }
 }
 
@@ -869,7 +892,8 @@ function renderProviderLists(providers, runtime) {
 
 function providerRow(provider, note) {
   const row = document.createElement("div");
-  row.className = `provider-row ${provider.configured ? "ready" : "muted-row"}`;
+  const temporarilyDisabled = isGeminiImageTemporarilyDisabled(provider.provider);
+  row.className = `provider-row ${provider.configured && !temporarilyDisabled ? "ready" : "muted-row"} ${temporarilyDisabled ? "temporarily-disabled" : ""}`.trim();
 
   const title = document.createElement("div");
   title.className = "provider-title";
@@ -877,7 +901,13 @@ function providerRow(provider, note) {
   name.textContent = providerLabel(provider.provider);
   const badge = document.createElement("span");
   badge.className = "mini-pill";
-  badge.textContent = provider.configured ? "已接入" : ["openai_gpt_image", "gemini_image"].includes(provider.provider) ? "需 API" : "未接入";
+  badge.textContent = temporarilyDisabled
+    ? geminiImageUnavailableShortLabel
+    : provider.configured
+      ? "已接入"
+      : ["openai_gpt_image", "gemini_image"].includes(provider.provider)
+        ? "需 API"
+        : "未接入";
   title.append(name, badge);
 
   const models = document.createElement("span");
@@ -885,7 +915,7 @@ function providerRow(provider, note) {
   models.textContent = provider.models.join(", ") || "-";
 
   const reason = document.createElement("p");
-  reason.textContent = provider.reason || note || "";
+  reason.textContent = temporarilyDisabled ? geminiImageUnavailableReason : provider.reason || note || "";
 
   row.append(title, models, reason);
   return row;
@@ -956,15 +986,19 @@ function historyProviderResultText(item) {
 }
 
 function isImageProviderUsable(provider) {
+  if (isGeminiImageTemporarilyDisabled(provider)) return false;
   return Boolean(state.imageProviderCapabilities?.[provider]?.configured);
 }
 
 function setImageProviderAvailability(provider, enabled, title) {
   const button = document.querySelector(`[data-image-provider="${provider}"]`);
   if (!button) return;
-  button.disabled = !enabled;
-  button.title = title || "";
-  button.classList.toggle("disabled", !enabled);
+  const temporarilyDisabled = isGeminiImageTemporarilyDisabled(provider);
+  const available = enabled && !temporarilyDisabled;
+  button.disabled = !available;
+  button.title = temporarilyDisabled ? geminiImageUnavailableReason : title || "";
+  button.classList.toggle("disabled", !available);
+  button.classList.toggle("temporarily-disabled", temporarilyDisabled);
 }
 
 function thinkingProviderLabel(provider) {
@@ -983,7 +1017,7 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
   toggleProviderSaving(true);
   try {
     const payload = {
-      default_image_provider: state.selectedProvider,
+      default_image_provider: safeImageProviderPreference(state.selectedProvider),
       default_image_model: selectedImageModel(),
       openai_image_model: els.openaiImageModelInput.value.trim() || "gpt-image-2",
       gemini_image_model: els.geminiImageModelInput.value.trim() || "gemini-3-pro-image-preview",
@@ -1029,7 +1063,7 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
 }
 
 function selectedImageModel() {
-  if (state.selectedProvider === "gemini_image") {
+  if (state.selectedProvider === "gemini_image" && !isGeminiImageTemporarilyDisabled("gemini_image")) {
     return els.geminiImageModelInput.value.trim() || "gemini-3-pro-image-preview";
   }
   return els.openaiImageModelInput.value.trim() || "gpt-image-2";
@@ -1059,9 +1093,12 @@ function otherThinkingProvider(provider) {
 }
 
 function modelEffectMessage(runtime) {
-  const imageProvider = runtime.default_image_provider || state.selectedProvider;
+  const imageProvider = safeImageProviderPreference(runtime.default_image_provider || state.selectedProvider);
   const thinkingProvider = runtime.default_llm_provider || state.selectedLlmProvider;
-  return `配置已生效：生图 ${providerLabel(imageProvider)} 优先，${providerLabel(otherImageProvider(imageProvider))} 兜底；思考 ${thinkingProviderLabel(thinkingProvider)} 优先，${thinkingProviderLabel(otherThinkingProvider(thinkingProvider))} 兜底。`;
+  const imageRoute = geminiImageGenerationTemporarilyDisabled
+    ? `生图 ${providerLabel(imageProvider)} 优先，Gemini 暂停兜底`
+    : `生图 ${providerLabel(imageProvider)} 优先，${providerLabel(otherImageProvider(imageProvider))} 兜底`;
+  return `配置已生效：${imageRoute}；思考 ${thinkingProviderLabel(thinkingProvider)} 优先，${thinkingProviderLabel(otherThinkingProvider(thinkingProvider))} 兜底。`;
 }
 
 async function initV2({ silent = true, force = false } = {}) {
@@ -1144,13 +1181,19 @@ function renderV2ModelSettings() {
 
 function renderV2ModelCards(settings = v2State.modelSettings || {}) {
   const provider = v2EffectiveImageProvider(settings);
+  syncV2ImageProviderOptionState(provider);
   document.querySelectorAll("[data-v2-image-provider]").forEach((button) => {
     const isActive = button.dataset.v2ImageProvider === provider;
     const capability = v2ProviderCapability(button.dataset.v2ImageProvider);
     const isConfigured = v2ImageProviderConfigured(button.dataset.v2ImageProvider);
     button.classList.toggle("active", isActive);
     button.disabled = !isConfigured;
-    button.title = isConfigured ? "" : capability?.reason || "请先配置 V2 生图通道的 API Key。";
+    button.classList.toggle("temporarily-disabled", isGeminiImageTemporarilyDisabled(button.dataset.v2ImageProvider));
+    button.title = isGeminiImageTemporarilyDisabled(button.dataset.v2ImageProvider)
+      ? geminiImageUnavailableReason
+      : isConfigured
+        ? ""
+        : capability?.reason || "请先配置 V2 生图通道的 API Key。";
   });
   if (els.v2ImageActiveLabel) {
     els.v2ImageActiveLabel.textContent = v2ImageChannelLabel(provider);
@@ -1165,7 +1208,9 @@ function renderV2ModelCards(settings = v2State.modelSettings || {}) {
   }
   if (els.v2GeminiImageState) {
     const capability = v2ProviderCapability("gemini_image");
-    els.v2GeminiImageState.textContent = settings.gemini_api_key_configured
+    els.v2GeminiImageState.textContent = isGeminiImageTemporarilyDisabled("gemini_image")
+      ? geminiImageUnavailableShortLabel
+      : settings.gemini_api_key_configured
       ? capability?.configured === false
         ? "模型不可生图"
         : settings.gemini_image_model || "gemini-2.5-flash-image"
@@ -1177,8 +1222,20 @@ function renderV2ModelCards(settings = v2State.modelSettings || {}) {
   }
 }
 
+function syncV2ImageProviderOptionState(fallbackProvider = "openai_gpt_image") {
+  if (!els.v2ImageProviderInput) return;
+  const option = els.v2ImageProviderInput.querySelector('option[value="gemini_image"]');
+  if (option) {
+    option.disabled = geminiImageGenerationTemporarilyDisabled;
+    option.textContent = geminiImageGenerationTemporarilyDisabled ? "Gemini Image（暂不可用）" : "Gemini Image";
+  }
+  if (isGeminiImageTemporarilyDisabled(els.v2ImageProviderInput.value)) {
+    els.v2ImageProviderInput.value = fallbackProvider || "auto";
+  }
+}
+
 function v2EffectiveImageProvider(settings = v2State.modelSettings || {}) {
-  const configured = settings.image_generation_provider;
+  const configured = safeImageProviderPreference(settings.image_generation_provider, "auto");
   if (["openai_gpt_image", "gemini_image"].includes(configured) && v2ImageProviderConfigured(configured, settings)) {
     return configured;
   }
@@ -1189,7 +1246,7 @@ function v2EffectiveImageProvider(settings = v2State.modelSettings || {}) {
 }
 
 function v2RequestedImageProvider(settings = v2State.modelSettings || {}) {
-  const selected = els.v2ImageProviderInput?.value || "";
+  const selected = safeImageProviderPreference(els.v2ImageProviderInput?.value || "", "auto");
   if (["openai_gpt_image", "gemini_image", "mock_image"].includes(selected) && v2ImageProviderConfigured(selected, settings)) {
     return selected;
   }
@@ -1203,6 +1260,7 @@ function v2PreferredLiveImageProvider(settings = v2State.modelSettings || {}) {
 }
 
 function v2ImageProviderConfigured(provider, settings = v2State.modelSettings || {}) {
+  if (isGeminiImageTemporarilyDisabled(provider)) return false;
   if (provider === "mock_image") return true;
   const capability = v2ProviderCapability(provider);
   if (capability && capability.configured === false) return false;
@@ -1223,6 +1281,11 @@ function v2ImageModelName(provider, settings = v2State.modelSettings || {}) {
 
 async function setV2ImageProvider(provider, { persist = false } = {}) {
   const requested = ["openai_gpt_image", "gemini_image", "mock_image"].includes(provider) ? provider : "openai_gpt_image";
+  if (isGeminiImageTemporarilyDisabled(requested)) {
+    updateV2Notice(geminiImageUnavailableReason, "warning");
+    renderV2ModelCards();
+    return;
+  }
   if (!v2ImageProviderConfigured(requested)) {
     updateV2Notice("请先配置 V2 生图通道的 API Key。", "warning");
     renderV2ModelCards();
@@ -1275,7 +1338,7 @@ async function applyV2ModelSettings() {
     const response = await v2Request("/runtime/model-settings", {
       method: "POST",
       body: {
-        image_generation_provider: els.v2ImageProviderInput?.value || "auto",
+        image_generation_provider: safeImageProviderPreference(els.v2ImageProviderInput?.value || "auto", "auto"),
         default_agent_model: els.v2AgentModelInput?.value.trim() || "gpt-4.1-mini",
         output_review_agent_enabled: true,
         output_review_agent_model: els.v2ReviewModelInput?.value.trim(),

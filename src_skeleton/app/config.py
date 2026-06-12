@@ -74,6 +74,7 @@ class Settings(BaseModel):
     anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or _claude_env_value("ANTHROPIC_BASE_URL")
     gemini_image_api_key: str | None = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     gemini_image_base_url: str | None = os.getenv("GEMINI_IMAGE_BASE_URL") or os.getenv("GOOGLE_GEMINI_BASE_URL")
+    gemini_image_generation_enabled: bool = os.getenv("GEMINI_IMAGE_GENERATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
@@ -174,7 +175,7 @@ def update_runtime_settings(
         settings.default_llm_model = settings.openai_llm_model
         settings.backup_llm_provider = "anthropic"
         settings.backup_llm_model = settings.kimi_llm_model
-    if settings.default_image_provider == "gemini_image":
+    if settings.default_image_provider == "gemini_image" and settings.gemini_image_generation_enabled:
         settings.default_image_model = settings.gemini_image_model
     else:
         settings.default_image_provider = "openai_gpt_image"

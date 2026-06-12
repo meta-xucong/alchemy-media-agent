@@ -1387,6 +1387,18 @@ body.h5-simplified .mobile-v2-home-results {
   border-color: rgba(85, 119, 97, 0.32);
 }
 
+.model-option:disabled,
+.model-option.temporarily-disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.38);
+  opacity: 0.5;
+}
+
+.provider-row.temporarily-disabled {
+  filter: grayscale(0.28);
+  opacity: 0.66;
+}
+
 .advanced-api-panel,
 .v2-template-vars {
   margin-top: 12px;

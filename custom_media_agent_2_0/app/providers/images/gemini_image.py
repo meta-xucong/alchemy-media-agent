@@ -29,7 +29,11 @@ class V2GeminiImageProvider:
 
     async def capabilities(self) -> V2ImageProviderCapabilities:
         model_supports_images = _supports_image_generation_model(settings.gemini_image_model)
-        configured = bool(settings.gemini_api_key) and model_supports_images
+        configured = bool(settings.gemini_api_key) and model_supports_images and settings.gemini_image_generation_enabled
+        if not settings.gemini_image_generation_enabled:
+            reason = "Gemini image generation is temporarily disabled."
+        else:
+            reason = _gemini_configuration_reason(has_key=bool(settings.gemini_api_key), model_supports_images=model_supports_images)
         return V2ImageProviderCapabilities(
             provider=self.name,
             configured=configured,
@@ -44,11 +48,13 @@ class V2GeminiImageProvider:
                 "composition_reference",
                 "color_reference",
             ],
-            limits={"max_batch": 4, "max_reference_images": 3},
-            reason=_gemini_configuration_reason(has_key=bool(settings.gemini_api_key), model_supports_images=model_supports_images),
+            limits={"max_batch": 4, "max_reference_images": 3, "temporarily_disabled": not settings.gemini_image_generation_enabled},
+            reason=reason,
         )
 
     async def generate(self, request: V2ImageProviderRequest) -> V2ImageProviderResult:
+        if not settings.gemini_image_generation_enabled:
+            raise V2ImageProviderNotConfiguredError("Gemini image generation is temporarily disabled.", provider=self.name)
         if not settings.gemini_api_key:
             raise V2ImageProviderNotConfiguredError("V2_GEMINI_API_KEY is not configured.", provider=self.name)
         if not _supports_image_generation_model(settings.gemini_image_model):

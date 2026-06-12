@@ -21,6 +21,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_gemini_model = settings.gemini_image_model
     original_gemini_key = settings.gemini_image_api_key
     original_gemini_base_url = settings.gemini_image_base_url
+    original_gemini_enabled = settings.gemini_image_generation_enabled
     monkeypatch.setattr(media_store, "root", tmp_path)
     settings.default_image_provider = "mock_image"
     settings.default_image_model = "mock-image"
@@ -28,6 +29,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_model = "gemini-3-pro-image-preview"
     settings.gemini_image_api_key = None
     settings.gemini_image_base_url = None
+    settings.gemini_image_generation_enabled = False
     repository.reset()
     yield
     repository.reset()
@@ -37,6 +39,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_model = original_gemini_model
     settings.gemini_image_api_key = original_gemini_key
     settings.gemini_image_base_url = original_gemini_base_url
+    settings.gemini_image_generation_enabled = original_gemini_enabled
 
 
 def test_http_smoke_image_revision_video_and_providers():
@@ -1270,6 +1273,7 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
     original_gemini_image_model = settings.gemini_image_model
     original_gemini_image_base_url = settings.gemini_image_base_url
     original_gemini_image_api_key = settings.gemini_image_api_key
+    original_gemini_image_enabled = settings.gemini_image_generation_enabled
     original_openai_llm_model = settings.openai_llm_model
     original_kimi_llm_model = settings.kimi_llm_model
     original_intensity = settings.image_work_intensity
@@ -1346,7 +1350,8 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         seedance_caps = next(provider for provider in providers["video"] if provider["provider"] == "seedance")
         assert openai_caps["models"] == ["gpt-image-2-test"]
         assert gemini_caps["models"] == ["gemini-image-test"]
-        assert gemini_caps["configured"] is True
+        assert gemini_caps["configured"] is False
+        assert gemini_caps["limits"]["temporarily_disabled"] is True
         assert seedance_caps["configured"] is False
     finally:
         settings.persist_runtime_settings = original_persist
@@ -1359,6 +1364,7 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         settings.gemini_image_model = original_gemini_image_model
         settings.gemini_image_base_url = original_gemini_image_base_url
         settings.gemini_image_api_key = original_gemini_image_api_key
+        settings.gemini_image_generation_enabled = original_gemini_image_enabled
         settings.openai_llm_model = original_openai_llm_model
         settings.kimi_llm_model = original_kimi_llm_model
         settings.image_work_intensity = original_intensity

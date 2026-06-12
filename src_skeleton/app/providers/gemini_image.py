@@ -22,7 +22,12 @@ class GeminiImageProvider:
     name = "gemini_image"
 
     async def capabilities(self) -> ProviderCapabilities:
-        configured = bool(settings.gemini_image_api_key)
+        configured = bool(settings.gemini_image_api_key) and settings.gemini_image_generation_enabled
+        reason = None
+        if not settings.gemini_image_generation_enabled:
+            reason = "Gemini image generation is temporarily disabled."
+        elif not settings.gemini_image_api_key:
+            reason = "GEMINI_IMAGE_API_KEY or GEMINI_API_KEY is not configured."
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
@@ -56,11 +61,14 @@ class GeminiImageProvider:
                 "image_sizes": ["1K", "2K", "4K"],
                 "api_key_configured": bool(settings.gemini_image_api_key),
                 "base_url_configured": bool(settings.gemini_image_base_url),
+                "temporarily_disabled": not settings.gemini_image_generation_enabled,
             },
-            reason=None if configured else "GEMINI_IMAGE_API_KEY or GEMINI_API_KEY is not configured.",
+            reason=reason,
         )
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        if not settings.gemini_image_generation_enabled:
+            raise ProviderNotConfiguredError("Gemini image generation is temporarily disabled.", provider=self.name)
         if not settings.gemini_image_api_key:
             raise ProviderNotConfiguredError("GEMINI_IMAGE_API_KEY or GEMINI_API_KEY is not configured.", provider=self.name)
         plan = request.prompt_plan

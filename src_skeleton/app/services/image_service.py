@@ -519,7 +519,7 @@ def _requested_history_model(job: GenerationJob) -> str | None:
 
 
 def _requested_image_model(provider: str | None) -> str | None:
-    if provider == "gemini_image":
+    if provider == "gemini_image" and settings.gemini_image_generation_enabled:
         return settings.gemini_image_model
     if provider == "openai_gpt_image":
         return settings.openai_image_model

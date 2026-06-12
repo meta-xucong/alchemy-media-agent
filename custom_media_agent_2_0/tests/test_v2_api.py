@@ -41,6 +41,7 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "image_generation_provider", "mock_image")
     object.__setattr__(settings, "openai_api_key", "sk-test-openai")
     object.__setattr__(settings, "gemini_api_key", "sk-test-gemini")
+    object.__setattr__(settings, "gemini_image_generation_enabled", False)
     object.__setattr__(settings, "persist_image_history", False)
     object.__setattr__(settings, "sync_github_on_startup", False)
     object.__setattr__(settings, "claude_orchestrator_enabled", False)
@@ -1818,17 +1819,17 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert profile.json()["source"] == "rules"
 
 
-def test_runtime_model_settings_accepts_gemini_image_provider() -> None:
+def test_runtime_model_settings_rejects_temporarily_disabled_gemini_image_provider() -> None:
     client = fresh_client()
 
     response = client.post("/api/v2/runtime/model-settings", json={"image_generation_provider": "gemini_image"})
 
     assert response.status_code == 200
-    assert response.json()["image_generation_provider"] == "gemini_image"
-    assert settings.image_generation_provider == "gemini_image"
+    assert response.json()["image_generation_provider"] == "openai_gpt_image"
+    assert settings.image_generation_provider == "openai_gpt_image"
 
 
-def test_v2_auto_provider_hint_inherits_gemini_setting() -> None:
+def test_v2_auto_provider_hint_ignores_temporarily_disabled_gemini_setting() -> None:
     fresh_client()
     object.__setattr__(settings, "image_generation_provider", "gemini_image")
     object.__setattr__(settings, "gemini_api_key", "test-gemini-key")
@@ -1843,6 +1844,26 @@ def test_v2_auto_provider_hint_inherits_gemini_setting() -> None:
     )
 
     assert request.prompt_plan.provider_parameters["provider_hint"] == "auto"
+    provider = asyncio.run(get_v2_image_provider(request.provider_hint))
+    assert provider.name == "openai_gpt_image"
+    assert generation_service._requested_model(request.provider_hint) == settings.openai_image_model
+
+
+def test_v2_gemini_image_provider_can_be_reenabled_by_flag() -> None:
+    fresh_client()
+    object.__setattr__(settings, "image_generation_provider", "gemini_image")
+    object.__setattr__(settings, "gemini_api_key", "test-gemini-key")
+    object.__setattr__(settings, "gemini_image_generation_enabled", True)
+    request = CreateImageJobRequest(
+        prompt_plan=ImagePromptPlan(
+            plan_id="plan_test_provider_hint_enabled",
+            mode="smart_enhance",
+            prompt="Create a premium tea poster.",
+            provider_parameters={"provider_hint": "auto"},
+        ),
+        provider_hint="auto",
+    )
+
     provider = asyncio.run(get_v2_image_provider(request.provider_hint))
     assert provider.name == "gemini_image"
     assert generation_service._requested_model(request.provider_hint) == settings.gemini_image_model

@@ -122,11 +122,11 @@ def _coerce_configured_provider(provider: str) -> str:
         return provider
     if provider == "openai_gpt_image" and settings.openai_api_key:
         return provider
-    if provider == "gemini_image" and settings.gemini_api_key:
+    if provider == "gemini_image" and settings.gemini_api_key and settings.gemini_image_generation_enabled:
         return provider
     if settings.openai_api_key:
         return "openai_gpt_image"
-    if settings.gemini_api_key:
+    if settings.gemini_api_key and settings.gemini_image_generation_enabled:
         return "gemini_image"
     return "mock_image" if settings.allow_mock_fallback else "auto"
 

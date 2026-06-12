@@ -129,6 +129,7 @@ def test_gemini_image_provider_generates_from_inline_data(monkeypatch):
     original_key = settings.gemini_image_api_key
     original_base_url = settings.gemini_image_base_url
     original_model = settings.gemini_image_model
+    original_enabled = settings.gemini_image_generation_enabled
 
     class FakeResponse:
         status_code = 200
@@ -175,6 +176,7 @@ def test_gemini_image_provider_generates_from_inline_data(monkeypatch):
         settings.gemini_image_api_key = "sk-gemini-test"
         settings.gemini_image_base_url = "https://gemini.example.test"
         settings.gemini_image_model = "gemini-3-pro-image-preview"
+        settings.gemini_image_generation_enabled = True
         monkeypatch.setattr(gemini_image_provider.httpx, "AsyncClient", FakeAsyncClient)
 
         result = asyncio.run(
@@ -193,6 +195,7 @@ def test_gemini_image_provider_generates_from_inline_data(monkeypatch):
         settings.gemini_image_api_key = original_key
         settings.gemini_image_base_url = original_base_url
         settings.gemini_image_model = original_model
+        settings.gemini_image_generation_enabled = original_enabled
 
     assert captured["url"] == "https://gemini.example.test/models/gemini-3-pro-image-preview:generateContent?key=sk-gemini-test"
     assert captured["headers"]["x-goog-api-key"] == "sk-gemini-test"
@@ -509,13 +512,16 @@ def test_default_image_selection_falls_back_to_mock_when_openai_unconfigured():
     original_provider = settings.default_image_provider
     original_openai_key = settings.openai_api_key
     original_gemini_key = settings.gemini_image_api_key
+    original_gemini_enabled = settings.gemini_image_generation_enabled
     try:
         settings.default_image_provider = "openai_gpt_image"
         settings.openai_api_key = None
         settings.gemini_image_api_key = None
+        settings.gemini_image_generation_enabled = False
         provider = asyncio.run(registry.select_image())
         assert provider.name == "mock_image"
     finally:
         settings.default_image_provider = original_provider
         settings.openai_api_key = original_openai_key
         settings.gemini_image_api_key = original_gemini_key
+        settings.gemini_image_generation_enabled = original_gemini_enabled

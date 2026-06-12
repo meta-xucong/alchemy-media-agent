@@ -60,7 +60,11 @@ class ProviderRegistry:
         return self.image_providers[provider_name]
 
     def alternate_image_name(self, provider_name: str | None) -> str | None:
-        if provider_name == "openai_gpt_image" and "gemini_image" in self.image_providers:
+        if (
+            provider_name == "openai_gpt_image"
+            and "gemini_image" in self.image_providers
+            and settings.gemini_image_generation_enabled
+        ):
             return "gemini_image"
         if provider_name == "gemini_image" and "openai_gpt_image" in self.image_providers:
             return "openai_gpt_image"

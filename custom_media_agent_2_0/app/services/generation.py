@@ -241,6 +241,8 @@ def _requested_provider(provider_hint: str | None) -> str:
     requested = provider_hint
     if requested in {None, "", "auto"}:
         requested = settings.image_generation_provider or "auto"
+    if requested == "gemini_image" and not settings.gemini_image_generation_enabled:
+        return "auto"
     return requested if requested != "" else "auto"
 
 
@@ -248,14 +250,14 @@ def _requested_model(provider_hint: str | None) -> str | None:
     provider = _requested_provider(provider_hint)
     if provider == "openai_gpt_image":
         return settings.openai_image_model
-    if provider == "gemini_image":
+    if provider == "gemini_image" and settings.gemini_image_generation_enabled:
         return settings.gemini_image_model
     if provider == "mock_image":
         return "mock-image-v2-native"
     if provider == "auto":
         if settings.openai_api_key:
             return settings.openai_image_model
-        if settings.gemini_api_key:
+        if settings.gemini_api_key and settings.gemini_image_generation_enabled:
             return settings.gemini_image_model
         return "mock-image-v2-native"
     return None

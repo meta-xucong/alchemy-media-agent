@@ -897,6 +897,12 @@ select:focus,
   opacity: 0.62;
 }
 
+.model-option.temporarily-disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.38);
+  opacity: 0.5;
+}
+
 .v2-single-model {
   grid-template-columns: 1fr;
 }
@@ -904,6 +910,11 @@ select:focus,
 .v2-single-model .model-option:disabled {
   cursor: default;
   opacity: 1;
+}
+
+.v2-single-model .model-option.temporarily-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .v2-model-card-grid {
@@ -1005,6 +1016,11 @@ h4 {
 
 .muted-row {
   opacity: 0.78;
+}
+
+.provider-row.temporarily-disabled {
+  filter: grayscale(0.28);
+  opacity: 0.66;
 }
 
 .provider-title {
