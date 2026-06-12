@@ -101,3 +101,13 @@ Invoke-RestMethod -Method Post "http://127.0.0.1:8020/api/v2/resource-providers/
 ```
 
 `mode=auto` uses `V2_ENABLE_REMOTE_GITHUB_SYNC`; when it is false, auto resolves to seed. Successful sync writes the active case index to `.v2_data/case_index.json`. Failed remote sync keeps the previous active index.
+
+Scheduled remote sync is enabled only when `V2_ENABLE_REMOTE_GITHUB_SYNC=true`. When enabled, the API starts a background scheduler after startup and checks the provider every `V2_RESOURCE_SYNC_INTERVAL_MINUTES` minutes, defaulting to `360`. The scheduler first compares the GitHub `main` commit SHA; if the local index already matches, it records a skipped sync run and does not download the archive again.
+
+Recommended production settings:
+
+```env
+V2_ENABLE_REMOTE_GITHUB_SYNC=true
+V2_SYNC_GITHUB_ON_STARTUP=true
+V2_RESOURCE_SYNC_INTERVAL_MINUTES=360
+```

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.providers.evolinkai import load_seed_cases
 from app.config import settings
 from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID, build_evolinkai_provider
@@ -7,6 +9,7 @@ from app.repositories import repository
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_index_store import load_case_index, save_case_index
 import app.services.resource_sync as resource_sync
+from app.services.resource_sync_scheduler import ResourceSyncScheduler
 from app.services.case_parser import MarkdownCaseDocument, parse_evolinkai_markdown_cases
 
 
@@ -41,6 +44,52 @@ A luxurious cinematic product photograph of a classic rectangular perfume bottle
     assert case.index_version.endswith("test-sha")
 
 
+def test_markdown_case_parser_handles_markdown_image_preview() -> None:
+    markdown = """
+# Example
+
+### Case 100: [Action Storyboard Sheet](https://x.com/example/status/2) (by [@x](https://x.com/x))
+
+![Action Storyboard Sheet](../../images/comparison_case100/output.jpg)
+
+**Prompt:**
+```
+Create a compact storyboard sheet with high-speed action readability and cinematic panel flow.
+```
+"""
+    cases = parse_evolinkai_markdown_cases(
+        [MarkdownCaseDocument(path="cases/comparison.md", text=markdown)],
+        source_version="test-sha",
+    )
+
+    assert len(cases) == 1
+    assert cases[0].preview_url == "/api/v2/case-thumbnails/images/comparison_case100/output.jpg"
+
+
+def test_markdown_case_parser_normalizes_raw_github_preview_to_local_thumbnail() -> None:
+    markdown = """
+# Example
+
+### Case 147: [Editorial Osaka Six Sweatshirt Ad](https://x.com/example/status/3) (by [@x](https://x.com/x))
+
+| Output |
+| :----: |
+| <img src="https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg" width="300" alt="Output image"> |
+
+**Prompt:**
+```
+Create a clean editorial fashion advertisement poster with a pale studio background and bold typography.
+```
+"""
+    cases = parse_evolinkai_markdown_cases(
+        [MarkdownCaseDocument(path="cases/poster.md", text=markdown)],
+        source_version="test-sha",
+    )
+
+    assert len(cases) == 1
+    assert cases[0].preview_url == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
+
+
 def test_case_index_store_roundtrip(tmp_path) -> None:
     _, cases = load_seed_cases()
     index_path = tmp_path / "case_index.json"
@@ -49,6 +98,21 @@ def test_case_index_store_roundtrip(tmp_path) -> None:
     assert len(loaded) == len(cases)
     assert loaded[0].case_id == cases[0].case_id
     assert loaded[0].license_policy.raw_image_final_use_allowed is False
+
+
+def test_case_index_store_normalizes_legacy_raw_github_previews(tmp_path) -> None:
+    _, cases = load_seed_cases()
+    index_path = tmp_path / "case_index.json"
+    legacy_case = cases[0].model_copy(
+        update={
+            "preview_url": "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
+        }
+    )
+    save_case_index([legacy_case], path=index_path)
+
+    loaded = load_case_index(path=index_path)
+
+    assert loaded[0].preview_url == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
 
 
 def test_bootstrap_can_reload_persisted_case_index(tmp_path) -> None:
@@ -76,7 +140,10 @@ def test_remote_sync_skips_archive_download_when_local_index_is_current(monkeypa
     _, seed_cases = load_seed_cases()
     expected_source_version = "github-same123"
     expected_index_version = f"{EVOLINKAI_PROVIDER_ID}:{expected_source_version}"
-    current_cases = [case.model_copy(update={"index_version": expected_index_version}) for case in seed_cases]
+    current_cases = [
+        case.model_copy(update={"index_version": expected_index_version, "preview_url": "/api/v2/case-thumbnails/images/current/output.jpg"})
+        for case in seed_cases
+    ]
     repository.upsert_provider(build_evolinkai_provider().model_copy(update={"active_index_version": expected_index_version}))
     repository.replace_cases_for_provider(EVOLINKAI_PROVIDER_ID, current_cases)
 
@@ -93,3 +160,80 @@ def test_remote_sync_skips_archive_download_when_local_index_is_current(monkeypa
     assert sync.stats["skipped"] is True
     assert sync.stats["adapter"] == "github_commit_check"
     assert sync.stats["cases_published"] == len(current_cases)
+
+
+def test_remote_sync_rebuilds_current_index_when_previews_are_missing(monkeypatch) -> None:
+    repository.reset()
+    _, seed_cases = load_seed_cases()
+    expected_source_version = "github-same123"
+    expected_index_version = f"{EVOLINKAI_PROVIDER_ID}:{expected_source_version}"
+    current_cases = [case.model_copy(update={"index_version": expected_index_version, "preview_url": None}) for case in seed_cases]
+    rebuilt_cases = [
+        case.model_copy(update={"index_version": expected_index_version, "preview_url": "../images/fixed/output.jpg"})
+        for case in seed_cases
+    ]
+    repository.upsert_provider(build_evolinkai_provider().model_copy(update={"active_index_version": expected_index_version}))
+    repository.replace_cases_for_provider(EVOLINKAI_PROVIDER_ID, current_cases)
+
+    monkeypatch.setattr(resource_sync, "fetch_evolinkai_source_version", lambda: expected_source_version)
+    monkeypatch.setattr(
+        resource_sync,
+        "fetch_evolinkai_github_cases",
+        lambda: (expected_source_version, [MarkdownCaseDocument(path="cases/poster.md", text="unused")]),
+    )
+    monkeypatch.setattr(resource_sync, "parse_evolinkai_markdown_cases", lambda documents, source_version: rebuilt_cases)
+
+    sync = resource_sync.sync_resource_provider(EVOLINKAI_PROVIDER_ID, mode="remote")
+
+    assert sync.status == "completed"
+    assert sync.stats.get("skipped") is not True
+    assert all(case.preview_url for case in repository.list_cases(active_only=True))
+
+
+def test_remote_sync_rebuilds_current_index_when_previews_are_repo_relative(monkeypatch) -> None:
+    repository.reset()
+    _, seed_cases = load_seed_cases()
+    expected_source_version = "github-same123"
+    expected_index_version = f"{EVOLINKAI_PROVIDER_ID}:{expected_source_version}"
+    current_cases = [
+        case.model_copy(update={"index_version": expected_index_version, "preview_url": "../images/current/output.jpg"})
+        for case in seed_cases
+    ]
+    rebuilt_cases = [
+        case.model_copy(update={"index_version": expected_index_version, "preview_url": "/api/v2/case-thumbnails/images/fixed/output.jpg"})
+        for case in seed_cases
+    ]
+    repository.upsert_provider(build_evolinkai_provider().model_copy(update={"active_index_version": expected_index_version}))
+    repository.replace_cases_for_provider(EVOLINKAI_PROVIDER_ID, current_cases)
+
+    monkeypatch.setattr(resource_sync, "fetch_evolinkai_source_version", lambda: expected_source_version)
+    monkeypatch.setattr(
+        resource_sync,
+        "fetch_evolinkai_github_cases",
+        lambda: (expected_source_version, [MarkdownCaseDocument(path="cases/poster.md", text="unused")]),
+    )
+    monkeypatch.setattr(resource_sync, "parse_evolinkai_markdown_cases", lambda documents, source_version: rebuilt_cases)
+
+    sync = resource_sync.sync_resource_provider(EVOLINKAI_PROVIDER_ID, mode="remote")
+
+    assert sync.status == "completed"
+    assert sync.stats.get("skipped") is not True
+    assert all(case.preview_url.startswith("/api/v2/case-thumbnails/") for case in repository.list_cases(active_only=True))
+
+
+def test_resource_sync_scheduler_uses_configured_interval(monkeypatch) -> None:
+    object.__setattr__(settings, "resource_sync_interval_minutes", 7)
+    scheduler = ResourceSyncScheduler()
+    intervals = []
+
+    async def fake_wait_for(awaitable, timeout):
+        intervals.append(timeout)
+        stop_event.set()
+        return await awaitable
+
+    stop_event = asyncio.Event()
+    monkeypatch.setattr("app.services.resource_sync_scheduler.asyncio.wait_for", fake_wait_for)
+
+    asyncio.run(scheduler.run_forever(stop_event))
+
+    assert intervals == [420]

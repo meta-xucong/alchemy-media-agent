@@ -18,6 +18,7 @@ const geminiImageUnavailableShortLabel = "暂不可用";
 const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
+  video: "coming soon",
 };
 const coffeeSamplePrompt = "生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
@@ -31,9 +32,14 @@ const v2RunLongWaitAttempt = 120;
 const v2LocalApiBase = "http://127.0.0.1:8020/api/v2";
 const v2ApiBase =
   window.ALCHEMY_V2_API_BASE ||
-  (window.location.port === "8017" ? v2LocalApiBase : `${window.location.origin}/api/v2`);
+  (isLocalAlchemyHost() ? v2LocalApiBase : `${window.location.origin}/api/v2`);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
+
+function isLocalAlchemyHost() {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(window.location.hostname);
+}
+
 const v2ProgressStages = [
   { key: "queued", label: "任务排队", short: "排队中", percent: 8 },
   { key: "planning", label: "中枢规划", short: "规划中", percent: 22 },
@@ -324,6 +330,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await handleVeyraTicketFromUrl();
     if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
+    syncVeyraSessionCookie();
     await createSession({ announce: false });
     await loadProviders();
     await refreshHistory({ silent: true });
@@ -480,6 +487,7 @@ function bindControls() {
 function switchTab(tabName) {
   if (document.body.dataset.mobileActiveSurface) closeMobileSurface({ silent: true });
   updateHeroCopy(tabName);
+  document.body.dataset.activeModule = tabName || "image";
   els.tabs.forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("active", active);
@@ -503,7 +511,8 @@ function switchTab(tabName) {
 
 function updateHeroCopy(tabName) {
   if (!els.heroLine) return;
-  els.heroLine.textContent = heroCopyByTab[tabName] || heroCopyByTab.image;
+  const moduleName = Object.prototype.hasOwnProperty.call(heroCopyByTab, tabName) ? tabName : "image";
+  els.heroLine.textContent = heroCopyByTab[moduleName];
 }
 
 function setupH5AdvancedPanels() {
@@ -2146,10 +2155,11 @@ function renderV2Templates(templates) {
       preview.type = "button";
       const fullImageUrl = v2CasePreviewUrl(template.preview_url);
       const image = document.createElement("img");
-      image.src = v2CaseThumbnailUrl(template.preview_url);
+      image.src = v2CaseThumbnailUrl(template.preview_url) || fullImageUrl;
       image.alt = template.title || "案例预览";
       image.loading = "lazy";
       image.decoding = "async";
+      image.addEventListener("error", () => fallbackV2CaseImageToPreview(image, fullImageUrl, preview));
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2CasePreview(template, fullImageUrl));
     } else {
@@ -2255,14 +2265,16 @@ function v2ReasonLabel(value) {
 
 function v2CasePreviewUrl(url) {
   if (!url) return "";
+  if (url.startsWith("/api/v2/")) return v2MediaUrl(url);
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-assets/${assetPath}`;
+  if (assetPath) return `${v2ApiBase}/case-assets/${encodeV2CaseAssetPath(assetPath)}`;
   return url;
 }
 
 function v2CaseThumbnailUrl(url) {
+  if (url?.startsWith("/api/v2/")) return v2MediaUrl(url);
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-thumbnails/${assetPath}`;
+  if (assetPath) return `${v2ApiBase}/case-thumbnails/${encodeV2CaseAssetPath(assetPath)}`;
   return url;
 }
 
@@ -2275,7 +2287,49 @@ function v2CaseAssetPath(url) {
   if (url.includes("raw.githubusercontent.com") && url.includes(marker)) {
     return url.split(marker)[1];
   }
+  const blobMarker = "/awesome-gpt-image-2-API-and-Prompts/blob/main/";
+  if (url.includes("github.com") && url.includes(blobMarker)) {
+    return url.split(blobMarker)[1];
+  }
+  const rawMarker = "/awesome-gpt-image-2-API-and-Prompts/raw/main/";
+  if (url.includes("github.com") && url.includes(rawMarker)) {
+    return url.split(rawMarker)[1];
+  }
   return "";
+}
+
+function encodeV2CaseAssetPath(assetPath) {
+  return assetPath
+    .split("/")
+    .map(encodeV2CaseAssetSegment)
+    .join("/");
+}
+
+function encodeV2CaseAssetSegment(segment) {
+  try {
+    return encodeURIComponent(decodeURIComponent(segment));
+  } catch {
+    return encodeURIComponent(segment);
+  }
+}
+
+function fallbackV2CaseImageToPreview(image, fullImageUrl, preview) {
+  if (!image || image.dataset.caseFallbackApplied === "1") {
+    if (preview) {
+      preview.classList.add("missing-case-preview");
+      preview.textContent = "Case";
+    }
+    return;
+  }
+  image.dataset.caseFallbackApplied = "1";
+  if (fullImageUrl && image.src !== fullImageUrl) {
+    image.src = fullImageUrl;
+    return;
+  }
+  if (preview) {
+    preview.classList.add("missing-case-preview");
+    preview.textContent = "Case";
+  }
 }
 
 async function selectV2Template(caseId) {
@@ -3232,12 +3286,22 @@ async function handleVeyraTicketFromUrl() {
       skipVeyraAuth: true,
     });
     setVeyraToken(session.access_token || "");
+    await syncVeyraSessionCookie();
     cleanVeyraTicketFromUrl();
     updateV2Notice("Veyra 账户已接入。", "success");
   } catch (error) {
     setVeyraToken("");
     cleanVeyraTicketFromUrl();
     updateV2Notice(`Veyra 登录失败：${friendlyError(error)}`, "error");
+  }
+}
+
+async function syncVeyraSessionCookie() {
+  if (!getVeyraToken()) return;
+  try {
+    await v2Request("/veyra/session-cookie", { method: "POST" });
+  } catch (error) {
+    console.warn("Veyra session cookie sync failed", error);
   }
 }
 

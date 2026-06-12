@@ -328,6 +328,29 @@ def test_case_thumbnail_endpoint_generates_cached_webp_from_snapshot(tmp_path) -
         assert image.height <= 450
 
 
+def test_case_thumbnail_endpoint_returns_404_for_unthumbnailable_assets(tmp_path) -> None:
+    client = fresh_client()
+    snapshot_dir = tmp_path / "snapshots"
+    thumbnail_dir = tmp_path / "thumbs"
+    snapshot_dir.mkdir()
+    object.__setattr__(settings, "remote_snapshot_dir", snapshot_dir)
+    object.__setattr__(settings, "case_thumbnail_dir", thumbnail_dir)
+    snapshot_path = snapshot_dir / "github-testsvg.zip"
+    with zipfile.ZipFile(snapshot_path, "w") as archive:
+        archive.writestr("repo-main/images/sample_case/vector.svg", b"<svg xmlns='http://www.w3.org/2000/svg'></svg>")
+
+    provider = repository.get_provider("github_evolinkai_gpt_image_cases")
+    assert provider is not None
+    repository.upsert_provider(provider.model_copy(update={"active_index_version": "github_evolinkai_gpt_image_cases:github-testsvg"}))
+
+    response = client.get("/api/v2/case-thumbnails/images/sample_case/vector.svg")
+    original = client.get("/api/v2/case-assets/images/sample_case/vector.svg")
+
+    assert response.status_code == 404
+    assert original.status_code == 200
+    assert original.headers["content-type"].startswith("image/svg+xml")
+
+
 def test_v2_upload_image_completes_with_asset_brief() -> None:
     client = fresh_client()
     asset_id = upload_test_asset(client, role="subject_reference", color=(32, 96, 180))

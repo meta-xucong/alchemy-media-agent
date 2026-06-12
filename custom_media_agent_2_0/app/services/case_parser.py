@@ -9,6 +9,7 @@ from typing import Any
 
 from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID
 from app.schemas import LicensePolicy, PromptCase
+from app.services.case_preview_urls import normalize_case_preview_url
 
 
 HEADING_RE = re.compile(
@@ -17,6 +18,7 @@ HEADING_RE = re.compile(
 )
 LINK_TITLE_RE = re.compile(r"^\[(?P<title>[^\]]+)\]\((?P<url>[^)]+)\)")
 IMAGE_RE = re.compile(r"<img\s+[^>]*src=[\"'](?P<src>[^\"']+)[\"']", re.IGNORECASE)
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((?P<src>[^)\s]+)(?:\s+\"[^\"]*\")?\)")
 SOURCE_RE = re.compile(r"\*\*Source\*\*:\s*\[?[^\]\n]*\]?\((?P<url>[^)]+)\)", re.IGNORECASE)
 FENCE_RE = re.compile(r"```(?:json|text|prompt)?\s*\n(?P<body>.*?)\n```", re.IGNORECASE | re.DOTALL)
 
@@ -110,7 +112,10 @@ def _clean_title(title: str) -> str:
 
 def _extract_preview_url(segment: str) -> str | None:
     image = IMAGE_RE.search(segment)
-    return image.group("src") if image else None
+    if image:
+        return normalize_case_preview_url(image.group("src"))
+    markdown_image = MARKDOWN_IMAGE_RE.search(segment)
+    return normalize_case_preview_url(markdown_image.group("src")) if markdown_image else None
 
 
 def _extract_prompt(segment: str) -> str:

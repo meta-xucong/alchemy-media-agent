@@ -38,6 +38,7 @@ from app.services.history_thumbnails import read_history_thumbnail
 from app.services.ids import new_id
 from app.services.revision import RevisionSourceError, build_revision_request
 from app.services.resource_sync import get_sync_run, list_resource_providers, sync_resource_provider
+from app.services.resource_sync_scheduler import ResourceSyncScheduler
 from app.services.runtime_model_settings import (
     apply_persisted_runtime_model_settings,
     get_runtime_model_settings,
@@ -86,11 +87,18 @@ async def lifespan(_: FastAPI):
     bootstrap_v2_repository(seed_cases=True)
     initialize_task_queue()
     startup_sync_task: asyncio.Task | None = None
+    resource_sync_task: asyncio.Task | None = None
+    resource_sync_stop: asyncio.Event | None = None
     queue_worker_task: asyncio.Task | None = None
     queue_worker_stop: asyncio.Event | None = None
     if settings.sync_github_on_startup:
         startup_sync_task = asyncio.create_task(
             asyncio.to_thread(sync_resource_provider, EVOLINKAI_PROVIDER_ID, "remote")
+        )
+    if settings.enable_remote_github_sync and settings.resource_sync_interval_minutes > 0:
+        resource_sync_stop = asyncio.Event()
+        resource_sync_task = asyncio.create_task(
+            ResourceSyncScheduler(provider_id=EVOLINKAI_PROVIDER_ID, mode="auto").run_forever(resource_sync_stop)
         )
     if settings.task_queue_inline_worker_enabled:
         queue_worker_stop = asyncio.Event()
@@ -100,6 +108,7 @@ async def lifespan(_: FastAPI):
     yield
     if startup_sync_task and not startup_sync_task.done():
         startup_sync_task.cancel()
+    await ResourceSyncScheduler.stop(resource_sync_task, resource_sync_stop)
     if queue_worker_stop:
         queue_worker_stop.set()
     if queue_worker_task and not queue_worker_task.done():
@@ -175,6 +184,9 @@ def veyra_logout(response: Response):
 
 @app.post("/api/v2/veyra/session-cookie")
 def veyra_session_cookie(request: Request, response: Response, authorization: str = Header(default="")):
+    if not settings.veyra_auth_enabled:
+        _clear_veyra_session_cookie(response)
+        return {"ok": True, "user_id": None, "auth_enabled": False}
     token = _veyra_session_token_from_request(request, authorization)
     user_id = _veyra_user_id_from_request(request, authorization)
     _set_veyra_session_cookie(response, token)
@@ -183,6 +195,11 @@ def veyra_session_cookie(request: Request, response: Response, authorization: st
 
 @app.get("/api/v2/veyra/me")
 async def veyra_me(request: Request, authorization: str = Header(default="")):
+    if not settings.veyra_auth_enabled:
+        raise HTTPException(
+            status_code=401,
+            detail={"error_code": "veyra_auth_disabled", "message": "Veyra auth is disabled."},
+        )
     user_id = _veyra_user_id_from_request(request, authorization)
     try:
         account = await VeyraSub2APIClient().account(user_id)
@@ -195,6 +212,8 @@ async def veyra_me(request: Request, authorization: str = Header(default="")):
 
 @app.get("/api/v2/veyra/history", response_model=ImageHistoryResponse)
 async def veyra_history(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    if not settings.veyra_auth_enabled:
+        return list_image_history(limit=limit, veyra_user_id=None, include_legacy_public=True, include_all=True)
     context = await _veyra_request_context(request, authorization)
     return list_image_history(
         limit=limit,
@@ -206,6 +225,8 @@ async def veyra_history(request: Request, limit: int = Query(default=50, ge=1, l
 
 @app.get("/api/v2/veyra/usage")
 def veyra_usage(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    if not settings.veyra_auth_enabled:
+        return {"items": [], "total": 0}
     user_id = _veyra_user_id_from_request(request, authorization)
     return list_veyra_usage(user_id, limit=limit)
 

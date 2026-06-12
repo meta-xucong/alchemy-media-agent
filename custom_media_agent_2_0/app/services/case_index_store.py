@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.schemas import PromptCase
+from app.services.case_preview_urls import normalize_case_preview_url
 
 
 def save_case_index(cases: list[PromptCase], path: Path | None = None) -> Path:
@@ -26,4 +27,11 @@ def load_case_index(path: Path | None = None) -> list[PromptCase]:
     if not target.exists():
         return []
     payload = json.loads(target.read_text(encoding="utf-8"))
-    return [PromptCase.model_validate(item) for item in payload.get("cases", [])]
+    return [_normalize_loaded_case(PromptCase.model_validate(item)) for item in payload.get("cases", [])]
+
+
+def _normalize_loaded_case(case: PromptCase) -> PromptCase:
+    normalized_preview = normalize_case_preview_url(case.preview_url)
+    if normalized_preview == case.preview_url:
+        return case
+    return case.model_copy(update={"preview_url": normalized_preview})

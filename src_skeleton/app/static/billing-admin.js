@@ -3,8 +3,12 @@ const localPortalHomeUrl = "http://127.0.0.1:18080/";
 const productionPortalHomeUrl = "https://aiself.vip/";
 const v2ApiBase =
   window.ALCHEMY_V2_API_BASE ||
-  (window.location.port === "8017" ? v2LocalApiBase : `${window.location.origin}/api/v2`);
+  (isLocalAlchemyHost() ? v2LocalApiBase : `${window.location.origin}/api/v2`);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
+
+function isLocalAlchemyHost() {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(window.location.hostname);
+}
 
 const els = {
   brandHomeLink: document.querySelector("#brandHomeLink"),

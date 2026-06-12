@@ -23,6 +23,8 @@ from app.services.uploaded_assets import uploaded_asset_path
 
 
 _openai_generation_lock = asyncio.Lock()
+_OPENAI_TRANSIENT_MAX_ATTEMPTS = 3
+_OPENAI_TRANSIENT_BASE_DELAY_SECONDS = 1.5
 
 
 class _V2OpenAIImageRateLimiter:
@@ -193,12 +195,14 @@ class V2OpenAIGPTImage2Provider:
                 trace_id=request.run_id,
             )
             kwargs = _openai_image_kwargs(plan)
-            response = await client.images.generate(
-                model=settings.openai_image_model,
-                prompt=_prompt(plan),
-                n=1,
-                timeout=settings.openai_image_timeout_seconds,
-                **kwargs,
+            response = await _call_openai_image_operation(
+                lambda: client.images.generate(
+                    model=settings.openai_image_model,
+                    prompt=_prompt(plan),
+                    n=1,
+                    timeout=settings.openai_image_timeout_seconds,
+                    **kwargs,
+                )
             )
         except V2ImageProviderRateLimitError:
             raise
@@ -245,13 +249,20 @@ class V2OpenAIGPTImage2Provider:
             with ExitStack() as stack:
                 image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
                 kwargs = _openai_image_kwargs(plan)
-                response = await client.images.edit(
-                    model=settings.openai_image_model,
-                    image=image_files,
-                    prompt=_prompt(plan),
-                    n=1,
-                    timeout=settings.openai_image_timeout_seconds,
-                    **kwargs,
+                async def edit_operation():
+                    for image_file in image_files:
+                        image_file.seek(0)
+                    return await client.images.edit(
+                        model=settings.openai_image_model,
+                        image=image_files,
+                        prompt=_prompt(plan),
+                        n=1,
+                        timeout=settings.openai_image_timeout_seconds,
+                        **kwargs,
+                    )
+
+                response = await _call_openai_image_operation(
+                    edit_operation
                 )
         except V2ImageProviderRateLimitError:
             raise
@@ -335,15 +346,68 @@ def _outputs_from_openai_response(response, plan, *, index: int, operation: str,
 
 def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
     message = str(exc)
+    retryable = _is_retryable_openai_error(exc)
     detail = {
         "error_type": type(exc).__name__,
         "message": message[:1000],
         "operation": operation,
         "request_index": index,
+        "retryable": retryable,
     }
     if _is_rate_limit(exc):
         return V2ImageProviderRateLimitError("OpenAI image request is rate limited.", provider=provider, detail=detail)
-    return V2ImageProviderRuntimeError("OpenAI image request failed.", provider=provider, detail=detail)
+    return V2ImageProviderRuntimeError(
+        "OpenAI image request failed.",
+        provider=provider,
+        detail=detail,
+        retryable=retryable,
+    )
+
+
+async def _call_openai_image_operation(operation):
+    last_error: Exception | None = None
+    for attempt in range(1, _OPENAI_TRANSIENT_MAX_ATTEMPTS + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            last_error = exc
+            if _is_image_quota_limit(exc):
+                raise
+            if attempt >= _OPENAI_TRANSIENT_MAX_ATTEMPTS or not _is_retryable_openai_error(exc):
+                raise
+            await asyncio.sleep(_openai_transient_retry_delay(attempt, exc))
+    if last_error:
+        raise last_error
+    raise RuntimeError("OpenAI image operation did not run.")
+
+
+def _openai_transient_retry_delay(attempt: int, exc: Exception) -> float:
+    retry_after = _retry_after_seconds_from_exception(exc)
+    if retry_after is not None:
+        return min(max(retry_after, 0.5), 8.0)
+    return min(_OPENAI_TRANSIENT_BASE_DELAY_SECONDS * attempt, 6.0)
+
+
+def _is_retryable_openai_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+        return True
+    message = str(exc).lower()
+    retryable_markers = [
+        "502 bad gateway",
+        "503 service unavailable",
+        "504 gateway timeout",
+        "bad gateway",
+        "gateway timeout",
+        "internal server error",
+        "server error",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "timeout",
+        "timed out",
+    ]
+    return any(marker in message for marker in retryable_markers)
 
 
 def _is_rate_limit(exc: Exception) -> bool:

@@ -76,3 +76,36 @@ def test_v2_openai_provider_cools_down_after_image_quota_limit() -> None:
     finally:
         openai_provider_module._openai_image_rate_limiter.reset()
         object.__setattr__(settings, "openai_image_local_queue_timeout_seconds", original_queue_timeout)
+
+
+def test_v2_openai_provider_retries_transient_gateway_errors(monkeypatch) -> None:
+    provider = asyncio.run(get_v2_image_provider("openai_gpt_image"))
+    attempts = 0
+
+    class GatewayError(Exception):
+        status_code = 502
+
+    class TransientImages:
+        async def generate(self, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise GatewayError("<html><h1>502 Bad Gateway</h1></html>")
+            return type(
+                "OpenAIResponse",
+                (),
+                {"data": [type("OpenAIImage", (), {"b64_json": "ZmFrZS1wbmc="})()]},
+            )()
+
+    class TransientClient:
+        images = TransientImages()
+
+    async def no_sleep(delay):
+        return None
+
+    monkeypatch.setattr(openai_provider_module.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(provider._generate_one(TransientClient(), _request(), index=0))
+
+    assert attempts == 3
+    assert result[0].b64_json == "ZmFrZS1wbmc="

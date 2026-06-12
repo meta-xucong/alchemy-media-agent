@@ -73,6 +73,36 @@ def test_veyra_login_route_disabled() -> None:
     assert response.json()["detail"]["error_code"] == "veyra_auth_disabled"
 
 
+def test_veyra_optional_routes_degrade_when_auth_disabled(tmp_path) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", False)
+    object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
+    object.__setattr__(settings, "veyra_usage_path", tmp_path / "usage.jsonl")
+    settings.image_history_path.write_text(_history_line("out_legacy", None) + "\n", encoding="utf-8")
+    settings.veyra_usage_path.write_text(
+        '{"user_id":42,"amount":1.5,"balance_after":8.5,"idempotency_key":"a","reference_id":"job_1","created_at":"2026-06-11T00:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    client = TestClient(app)
+
+    policy = client.get("/api/v2/veyra/auth-policy")
+    history = client.get("/api/v2/veyra/history?limit=10")
+    usage = client.get("/api/v2/veyra/usage?limit=10")
+    session_cookie = client.post("/api/v2/veyra/session-cookie")
+    me = client.get("/api/v2/veyra/me")
+
+    assert policy.status_code == 200
+    assert policy.json()["enabled"] is False
+    assert history.status_code == 200
+    assert history.json()["total"] == 1
+    assert history.json()["items"][0]["output_id"] == "out_legacy"
+    assert usage.status_code == 200
+    assert usage.json() == {"items": [], "total": 0}
+    assert session_cookie.status_code == 200
+    assert session_cookie.json()["auth_enabled"] is False
+    assert me.status_code == 401
+    assert me.json()["detail"]["error_code"] == "veyra_auth_disabled"
+
+
 def test_veyra_login_and_me_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", True)
     object.__setattr__(settings, "veyra_internal_token", "bridge-secret")

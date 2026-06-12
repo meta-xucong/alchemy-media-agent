@@ -544,7 +544,11 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
+    assert "20260612-v2-media-url-fix" in index.text
+    assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
+    assert "生视频（DEMO）" in index.text
+    assert "<p class=\"video-state\">coming soon</p>" in index.text
     assert "手机 H5" in index.text
     assert "window.location.replace(`/h5${window.location.search}${window.location.hash}`)" in index.text
     assert 'params.get("desktop") === "1"' in index.text
@@ -655,6 +659,8 @@ def test_frontend_static_app_is_served():
     assert "noticeBar" in script.text
     assert "生成中" in script.text
     assert "scrollIntoView" in script.text
+    assert "function scrollV2HomeResultsIntoView(run)" in script.text
+    assert "scrollV2HomeResultsIntoView(run);" in script.text
     assert "unhandledrejection" in script.text
     assert "startNewSession" in script.text
     assert "resetV2Session" in script.text
@@ -683,6 +689,8 @@ def test_frontend_static_app_is_served():
     assert "/v1/image/history/" in script.text
     assert 'method: "DELETE"' in script.text
     assert "v2PromptTextFromHistory" in script.text
+    assert "function isLocalAlchemyHost()" in script.text
+    assert "(isLocalAlchemyHost() ? v2LocalApiBase" in script.text
     assert "Claude 思考后的最终提示词" in script.text
     assert "selectedQuality" in script.text
     assert "openaiLlmModelInput" in script.text
@@ -722,6 +730,15 @@ def test_frontend_static_app_is_served():
     assert "v2CaseIntelligenceSourceLabel" in script.text
     assert "setV2CaseSearchThinking" in script.text
     assert "后台仍在运行，页面会持续刷新" in script.text
+    assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in script.text
+    assert 'video: "coming soon"' in script.text
+    assert "document.body.dataset.activeModule" in script.text
+    assert "encodeV2CaseAssetPath" in script.text
+    assert "fallbackV2CaseImageToPreview" in script.text
+    assert "if (url.startsWith(\"/api/v2/\")) return v2MediaUrl(url);" in script.text
+    assert "if (url?.startsWith(\"/api/v2/\")) return v2MediaUrl(url);" in script.text
+    assert "/case-thumbnails/" in script.text
+    assert "/case-assets/" in script.text
     assert "openV2HistoryLightbox" in script.text
     assert "v2PromptTextFromJob" in script.text
     assert "mergeAccountHistory" in script.text
@@ -747,8 +764,12 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
+    assert "20260612-v2-media-url-fix" in h5.text
+    assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
+    assert "生视频（DEMO）" in h5.text
+    assert "<p class=\"video-state\">coming soon</p>" in h5.text
     assert "coming soon" in h5.text
     assert 'href="/?desktop=1"' in h5.text
     assert "桌面版" in h5.text
@@ -788,6 +809,16 @@ def test_mobile_h5_app_is_served_independently():
     assert "const historyPageSize = 24" in mobile_script.text
     assert "const v2HistoryPageSize = 24" in mobile_script.text
     assert "const veyraTokenStorageKey" in mobile_script.text
+    assert "function isLocalAlchemyHost()" in mobile_script.text
+    assert "(isLocalAlchemyHost() ? v2LocalApiBase" in mobile_script.text
+    assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in mobile_script.text
+    assert 'video: "coming soon"' in mobile_script.text
+    assert "document.body.dataset.activeModule" in mobile_script.text
+    assert "encodeV2CaseAssetPath" in mobile_script.text
+    assert "fallbackV2CaseImageToPreview" in mobile_script.text
+    assert "if (url.startsWith(\"/api/v2/\")) return v2MediaUrl(url);" in mobile_script.text
+    assert "if (url?.startsWith(\"/api/v2/\")) return v2MediaUrl(url);" in mobile_script.text
+    assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
     assert "/veyra/history?limit=1000" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text

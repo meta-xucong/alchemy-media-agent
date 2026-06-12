@@ -6,7 +6,7 @@ import mimetypes
 import zipfile
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.config import settings
 from app.repositories import repository
@@ -39,7 +39,10 @@ def read_case_thumbnail(asset_path: str) -> tuple[bytes, str] | None:
     original = _read_asset_bytes(normalized_path, snapshot_path=snapshot_path)
     if original is None:
         return None
-    thumbnail = _make_thumbnail(original)
+    try:
+        thumbnail = _make_thumbnail(original)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temp = cache_path.with_suffix(cache_path.suffix + ".tmp")
     temp.write_bytes(thumbnail)

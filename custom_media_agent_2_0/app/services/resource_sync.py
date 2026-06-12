@@ -9,6 +9,7 @@ from app.repositories.memory import utc_now
 from app.schemas import ProviderSyncRun, ResourceProvider
 from app.services.case_index_store import save_case_index
 from app.services.case_parser import parse_evolinkai_markdown_cases
+from app.services.case_preview_urls import has_serviceable_case_preview_url
 from app.services.github_archive import fetch_evolinkai_github_cases, fetch_evolinkai_source_version
 from app.services.ids import new_id
 
@@ -64,7 +65,7 @@ def sync_resource_provider(provider_id: str, mode: SyncMode = "auto") -> Provide
             source_version = fetch_evolinkai_source_version()
             expected_index_version = f"{provider.provider_id}:{source_version}"
             current_cases = repository.list_cases(active_only=True)
-            if provider.active_index_version == expected_index_version and current_cases:
+            if provider.active_index_version == expected_index_version and current_cases and _case_index_has_preview_assets(current_cases):
                 finished_at = utc_now()
                 completed = sync_run.model_copy(
                     update={
@@ -162,3 +163,7 @@ def _should_use_remote(mode: SyncMode) -> bool:
     if mode == "remote":
         return True
     return mode == "auto" and settings.enable_remote_github_sync
+
+
+def _case_index_has_preview_assets(cases: list) -> bool:
+    return all(has_serviceable_case_preview_url(getattr(case, "preview_url", None)) for case in cases)

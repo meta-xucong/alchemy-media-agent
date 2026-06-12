@@ -57,6 +57,17 @@ class V2ImageProviderNotConfiguredError(V2ImageProviderError):
 class V2ImageProviderRuntimeError(V2ImageProviderError):
     code = "provider_runtime_error"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        detail: dict[str, Any] | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message, provider=provider, detail=detail)
+        self.retryable = retryable
+
 
 class V2ImageProviderRateLimitError(V2ImageProviderError):
     code = "provider_rate_limit"
