@@ -469,6 +469,7 @@ class RuntimeProviderSettingsResponse(BaseModel):
     anthropic_api_key_configured: bool
     gemini_image_base_url: str | None = None
     gemini_image_api_key_configured: bool
+    runtime_persistence_warning: str | None = None
     provider_notes: dict[str, str] = Field(default_factory=dict)
 
 

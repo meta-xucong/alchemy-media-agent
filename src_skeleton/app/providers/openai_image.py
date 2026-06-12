@@ -12,6 +12,7 @@ from app.config import settings
 from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationResult
 from app.providers.base import ProviderCapabilities, ProviderNotConfiguredError, ProviderRateLimitError, ProviderRuntimeError
 from app.services.asset_planning import reference_image_paths
+from app.storage import media_store
 
 
 _openai_image_generation_lock = asyncio.Lock()
@@ -121,7 +122,7 @@ class OpenAIGPTImageProvider:
             provider=self.name,
             configured=configured,
             models=[self._model()],
-            operations=["generate", "image_reference"],
+            operations=["generate", "edit", "image_reference", "image_edit"],
             advanced_asset_roles=[
                 "style_reference",
                 "subject_reference",
@@ -133,7 +134,7 @@ class OpenAIGPTImageProvider:
             model_capabilities=[
                 {
                     "id": self._model(),
-                    "capabilities": ["text_to_image", "image_reference"],
+                    "capabilities": ["text_to_image", "image_reference", "image_edit"],
                     "advanced_asset_roles": [
                         "style_reference",
                         "subject_reference",
@@ -371,9 +372,49 @@ class OpenAIGPTImageProvider:
         return outputs
 
     async def edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
-        raise ProviderNotConfiguredError(
-            "OpenAI image edit requires stored input images or Responses API image context; use mock mode until asset file_id handling is wired.",
+        if not settings.openai_api_key:
+            raise ProviderNotConfiguredError("OPENAI_API_KEY is not configured.", provider=self.name)
+        if not request.source_output_id:
+            raise ProviderRuntimeError(
+                "OpenAI image edit requires a stored source output image.",
+                provider=self.name,
+                detail={"missing": "source_output_id"},
+            )
+        source = media_store.find_output_file(request.source_output_id)
+        if not source:
+            raise ProviderRuntimeError(
+                "OpenAI image edit source file was not found.",
+                provider=self.name,
+                detail={"source_output_id": request.source_output_id},
+            )
+        source_path, source_format, source_job_id = source
+        try:
+            from openai import AsyncOpenAI
+        except ModuleNotFoundError as exc:
+            raise ProviderNotConfiguredError("The openai package is not installed.", provider=self.name) from exc
+
+        client_kwargs = {"api_key": settings.openai_api_key}
+        if settings.openai_base_url:
+            client_kwargs["base_url"] = settings.openai_base_url
+        client = AsyncOpenAI(**client_kwargs)
+        plan = request.prompt_plan
+        prompt = self._render_prompt(plan)
+        async with _openai_image_generation_lock:
+            outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
+        outputs = outputs[:1]
+        return ImageGenerationResult(
             provider=self.name,
+            model=self._model(),
+            outputs=outputs,
+            raw_response_summary={
+                "output_count": len(outputs),
+                "requests": 1,
+                "api_style": "images.edit",
+                "source_output_id": request.source_output_id,
+                "source_job_id": source_job_id,
+                "source_output_format": source_format,
+                "reference_image_count": 1,
+            },
         )
 
     async def estimate_cost(self, request: ImageGenerationRequest) -> CostEstimate:

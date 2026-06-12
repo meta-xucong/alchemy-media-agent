@@ -1429,6 +1429,7 @@ def _build_checkpoint_stage_prompt(
             "The first visible character must be { and the last visible character must be }. "
             f"Hard visible output cap: total JSON <= {output_limits['total_json_chars']} characters; obey each field cap in output_limits. "
             "Follow visual_grammar_contract when present: grammar controls composition/hierarchy/mood/layout; user controls semantic content. "
+            "If visual_grammar_contract.mode=uploaded_frame_visual_grammar, the uploaded reference controls the layout/composition frame and retrieved cases only polish compatible style. "
             "If visual_grammar_contract.info.active, keep key poster/menu info; use larger canvas/modules instead of dropping offers, prices, rules, QR, CTA, or item imagery. "
             "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
             "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
@@ -2504,6 +2505,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
         "rules": (
             "Visual grammar lock: anchor controls composition, main visual presence, layout rhythm, hierarchy, background density, "
             "palette, lighting, mood, text/card treatment, subject relation, and design language; user/assets control semantic content. "
+            "If visual_grammar_contract.mode=uploaded_frame_visual_grammar, uploaded layout/composition controls the frame and cases only supply compatible polish. "
             "Template mode: selected_case_ids=[template_case_id] only. No-template mode: choose one primary grammar anchor, not an average hybrid. Obey "
             "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
             "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
@@ -2633,6 +2635,7 @@ def _compact_visual_grammar_contract(raw: Any) -> dict[str, Any]:
         return {}
     source_risk = raw.get("source_layout_risk") if isinstance(raw.get("source_layout_risk"), dict) else {}
     information_integrity = raw.get("information_integrity") if isinstance(raw.get("information_integrity"), dict) else {}
+    asset_frame_strategy = raw.get("asset_frame_strategy") if isinstance(raw.get("asset_frame_strategy"), dict) else {}
     return {
         "mode": raw.get("mode"),
         "strength": raw.get("lock_strength"),
@@ -2650,6 +2653,13 @@ def _compact_visual_grammar_contract(raw: Any) -> dict[str, Any]:
             "priority": information_integrity.get("priority"),
             "fields": (information_integrity.get("critical_fields") or [])[:5],
             "canvas": _truncate(_text_value(information_integrity.get("canvas_policy")), 110),
+        },
+        "asset_frame_strategy": {
+            "mode": asset_frame_strategy.get("mode"),
+            "frame_source": asset_frame_strategy.get("frame_source"),
+            "uploaded_layout_may_override_case": asset_frame_strategy.get("uploaded_layout_may_override_case"),
+            "content_extraction": asset_frame_strategy.get("content_extraction"),
+            "reason": _truncate(_text_value(asset_frame_strategy.get("reason")), 110),
         },
         "policy": _truncate(_text_value(raw.get("conflict_policy")), 180),
     }

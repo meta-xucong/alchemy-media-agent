@@ -106,6 +106,7 @@ def test_image_job_idempotency_returns_existing_job():
 def test_revise_image_job_creates_version_child():
     job = asyncio.run(create_image_job(session_id="ses_test", prompt="生成 1 张咖啡海报。"))
     source_output = job.outputs[0]
+    image_service.settings.default_image_provider = "openai_gpt_image"
 
     revision = asyncio.run(
         revise_image_job(
@@ -118,6 +119,8 @@ def test_revise_image_job_creates_version_child():
     assert revision.status == "ready"
     assert revision.version_parent_id == source_output.id
     assert revision.outputs[0].version_parent_id == source_output.id
+    assert revision.raw_response_summary["requested_image_provider"] == "mock_image"
+    assert revision.raw_response_summary["source_output_id"] == source_output.id
     assert "prompt_patch" in revision.raw_response_summary
 
 

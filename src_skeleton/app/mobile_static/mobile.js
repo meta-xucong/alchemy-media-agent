@@ -15,6 +15,10 @@ const qualityMap = {
 const geminiImageGenerationTemporarilyDisabled = true;
 const geminiImageUnavailableReason = "Gemini 生图暂不可用，恢复后会重新开放。";
 const geminiImageUnavailableShortLabel = "暂不可用";
+const heroCopyByTab = {
+  image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
+  v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
+};
 const coffeeSamplePrompt = "生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
 const coffeeSampleCount = "1";
@@ -167,6 +171,7 @@ const els = {
   sessionLabel: document.querySelector("#sessionLabel"),
   tabs: document.querySelectorAll("[data-tab]"),
   panels: document.querySelectorAll("[data-panel]"),
+  heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
   videoProviderList: document.querySelector("#videoProviderList"),
   v2HealthState: document.querySelector("#v2HealthState"),
@@ -474,6 +479,7 @@ function bindControls() {
 
 function switchTab(tabName) {
   if (document.body.dataset.mobileActiveSurface) closeMobileSurface({ silent: true });
+  updateHeroCopy(tabName);
   els.tabs.forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("active", active);
@@ -493,6 +499,11 @@ function switchTab(tabName) {
   } else {
     renderHeroHistory(state.historyItems, { source: "v1" });
   }
+}
+
+function updateHeroCopy(tabName) {
+  if (!els.heroLine) return;
+  els.heroLine.textContent = heroCopyByTab[tabName] || heroCopyByTab.image;
 }
 
 function setupH5AdvancedPanels() {
@@ -1299,7 +1310,7 @@ async function createSession({ announce = true } = {}) {
     method: "POST",
     body: {
       project_id: "frontend_project",
-      title: "Alchemy Image Atelier",
+      title: "Verya Alchemy",
       orchestration_mode: "runtime_first",
     },
   });
@@ -1604,8 +1615,13 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
     await loadProviders();
     if (!silent) {
       const message = modelEffectMessage(runtime);
-      showNotice(message, "success");
-      showGlobalToast(message);
+      if (runtime.runtime_persistence_warning) {
+        showNotice(`${message} ${runtime.runtime_persistence_warning}`, "warning");
+        showGlobalToast("配置已临时生效，但未能持久化。", "error");
+      } else {
+        showNotice(message, "success");
+        showGlobalToast(message);
+      }
     }
     return runtime;
   } catch (error) {

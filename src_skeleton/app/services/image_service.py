@@ -200,7 +200,7 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
     image_request = ImageGenerationRequest(
         prompt_plan=prompt_plan,
         asset_ids=prompt_plan.variables.get("asset_ids", []),
-        provider_preference=request.provider_preference,
+        provider_preference=request.provider_preference or source_job.provider,
         trace_id=trace_id,
         source_output_id=request.output_id,
         veyra_user_id=veyra_user_id,

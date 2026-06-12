@@ -2805,6 +2805,86 @@ def test_smart_enhance_uses_auto_visual_grammar_anchor() -> None:
     assert "Do not average multiple cases into a vague hybrid" in prompt
 
 
+def test_no_template_uploaded_layout_reference_becomes_frame_primary() -> None:
+    client = fresh_client()
+    repository.upsert_cases(
+        [
+            make_prompt_case(
+                "test_polish_case",
+                "Luxury Editorial Poster Polish",
+                "poster",
+                "A refined commercial poster with premium lighting, elegant typography, polished material texture, and controlled color mood.",
+                style_tags=["premium", "editorial"],
+                use_case_tags=["poster"],
+            )
+        ]
+    )
+    asset_id = upload_test_asset(client, role="composition_reference", color=(245, 220, 180))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "参考上传图片的版式和构图，做一张高级餐饮活动海报，整体更精致。",
+            "assets": [{"asset_id": asset_id, "role": "composition_reference", "constraint_strength": "required"}],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    strategy = variables["asset_frame_strategy"]
+    grammar = variables["visual_grammar_contract"]
+    assert strategy["mode"] == "uploaded_frame_primary"
+    assert strategy["uploaded_layout_may_override_case"] is True
+    assert grammar["mode"] == "uploaded_frame_visual_grammar"
+    assert grammar["lock_strength"] == "medium"
+    assert grammar["asset_frame_strategy"]["mode"] == "uploaded_frame_primary"
+    assert run["case_retrieval_plan"]["query_text"]
+    assert run["selected_cases"]
+    prompt = run["prompt_plan"]["prompt"]
+    assert prompt.startswith("UPLOADED FRAME VISUAL GRAMMAR:")
+    assert "Retrieved case" in prompt
+    assert "not the frame owner" in prompt
+    assert "uploaded layout/composition wins" in prompt
+
+
+def test_no_template_content_source_keeps_case_frame_primary() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(180, 220, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "只提取上传旧菜单里的菜品、价格、优惠和二维码，不要沿用旧版式，重新做一张高级海报。",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "旧菜单整图，只提取内容，不要沿用版式。",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    strategy = variables["asset_frame_strategy"]
+    grammar = variables["visual_grammar_contract"]
+    assert strategy["mode"] == "case_frame_primary"
+    assert strategy["content_extraction"] is True
+    assert strategy["uploaded_layout_may_override_case"] is False
+    assert grammar["mode"] == "auto_visual_grammar_lock"
+    assert variables["asset_binding_plan"]["bindings"][0]["fusion_mode"] == "composite_content_source"
+    prompt = run["prompt_plan"]["prompt"]
+    assert "UPLOADED CONTENT SOURCE" in prompt
+    assert "Source-layout risk detected" in prompt
+    assert "do not copy its overall grid" in prompt
+
+
 def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     client = fresh_client()
     asset_id = upload_test_asset(client, role="subject_reference", color=(180, 220, 240))

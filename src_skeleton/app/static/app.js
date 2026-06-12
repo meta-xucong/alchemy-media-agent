@@ -15,6 +15,10 @@ const qualityMap = {
 const geminiImageGenerationTemporarilyDisabled = true;
 const geminiImageUnavailableReason = "Gemini 生图暂不可用，恢复后会重新开放。";
 const geminiImageUnavailableShortLabel = "暂不可用";
+const heroCopyByTab = {
+  image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
+  v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
+};
 const coffeeSamplePrompt = "生成 4 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
 const coffeeSampleCount = "4";
@@ -175,6 +179,7 @@ const els = {
   sessionLabel: document.querySelector("#sessionLabel"),
   tabs: document.querySelectorAll("[data-tab]"),
   panels: document.querySelectorAll("[data-panel]"),
+  heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
   videoProviderList: document.querySelector("#videoProviderList"),
   v2HealthState: document.querySelector("#v2HealthState"),
@@ -497,6 +502,7 @@ function bindControls() {
 
 function switchTab(tabName) {
   activeTabName = tabName || "image";
+  updateHeroCopy(activeTabName);
   els.tabs.forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("active", active);
@@ -525,6 +531,11 @@ function switchTab(tabName) {
   } else {
     renderHeroHistory(state.historyItems, { source: "v1" });
   }
+}
+
+function updateHeroCopy(tabName) {
+  if (!els.heroLine) return;
+  els.heroLine.textContent = heroCopyByTab[tabName] || heroCopyByTab.image;
 }
 
 function hydratePortalHomeLink() {
@@ -722,7 +733,7 @@ async function createSession({ announce = true } = {}) {
     method: "POST",
     body: {
       project_id: "frontend_project",
-      title: "Alchemy Image Atelier",
+      title: "Verya Alchemy",
       orchestration_mode: "runtime_first",
     },
   });
@@ -1050,8 +1061,13 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
     await loadProviders();
     if (!silent) {
       const message = modelEffectMessage(runtime);
-      showNotice(message, "success");
-      showGlobalToast(message);
+      if (runtime.runtime_persistence_warning) {
+        showNotice(`${message} ${runtime.runtime_persistence_warning}`, "warning");
+        showGlobalToast("配置已临时生效，但未能持久化。", "error");
+      } else {
+        showNotice(message, "success");
+        showGlobalToast(message);
+      }
     }
     return runtime;
   } catch (error) {
@@ -1977,6 +1993,7 @@ async function runV2Creative() {
     finishV2Progress(v2StatusStageMap[run.status] || "completed", notice.message, notice.type);
     showGlobalToast("V2.0 Agent 已完成出图流程。");
     await loadV2History({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
   } catch (error) {
     const message = `V2.0 Agent 失败：${friendlyError(error)}`;
     finishV2Progress("failed", message, "error");
@@ -2467,6 +2484,7 @@ async function deleteV2HistoryItem(item, card) {
     }
     renderV2History(v2State.history);
     if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     updateV2Notice("2.0 历史图片已删除。", "success");
     showGlobalToast("2.0 历史图片已删除。");
   } catch (error) {
@@ -2941,6 +2959,18 @@ function mergeAccountHistory(v1Items = [], v2Items = []) {
   return normalized.sort(compareHistoryItems);
 }
 
+function mergeVeyraUsage(v1Items = [], v2Items = []) {
+  const seen = new Set();
+  return [...v1Items, ...v2Items]
+    .filter((item) => {
+      const key = item?.idempotency_key || item?.reference_id || JSON.stringify(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => historyTime(b) - historyTime(a));
+}
+
 function accountHistorySourceLabel(item) {
   return item?.account_history_source === "v1" ? "V1" : "V2";
 }
@@ -3027,15 +3057,16 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
   if (veyraState.loading && !force) return veyraState.account;
   setVeyraAccountLoading(true);
   try {
-    const [account, v1HistoryResponse, v2HistoryResponse, usageResponse] = await Promise.all([
+    const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
       refreshVeyraAccount(),
       request("/v1/image/history?limit=1000"),
       loadV2HistoryResponse(),
+      request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
     veyraState.account = account;
     veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
-    veyraState.usage = usageResponse.items || [];
+    veyraState.usage = mergeVeyraUsage(v1UsageResponse.items || [], v2UsageResponse.items || []);
     renderVeyraAccountSummary();
     renderVeyraAccountHistory(veyraState.history);
     renderVeyraUsageList(veyraState.usage);
@@ -3050,6 +3081,15 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
     throw error;
   } finally {
     setVeyraAccountLoading(false);
+  }
+}
+
+async function refreshVeyraAccountPanelAfterHistoryChange() {
+  if (!getVeyraToken() || !els.veyraAccountHistoryGrid) return;
+  try {
+    await loadVeyraAccountPanel({ silent: true, force: true });
+  } catch (error) {
+    console.warn("Veyra account panel refresh failed", error);
   }
 }
 
@@ -3479,6 +3519,7 @@ async function generateImage() {
     showNotice(`已生成 ${job.outputs.length} 张图片：${imageProviderResultText(job)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
     await refreshHistory({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
   } catch (error) {
     stopImageProgress();
@@ -3523,6 +3564,7 @@ async function reviseSelectedOutput() {
     showNotice(`修改版本已生成：${imageProviderResultText(job)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
     await refreshHistory({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
   } catch (error) {
     stopImageProgress();
@@ -3858,6 +3900,7 @@ async function deleteHistoryItem(item, card) {
       closeImageLightbox();
     }
     await refreshHistory({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     showNotice("历史图片已删除。", "success");
     showGlobalToast("历史图片已删除。");
   } catch (error) {

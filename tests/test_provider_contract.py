@@ -14,12 +14,14 @@ from app.providers.registry import registry
 from app.schemas import ImageGenerationRequest, ImagePromptPlan
 from app.config import settings
 from app.services.work_intensity import apply_work_intensity
+from app.storage import media_store
 
 
 def test_openai_image_provider_capabilities():
     caps = asyncio.run(registry.image("openai_gpt_image").capabilities())
     assert caps.provider == "openai_gpt_image"
     assert "generate" in caps.operations
+    assert "edit" in caps.operations
     assert caps.models == ["gpt-image-2"]
     assert caps.limits["qualities"] == ["auto", "low", "medium", "high"]
 
@@ -121,6 +123,60 @@ def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path)
     assert len(captured["image"]) == 1
     assert result[0]["api_operation"] == "images.edit"
     assert result[0]["reference_image_count"] == 1
+
+
+def test_openai_image_provider_edit_uses_stored_source_output(tmp_path, monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    captured = {}
+    source_dir = tmp_path / "generated_images" / "job_source"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "out_source.png"
+    source_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.update(kwargs)
+            captured["image_file_names"] = [getattr(handle, "name", "") for handle in kwargs["image"]]
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    class CapturingClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+            self.images = CapturingImages()
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test-openai-image")
+    monkeypatch.setattr(settings, "openai_base_url", "https://openai.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=CapturingClient))
+
+    result = asyncio.run(
+        provider.edit(
+            ImageGenerationRequest(
+                prompt_plan=ImagePromptPlan(main_subject="精品咖啡海报", count=4, quality="high", output_format="png"),
+                source_output_id="out_source",
+            )
+        )
+    )
+
+    assert captured["client_kwargs"]["base_url"] == "https://openai.example.test/v1"
+    assert captured["model"] == "gpt-image-2"
+    assert captured["prompt"].startswith("Main subject: 精品咖啡海报")
+    assert captured["quality"] == "high"
+    assert captured["output_format"] == "png"
+    assert len(captured["image"]) == 1
+    assert captured["image_file_names"][0].endswith("out_source.png")
+    assert len(result.outputs) == 1
+    assert result.outputs[0]["api_operation"] == "images.edit"
+    assert result.raw_response_summary["api_style"] == "images.edit"
+    assert result.raw_response_summary["source_output_id"] == "out_source"
+    assert result.raw_response_summary["source_job_id"] == "job_source"
+    assert result.raw_response_summary["source_output_format"] == "png"
 
 
 def test_gemini_image_provider_generates_from_inline_data(monkeypatch):

@@ -8,6 +8,7 @@ import pytest
 
 from app.config import settings
 import app.main as main_module
+import app.services.image_service as image_service_module
 from app.main import app
 from app.repositories import repository
 from app.storage import media_store
@@ -22,6 +23,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_gemini_key = settings.gemini_image_api_key
     original_gemini_base_url = settings.gemini_image_base_url
     original_gemini_enabled = settings.gemini_image_generation_enabled
+    original_veyra_usage_path = settings.veyra_usage_path
     monkeypatch.setattr(media_store, "root", tmp_path)
     settings.default_image_provider = "mock_image"
     settings.default_image_model = "mock-image"
@@ -30,6 +32,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_api_key = None
     settings.gemini_image_base_url = None
     settings.gemini_image_generation_enabled = False
+    settings.veyra_usage_path = tmp_path / "veyra_usage.jsonl"
     repository.reset()
     yield
     repository.reset()
@@ -40,6 +43,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_api_key = original_gemini_key
     settings.gemini_image_base_url = original_gemini_base_url
     settings.gemini_image_generation_enabled = original_gemini_enabled
+    settings.veyra_usage_path = original_veyra_usage_path
 
 
 def test_http_smoke_image_revision_video_and_providers():
@@ -538,7 +542,7 @@ def test_frontend_static_app_is_served():
 
     index = client.get("/")
     assert index.status_code == 200
-    assert "Alchemy Media Agent" in index.text
+    assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
     assert 'href="/h5"' in index.text
     assert "手机 H5" in index.text
@@ -712,7 +716,8 @@ def test_frontend_static_app_is_served():
     assert "/runtime/model-settings" in script.text
     assert "applyV2ModelSettings" in script.text
     assert "function v2RequestedImageProvider" in script.text
-    assert "const selected = els.v2ImageProviderInput?.value" in script.text
+    assert 'const selected = safeImageProviderPreference(els.v2ImageProviderInput?.value || "", "auto")' in script.text
+    assert "isGeminiImageTemporarilyDisabled(requested)" in script.text
     assert "const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {})" in script.text
     assert "v2CaseIntelligenceSourceLabel" in script.text
     assert "setV2CaseSearchThinking" in script.text
@@ -721,9 +726,13 @@ def test_frontend_static_app_is_served():
     assert "v2PromptTextFromJob" in script.text
     assert "mergeAccountHistory" in script.text
     assert "account_history_source" in script.text
+    assert "mergeVeyraUsage" in script.text
+    assert "/v1/veyra/usage?limit=100" in script.text
+    assert "refreshVeyraAccountPanelAfterHistoryChange" in script.text
+    assert script.text.count("await refreshVeyraAccountPanelAfterHistoryChange();") >= 4
     assert "/veyra/history?limit=1000" in script.text
     assert "管理员可见全部账户" in script.text
-    assert "当前账户与旧公共记录" in script.text
+    assert "当前账户与旧版生图记录" in script.text
     assert "生成修改版本" in script.text
     assert "后续接入" not in script.text
 
@@ -740,7 +749,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "/mobile-static/mobile.js" in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
-    assert "生视频（DEMO）" in h5.text
+    assert "coming soon" in h5.text
     assert 'href="/?desktop=1"' in h5.text
     assert "桌面版" in h5.text
     assert "基础版" in h5.text
@@ -1061,10 +1070,16 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
 
     try:
         client = TestClient(app)
-        session_id = client.post("/v1/sessions", json={"project_id": "proj_account_history"}).json()["id"]
         user_token = _issue_test_veyra_session_token(42)
         admin_token = _issue_test_veyra_session_token(99)
         assert verify_session_token(user_token) == 42
+        session_response = client.post(
+            "/v1/sessions",
+            json={"project_id": "proj_account_history"},
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert session_response.status_code == 200
+        session_id = session_response.json()["id"]
 
         user_id = "out_user_account"
         user_path = media_store.output_path(job_id="job_user_account", output_id=user_id, output_format="png")
@@ -1138,6 +1153,118 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
         assert admin_history.status_code == 200
         admin_ids = {item["id"] for item in admin_history.json()["items"]}
         assert {user_id, other_id, public_id}.issubset(admin_ids)
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_veyra_usage_filters_current_user(monkeypatch):
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+    settings.veyra_usage_path.write_text(
+        "\n".join(
+            [
+                '{"user_id":42,"amount":1.2,"balance_after":8.8,"idempotency_key":"v1:user","reference_id":"job_user","source":"alchemy:v1","created_at":"2026-06-11T00:00:00+00:00"}',
+                '{"user_id":77,"amount":9.9,"balance_after":1,"idempotency_key":"v1:other","reference_id":"job_other","source":"alchemy:v1","created_at":"2026-06-11T00:01:00+00:00"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        client = TestClient(app)
+        token = _issue_test_veyra_session_token(42)
+        response = client.get("/v1/veyra/usage?limit=10", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["reference_id"] == "job_user"
+        assert body["items"][0]["amount"] == 1.2
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatch):
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        return type("Account", (), {"user_id": user_id, "role": "user", "balance": 100})()
+
+    async def fake_load_billing_rule(rule_key: str | None = None):
+        return type("Rule", (), {"key": rule_key or "alchemy:v1", "enabled": True, "charge_amount": 2.5, "source": "alchemy:v1"})()
+
+    async def fake_ensure_sufficient_balance(*, user_id: int, amount: float):
+        return type("Account", (), {"user_id": user_id, "role": "user", "balance": 100})()
+
+    async def fake_debit_balance(*, user_id: int, amount: float, idempotency_key: str, source: str, reference_id: str):
+        return type(
+            "Debit",
+            (),
+            {
+                "user_id": user_id,
+                "amount": amount,
+                "balance_after": 97.5,
+                "idempotency_key": idempotency_key,
+                "source": source,
+                "replayed": False,
+            },
+        )()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    monkeypatch.setattr(image_service_module, "load_billing_rule", fake_load_billing_rule)
+    monkeypatch.setattr(image_service_module, "ensure_sufficient_balance", fake_ensure_sufficient_balance)
+    monkeypatch.setattr(image_service_module, "debit_balance", fake_debit_balance)
+
+    try:
+        client = TestClient(app)
+        token = _issue_test_veyra_session_token(42)
+        session = client.post(
+            "/v1/sessions",
+            json={"project_id": "proj_v1_account_generation"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert session.status_code == 200
+        session_id = session.json()["id"]
+
+        image_job = client.post(
+            "/v1/image/jobs",
+            json={
+                "session_id": session_id,
+                "prompt": "生成一张账户历史测试图。",
+                "count": 1,
+                "provider_preference": "mock_image",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert image_job.status_code == 200
+        job = image_job.json()
+        assert job["status"] == "ready"
+        output_id = job["outputs"][0]["id"]
+        assert job["outputs"][0]["metadata"]["veyra_user_id"] == 42
+
+        history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {token}"})
+        assert history.status_code == 200
+        history_items = history.json()["items"]
+        assert any(item["id"] == output_id and item["veyra_user_id"] == 42 for item in history_items)
+
+        usage = client.get("/v1/veyra/usage?limit=10", headers={"Authorization": f"Bearer {token}"})
+        assert usage.status_code == 200
+        usage_items = usage.json()["items"]
+        assert any(item["reference_id"] == job["id"] and item["amount"] == 2.5 for item in usage_items)
     finally:
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_internal_token = original_internal_token
@@ -1375,3 +1502,27 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         settings.anthropic_base_url = original_anthropic_base_url
         settings.anthropic_api_key = original_anthropic_api_key
         settings.anthropic_auth_token = original_anthropic_auth_token
+
+
+def test_runtime_provider_settings_apply_when_persistence_fails(monkeypatch):
+    client = TestClient(app)
+    original_intensity = settings.image_work_intensity
+
+    def fail_persist():
+        raise OSError("runtime env is read-only")
+
+    try:
+        monkeypatch.setattr(main_module, "persist_runtime_settings_to_env", fail_persist)
+        response = client.post(
+            "/v1/runtime/provider-settings",
+            json={"image_work_intensity": "atelier"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["image_work_intensity"] == "atelier"
+        assert body["runtime_persistence_warning"]
+        assert "写入 .env 失败" in body["runtime_persistence_warning"]
+        assert settings.image_work_intensity == "atelier"
+    finally:
+        settings.image_work_intensity = original_intensity

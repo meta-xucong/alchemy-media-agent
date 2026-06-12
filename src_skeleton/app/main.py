@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from datetime import datetime, timezone
 import hashlib
+import logging
 from html import escape
 from pathlib import Path
 import textwrap
@@ -42,10 +43,12 @@ from app.services.veyra_auth import (
     load_account,
     verify_session_token,
 )
+from app.services.veyra_usage import list_veyra_usage
 from app.services.video_service import create_video_job
 from app.storage import media_store
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
@@ -435,6 +438,14 @@ async def list_image_history(
     return ImageHistoryResponse(items=items[:limit], total=len(items))
 
 
+@app.get("/v1/veyra/usage")
+def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_request(request, authorization)
+    if not user_id:
+        return {"items": [], "total": 0}
+    return list_veyra_usage(user_id, limit=limit)
+
+
 @app.delete("/v1/image/history/{output_id}")
 async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
@@ -544,8 +555,13 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Requ
         gemini_image_api_key=body.gemini_image_api_key,
         gemini_image_base_url=body.gemini_image_base_url,
     )
-    persist_runtime_settings_to_env()
-    return _runtime_provider_settings_response()
+    persistence_warning = None
+    try:
+        persist_runtime_settings_to_env()
+    except OSError as exc:
+        persistence_warning = "运行时配置已生效，但写入 .env 失败；重启后可能恢复旧配置。"
+        logger.warning("Runtime provider settings applied but failed to persist to env file: %s", exc)
+    return _runtime_provider_settings_response(runtime_persistence_warning=persistence_warning)
 
 
 @app.get("/v1/outputs/{output_id}/download")
@@ -1109,7 +1125,7 @@ def _is_v2_bridge_history_record(record: dict) -> bool:
     return False
 
 
-def _runtime_provider_settings_response() -> RuntimeProviderSettingsResponse:
+def _runtime_provider_settings_response(runtime_persistence_warning: str | None = None) -> RuntimeProviderSettingsResponse:
     return RuntimeProviderSettingsResponse(
         default_image_provider=settings.default_image_provider,
         default_image_model=settings.default_image_model,
@@ -1128,6 +1144,7 @@ def _runtime_provider_settings_response() -> RuntimeProviderSettingsResponse:
         anthropic_api_key_configured=bool(settings.anthropic_api_key or settings.anthropic_auth_token),
         gemini_image_base_url=settings.gemini_image_base_url,
         gemini_image_api_key_configured=bool(settings.gemini_image_api_key),
+        runtime_persistence_warning=runtime_persistence_warning,
         provider_notes={
             "openai_gpt_image": "OpenAI-compatible GPT Image provider is wired for live image generation.",
             "gemini_image": "Gemini image provider is wired for live generateContent image generation.",

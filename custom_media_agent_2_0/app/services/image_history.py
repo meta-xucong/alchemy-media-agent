@@ -163,6 +163,7 @@ def _history_metadata(job: ImageJob, output: ImageOutput) -> dict[str, Any]:
     for key in [
         "template_lock_enabled",
         "template_lock_contract",
+        "asset_frame_strategy",
         "asset_binding_plan",
         "provider_input_plan",
         "uploaded_assets",

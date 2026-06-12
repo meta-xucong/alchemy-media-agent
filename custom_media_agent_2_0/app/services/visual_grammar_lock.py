@@ -91,10 +91,18 @@ def build_visual_grammar_contract(
         asset_context=asset_context,
         source_layout_risk=source_layout_risk,
     )
+    asset_frame_strategy = _asset_frame_strategy(asset_context)
+    uploaded_frame_primary = (not explicit_template) and asset_frame_strategy.get("mode") == "uploaded_frame_primary"
     contract = {
         "contract_id": new_id("vgl"),
-        "mode": "template_visual_grammar_lock" if explicit_template else "auto_visual_grammar_lock",
-        "lock_strength": "strong" if explicit_template else "medium_strong",
+        "mode": (
+            "template_visual_grammar_lock"
+            if explicit_template
+            else "uploaded_frame_visual_grammar"
+            if uploaded_frame_primary
+            else "auto_visual_grammar_lock"
+        ),
+        "lock_strength": "strong" if explicit_template else "medium" if uploaded_frame_primary else "medium_strong",
         "primary_anchor_case_id": primary.case_id,
         "primary_anchor_title": primary.title,
         "primary_anchor_category": primary.category,
@@ -106,9 +114,13 @@ def build_visual_grammar_contract(
         "visual_signal_brief": visual_signals.brief,
         "source_layout_risk": source_layout_risk,
         "information_integrity": information_integrity,
+        "asset_frame_strategy": asset_frame_strategy,
         "critical_asset_rules": _critical_asset_rules(asset_context),
         "conflict_policy": (
-            "Preserve the selected visual grammar over Claude drafts and uploaded source layouts. "
+            "Preserve the uploaded layout/composition frame; use retrieved cases only for compatible polish, lighting, materials, and finish. "
+            "Do not let the case anchor replace the uploaded frame."
+            if uploaded_frame_primary
+            else "Preserve the selected visual grammar over Claude drafts and uploaded source layouts. "
             "Replace semantic content, not composition, spatial hierarchy, mood, or design language. "
             "If the user's assets lack a key visual element required by the anchor, synthesize suitable virtual content."
         ),
@@ -151,6 +163,15 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
             "Strong lock: preserve its main visual presence, composition framework, spatial hierarchy, "
             "layout rhythm, lighting logic, background density, mood, typography/information treatment, and design language."
         )
+    elif mode == "uploaded_frame_visual_grammar":
+        lead = (
+            "UPLOADED FRAME VISUAL GRAMMAR: no user-selected template was provided, and the uploaded reference is the requested layout/composition frame. "
+            f"Retrieved case '{title}' is a secondary style-polish reference, not the frame owner."
+        )
+        strength = (
+            "Medium lock: preserve the uploaded reference image's composition framework, layout rhythm, major spatial hierarchy, and camera/design structure. "
+            "Use retrieved cases only for compatible lighting, material treatment, typography polish, color mood, and commercial finish."
+        )
     else:
         lead = (
             "AUTO VISUAL GRAMMAR LOCK: no user-selected template was provided, so use one primary curated case as the main visual grammar anchor. "
@@ -169,14 +190,21 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
             + "."
         ),
         (
-            "Uploaded assets are evidence and slot variables. Hard identity assets must remain reference images when supported, "
+            "Uploaded assets include the requested frame reference. Hard identity assets must remain reference images when supported, "
+            "and the uploaded layout/composition frame stays primary."
+            if mode == "uploaded_frame_visual_grammar"
+            else "Uploaded assets are evidence and slot variables. Hard identity assets must remain reference images when supported, "
             "but uploaded source layouts must not override the selected visual grammar."
         ),
         (
             "If the visual grammar requires a key element such as a large hero image, product scene, information band, or typography-safe area "
             "and the uploaded assets do not provide it, synthesize suitable virtual content that matches the user's subject."
         ),
-        "Conflict policy: visual grammar wins over Claude draft wording and uploaded source layout; user semantics win over the anchor's original literal subject and copy.",
+        (
+            "Conflict policy: uploaded layout/composition wins over retrieved case composition; retrieved cases only polish compatible details; user semantics still control subject, copy, and business meaning."
+            if mode == "uploaded_frame_visual_grammar"
+            else "Conflict policy: visual grammar wins over Claude draft wording and uploaded source layout; user semantics win over the anchor's original literal subject and copy."
+        ),
     ]
     if anchor:
         parts.insert(2, "Reusable visual grammar from the anchor: " + anchor + ".")
@@ -200,10 +228,16 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     if aux_titles:
         parts.append("Auxiliary cases may contribute only compatible local cues, not the main composition: " + ", ".join(aux_titles) + ".")
     if source_layout_risk.get("detected"):
-        parts.append(
-            "Source-layout risk detected: the uploaded image or request looks like a finished poster, menu sheet, weekly card, QR/text sheet, or screenshot. "
-            "Extract semantic content and hard references only; do not copy its overall grid, background, density, or layout."
-        )
+        if mode == "uploaded_frame_visual_grammar":
+            parts.append(
+                "Uploaded-frame intent confirmed: the uploaded source may be a finished layout, but the user explicitly asked to preserve its frame. "
+                "Keep the layout/composition structure while refreshing details and preventing unreadable copied text."
+            )
+        else:
+            parts.append(
+                "Source-layout risk detected: the uploaded image or request looks like a finished poster, menu sheet, weekly card, QR/text sheet, or screenshot. "
+                "Extract semantic content and hard references only; do not copy its overall grid, background, density, or layout."
+            )
     return " ".join(parts)
 
 
@@ -300,6 +334,13 @@ def _source_layout_risk(*, user_prompt: str, asset_context: dict[str, Any] | Non
     return {"detected": bool(hits), "markers": hits[:8]}
 
 
+def _asset_frame_strategy(asset_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(asset_context, dict):
+        return {}
+    strategy = asset_context.get("asset_frame_strategy")
+    return strategy if isinstance(strategy, dict) else {}
+
+
 def _information_integrity_contract(
     *,
     user_prompt: str,
@@ -324,6 +365,7 @@ def _information_integrity_contract(
         text_parts.extend(str(item) for item in detected_text[:8])
     text = " ".join(text_parts).lower()
     hits = [marker for marker in INFO_DENSE_MARKERS if marker in text]
+    uploaded_frame_primary = _asset_frame_strategy(asset_context).get("mode") == "uploaded_frame_primary"
     composite_source = "composite_content_source" in fusion_modes
     explicit_retention = bool(
         re.search(
@@ -340,7 +382,9 @@ def _information_integrity_contract(
         "triggers": hits[:10],
         "critical_fields": CRITICAL_INFORMATION_FIELDS,
         "layout_policy": (
-            "Preserve facts and commercial meaning while adapting them into the locked visual grammar; "
+            "Preserve facts and commercial meaning inside the uploaded layout/composition frame; refresh only incompatible visual details."
+            if uploaded_frame_primary
+            else "Preserve facts and commercial meaning while adapting them into the locked visual grammar; "
             "do not preserve the old source layout."
         ),
         "canvas_policy": (

@@ -190,7 +190,20 @@ class CreativeManagerRuntime:
             mode=fallback_mode,
             next_actions=["Building the initial case retrieval and asset-understanding plan."],
         )
-        fallback_retrieval_plan = self._build_retrieval_plan(request, fallback_mode)
+        asset_context = build_asset_context(request)
+        asset_binding_error = _asset_binding_failure(asset_context)
+        if asset_binding_error:
+            return self._save_run_stage(
+                request,
+                run_id=run_id,
+                trace_id=trace_id,
+                created_at=created,
+                status="failed",
+                mode=fallback_mode,
+                selected_cases=[],
+                next_actions=[asset_binding_error],
+            )
+        fallback_retrieval_plan = self._build_retrieval_plan(request, fallback_mode, asset_context=asset_context)
         self._save_run_stage(
             request,
             run_id=run_id,
@@ -204,6 +217,13 @@ class CreativeManagerRuntime:
         template_case = get_prompt_case(request.template_case_id) if request.template_case_id else None
         template_locked = template_case is not None
         candidate_summaries = self._retrieve_candidate_summaries(fallback_retrieval_plan, limit=max(4, fallback_retrieval_plan.limit))
+        if not candidate_summaries:
+            for relaxed_plan in self._relaxed_retrieval_plans(fallback_retrieval_plan, asset_context=asset_context):
+                relaxed_summaries = self._retrieve_candidate_summaries(relaxed_plan, limit=max(4, relaxed_plan.limit))
+                if relaxed_summaries:
+                    fallback_retrieval_plan = relaxed_plan
+                    candidate_summaries = relaxed_summaries
+                    break
         candidate_summaries = self._prioritize_template_summary(candidate_summaries, request.template_case_id)
         candidate_case_details = self._hydrate_template_and_candidates(
             request.template_case_id,
@@ -215,20 +235,6 @@ class CreativeManagerRuntime:
         if template_locked and template_case:
             orchestrator_candidate_summaries = summaries_from_cases([template_case])
             orchestrator_candidate_details = [template_case]
-        asset_context = build_asset_context(request)
-        asset_binding_error = _asset_binding_failure(asset_context)
-        if asset_binding_error:
-            return self._save_run_stage(
-                request,
-                run_id=run_id,
-                trace_id=trace_id,
-                created_at=created,
-                status="failed",
-                mode=fallback_mode,
-                case_retrieval_plan=fallback_retrieval_plan,
-                selected_cases=orchestrator_candidate_summaries,
-                next_actions=[asset_binding_error],
-            )
         self._save_run_stage(
             request,
             run_id=run_id,
@@ -481,7 +487,13 @@ class CreativeManagerRuntime:
             pass
         return saved
 
-    def _build_retrieval_plan(self, request: CreateCreativeRunRequest, mode: str) -> CaseRetrievalPlan:
+    def _build_retrieval_plan(
+        self,
+        request: CreateCreativeRunRequest,
+        mode: str,
+        *,
+        asset_context: dict[str, Any] | None = None,
+    ) -> CaseRetrievalPlan:
         text = request.user_prompt.lower()
         category_filters: list[str] = []
         use_case_filters: list[str] = []
@@ -515,8 +527,22 @@ class CreativeManagerRuntime:
                 category_filters = [template.category]
                 use_case_filters = template.use_case_tags[:2]
                 style_filters = template.style_tags[:3]
+        query_text = request.user_prompt
+        asset_strategy = (
+            asset_context.get("asset_frame_strategy")
+            if isinstance(asset_context, dict) and isinstance(asset_context.get("asset_frame_strategy"), dict)
+            else {}
+        )
+        hints = asset_strategy.get("retrieval_hints") if isinstance(asset_strategy.get("retrieval_hints"), dict) else {}
+        if mode != "template_customize" and hints:
+            query_terms = str(hints.get("query_terms") or "").strip()
+            if query_terms:
+                query_text = " ".join(part for part in [request.user_prompt, f"Uploaded asset intent: {query_terms}"] if part)
+            category_filters.extend(str(item) for item in (hints.get("category_filters") or []) if item)
+            use_case_filters.extend(str(item) for item in (hints.get("use_case_filters") or []) if item)
+            style_filters.extend(str(item) for item in (hints.get("style_filters") or []) if item)
         return CaseRetrievalPlan(
-            query_text=request.user_prompt,
+            query_text=query_text,
             category_filters=_dedupe(category_filters),
             use_case_filters=_dedupe(use_case_filters),
             style_filters=_dedupe(style_filters),
@@ -528,6 +554,70 @@ class CreativeManagerRuntime:
     def _retrieve_candidate_summaries(self, retrieval_plan: CaseRetrievalPlan, *, limit: int):
         response = self._search_cases(retrieval_plan.model_copy(update={"limit": limit}))
         return response.cases
+
+    def _relaxed_retrieval_plans(
+        self,
+        retrieval_plan: CaseRetrievalPlan,
+        *,
+        asset_context: dict[str, Any] | None = None,
+    ) -> list[CaseRetrievalPlan]:
+        plans: list[CaseRetrievalPlan] = []
+        if retrieval_plan.style_filters:
+            plans.append(retrieval_plan.model_copy(update={"style_filters": []}))
+        asset_strategy = (
+            asset_context.get("asset_frame_strategy")
+            if isinstance(asset_context, dict) and isinstance(asset_context.get("asset_frame_strategy"), dict)
+            else {}
+        )
+        fallback_query = self._asset_strategy_fallback_query(asset_strategy)
+        if fallback_query:
+            plans.append(
+                retrieval_plan.model_copy(
+                    update={
+                        "query_text": fallback_query,
+                        "style_filters": [],
+                    }
+                )
+            )
+            plans.append(
+                retrieval_plan.model_copy(
+                    update={
+                        "query_text": fallback_query,
+                        "category_filters": [],
+                        "use_case_filters": [],
+                        "style_filters": [],
+                    }
+                )
+            )
+        plans.append(
+            retrieval_plan.model_copy(
+                update={
+                    "query_text": "",
+                    "category_filters": [],
+                    "use_case_filters": [],
+                    "style_filters": [],
+                }
+            )
+        )
+        unique: list[CaseRetrievalPlan] = []
+        seen: set[str] = set()
+        for plan in plans:
+            key = plan.model_dump_json()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(plan)
+        return unique
+
+    def _asset_strategy_fallback_query(self, asset_strategy: dict[str, Any]) -> str:
+        mode = str(asset_strategy.get("mode") or "")
+        if mode == "uploaded_frame_primary":
+            return "poster commercial layout composition typography premium lighting polish"
+        if asset_strategy.get("content_extraction"):
+            return "poster menu commercial information hierarchy typography premium product food"
+        if mode:
+            return "commercial poster product visual premium composition"
+        return ""
 
     def _prioritize_template_summary(self, summaries, template_case_id: str | None):
         if not template_case_id:

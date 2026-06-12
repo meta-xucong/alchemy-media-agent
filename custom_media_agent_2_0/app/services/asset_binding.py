@@ -82,13 +82,21 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
     brief_by_id = {item.asset_id: _brief_for(item) for item in uploaded_assets}
     template_lock = _template_lock_contract(request.template_case_id)
     binding_plan = _binding_plan(asset_inputs, brief_by_id, template_lock, user_prompt=request.user_prompt)
+    uploaded_asset_contexts = [
+        _asset_for_context(asset, brief_by_id.get(asset.asset_id), inputs_by_id.get(asset.asset_id, []))
+        for asset in uploaded_assets
+    ]
+    asset_frame_strategy = _asset_frame_strategy(
+        user_prompt=request.user_prompt,
+        uploaded_assets=uploaded_asset_contexts,
+        binding_plan=binding_plan,
+        template_locked=template_lock is not None,
+    )
     return {
-        "uploaded_assets": [
-            _asset_for_context(asset, brief_by_id.get(asset.asset_id), inputs_by_id.get(asset.asset_id, []))
-            for asset in uploaded_assets
-        ],
+        "uploaded_assets": uploaded_asset_contexts,
         "template_lock_contract": template_lock.model_dump(mode="json") if template_lock else None,
         "asset_binding_plan": binding_plan.model_dump(mode="json"),
+        "asset_frame_strategy": asset_frame_strategy,
         "provider_input_images": [item.model_dump(mode="json") for item in provider_input_images(binding_plan, brief_by_id)],
         "provider_input_plan": binding_plan.provider_input_plan,
         "warnings": _warnings(asset_inputs, uploaded_assets),
@@ -119,6 +127,18 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         parts.append(
             "TEMPLATE LOCK: the selected case is the highest-priority visual template. "
             "Preserve its composition, spatial hierarchy, lighting, background density, mood, layout structure, and visual rhythm."
+        )
+    frame_strategy = asset_context.get("asset_frame_strategy") if isinstance(asset_context.get("asset_frame_strategy"), dict) else {}
+    if frame_strategy.get("mode") == "uploaded_frame_primary":
+        parts.append(
+            "UPLOADED FRAME INTENT: no hand-selected template is active, and the user asked the uploaded reference to drive layout or composition. "
+            "Preserve the uploaded frame's composition, layout rhythm, major spatial hierarchy, and camera/design structure. "
+            "Retrieved cases may add polish, lighting, materials, and commercial finish only; they must not replace the uploaded frame."
+        )
+    elif frame_strategy.get("mode") == "case_frame_primary" and frame_strategy.get("content_extraction"):
+        parts.append(
+            "UPLOADED CONTENT SOURCE: use uploaded poster/menu/screenshot-like assets as content evidence and hard references only. "
+            "Extract semantic content, product/food identity, copy, QR, and offer details; use retrieved cases for the new visual frame."
         )
     plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
     bindings = plan.get("bindings") if isinstance(plan, dict) else []
@@ -196,6 +216,216 @@ def provider_input_images(binding_plan: AssetBindingPlan, brief_by_id: dict[str,
             )
         )
     return list(images_by_asset_id.values())
+
+
+def _asset_frame_strategy(
+    *,
+    user_prompt: str,
+    uploaded_assets: list[dict[str, Any]],
+    binding_plan: AssetBindingPlan,
+    template_locked: bool,
+) -> dict[str, Any]:
+    bindings = [item.model_dump(mode="json") for item in binding_plan.bindings]
+    text = _frame_strategy_text(user_prompt=user_prompt, uploaded_assets=uploaded_assets, bindings=bindings)
+    content_extraction = _content_extraction_requested(text, bindings)
+    uploaded_frame_requested = _uploaded_frame_requested(text, bindings) and not _layout_rejection_requested(text)
+    retrieval_hints = _asset_retrieval_hints(
+        text=text,
+        uploaded_assets=uploaded_assets,
+        bindings=bindings,
+        content_extraction=content_extraction,
+        uploaded_frame_requested=uploaded_frame_requested,
+    )
+    if template_locked:
+        return {
+            "mode": "template_frame_primary",
+            "frame_source": "selected_template",
+            "case_anchor_policy": "selected template controls the visual frame; uploads fill replaceable slots",
+            "uploaded_layout_may_override_case": False,
+            "content_extraction": content_extraction,
+            "asset_ids": _strategy_asset_ids(uploaded_assets),
+            "retrieval_hints": retrieval_hints,
+            "reason": "A hand-selected template is active.",
+        }
+    if uploaded_frame_requested:
+        return {
+            "mode": "uploaded_frame_primary",
+            "frame_source": "uploaded_asset",
+            "case_anchor_policy": "retrieved cases support style, lighting, material, and finish only",
+            "uploaded_layout_may_override_case": True,
+            "content_extraction": False,
+            "asset_ids": _strategy_asset_ids(uploaded_assets),
+            "retrieval_hints": retrieval_hints,
+            "reason": "The user explicitly asked to preserve or follow the uploaded layout/composition frame.",
+        }
+    return {
+        "mode": "case_frame_primary",
+        "frame_source": "retrieved_case",
+        "case_anchor_policy": "one retrieved case controls the main visual grammar; uploads fill semantic or identity slots",
+        "uploaded_layout_may_override_case": False,
+        "content_extraction": content_extraction,
+        "asset_ids": _strategy_asset_ids(uploaded_assets),
+        "retrieval_hints": retrieval_hints,
+        "reason": (
+            "Uploaded source looks like content evidence; extract content into a new case frame."
+            if content_extraction
+            else "No explicit uploaded-layout override was requested."
+        ),
+    }
+
+
+def _frame_strategy_text(
+    *,
+    user_prompt: str,
+    uploaded_assets: list[dict[str, Any]],
+    bindings: list[dict[str, Any]],
+) -> str:
+    parts = [str(user_prompt or "")]
+    for asset in uploaded_assets:
+        if not isinstance(asset, dict):
+            continue
+        parts.extend([str(asset.get("filename") or ""), str(asset.get("role") or ""), str(asset.get("intended_use") or "")])
+        brief = asset.get("brief") if isinstance(asset.get("brief"), dict) else {}
+        parts.extend(
+            [
+                str(brief.get("visual_summary") or ""),
+                " ".join(str(item) for item in (brief.get("identity_requirements") or [])[:4]),
+                " ".join(str(item) for item in (brief.get("style_signals") or [])[:5]),
+            ]
+        )
+    for item in bindings:
+        if not isinstance(item, dict):
+            continue
+        placement = item.get("placement_intent") if isinstance(item.get("placement_intent"), dict) else {}
+        parts.extend(
+            [
+                str(item.get("role") or ""),
+                str(item.get("constraint_strength") or ""),
+                str(item.get("fusion_mode") or ""),
+                str(item.get("binding_slot") or ""),
+                str(placement.get("instruction") or ""),
+                str(placement.get("target_label") or ""),
+            ]
+        )
+    return " ".join(parts).lower()
+
+
+def _uploaded_frame_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
+    if any(
+        isinstance(item, dict)
+        and item.get("role") == "composition_reference"
+        and item.get("constraint_strength") in {"required", "strong"}
+        for item in bindings
+    ):
+        return True
+    return bool(
+        re.search(
+            r"(按.*(版式|布局|构图|排版|画面结构)|参考.*(版式|布局|构图|排版|画面结构)|沿用.*(版式|布局|构图|排版)|保持.*(版式|布局|构图|排版)|"
+            r"same\s+(layout|composition|framing)|follow\s+(the\s+)?(layout|composition|framing)|use\s+.*(layout|composition|framing)\s+as\s+(the\s+)?(frame|reference))",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _layout_rejection_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(不要.*(沿用|复制|照搬).*(版式|布局|构图|排版)|不.*(沿用|复制|照搬).*(版式|布局|构图|排版)|只提取|仅提取|提取.*内容|摘取.*内容|"
+            r"do\s+not\s+(copy|reuse|follow).*(layout|composition)|content\s+only|extract\s+content)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _content_extraction_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
+    if any(isinstance(item, dict) and item.get("fusion_mode") == "composite_content_source" for item in bindings):
+        return True
+    return bool(
+        re.search(
+            r"(菜单|周卡|整图|旧图|旧海报|截图|二维码|优惠|价格|套餐|配送|加购|文案|提取|摘取|内容|"
+            r"menu|weekly card|poster source|screenshot|qr|offer|price|package|copy|extract)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        and _layout_rejection_requested(text)
+    )
+
+
+def _asset_retrieval_hints(
+    *,
+    text: str,
+    uploaded_assets: list[dict[str, Any]],
+    bindings: list[dict[str, Any]],
+    content_extraction: bool,
+    uploaded_frame_requested: bool,
+) -> dict[str, Any]:
+    user_intent_text = _user_intent_text(text)
+    category_hints: list[str] = []
+    use_case_hints: list[str] = []
+    style_hints: list[str] = []
+    if re.search(r"(海报|菜单|周卡|活动|poster|menu|flyer|campaign)", text, flags=re.IGNORECASE):
+        category_hints.append("poster")
+        use_case_hints.append("poster")
+    if re.search(r"(商品|产品|电商|包装|product|ecommerce|marketplace|listing|package)", text, flags=re.IGNORECASE):
+        use_case_hints.extend(["ecommerce", "product-listing"])
+    if re.search(r"(食物|食品|美食|菜品|餐饮|咖啡|饮料|food|meal|dish|restaurant|coffee|beverage)", text, flags=re.IGNORECASE):
+        use_case_hints.append("poster")
+    if re.search(r"(高级|高端|奢华|质感|premium|luxury|high-end)", user_intent_text, flags=re.IGNORECASE):
+        style_hints.extend(["premium", "luxury"])
+    if re.search(r"(极简|干净|留白|minimal|clean)", user_intent_text, flags=re.IGNORECASE):
+        style_hints.extend(["minimal", "clean"])
+    role_terms = _dedupe(str(item.get("role") or "") for item in bindings if isinstance(item, dict))
+    fusion_terms = _dedupe(str(item.get("fusion_mode") or "") for item in bindings if isinstance(item, dict))
+    asset_terms: list[str] = []
+    for asset in uploaded_assets[:4]:
+        if not isinstance(asset, dict):
+            continue
+        brief = asset.get("brief") if isinstance(asset.get("brief"), dict) else {}
+        asset_terms.extend(
+            [
+                str(asset.get("filename") or ""),
+                str(asset.get("role") or ""),
+                str(brief.get("visual_summary") or ""),
+                " ".join(str(item) for item in (brief.get("style_signals") or [])[:4]),
+            ]
+        )
+    intent = (
+        "uploaded frame/layout reference should drive composition; find cases for compatible style polish"
+        if uploaded_frame_requested
+        else "uploaded source supplies content/identity slots; find one fresh visual frame"
+        if content_extraction
+        else "uploaded assets fill identity or style slots; find one compatible visual frame"
+    )
+    return {
+        "query_terms": _compact_strategy_text(" ".join([intent, *asset_terms, *role_terms, *fusion_terms]), 760),
+        "category_filters": _dedupe(category_hints),
+        "use_case_filters": _dedupe(use_case_hints),
+        "style_filters": _dedupe(style_hints),
+    }
+
+
+def _user_intent_text(text: str) -> str:
+    marker = " uploaded asset intent:"
+    if marker in text:
+        return text.split(marker, 1)[0]
+    return text
+
+
+def _strategy_asset_ids(uploaded_assets: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(item.get("asset_id"))
+        for item in uploaded_assets
+        if isinstance(item, dict) and item.get("asset_id")
+    ][:8]
+
+
+def _compact_strategy_text(value: str, limit: int) -> str:
+    clean = " ".join(str(value or "").strip().split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _normalize_asset_inputs(raw_assets: list[str | CreativeRunAssetInput]) -> list[CreativeRunAssetInput]:
