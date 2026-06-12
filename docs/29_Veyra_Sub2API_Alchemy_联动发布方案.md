@@ -1,5 +1,9 @@
 # Veyra / sub2api / Alchemy 联动发布方案
 
+> 生产登录门禁、匿名访问收紧、以及“聚合平台 / Alchemy / 首页登录”按来源回跳的下一步优化，以
+> [30_生产登录门禁与来源回跳开发文档.md](30_生产登录门禁与来源回跳开发文档.md)
+> 为准。
+
 ## 边界
 
 本次联动由两个 GitHub 仓库共同承载，但职责必须保持分离：
@@ -25,7 +29,10 @@
    - `VEYRA_SUB2API_BASE_URL=https://aiself.vip`
    - `VEYRA_INTERNAL_TOKEN` 与 sub2api 的 `veyra.internal_token` 完全一致
    - `VEYRA_SESSION_SECRET` 使用独立随机密钥
-5. 最后切换域名/反代，不在代码推送阶段触碰 VPS。
+5. Alchemy V1 如果运行在 Docker 容器中，`VEYRA_BILLING_SETTINGS_URL` 必须使用容器可访问地址。生产推荐：
+   - `VEYRA_BILLING_SETTINGS_URL=https://alchemy.aiself.vip/api/v2/veyra/billing/settings/public`
+   - 不要使用 `http://127.0.0.1:8020/...`，除非 V2 也在同一容器网络中且该地址真实可达。
+6. 最后切换域名/反代，不在代码推送阶段触碰 VPS。
 
 ## 回归矩阵
 
@@ -40,9 +47,12 @@ sub2api：
 Alchemy：
 
 - 桌面和 H5 都能消费 `?ticket=...`。
+- 生产强制登录开启后，匿名用户不能读取 V1/V2 历史、输出、runtime/provider 设置或管理员页面。
+- 未登录直接打开 Alchemy 桌面/H5 时，应回到 sub2api 登录页，登录后自动回到对应 Alchemy 入口。
 - 账户页展示 sub2api 余额、当前用户生成记录、扣费流水。
 - 管理员用户显示“管理员设置”，普通用户不显示。
 - V2 未显式保存 Mock 时优先使用 OpenAI/Gemini 真实通道。
+- 从 V1 容器内部访问 `VEYRA_BILLING_SETTINGS_URL?rule_key=alchemy:v1` 返回 200。
 - 余额不足时不调用生图 provider。
 - 生成失败不扣费，生成成功后扣费。
 

@@ -44,7 +44,7 @@ def list_image_history(
     limit: int = 50,
     *,
     veyra_user_id: int | None = None,
-    include_public: bool = False,
+    include_legacy_public: bool = True,
     include_all: bool = False,
 ) -> ImageHistoryResponse:
     if not settings.image_history_path.exists():
@@ -59,9 +59,11 @@ def list_image_history(
             continue
         if not include_all and veyra_user_id is not None:
             owner_id = _veyra_user_id(item.metadata)
-            if owner_id != veyra_user_id and not (include_public and owner_id is None):
+            if owner_id != veyra_user_id and not (include_legacy_public and owner_id is None):
                 continue
-        item = _normalize_thumbnail_url(item)
+        elif not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
+            continue
+        item = _with_veyra_history_label(_normalize_thumbnail_url(item))
         existing = records_by_output.get(item.output_id)
         if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
             records_by_output[item.output_id] = item
@@ -181,6 +183,21 @@ def _normalize_thumbnail_url(item: ImageHistoryItem) -> ImageHistoryItem:
     if item.metadata.get("mock"):
         return item
     return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
+
+
+def _with_veyra_history_label(item: ImageHistoryItem) -> ImageHistoryItem:
+    if _veyra_user_id(item.metadata) is not None:
+        return item
+    metadata = dict(item.metadata)
+    metadata.setdefault("veyra_legacy_public", True)
+    metadata.setdefault("record_label", "旧版生图记录")
+    return item.model_copy(
+        update={
+            "metadata": metadata,
+            "veyra_legacy_public": True,
+            "record_label": "旧版生图记录",
+        }
+    )
 
 
 def _thumbnail_endpoint(output_id: str) -> str:

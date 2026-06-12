@@ -220,6 +220,12 @@ GET /api/v2/image/jobs/{job_id}
 
 目标：Alchemy 不自建账号、密码、充值和余额系统，而是把 sub2api 作为唯一账号和资金来源。
 
+生产强制登录、匿名接口收紧、Cookie 会话门禁和按来源登录回跳的完整方案见：
+
+```text
+custom_media_agent_docs/docs/30_生产登录门禁与来源回跳开发文档.md
+```
+
 ### sub2api 入口页流程
 
 Veyra Agent 首页由 sub2api 的自定义 portal 扩展提供：
@@ -307,7 +313,7 @@ Alchemy 桌面和 H5 前端在初始化时：
 4. 清理 URL 里的 `ticket`。
 5. 后续 `v2Request(...)` 自动附加 `Authorization: Bearer <alchemy_veyra_access_token>`。
 
-如果没有 token，本地开发和匿名兼容路径仍可读公开历史接口；正式启用 `VEYRA_AUTH_ENABLED=true` 后，创意运行和直接 image job 会由后端要求有效 Veyra session。
+如果没有 token，本地开发可以保留匿名兼容路径；正式启用 `VEYRA_AUTH_ENABLED=true` 后，创意运行、直接 image job、历史、输出、runtime/provider 设置和管理员页都必须由后端要求有效 Veyra session。若产品要求未登录不能打开页面壳，还必须启用 Alchemy 同域 Cookie 会话门禁。
 
 ### Alchemy 账户与扣费闭环
 

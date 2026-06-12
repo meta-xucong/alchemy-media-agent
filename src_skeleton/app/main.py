@@ -9,7 +9,7 @@ import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
@@ -56,18 +56,24 @@ app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobi
 
 
 @app.get("/")
-def frontend_app():
+def frontend_app(request: Request):
+    gate = _veyra_page_gate(request, target="alchemy")
+    if gate:
+        return gate
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/h5")
 @app.get("/mobile")
-def mobile_frontend_app():
+def mobile_frontend_app(request: Request):
+    gate = _veyra_page_gate(request, target="alchemy-mobile")
+    if gate:
+        return gate
     return FileResponse(MOBILE_STATIC_DIR / "index.html")
 
 
 @app.get("/admin/billing")
-def billing_admin_app():
+def billing_admin_app(request: Request):
     return FileResponse(STATIC_DIR / "billing-admin.html")
 
 
@@ -154,14 +160,46 @@ def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
 
 
-def _veyra_user_id_from_authorization(authorization: str) -> int | None:
+def _veyra_login_redirect_url(target: str) -> str:
+    base_url = (settings.veyra_login_base_url or "https://aiself.vip").rstrip("/")
+    redirect = "/_veyra/return?" + urlencode({"target": target})
+    return base_url + "/login?" + urlencode({"redirect": redirect})
+
+
+def _veyra_page_gate(request: Request, *, target: str) -> RedirectResponse | None:
+    if not settings.veyra_auth_enabled or not settings.veyra_require_ui_auth:
+        return None
+    if request.query_params.get("ticket"):
+        return None
+    token = _veyra_session_token_from_request(request)
+    if token:
+        try:
+            verify_session_token(token)
+            return None
+        except VeyraAuthUnauthorized:
+            pass
+        except (VeyraAuthDisabled, VeyraAuthMisconfigured) as exc:
+            raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
+        except VeyraAuthError as exc:
+            raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra auth failed."}) from exc
+    return RedirectResponse(_veyra_login_redirect_url(target), status_code=307)
+
+
+def _veyra_session_token_from_request(request: Request, authorization: str = "") -> str:
+    scheme, _, token = str(authorization or "").partition(" ")
+    if scheme.lower() == "bearer" and token.strip():
+        return token.strip()
+    return str(request.cookies.get(settings.veyra_session_cookie_name) or "").strip()
+
+
+def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int | None:
     if not settings.veyra_auth_enabled:
         return None
-    scheme, _, token = str(authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
+    token = _veyra_session_token_from_request(request, authorization)
+    if not token:
         raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
     try:
-        return verify_session_token(token.strip())
+        return verify_session_token(token)
     except VeyraAuthUnauthorized as exc:
         raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Veyra session is invalid."}) from exc
     except (VeyraAuthDisabled, VeyraAuthMisconfigured) as exc:
@@ -170,13 +208,16 @@ def _veyra_user_id_from_authorization(authorization: str) -> int | None:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra auth failed."}) from exc
 
 
-async def _veyra_history_context(authorization: str) -> dict:
+def _require_veyra_user_if_enabled(request: Request, authorization: str = "") -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    return _veyra_user_id_from_request(request, authorization)
+
+
+async def _veyra_history_context(request: Request, authorization: str = "") -> dict:
     if not settings.veyra_auth_enabled:
         return {"authenticated": False, "user_id": None, "is_admin": False}
-    scheme, _, token = str(authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return {"authenticated": False, "user_id": None, "is_admin": False}
-    user_id = _veyra_user_id_from_authorization(authorization)
+    user_id = _veyra_user_id_from_request(request, authorization)
     account = await _veyra_account(user_id)
     return {"authenticated": True, "user_id": user_id, "is_admin": _is_veyra_admin_account(account)}
 
@@ -194,28 +235,55 @@ def _is_veyra_admin_account(account) -> bool:
     return str(getattr(account, "role", "") or "").lower() == "admin"
 
 
+def _v1_output_owner_id(output_id: str) -> int | None:
+    output = repository.get_output(output_id)
+    if output:
+        owner_id = _history_output_veyra_user_id(output.metadata)
+        if owner_id is not None:
+            return owner_id
+    for record in media_store.list_history_records(limit=10000):
+        if record.get("id") == output_id:
+            return _positive_int_or_none(record.get("veyra_user_id"))
+    return None
+
+
+async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
+    if not settings.veyra_auth_enabled:
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
+    context = await _veyra_history_context(request, authorization)
+    owner_id = _v1_output_owner_id(output_id)
+    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
+        return {**context, "owner_id": owner_id}
+    raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
+
+
 @app.post("/v1/sessions")
-def create_session_endpoint(body: CreateSessionRequest):
+def create_session_endpoint(body: CreateSessionRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return create_session(body)
 
 
 @app.post("/v1/sessions/{session_id}/messages")
-async def send_message(session_id: str, body: MessageRequest):
+async def send_message(session_id: str, body: MessageRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return await handle_message(session_id, body)
 
 
 @app.get("/v1/sessions/{session_id}/events")
-def stream_session_events(session_id: str):
+def stream_session_events(session_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return StreamingResponse(format_sse_events(session_id), media_type="text/event-stream")
 
 
 @app.post("/v1/assets/upload-url")
-def create_asset_upload_endpoint(body: CreateAssetUploadRequest):
+def create_asset_upload_endpoint(body: CreateAssetUploadRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return create_asset_upload(body)
 
 
 @app.put("/v1/assets/{asset_id}/content")
-def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest):
+def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = store_asset_content(asset_id, body)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -225,7 +293,8 @@ def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest):
 
 
 @app.get("/v1/assets/{asset_id}/content")
-def get_asset_content_endpoint(asset_id: str):
+def get_asset_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -236,7 +305,8 @@ def get_asset_content_endpoint(asset_id: str):
 
 
 @app.post("/v1/assets/{asset_id}/complete")
-def complete_asset_upload_endpoint(asset_id: str):
+def complete_asset_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = complete_asset_upload(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -244,7 +314,8 @@ def complete_asset_upload_endpoint(asset_id: str):
 
 
 @app.get("/v1/assets/{asset_id}")
-def get_asset_endpoint(asset_id: str):
+def get_asset_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -252,7 +323,8 @@ def get_asset_endpoint(asset_id: str):
 
 
 @app.put("/v1/assets/{asset_id}/intent")
-def set_asset_intent_endpoint(asset_id: str, body: AssetIntent):
+def set_asset_intent_endpoint(asset_id: str, body: AssetIntent, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -260,7 +332,8 @@ def set_asset_intent_endpoint(asset_id: str, body: AssetIntent):
 
 
 @app.post("/v1/assets/{asset_id}/masks")
-def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest):
+def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     result = create_asset_mask(asset_id, body)
     if not result:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -268,7 +341,7 @@ def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest):
 
 
 @app.post("/v1/image/jobs")
-async def create_image_job_endpoint(body: CreateImageJobRequest, authorization: str = Header(default="")):
+async def create_image_job_endpoint(body: CreateImageJobRequest, request: Request, authorization: str = Header(default="")):
     return await create_image_job(
         session_id=body.session_id,
         prompt=body.prompt,
@@ -282,17 +355,18 @@ async def create_image_job_endpoint(body: CreateImageJobRequest, authorization: 
         work_intensity=body.work_intensity,
         provider_preference=body.provider_preference,
         idempotency_key=body.idempotency_key,
-        veyra_user_id=_veyra_user_id_from_authorization(authorization),
+        veyra_user_id=_veyra_user_id_from_request(request, authorization),
     )
 
 
 @app.get("/v1/image/history")
 async def list_image_history(
+    request: Request,
     session_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=1000),
     authorization: str = Header(default=""),
 ):
-    veyra_context = await _veyra_history_context(authorization)
+    veyra_context = await _veyra_history_context(request, authorization)
     items: list[ImageHistoryItem] = []
     known_output_ids: set[str] = set()
     blocked_output_ids: set[str] = set()
@@ -356,13 +430,14 @@ async def list_image_history(
             known_output_ids.add(record["id"])
             items.append(ImageHistoryItem(**record))
 
-    items = [item for item in items if _history_visible_to_veyra(item, veyra_context)]
+    items = [_with_veyra_history_label(item) for item in items if _history_visible_to_veyra(item, veyra_context)]
     items.sort(key=_history_sort_key, reverse=True)
     return ImageHistoryResponse(items=items[:limit], total=len(items))
 
 
 @app.delete("/v1/image/history/{output_id}")
-def delete_image_history_item(output_id: str):
+async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
     output = repository.delete_output(output_id)
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     deleted_file = media_store.delete_output_file(
@@ -391,7 +466,8 @@ def delete_image_history_item(output_id: str):
 
 
 @app.get("/v1/image/jobs/{job_id}")
-def get_image_job(job_id: str):
+def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     job = repository.get_job(job_id)
     if not job or job.job_type != "image":
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Image job not found."})
@@ -399,15 +475,16 @@ def get_image_job(job_id: str):
 
 
 @app.post("/v1/image/jobs/{job_id}/revise")
-async def revise_image_job_endpoint(job_id: str, body: ReviseImageRequest, authorization: str = Header(default="")):
-    job = await revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_authorization(authorization))
+async def revise_image_job_endpoint(job_id: str, body: ReviseImageRequest, request: Request, authorization: str = Header(default="")):
+    job = await revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
     if not job:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
     return job
 
 
 @app.post("/v1/video/jobs")
-async def create_video_job_endpoint(body: CreateVideoJobRequest):
+async def create_video_job_endpoint(body: CreateVideoJobRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return await create_video_job(
         session_id=body.session_id,
         task_type=body.task_type,
@@ -421,7 +498,8 @@ async def create_video_job_endpoint(body: CreateVideoJobRequest):
 
 
 @app.get("/v1/video/jobs/{job_id}")
-def get_video_job(job_id: str):
+def get_video_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     job = repository.get_job(job_id)
     if not job or job.job_type != "video":
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Video job not found."})
@@ -429,7 +507,8 @@ def get_video_job(job_id: str):
 
 
 @app.get("/v1/providers")
-async def list_providers():
+async def list_providers(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     capabilities = await registry.list_capabilities()
     return {
         "providers": [item.model_dump() for group in capabilities.values() for item in group],
@@ -439,12 +518,14 @@ async def list_providers():
 
 
 @app.get("/v1/runtime/provider-settings")
-def get_runtime_provider_settings():
+def get_runtime_provider_settings(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return _runtime_provider_settings_response()
 
 
 @app.post("/v1/runtime/provider-settings")
-def update_provider_settings(body: RuntimeProviderSettingsRequest):
+def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     update_runtime_settings(
         default_image_provider=body.default_image_provider,
         default_image_model=body.default_image_model,
@@ -468,13 +549,15 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest):
 
 
 @app.get("/v1/outputs/{output_id}/download")
-def download_output(output_id: str):
+async def download_output(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     path, _ = _resolve_output_file(output_id)
     return FileResponse(path, headers=IMMUTABLE_IMAGE_HEADERS)
 
 
 @app.get("/v1/outputs/{output_id}/thumbnail")
-def thumbnail_output(output_id: str):
+async def thumbnail_output(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     path, _ = _resolve_output_file(output_id)
     thumbnail_path = media_store.ensure_thumbnail(output_id=output_id, source_path=path)
     if thumbnail_path == media_store.thumbnail_path(output_id):
@@ -957,7 +1040,7 @@ def _history_sort_key(item: ImageHistoryItem) -> tuple[float, str, str]:
 
 def _history_visible_to_veyra(item: ImageHistoryItem, context: dict) -> bool:
     if not context.get("authenticated"):
-        return True
+        return not settings.veyra_auth_enabled
     if context.get("is_admin"):
         return True
     owner_id = _history_item_veyra_user_id(item)
@@ -966,6 +1049,12 @@ def _history_visible_to_veyra(item: ImageHistoryItem, context: dict) -> bool:
 
 def _history_item_veyra_user_id(item: ImageHistoryItem) -> int | None:
     return _positive_int_or_none(getattr(item, "veyra_user_id", None))
+
+
+def _with_veyra_history_label(item: ImageHistoryItem) -> ImageHistoryItem:
+    if _history_item_veyra_user_id(item) is not None:
+        return item
+    return item.model_copy(update={"veyra_legacy_public": True, "record_label": "旧版生图记录"})
 
 
 def _history_output_veyra_user_id(metadata: dict | None) -> int | None:

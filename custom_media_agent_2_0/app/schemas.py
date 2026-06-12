@@ -532,6 +532,8 @@ class ImageHistoryItem(BaseModel):
     thumbnail_url: str | None = None
     score: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    veyra_legacy_public: bool = False
+    record_label: str | None = None
     created_at: datetime
     updated_at: datetime
 

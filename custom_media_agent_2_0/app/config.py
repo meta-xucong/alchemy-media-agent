@@ -150,6 +150,10 @@ class Settings:
     veyra_request_timeout_seconds: float = 10.0
     veyra_session_secret: str | None = None
     veyra_session_ttl_seconds: int = 86400
+    veyra_require_ui_auth: bool = False
+    veyra_login_base_url: str = "https://aiself.vip"
+    veyra_session_cookie_name: str = "alchemy_veyra_session"
+    veyra_session_cookie_secure: bool = True
     veyra_billing_enabled: bool = True
     veyra_generation_charge_amount: float = 0.0
     cors_allow_origins: tuple[str, ...] = (
@@ -363,6 +367,11 @@ def load_settings() -> Settings:
         veyra_request_timeout_seconds=max(1.0, float(os.getenv("VEYRA_REQUEST_TIMEOUT_SECONDS", "10"))),
         veyra_session_secret=os.getenv("VEYRA_SESSION_SECRET") or None,
         veyra_session_ttl_seconds=max(300, int(os.getenv("VEYRA_SESSION_TTL_SECONDS", "86400"))),
+        veyra_require_ui_auth=os.getenv("VEYRA_REQUIRE_UI_AUTH", "false").lower() in {"1", "true", "yes", "on"},
+        veyra_login_base_url=(os.getenv("VEYRA_LOGIN_BASE_URL", "https://aiself.vip") or "").rstrip("/"),
+        veyra_session_cookie_name=os.getenv("VEYRA_SESSION_COOKIE_NAME", "alchemy_veyra_session"),
+        veyra_session_cookie_secure=os.getenv("VEYRA_SESSION_COOKIE_SECURE", "true").lower()
+        in {"1", "true", "yes", "on"},
         veyra_billing_enabled=os.getenv("VEYRA_BILLING_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
         veyra_generation_charge_amount=max(0.0, float(os.getenv("VEYRA_GENERATION_CHARGE_AMOUNT", "0"))),
         cors_allow_origins=_parse_csv_env(

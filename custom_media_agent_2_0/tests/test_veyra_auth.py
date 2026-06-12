@@ -78,6 +78,7 @@ def test_veyra_login_and_me_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
     object.__setattr__(settings, "veyra_session_secret", "session-secret")
     object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
+    object.__setattr__(settings, "veyra_session_cookie_secure", False)
 
     async def fake_exchange(self, ticket: str):
         assert ticket == "ticket-1"
@@ -94,11 +95,30 @@ def test_veyra_login_and_me_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     login = client.post("/api/v2/veyra/login", json={"ticket": "ticket-1"})
     assert login.status_code == 200
     token = login.json()["access_token"]
+    assert "alchemy_veyra_session" in login.cookies
 
     me = client.get("/api/v2/veyra/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
     assert me.json()["user"]["user_id"] == 42
     assert me.json()["user"]["balance"] == 9.5
+
+    cookie_client = TestClient(app)
+    synced = cookie_client.post("/api/v2/veyra/session-cookie", headers={"Authorization": f"Bearer {token}"})
+    assert synced.status_code == 200
+    assert synced.json()["user_id"] == 42
+    assert "alchemy_veyra_session" in synced.cookies
+    synced_cookie_me = cookie_client.get("/api/v2/veyra/me")
+    assert synced_cookie_me.status_code == 200
+    assert synced_cookie_me.json()["user"]["user_id"] == 42
+
+    cookie_me = client.get("/api/v2/veyra/me")
+    assert cookie_me.status_code == 200
+    assert cookie_me.json()["user"]["user_id"] == 42
+
+    logout = client.post("/api/v2/veyra/logout")
+    assert logout.status_code == 200
+    after_logout = client.get("/api/v2/veyra/me")
+    assert after_logout.status_code == 401
 
 
 def test_veyra_billing_settings_require_admin(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,44 +200,104 @@ def test_veyra_billing_settings_support_versioned_rules(tmp_path, monkeypatch: p
     assert public_v1.json()["charge_amount"] == 0.15
 
 
-def test_veyra_history_filters_by_session_user_and_public_history(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_veyra_history_filters_by_session_user(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", True)
     object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
     object.__setattr__(settings, "veyra_session_secret", "session-secret")
     object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
     object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
-
-    async def fake_account(self, user_id: int):
-        role = "admin" if user_id == 99 else "user"
-        return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role=role, balance=9.5, status="active")
-
-    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
     settings.image_history_path.write_text(
         "\n".join(
             [
                 _history_line("out_1", 42),
                 _history_line("out_2", 77),
-                _history_line("out_public", None),
             ]
         )
         + "\n",
         encoding="utf-8",
     )
+
+    async def fake_account(self, user_id: int):
+        return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role="user", balance=9.5, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
     client = TestClient(app)
     token = issue_session_token(42)
-    admin_token = issue_session_token(99)
 
     all_history = client.get("/api/v2/image/history")
     own_history = client.get("/api/v2/veyra/history", headers={"Authorization": f"Bearer {token}"})
-    admin_history = client.get("/api/v2/veyra/history", headers={"Authorization": f"Bearer {admin_token}"})
+
+    assert all_history.status_code == 401
+    assert own_history.status_code == 200
+    assert own_history.json()["total"] == 1
+    assert own_history.json()["items"][0]["output_id"] == "out_1"
+
+
+def test_veyra_history_allows_legacy_public_for_signed_in_user(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
+    object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
+    settings.image_history_path.write_text(
+        "\n".join(
+            [
+                _history_line("out_1", 42),
+                _history_line("out_2", 77),
+                _history_line("out_legacy", None),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def fake_account(self, user_id: int):
+        return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role="user", balance=9.5, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
+    client = TestClient(app)
+    token = issue_session_token(42)
+
+    own_history = client.get("/api/v2/image/history", headers={"Authorization": f"Bearer {token}"})
+
+    assert own_history.status_code == 200
+    ids = {item["output_id"] for item in own_history.json()["items"]}
+    assert ids == {"out_1", "out_legacy"}
+    legacy = next(item for item in own_history.json()["items"] if item["output_id"] == "out_legacy")
+    assert legacy["veyra_legacy_public"] is True
+    assert legacy["record_label"] == "旧版生图记录"
+    assert legacy["metadata"]["record_label"] == "旧版生图记录"
+
+
+def test_veyra_history_admin_can_see_all_users(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
+    object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
+    settings.image_history_path.write_text(
+        "\n".join(
+            [
+                _history_line("out_1", 42),
+                _history_line("out_2", 77),
+                _history_line("out_legacy", None),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def fake_account(self, user_id: int):
+        return veyra_auth_module.VeyraAccount(user_id=user_id, email="admin@example.com", role="admin", balance=9.5, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
+    client = TestClient(app)
+    token = issue_session_token(1)
+
+    all_history = client.get("/api/v2/image/history", headers={"Authorization": f"Bearer {token}"})
 
     assert all_history.status_code == 200
     assert all_history.json()["total"] == 3
-    assert own_history.status_code == 200
-    assert own_history.json()["total"] == 2
-    assert {item["output_id"] for item in own_history.json()["items"]} == {"out_1", "out_public"}
-    assert admin_history.status_code == 200
-    assert admin_history.json()["total"] == 3
 
 
 def test_veyra_usage_filters_by_session_user(tmp_path) -> None:
@@ -560,7 +640,7 @@ def _history_line(output_id: str, user_id: int | None) -> str:
         "model": "mock-image-v2-native",
         "prompt": "prompt",
         "url": "/api/v2/outputs/" + output_id + "/download",
-        "metadata": {"veyra_user_id": user_id, "native_v2_storage": True},
+        "metadata": {"native_v2_storage": True, **({"veyra_user_id": user_id} if user_id is not None else {})},
         "created_at": "2026-06-11T00:00:00Z",
         "updated_at": "2026-06-11T00:00:00Z",
     }

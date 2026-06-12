@@ -41,10 +41,6 @@ function hydratePortalHomeLink() {
 }
 
 async function loadBillingSettings({ silent = true } = {}) {
-  if (!getVeyraToken()) {
-    renderSignedOut();
-    throw new Error("请先从 Veyra Agent 登录管理员账户。");
-  }
   setLoading(true);
   try {
     const settings = await v2Request("/veyra/billing/settings");
@@ -160,6 +156,7 @@ async function v2Request(path, options = {}) {
     method: options.method || "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: "include",
   });
   if (!response.ok) {
     const detail = await response.text();

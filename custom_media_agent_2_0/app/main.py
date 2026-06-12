@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents import AGENTS_SDK_AVAILABLE, CreativeManagerRuntime
@@ -133,8 +133,20 @@ def health() -> HealthResponse:
     )
 
 
+@app.get("/api/v2/veyra/auth-policy")
+def veyra_auth_policy():
+    return {
+        "enabled": settings.veyra_auth_enabled,
+        "require_ui_auth": settings.veyra_require_ui_auth,
+        "login_base_url": settings.veyra_login_base_url,
+        "desktop_target": "alchemy",
+        "mobile_target": "alchemy-mobile",
+        "session_cookie_name": settings.veyra_session_cookie_name,
+    }
+
+
 @app.post("/api/v2/veyra/login")
-async def veyra_login(body: dict):
+async def veyra_login(body: dict, response: Response):
     try:
         ticket = str(body.get("ticket") or "").strip()
     except AttributeError:
@@ -142,7 +154,9 @@ async def veyra_login(body: dict):
     if not ticket:
         raise HTTPException(status_code=400, detail={"error_code": "veyra_ticket_required", "message": "Ticket is required."})
     try:
-        return await login_with_ticket(ticket)
+        session = await login_with_ticket(ticket)
+        _set_veyra_session_cookie(response, str(session.get("access_token") or ""))
+        return session
     except VeyraAuthDisabled as exc:
         raise HTTPException(status_code=404, detail={"error_code": exc.code, "message": "Veyra auth is disabled."}) from exc
     except VeyraAuthMisconfigured as exc:
@@ -153,9 +167,23 @@ async def veyra_login(body: dict):
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
 
 
+@app.post("/api/v2/veyra/logout")
+def veyra_logout(response: Response):
+    _clear_veyra_session_cookie(response)
+    return {"ok": True}
+
+
+@app.post("/api/v2/veyra/session-cookie")
+def veyra_session_cookie(request: Request, response: Response, authorization: str = Header(default="")):
+    token = _veyra_session_token_from_request(request, authorization)
+    user_id = _veyra_user_id_from_request(request, authorization)
+    _set_veyra_session_cookie(response, token)
+    return {"ok": True, "user_id": user_id}
+
+
 @app.get("/api/v2/veyra/me")
-async def veyra_me(authorization: str = Header(default="")):
-    user_id = _veyra_user_id_from_authorization(authorization)
+async def veyra_me(request: Request, authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_request(request, authorization)
     try:
         account = await VeyraSub2APIClient().account(user_id)
     except VeyraAuthMisconfigured as exc:
@@ -166,26 +194,25 @@ async def veyra_me(authorization: str = Header(default="")):
 
 
 @app.get("/api/v2/veyra/history", response_model=ImageHistoryResponse)
-async def veyra_history(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
-    user_id = _veyra_user_id_from_authorization(authorization)
-    account = await _veyra_account(user_id)
+async def veyra_history(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    context = await _veyra_request_context(request, authorization)
     return list_image_history(
         limit=limit,
-        veyra_user_id=user_id,
-        include_public=True,
-        include_all=_is_veyra_admin_account(account),
+        veyra_user_id=context["user_id"],
+        include_legacy_public=True,
+        include_all=context["is_admin"],
     )
 
 
 @app.get("/api/v2/veyra/usage")
-def veyra_usage(limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
-    user_id = _veyra_user_id_from_authorization(authorization)
+def veyra_usage(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_request(request, authorization)
     return list_veyra_usage(user_id, limit=limit)
 
 
 @app.get("/api/v2/veyra/billing/settings", response_model=VeyraBillingSettingsResponse)
-async def veyra_billing_settings(rule_key: str | None = Query(default=None), authorization: str = Header(default="")):
-    await _require_veyra_admin(authorization)
+async def veyra_billing_settings(request: Request, rule_key: str | None = Query(default=None), authorization: str = Header(default="")):
+    await _require_veyra_admin(request, authorization)
     return get_billing_settings(rule_key)
 
 
@@ -197,78 +224,140 @@ def public_veyra_billing_settings(rule_key: str | None = Query(default=None)):
 @app.post("/api/v2/veyra/billing/settings", response_model=VeyraBillingSettingsResponse)
 async def update_veyra_billing_settings(
     body: VeyraBillingSettingsRequest,
+    request: Request,
     authorization: str = Header(default=""),
 ):
-    await _require_veyra_admin(authorization)
+    await _require_veyra_admin(request, authorization)
     return update_billing_settings(body)
 
 
-def _veyra_user_id_from_authorization(authorization: str) -> int:
+def _set_veyra_session_cookie(response: Response, token: str) -> None:
+    if not token:
+        return
+    response.set_cookie(
+        settings.veyra_session_cookie_name,
+        token,
+        max_age=settings.veyra_session_ttl_seconds,
+        path="/",
+        httponly=True,
+        secure=settings.veyra_session_cookie_secure,
+        samesite="lax",
+    )
+
+
+def _clear_veyra_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        settings.veyra_session_cookie_name,
+        path="/",
+        secure=settings.veyra_session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _veyra_session_token_from_request(request: Request, authorization: str = "") -> str:
     scheme, _, token = str(authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
+    if scheme.lower() == "bearer" and token.strip():
+        return token.strip()
+    return str(request.cookies.get(settings.veyra_session_cookie_name) or "").strip()
+
+
+def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int:
+    token = _veyra_session_token_from_request(request, authorization)
+    if not token:
         raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
     try:
-        return verify_session_token(token.strip())
+        return verify_session_token(token)
     except VeyraAuthUnauthorized as exc:
         raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Veyra session is invalid."}) from exc
     except (VeyraAuthDisabled, VeyraAuthMisconfigured) as exc:
         raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
 
 
-async def _require_veyra_admin(authorization: str):
-    user_id = _veyra_user_id_from_authorization(authorization)
-    account = await _veyra_account(user_id)
-    if not _is_veyra_admin_account(account):
-        raise HTTPException(status_code=403, detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."})
-    return account
+def _require_veyra_user_if_enabled(request: Request, authorization: str = "") -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    return _veyra_user_id_from_request(request, authorization)
 
 
-async def _veyra_account(user_id: int):
+async def _veyra_request_context(request: Request, authorization: str = "") -> dict:
+    user_id = _veyra_user_id_from_request(request, authorization)
     try:
         account = await VeyraSub2APIClient().account(user_id)
     except VeyraAuthMisconfigured as exc:
         raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
     except VeyraAuthError as exc:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
+    return {"user_id": user_id, "account": account, "is_admin": str(account.role).lower() == "admin"}
+
+
+async def _require_veyra_admin(request: Request, authorization: str = ""):
+    context = await _veyra_request_context(request, authorization)
+    account = context["account"]
+    if str(account.role).lower() != "admin":
+        raise HTTPException(status_code=403, detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."})
     return account
 
 
-def _is_veyra_admin_account(account) -> bool:
-    return str(getattr(account, "role", "") or "").lower() == "admin"
-
-
-def _with_veyra_user(body: CreateCreativeRunRequest, authorization: str) -> CreateCreativeRunRequest:
+def _with_veyra_user(body: CreateCreativeRunRequest, request: Request, authorization: str) -> CreateCreativeRunRequest:
     if not settings.veyra_auth_enabled:
         return body.model_copy(update={"veyra_user_id": None})
-    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_authorization(authorization)})
+    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_request(request, authorization)})
 
 
-def _image_job_with_veyra_user(body: CreateImageJobRequest, authorization: str) -> CreateImageJobRequest:
+def _image_job_with_veyra_user(body: CreateImageJobRequest, request: Request, authorization: str) -> CreateImageJobRequest:
     if not settings.veyra_auth_enabled:
         return body.model_copy(update={"veyra_user_id": None})
-    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_authorization(authorization)})
+    return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_request(request, authorization)})
+
+
+def _v2_output_owner_id(output_id: str) -> int | None:
+    output = repository.get_output(output_id)
+    metadata = output.metadata if output else {}
+    if not metadata:
+        from app.services.image_history import get_image_history_item
+
+        item = get_image_history_item(output_id)
+        metadata = item.metadata if item else {}
+    try:
+        owner_id = int((metadata or {}).get("veyra_user_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return owner_id if owner_id > 0 else None
+
+
+async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
+    if not settings.veyra_auth_enabled:
+        return {"user_id": None, "is_admin": False, "owner_id": _v2_output_owner_id(output_id)}
+    context = await _veyra_request_context(request, authorization)
+    owner_id = _v2_output_owner_id(output_id)
+    if context["is_admin"] or owner_id == context["user_id"] or (allow_legacy_public and owner_id is None):
+        return {**context, "owner_id": owner_id}
+    raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
 
 
 @app.post("/api/v2/creative/runs", status_code=202)
-async def create_creative_run(body: CreateCreativeRunRequest, authorization: str = Header(default="")):
-    return await creative_manager.run(_with_veyra_user(body, authorization))
+async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
+    return await creative_manager.run(_with_veyra_user(body, request, authorization))
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
-async def create_creative_run_async(body: CreateCreativeRunRequest, authorization: str = Header(default="")):
-    body = _with_veyra_user(body, authorization)
+async def create_creative_run_async(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
+    body = _with_veyra_user(body, request, authorization)
     queued = creative_manager.queue_run(body)
     enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
     return queued
 
 
 @app.post("/api/v2/uploads", response_model=CreateUploadedAssetResponse)
-def create_upload(body: CreateUploadedAssetRequest) -> CreateUploadedAssetResponse:
+def create_upload(body: CreateUploadedAssetRequest, request: Request, authorization: str = Header(default="")) -> CreateUploadedAssetResponse:
+    _require_veyra_user_if_enabled(request, authorization)
     return create_uploaded_asset(body)
 
 
 @app.put("/api/v2/uploads/{asset_id}/content")
-def put_upload_content(asset_id: str, body: AssetContentUploadRequest):
+def put_upload_content(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = store_uploaded_asset_content(asset_id, body)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
@@ -278,7 +367,8 @@ def put_upload_content(asset_id: str, body: AssetContentUploadRequest):
 
 
 @app.post("/api/v2/uploads/{asset_id}/complete")
-def complete_upload(asset_id: str):
+def complete_upload(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = complete_uploaded_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
@@ -286,7 +376,8 @@ def complete_upload(asset_id: str):
 
 
 @app.get("/api/v2/uploads/{asset_id}")
-def upload_detail(asset_id: str):
+def upload_detail(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = get_uploaded_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
@@ -294,7 +385,8 @@ def upload_detail(asset_id: str):
 
 
 @app.get("/api/v2/uploads/{asset_id}/content")
-def upload_content(asset_id: str):
+def upload_content(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = read_uploaded_asset_content(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_content_not_found", "message": "Uploaded asset content not found."})
@@ -303,32 +395,38 @@ def upload_content(asset_id: str):
 
 
 @app.get("/api/v2/orchestrator/status")
-def orchestrator_status():
+def orchestrator_status(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return get_orchestrator_status()
 
 
 @app.get("/api/v2/task-queue/status")
-def task_queue_status():
+def task_queue_status(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return task_queue_stats()
 
 
 @app.get("/api/v2/review-agent/status")
-def review_agent_status():
+def review_agent_status(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return get_visual_review_agent_status()
 
 
 @app.get("/api/v2/provider-capabilities")
-async def provider_capabilities():
+async def provider_capabilities(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return {"providers": [item.model_dump(mode="json") for item in await list_v2_image_provider_capabilities()]}
 
 
 @app.get("/api/v2/runtime/model-settings", response_model=V2RuntimeModelSettingsResponse)
-def runtime_model_settings() -> V2RuntimeModelSettingsResponse:
+def runtime_model_settings(request: Request, authorization: str = Header(default="")) -> V2RuntimeModelSettingsResponse:
+    _require_veyra_user_if_enabled(request, authorization)
     return get_runtime_model_settings()
 
 
 @app.post("/api/v2/runtime/model-settings", response_model=V2RuntimeModelSettingsResponse)
-def update_model_settings(body: V2RuntimeModelSettingsRequest) -> V2RuntimeModelSettingsResponse:
+def update_model_settings(body: V2RuntimeModelSettingsRequest, request: Request, authorization: str = Header(default="")) -> V2RuntimeModelSettingsResponse:
+    _require_veyra_user_if_enabled(request, authorization)
     updated = update_runtime_model_settings(body)
     creative_manager.refresh_runtime_config()
     refresh_visual_review_agent()
@@ -336,7 +434,8 @@ def update_model_settings(body: V2RuntimeModelSettingsRequest) -> V2RuntimeModel
 
 
 @app.get("/api/v2/creative/runs/{run_id}")
-def get_creative_run(run_id: str):
+def get_creative_run(run_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     run = get_run_snapshot(run_id) or repository.get_creative_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail={"error_code": "run_not_found", "message": "Creative run not found."})
@@ -344,12 +443,14 @@ def get_creative_run(run_id: str):
 
 
 @app.post("/api/v2/prompt-cases/search")
-def search_cases(body: SearchPromptCasesRequest):
+def search_cases(body: SearchPromptCasesRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return search_prompt_cases(body)
 
 
 @app.get("/api/v2/case-profiles/{case_id}")
-def case_profile(case_id: str):
+def case_profile(case_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     case = get_prompt_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail={"error_code": "case_not_found", "message": "Prompt case not found."})
@@ -357,7 +458,8 @@ def case_profile(case_id: str):
 
 
 @app.get("/api/v2/prompt-cases/{case_id}")
-def get_case(case_id: str):
+def get_case(case_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     case = get_prompt_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail={"error_code": "case_not_found", "message": "Prompt case not found."})
@@ -366,15 +468,19 @@ def get_case(case_id: str):
 
 @app.get("/api/v2/templates")
 def templates(
+    request: Request,
     category: str | None = None,
     use_case: str | None = None,
     limit: int = Query(default=24, ge=1, le=1000),
+    authorization: str = Header(default=""),
 ):
+    _require_veyra_user_if_enabled(request, authorization)
     return {"templates": list_templates(category=category, use_case=use_case, limit=limit)}
 
 
 @app.get("/api/v2/case-assets/{asset_path:path}")
-def case_asset(asset_path: str):
+def case_asset(asset_path: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = read_case_asset(asset_path)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "case_asset_not_found", "message": "Case asset not found."})
@@ -383,7 +489,8 @@ def case_asset(asset_path: str):
 
 
 @app.get("/api/v2/case-thumbnails/{asset_path:path}")
-def case_thumbnail(asset_path: str):
+def case_thumbnail(asset_path: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     asset = read_case_thumbnail(asset_path)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "case_thumbnail_not_found", "message": "Case thumbnail not found."})
@@ -392,12 +499,14 @@ def case_thumbnail(asset_path: str):
 
 
 @app.get("/api/v2/resource-providers")
-def resource_providers():
+def resource_providers(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     return {"providers": list_resource_providers()}
 
 
 @app.post("/api/v2/resource-providers/{provider_id}/sync", status_code=202)
-def request_provider_sync(provider_id: str, mode: str = Query(default="auto", pattern="^(auto|seed|remote)$")):
+def request_provider_sync(provider_id: str, request: Request, mode: str = Query(default="auto", pattern="^(auto|seed|remote)$"), authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     try:
         return sync_resource_provider(provider_id, mode=mode)  # type: ignore[arg-type]
     except KeyError as exc:
@@ -408,7 +517,8 @@ def request_provider_sync(provider_id: str, mode: str = Query(default="auto", pa
 
 
 @app.get("/api/v2/resource-providers/{provider_id}/sync-runs/{sync_run_id}")
-def provider_sync_run(provider_id: str, sync_run_id: str):
+def provider_sync_run(provider_id: str, sync_run_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     run = get_sync_run(sync_run_id)
     if not run or run.provider_id != provider_id:
         raise HTTPException(status_code=404, detail={"error_code": "sync_run_not_found", "message": "Sync run not found."})
@@ -416,17 +526,26 @@ def provider_sync_run(provider_id: str, sync_run_id: str):
 
 
 @app.post("/api/v2/image/jobs", status_code=202)
-async def image_job(body: CreateImageJobRequest, authorization: str = Header(default="")):
-    return await create_image_job(_image_job_with_veyra_user(body, authorization))
+async def image_job(body: CreateImageJobRequest, request: Request, authorization: str = Header(default="")):
+    return await create_image_job(_image_job_with_veyra_user(body, request, authorization))
 
 
 @app.get("/api/v2/image/history", response_model=ImageHistoryResponse)
-def image_history(limit: int = Query(default=50, ge=1, le=1000)):
-    return list_image_history(limit=limit)
+async def image_history(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+    if not settings.veyra_auth_enabled:
+        return list_image_history(limit=limit)
+    context = await _veyra_request_context(request, authorization)
+    return list_image_history(
+        limit=limit,
+        veyra_user_id=context["user_id"],
+        include_legacy_public=True,
+        include_all=context["is_admin"],
+    )
 
 
 @app.get("/api/v2/image/history/{output_id}/thumbnail")
-def image_history_thumbnail(output_id: str):
+async def image_history_thumbnail(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     thumbnail = read_history_thumbnail(output_id)
     if not thumbnail:
         raise HTTPException(status_code=404, detail={"error_code": "history_thumbnail_not_found", "message": "History thumbnail not found."})
@@ -435,7 +554,8 @@ def image_history_thumbnail(output_id: str):
 
 
 @app.delete("/api/v2/image/history/{output_id}")
-def delete_history_item(output_id: str):
+async def delete_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
     result = delete_image_history_item(output_id)
     if not result.get("ok"):
         raise HTTPException(
@@ -446,7 +566,8 @@ def delete_history_item(output_id: str):
 
 
 @app.get("/api/v2/image/jobs/{job_id}")
-def get_image_job(job_id: str):
+def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
     job = repository.get_image_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error_code": "job_not_found", "message": "Image job not found."})
@@ -454,7 +575,8 @@ def get_image_job(job_id: str):
 
 
 @app.get("/api/v2/outputs/{output_id}/download")
-def output_download(output_id: str):
+async def output_download(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     output = read_output_content(output_id)
     if not output:
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "V2 output file not found."})
@@ -463,7 +585,8 @@ def output_download(output_id: str):
 
 
 @app.post("/api/v2/outputs/{output_id}/feedback", status_code=201, response_model=FeedbackEvent)
-def output_feedback(output_id: str, body: CreateFeedbackRequest) -> FeedbackEvent:
+async def output_feedback(output_id: str, body: CreateFeedbackRequest, request: Request, authorization: str = Header(default="")) -> FeedbackEvent:
+    await _require_output_visible(request, output_id, authorization)
     if not repository.get_output(output_id):
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "Output not found."})
     event = FeedbackEvent(
@@ -477,7 +600,8 @@ def output_feedback(output_id: str, body: CreateFeedbackRequest) -> FeedbackEven
 
 
 @app.post("/api/v2/outputs/{output_id}/revisions", status_code=202)
-async def output_revision(output_id: str, body: CreateRevisionRunRequest):
+async def output_revision(output_id: str, body: CreateRevisionRunRequest, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     try:
         request = build_revision_request(output_id, body)
     except RevisionSourceError as exc:
@@ -490,7 +614,8 @@ async def output_revision(output_id: str, body: CreateRevisionRunRequest):
 
 
 @app.post("/api/v2/outputs/{output_id}/revisions/async", status_code=202)
-async def output_revision_async(output_id: str, body: CreateRevisionRunRequest):
+async def output_revision_async(output_id: str, body: CreateRevisionRunRequest, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
     try:
         request = build_revision_request(output_id, body)
     except RevisionSourceError as exc:

@@ -334,6 +334,8 @@ class ImageHistoryItem(BaseModel):
     size: str | None = None
     version_parent_id: str | None = None
     veyra_user_id: int | None = None
+    veyra_legacy_public: bool = False
+    record_label: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     source: Literal["repository", "manifest", "filesystem"] = "repository"

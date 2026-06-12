@@ -26,6 +26,7 @@ const v2ApiBase =
   window.ALCHEMY_V2_API_BASE ||
   (window.location.port === "8017" ? v2LocalApiBase : `${window.location.origin}/api/v2`);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
+const defaultVeyraLoginBaseUrl = "https://aiself.vip";
 const v2ProgressStages = [
   { key: "queued", label: "任务排队", short: "排队中", percent: 8 },
   { key: "planning", label: "中枢规划", short: "规划中", percent: 22 },
@@ -137,6 +138,10 @@ const v2State = {
   progressType: "info",
   progressNoticeKey: "",
   progressTimer: null,
+};
+
+const veyraState = {
+  authPolicy: null,
 };
 
 let providerSaveTimer = null;
@@ -301,6 +306,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindControls();
   setupH5AdvancedPanels();
   try {
+    await handleVeyraTicketFromUrl();
+    if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
     await createSession({ announce: false });
     await loadProviders();
     await refreshHistory({ silent: true });
@@ -2861,7 +2868,7 @@ function renderV2History(items) {
     const prompt = document.createElement("strong");
     prompt.textContent = cardPrompt || item.output_id;
     const details = document.createElement("span");
-    details.textContent = `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at)}`;
+    details.textContent = historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at));
     meta.append(prompt, details);
 
     const footer = document.createElement("div");
@@ -2914,7 +2921,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     url: v2MediaUrl(item.url),
     thumbnailUrl: v2MediaUrl(item.thumbnail_url || item.url),
     format: v2HistoryFormat(item),
-    meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
+    meta: historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)),
     promptText: v2PromptTextFromHistory(item),
     actions: [
       {
@@ -3094,17 +3101,88 @@ function updateV2Notice(message, type = "info") {
 }
 
 function v2HistoryPath() {
-  return getVeyraToken() ? "/veyra/history?limit=1000" : "/image/history?limit=1000";
+  return "/veyra/history?limit=1000";
 }
 
 async function loadV2HistoryResponse() {
+  return await v2Request(v2HistoryPath());
+}
+
+async function loadVeyraAuthPolicy() {
+  if (veyraState.authPolicy) return veyraState.authPolicy;
   try {
-    return await v2Request(v2HistoryPath());
+    veyraState.authPolicy = await v2Request("/veyra/auth-policy", { skipVeyraAuth: true });
+  } catch {
+    veyraState.authPolicy = {
+      enabled: false,
+      require_ui_auth: false,
+      login_base_url: defaultVeyraLoginBaseUrl,
+    };
+  }
+  return veyraState.authPolicy;
+}
+
+function veyraLoginUrl(target = "alchemy-mobile") {
+  const policy = veyraState.authPolicy || {};
+  const base = String(policy.login_base_url || defaultVeyraLoginBaseUrl).replace(/\/+$/, "");
+  const redirect = `/_veyra/return?target=${encodeURIComponent(target)}`;
+  return `${base}/login?redirect=${encodeURIComponent(redirect)}`;
+}
+
+function cleanVeyraTicketFromUrl() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("ticket")) return;
+  url.searchParams.delete("ticket");
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function handleVeyraTicketFromUrl() {
+  const ticket = new URLSearchParams(window.location.search).get("ticket");
+  if (!ticket) return;
+  try {
+    const session = await v2Request("/veyra/login", {
+      method: "POST",
+      body: { ticket },
+      skipVeyraAuth: true,
+    });
+    setVeyraToken(session.access_token || "");
+    cleanVeyraTicketFromUrl();
+    updateV2Notice("Veyra 账户已接入。", "success");
   } catch (error) {
-    if (String(error?.message || error).includes("401") && !getVeyraToken()) {
-      return v2Request("/image/history?limit=1000", { skipVeyraAuth: true });
-    }
-    throw error;
+    setVeyraToken("");
+    cleanVeyraTicketFromUrl();
+    updateV2Notice(`Veyra 登录失败：${friendlyError(error)}`, "error");
+  }
+}
+
+async function hasValidVeyraSession() {
+  if (getVeyraToken()) return true;
+  try {
+    await v2Request("/veyra/me", { skipVeyraAuth: true });
+    return true;
+  } catch {
+    setVeyraToken("");
+    return false;
+  }
+}
+
+async function enforceVeyraUiAuth({ target = "alchemy-mobile" } = {}) {
+  const policy = await loadVeyraAuthPolicy();
+  if (!policy.enabled || !policy.require_ui_auth) return false;
+  if (await hasValidVeyraSession()) return false;
+  window.location.replace(veyraLoginUrl(target));
+  return true;
+}
+
+function redirectToVeyraLogin(target = "alchemy-mobile") {
+  window.location.replace(veyraLoginUrl(target));
+}
+
+async function handleVeyraUnauthorized() {
+  setVeyraToken("");
+  const policy = await loadVeyraAuthPolicy();
+  if (policy.enabled && policy.require_ui_auth) {
+    redirectToVeyraLogin("alchemy-mobile");
   }
 }
 
@@ -3120,10 +3198,13 @@ async function v2Request(path, options = {}) {
     method: options.method || "GET",
     headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: "include",
   });
   if (!response.ok) {
     const detail = await response.text();
-    if (response.status === 401 && !options.skipVeyraAuth) setVeyraToken("");
+    if (response.status === 401 && !options.skipVeyraAuth) {
+      await handleVeyraUnauthorized();
+    }
     throw new Error(detail);
   }
   return response.json();
@@ -4456,7 +4537,18 @@ function assetPreservationLabel(value) {
 }
 
 async function refreshEvents() {
-  const response = await fetch(`/v1/sessions/${state.sessionId}/events`);
+  const headers = {};
+  const token = getVeyraToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`/v1/sessions/${state.sessionId}/events`, {
+    headers: Object.keys(headers).length ? headers : undefined,
+    credentials: "include",
+  });
+  if (response.status === 401) {
+    await handleVeyraUnauthorized();
+    throw new Error("Veyra session is required.");
+  }
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const text = await response.text();
   const rows = text
     .trim()
@@ -4533,13 +4625,24 @@ function updateRevisionState() {
 }
 
 async function request(path, options = {}) {
+  const headers = {};
+  if (options.body) headers["Content-Type"] = "application/json";
+  if (options.headers) Object.assign(headers, options.headers);
+  const token = getVeyraToken();
+  if (token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const response = await fetch(path, {
     method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: "include",
   });
   if (!response.ok) {
     const detail = await response.text();
+    if (response.status === 401 && !options.skipVeyraAuth) {
+      await handleVeyraUnauthorized();
+    }
     throw new Error(detail);
   }
   return response.json();
@@ -4602,9 +4705,20 @@ function formatDate(value) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function historyRecordLabel(item) {
+  if (item?.record_label) return item.record_label;
+  if (item?.metadata?.record_label) return item.metadata.record_label;
+  if (item?.veyra_legacy_public || item?.metadata?.veyra_legacy_public) return "旧版生图记录";
+  return "";
+}
+
+function historyDetailText(...parts) {
+  return parts.filter(Boolean).join(" · ");
+}
+
 function historyMetaText(item, model = item.model || item.source) {
   const providerText = historyProviderResultText(item);
-  const parts = [providerText || model];
+  const parts = [historyRecordLabel(item), providerText || model];
   const intensity = item.work_intensity_label || intensityMap[item.work_intensity]?.label;
   if (intensity) parts.push(`强度：${intensity}`);
   parts.push(formatDate(item.created_at || item.updated_at));
