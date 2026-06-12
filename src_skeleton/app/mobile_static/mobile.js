@@ -2915,6 +2915,15 @@ function isRenderableV2HistoryImage(item) {
 
 function openV2HistoryLightbox(item, index = 0, card = null) {
   const cardPrompt = v2HistoryCardPrompt(item);
+  const actions = historyItemCanDelete(item)
+    ? [
+        {
+          label: "删除",
+          tone: "danger",
+          run: () => deleteV2HistoryItem(item, card),
+        },
+      ]
+    : [];
   openImageLightbox({
     id: item.output_id,
     title: cardPrompt ? cardPrompt.slice(0, 34) : `2.0 历史图片 ${index + 1}`,
@@ -2923,17 +2932,15 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     format: v2HistoryFormat(item),
     meta: historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)),
     promptText: v2PromptTextFromHistory(item),
-    actions: [
-      {
-        label: "删除",
-        tone: "danger",
-        run: () => deleteV2HistoryItem(item, card),
-      },
-    ],
+    actions,
   });
 }
 
 async function deleteV2HistoryItem(item, card) {
+  if (!historyItemCanDelete(item)) {
+    updateV2Notice("这条历史记录不可删除。", "warning");
+    return;
+  }
   const confirmed = window.confirm("删除后这张图片将从 2.0 历史记录中移除。确认删除？");
   if (!confirmed) return;
   const deleteButton = card?.querySelector(".delete-link");
@@ -3953,6 +3960,10 @@ function historyTime(item) {
 }
 
 async function deleteHistoryItem(item, card) {
+  if (!historyItemCanDelete(item)) {
+    showNotice("这条历史记录不可删除。", "warning");
+    return;
+  }
   const confirmed = window.confirm("删除后这张图片将从历史记录中移除，并删除本地文件。确认删除？");
   if (!confirmed) return;
   const deleteButton = card.querySelector(".delete-link");
@@ -4001,11 +4012,13 @@ function selectHistoryItem(item, card) {
       },
     });
   }
-  actions.push({
-    label: "删除",
-    tone: "danger",
-    run: () => deleteHistoryItem(item, card),
-  });
+  if (historyItemCanDelete(item)) {
+    actions.push({
+      label: "删除",
+      tone: "danger",
+      run: () => deleteHistoryItem(item, card),
+    });
+  }
   openImageLightbox({
     id: item.id,
     title: (item.original_prompt || item.prompt) ? (item.original_prompt || item.prompt).slice(0, 34) : "历史图片",
@@ -4710,6 +4723,10 @@ function historyRecordLabel(item) {
   if (item?.metadata?.record_label) return item.metadata.record_label;
   if (item?.veyra_legacy_public || item?.metadata?.veyra_legacy_public) return "旧版生图记录";
   return "";
+}
+
+function historyItemCanDelete(item) {
+  return item?.can_delete === true || item?.metadata?.can_delete === true;
 }
 
 function historyDetailText(...parts) {

@@ -267,6 +267,9 @@ def test_veyra_history_allows_legacy_public_for_signed_in_user(tmp_path, monkeyp
     assert legacy["veyra_legacy_public"] is True
     assert legacy["record_label"] == "旧版生图记录"
     assert legacy["metadata"]["record_label"] == "旧版生图记录"
+    assert legacy["can_delete"] is False
+    own = next(item for item in own_history.json()["items"] if item["output_id"] == "out_1")
+    assert own["can_delete"] is True
 
 
 def test_veyra_history_admin_can_see_all_users(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,6 +301,48 @@ def test_veyra_history_admin_can_see_all_users(tmp_path, monkeypatch: pytest.Mon
 
     assert all_history.status_code == 200
     assert all_history.json()["total"] == 3
+    assert {item["output_id"]: item["can_delete"] for item in all_history.json()["items"]} == {
+        "out_1": True,
+        "out_2": True,
+        "out_legacy": True,
+    }
+
+
+def test_veyra_history_delete_permissions_enforced(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
+    object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
+    object.__setattr__(settings, "storage_dir", tmp_path / "storage")
+    settings.image_history_path.write_text(
+        "\n".join(
+            [
+                _history_line("out_1", 42),
+                _history_line("out_legacy", None),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def fake_account(self, user_id: int):
+        role = "admin" if user_id == 1 else "user"
+        return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role=role, balance=9.5, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
+    client = TestClient(app)
+    user_token = issue_session_token(42)
+    admin_token = issue_session_token(1)
+
+    public_delete = client.delete("/api/v2/image/history/out_legacy", headers={"Authorization": f"Bearer {user_token}"})
+    own_delete = client.delete("/api/v2/image/history/out_1", headers={"Authorization": f"Bearer {user_token}"})
+    admin_delete = client.delete("/api/v2/image/history/out_legacy", headers={"Authorization": f"Bearer {admin_token}"})
+
+    assert public_delete.status_code == 403
+    assert own_delete.status_code == 200
+    assert admin_delete.status_code == 200
+    assert settings.image_history_path.read_text(encoding="utf-8").strip() == ""
 
 
 def test_veyra_usage_filters_by_session_user(tmp_path) -> None:

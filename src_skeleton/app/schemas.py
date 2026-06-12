@@ -336,6 +336,7 @@ class ImageHistoryItem(BaseModel):
     veyra_user_id: int | None = None
     veyra_legacy_public: bool = False
     record_label: str | None = None
+    can_delete: bool = False
     created_at: str | None = None
     updated_at: str | None = None
     source: Literal["repository", "manifest", "filesystem"] = "repository"

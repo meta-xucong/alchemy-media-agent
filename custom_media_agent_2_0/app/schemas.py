@@ -534,6 +534,7 @@ class ImageHistoryItem(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     veyra_legacy_public: bool = False
     record_label: str | None = None
+    can_delete: bool = False
     created_at: datetime
     updated_at: datetime
 

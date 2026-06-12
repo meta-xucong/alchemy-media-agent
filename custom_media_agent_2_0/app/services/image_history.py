@@ -63,7 +63,11 @@ def list_image_history(
                 continue
         elif not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
             continue
-        item = _with_veyra_history_label(_normalize_thumbnail_url(item))
+        item = _with_veyra_history_access(
+            _normalize_thumbnail_url(item),
+            veyra_user_id=veyra_user_id,
+            include_all=include_all,
+        )
         existing = records_by_output.get(item.output_id)
         if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
             records_by_output[item.output_id] = item
@@ -185,9 +189,16 @@ def _normalize_thumbnail_url(item: ImageHistoryItem) -> ImageHistoryItem:
     return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
 
 
-def _with_veyra_history_label(item: ImageHistoryItem) -> ImageHistoryItem:
-    if _veyra_user_id(item.metadata) is not None:
-        return item
+def _with_veyra_history_access(
+    item: ImageHistoryItem,
+    *,
+    veyra_user_id: int | None,
+    include_all: bool,
+) -> ImageHistoryItem:
+    owner_id = _veyra_user_id(item.metadata)
+    can_delete = _can_delete_veyra_history(owner_id, veyra_user_id=veyra_user_id, include_all=include_all)
+    if owner_id is not None:
+        return item.model_copy(update={"can_delete": can_delete})
     metadata = dict(item.metadata)
     metadata.setdefault("veyra_legacy_public", True)
     metadata.setdefault("record_label", "旧版生图记录")
@@ -196,8 +207,17 @@ def _with_veyra_history_label(item: ImageHistoryItem) -> ImageHistoryItem:
             "metadata": metadata,
             "veyra_legacy_public": True,
             "record_label": "旧版生图记录",
+            "can_delete": can_delete,
         }
     )
+
+
+def _can_delete_veyra_history(owner_id: int | None, *, veyra_user_id: int | None, include_all: bool) -> bool:
+    if not settings.veyra_auth_enabled:
+        return True
+    if include_all:
+        return True
+    return owner_id is not None and owner_id == veyra_user_id
 
 
 def _thumbnail_endpoint(output_id: str) -> str:

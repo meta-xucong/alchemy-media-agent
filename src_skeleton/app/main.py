@@ -430,7 +430,7 @@ async def list_image_history(
             known_output_ids.add(record["id"])
             items.append(ImageHistoryItem(**record))
 
-    items = [_with_veyra_history_label(item) for item in items if _history_visible_to_veyra(item, veyra_context)]
+    items = [_with_veyra_history_access(item, veyra_context) for item in items if _history_visible_to_veyra(item, veyra_context)]
     items.sort(key=_history_sort_key, reverse=True)
     return ImageHistoryResponse(items=items[:limit], total=len(items))
 
@@ -1051,10 +1051,20 @@ def _history_item_veyra_user_id(item: ImageHistoryItem) -> int | None:
     return _positive_int_or_none(getattr(item, "veyra_user_id", None))
 
 
-def _with_veyra_history_label(item: ImageHistoryItem) -> ImageHistoryItem:
-    if _history_item_veyra_user_id(item) is not None:
-        return item
-    return item.model_copy(update={"veyra_legacy_public": True, "record_label": "旧版生图记录"})
+def _with_veyra_history_access(item: ImageHistoryItem, context: dict) -> ImageHistoryItem:
+    owner_id = _history_item_veyra_user_id(item)
+    can_delete = _history_deletable_to_veyra(owner_id, context)
+    if owner_id is not None:
+        return item.model_copy(update={"can_delete": can_delete})
+    return item.model_copy(update={"veyra_legacy_public": True, "record_label": "旧版生图记录", "can_delete": can_delete})
+
+
+def _history_deletable_to_veyra(owner_id: int | None, context: dict) -> bool:
+    if not settings.veyra_auth_enabled:
+        return True
+    if context.get("is_admin"):
+        return True
+    return owner_id is not None and owner_id == context.get("user_id")
 
 
 def _history_output_veyra_user_id(metadata: dict | None) -> int | None:
