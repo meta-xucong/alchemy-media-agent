@@ -36,6 +36,7 @@
 - `docs/28_移动H5前端交互重构开发文档.md`：移动 H5 前端信息架构重构方案，把高级设置、案例库、历史、运行详情和设置页改为更适合手机操作的独立层级。
 - `docs/29_Veyra_Sub2API_Alchemy_联动发布方案.md`：Veyra / sub2api / Alchemy 联动发布、账号桥、扣费桥和 VPS 发布边界。
 - `docs/30_生产登录门禁与来源回跳开发文档.md`：Alchemy 生产强制登录、匿名接口收紧、Cookie 会话门禁和按来源登录回跳方案。
+- `docs/31_V2案例库加载与缩略图优化开发文档.md`：V2 案例库轻量索引、分页加载和高清缩略图分档方案。
 - `specs/openapi.yaml`：第一版后端 API 草案。
 - `diagrams/*.mmd`：Mermaid 架构图。
 - `src_skeleton/`：最小代码骨架，方便研发快速起项目。

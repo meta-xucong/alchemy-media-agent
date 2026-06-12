@@ -11,8 +11,12 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app.config import settings
 from app.repositories import repository
 
-THUMBNAIL_SIZE = (360, 450)
-THUMBNAIL_QUALITY = 76
+DEFAULT_CASE_THUMBNAIL_VARIANT = "grid"
+CASE_THUMBNAIL_VERSION = "v2"
+CASE_THUMBNAIL_VARIANTS = {
+    "grid": {"size": (720, 900), "quality": 84},
+    "preview": {"size": (1280, 1600), "quality": 88},
+}
 
 
 def read_case_asset(asset_path: str) -> tuple[bytes, str] | None:
@@ -26,21 +30,24 @@ def read_case_asset(asset_path: str) -> tuple[bytes, str] | None:
     return content, media_type
 
 
-def read_case_thumbnail(asset_path: str) -> tuple[bytes, str] | None:
+def read_case_thumbnail(asset_path: str, variant: str = DEFAULT_CASE_THUMBNAIL_VARIANT) -> tuple[bytes, str] | None:
     normalized_path = _normalize_asset_path(asset_path)
     if not normalized_path:
+        return None
+    thumbnail_variant = _thumbnail_variant(variant)
+    if not thumbnail_variant:
         return None
     snapshot_path = _active_snapshot_path()
     if not snapshot_path or not snapshot_path.exists():
         return None
-    cache_path = _thumbnail_cache_path(normalized_path, snapshot_path)
+    cache_path = _thumbnail_cache_path(normalized_path, snapshot_path, thumbnail_variant)
     if cache_path.exists():
         return cache_path.read_bytes(), "image/webp"
     original = _read_asset_bytes(normalized_path, snapshot_path=snapshot_path)
     if original is None:
         return None
     try:
-        thumbnail = _make_thumbnail(original)
+        thumbnail = _make_thumbnail(original, thumbnail_variant)
     except (OSError, UnidentifiedImageError, ValueError):
         return None
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,16 +80,20 @@ def _read_asset_bytes(asset_path: str, snapshot_path: Path | None = None) -> byt
             return file.read()
 
 
-def _thumbnail_cache_path(asset_path: str, snapshot_path: Path) -> Path:
+def _thumbnail_cache_path(asset_path: str, snapshot_path: Path, variant: str) -> Path:
     index_version = repository.get_active_index_version() or snapshot_path.stem
-    digest = hashlib.sha1(f"{index_version}:{asset_path}:{THUMBNAIL_SIZE}".encode("utf-8")).hexdigest()
+    spec = CASE_THUMBNAIL_VARIANTS[variant]
+    digest = hashlib.sha1(
+        f"{CASE_THUMBNAIL_VERSION}:{index_version}:{asset_path}:{variant}:{spec['size']}:{spec['quality']}".encode("utf-8")
+    ).hexdigest()
     return settings.case_thumbnail_dir / digest[:2] / f"{digest}.webp"
 
 
-def _make_thumbnail(content: bytes) -> bytes:
+def _make_thumbnail(content: bytes, variant: str = DEFAULT_CASE_THUMBNAIL_VARIANT) -> bytes:
+    spec = CASE_THUMBNAIL_VARIANTS[variant]
     with Image.open(io.BytesIO(content)) as image:
         image = ImageOps.exif_transpose(image)
-        image.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+        image.thumbnail(spec["size"], Image.Resampling.LANCZOS)
         if image.mode in {"RGBA", "LA", "P"}:
             canvas = Image.new("RGB", image.size, (255, 255, 255))
             if image.mode == "P":
@@ -92,8 +103,13 @@ def _make_thumbnail(content: bytes) -> bytes:
         else:
             image = image.convert("RGB")
         output = io.BytesIO()
-        image.save(output, format="WEBP", quality=THUMBNAIL_QUALITY, method=6)
+        image.save(output, format="WEBP", quality=spec["quality"], method=6)
         return output.getvalue()
+
+
+def _thumbnail_variant(variant: str) -> str | None:
+    normalized = (variant or DEFAULT_CASE_THUMBNAIL_VARIANT).strip().lower()
+    return normalized if normalized in CASE_THUMBNAIL_VARIANTS else None
 
 
 def _active_snapshot_path() -> Path | None:

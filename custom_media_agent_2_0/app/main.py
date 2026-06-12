@@ -30,7 +30,7 @@ from app.schemas import (
 )
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_assets import read_case_asset, read_case_thumbnail
-from app.services.case_intelligence import build_case_profile, get_prompt_case, list_templates, search_prompt_cases
+from app.services.case_intelligence import build_case_profile, get_prompt_case, list_template_index, list_templates, list_templates_page, search_prompt_cases
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
 from app.services.image_history import delete_image_history_item, list_image_history
@@ -499,6 +499,26 @@ def templates(
     return {"templates": list_templates(category=category, use_case=use_case, limit=limit)}
 
 
+@app.get("/api/v2/templates/index")
+def templates_index(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return list_template_index()
+
+
+@app.get("/api/v2/templates/page")
+def templates_page(
+    request: Request,
+    category: str | None = None,
+    use_case: str | None = None,
+    facet: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=24, ge=1, le=96),
+    authorization: str = Header(default=""),
+):
+    _require_veyra_user_if_enabled(request, authorization)
+    return list_templates_page(category=category, use_case=use_case, facet=facet, cursor=cursor, limit=limit)
+
+
 @app.get("/api/v2/case-assets/{asset_path:path}")
 def case_asset(asset_path: str, request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
@@ -512,11 +532,21 @@ def case_asset(asset_path: str, request: Request, authorization: str = Header(de
 @app.get("/api/v2/case-thumbnails/{asset_path:path}")
 def case_thumbnail(asset_path: str, request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
-    asset = read_case_thumbnail(asset_path)
+    variant, normalized_asset_path = _case_thumbnail_request(asset_path)
+    asset = read_case_thumbnail(normalized_asset_path, variant=variant)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "case_thumbnail_not_found", "message": "Case thumbnail not found."})
     content, media_type = asset
     return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+def _case_thumbnail_request(asset_path: str) -> tuple[str, str]:
+    normalized = (asset_path or "").replace("\\", "/").lstrip("/")
+    for variant in ("grid", "preview"):
+        prefix = f"{variant}/"
+        if normalized.startswith(prefix):
+            return variant, normalized[len(prefix) :]
+    return "grid", normalized
 
 
 @app.get("/api/v2/resource-providers")

@@ -638,15 +638,98 @@ def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesR
     )
 
 
+def list_template_index() -> dict:
+    cases = _sorted_template_cases()
+    categories = _count_case_values(cases, lambda case: [case.category] if case.category else [])
+    style_tags = _count_case_values(cases, lambda case: case.style_tags)
+    use_case_tags = _count_case_values(cases, lambda case: case.use_case_tags)
+    facets = _count_case_values(
+        cases,
+        lambda case: [case.category, *case.style_tags, *case.use_case_tags],
+    )
+    return {
+        "total": len(cases),
+        "index_version": repository.get_active_index_version(),
+        "facets": facets,
+        "categories": categories,
+        "style_tags": style_tags,
+        "use_case_tags": use_case_tags,
+    }
+
+
+def list_templates_page(
+    *,
+    category: str | None = None,
+    use_case: str | None = None,
+    facet: str | None = None,
+    cursor: str | None = None,
+    limit: int = 24,
+) -> dict:
+    cases = _filtered_template_cases(category=category, use_case=use_case, facet=facet)
+    start = _cursor_offset(cursor)
+    end = min(start + limit, len(cases))
+    next_cursor = str(end) if end < len(cases) else None
+    return {
+        "items": [_case_summary(case, score=round(case.quality_score, 4), why_selected="template-ready case") for case in cases[start:end]],
+        "total": len(cases),
+        "limit": limit,
+        "cursor": str(start),
+        "next_cursor": next_cursor,
+        "has_more": next_cursor is not None,
+        "index_version": repository.get_active_index_version(),
+    }
+
+
 def list_templates(category: str | None = None, use_case: str | None = None, limit: int = 24) -> list[PromptCaseSummary]:
+    cases = _filtered_template_cases(category=category, use_case=use_case)
+    return [_case_summary(case, score=round(case.quality_score, 4), why_selected="template-ready case") for case in cases[:limit]]
+
+
+def _sorted_template_cases() -> list[PromptCase]:
     bootstrap_v2_repository(seed_cases=True)
     cases = repository.list_cases(active_only=True)
+    cases.sort(key=lambda case: (-case.quality_score, case.category, case.title, case.case_id))
+    return cases
+
+
+def _filtered_template_cases(
+    *,
+    category: str | None = None,
+    use_case: str | None = None,
+    facet: str | None = None,
+) -> list[PromptCase]:
+    cases = _sorted_template_cases()
     if category:
         cases = [case for case in cases if case.category == category]
     if use_case:
         cases = [case for case in cases if use_case in case.use_case_tags]
-    cases.sort(key=lambda case: (-case.quality_score, case.category, case.title, case.case_id))
-    return [_case_summary(case, score=round(case.quality_score, 4), why_selected="template-ready case") for case in cases[:limit]]
+    normalized_facet = (facet or "").strip()
+    if normalized_facet and normalized_facet != "all":
+        cases = [case for case in cases if _case_has_facet(case, normalized_facet)]
+    return cases
+
+
+def _case_has_facet(case: PromptCase, facet: str) -> bool:
+    return facet in {case.category, *case.style_tags, *case.use_case_tags}
+
+
+def _count_case_values(cases: list[PromptCase], values_for_case) -> list[dict[str, int | str]]:
+    counts: Counter[str] = Counter()
+    for case in cases:
+        for value in set(values_for_case(case)):
+            if value:
+                counts[str(value)] += 1
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _cursor_offset(cursor: str | None) -> int:
+    try:
+        return max(0, int(str(cursor or "0")))
+    except (TypeError, ValueError):
+        return 0
 
 
 def get_prompt_case(case_id: str) -> PromptCase | None:

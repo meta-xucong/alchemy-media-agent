@@ -27,7 +27,7 @@ const coffeeSampleCount = "4";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
 const heroHistoryPageSize = 8;
-const v2TemplatePageSize = 48;
+const v2TemplatePageSize = 24;
 const v2HistoryPageSize = 24;
 const v2RunLongWaitAttempt = 120;
 const v2LocalApiBase = "http://127.0.0.1:8020/api/v2";
@@ -136,6 +136,11 @@ const v2State = {
   imageProviderCapabilities: [],
   orchestratorStatus: null,
   modelSettings: null,
+  templateIndex: null,
+  templateTotal: 0,
+  templateNextCursor: null,
+  templateHasMore: false,
+  templateLoadingMore: false,
   templates: [],
   visibleTemplates: [],
   history: [],
@@ -1137,11 +1142,12 @@ async function initV2({ silent = true, force = false } = {}) {
   toggleV2Loading(true);
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
   try {
-    const [health, providersResponse, imageProviderCapabilities, templatesResponse, historyResponse, orchestratorStatus, modelSettings] = await Promise.all([
+    const [health, providersResponse, imageProviderCapabilities, templateIndexResponse, templatesPageResponse, historyResponse, orchestratorStatus, modelSettings] = await Promise.all([
       v2Request("/health"),
       v2Request("/resource-providers"),
       v2Request("/provider-capabilities"),
-      v2Request("/templates?limit=1000"),
+      v2Request("/templates/index"),
+      v2Request(v2TemplatePageEndpoint()),
       loadV2HistoryResponse(),
       v2Request("/orchestrator/status"),
       v2Request("/runtime/model-settings"),
@@ -1151,15 +1157,14 @@ async function initV2({ silent = true, force = false } = {}) {
     v2State.imageProviderCapabilities = imageProviderCapabilities.providers || [];
     v2State.orchestratorStatus = orchestratorStatus;
     v2State.modelSettings = modelSettings;
-    v2State.templates = templatesResponse.templates || [];
-    v2State.templateRenderLimit = v2TemplatePageSize;
+    applyV2TemplateIndex(templateIndexResponse);
+    applyV2TemplatePage(templatesPageResponse, { reset: true });
     v2State.historyRenderLimit = v2HistoryPageSize;
-    v2State.visibleTemplates = v2State.templates;
     v2State.history = historyResponse.items || [];
     v2State.loaded = true;
     renderV2Health(health);
     renderV2Providers(v2State.providers);
-    renderV2CaseFacets(v2State.templates);
+    renderV2CaseFacets();
     renderV2Templates(v2State.visibleTemplates);
     renderV2History(v2State.history);
     if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
@@ -1457,6 +1462,71 @@ async function syncV2Provider(mode) {
   }
 }
 
+function applyV2TemplateIndex(index) {
+  v2State.templateIndex = index || null;
+  v2State.templateTotal = Number(index?.total || 0);
+  if (index?.index_version && els.v2IndexState) {
+    els.v2IndexState.textContent = index.index_version;
+  }
+}
+
+function applyV2TemplatePage(page, { reset = false } = {}) {
+  const items = page?.items || [];
+  const nextTemplates = reset ? [] : [...v2State.templates];
+  const seen = new Set(nextTemplates.map((item) => item.case_id));
+  items.forEach((item) => {
+    if (!seen.has(item.case_id)) {
+      nextTemplates.push(item);
+      seen.add(item.case_id);
+    }
+  });
+  v2State.templates = nextTemplates;
+  v2State.visibleTemplates = nextTemplates;
+  v2State.templateTotal = Number(page?.total ?? v2State.templateTotal ?? nextTemplates.length);
+  v2State.templateNextCursor = page?.next_cursor || null;
+  v2State.templateHasMore = Boolean(page?.has_more);
+  v2State.templateRenderLimit = reset ? v2TemplatePageSize : nextTemplates.length;
+}
+
+function v2TemplatePageEndpoint({ cursor = null, facet = v2State.activeCaseFacet, limit = v2TemplatePageSize } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (cursor) params.set("cursor", cursor);
+  if (facet && facet !== "all") params.set("facet", facet);
+  return `/templates/page?${params.toString()}`;
+}
+
+async function loadV2TemplatePage({ reset = false, refreshIndex = false, silent = true } = {}) {
+  if (v2State.templateLoadingMore) return;
+  if (!reset && !v2State.templateHasMore) return;
+  v2State.templateLoadingMore = true;
+  if (!reset) renderV2Templates(v2State.visibleTemplates);
+  let pageLoaded = false;
+  try {
+    if (refreshIndex) {
+      applyV2TemplateIndex(await v2Request("/templates/index"));
+    }
+    const page = await v2Request(
+      v2TemplatePageEndpoint({
+        cursor: reset ? null : v2State.templateNextCursor,
+      })
+    );
+    applyV2TemplatePage(page, { reset });
+    pageLoaded = true;
+    if (!silent) {
+      updateV2Notice(`已加载 ${v2State.templates.length} / ${v2State.templateTotal || v2State.templates.length} 个案例。`, "success");
+    }
+  } catch (error) {
+    updateV2Notice(`案例加载失败：${friendlyError(error)}`, "error");
+  } finally {
+    v2State.templateLoadingMore = false;
+    if (pageLoaded || !reset) {
+      renderV2CaseFacets();
+      renderV2Templates(v2State.visibleTemplates);
+    }
+  }
+}
+
 async function loadV2History({ silent = true } = {}) {
   if (!els.v2HistoryGrid) return;
   if (!silent) updateV2Notice("正在刷新 2.0 历史。", "info");
@@ -1482,8 +1552,8 @@ async function searchV2Templates() {
   try {
     v2State.caseSearchQuery = query;
     if (!query) {
-      const response = await v2Request("/templates?limit=1000");
-      v2State.templates = response.templates || [];
+      v2State.activeCaseFacet = "all";
+      await loadV2TemplatePage({ reset: true, refreshIndex: true, silent: true });
     } else {
       const response = await v2Request("/prompt-cases/search", {
         method: "POST",
@@ -1495,16 +1565,19 @@ async function searchV2Templates() {
         },
       });
       v2State.templates = response.cases || [];
+      v2State.templateTotal = v2State.templates.length;
+      v2State.templateNextCursor = null;
+      v2State.templateHasMore = false;
+      v2State.activeCaseFacet = "all";
+      v2State.templateRenderLimit = v2TemplatePageSize;
+      v2State.visibleTemplates = v2State.templates;
+      renderV2CaseFacets();
+      renderV2Templates(v2State.visibleTemplates);
     }
-    v2State.activeCaseFacet = "all";
-    v2State.templateRenderLimit = v2TemplatePageSize;
-    v2State.visibleTemplates = v2State.templates;
-    renderV2CaseFacets(v2State.templates);
-    renderV2Templates(v2State.visibleTemplates);
     if (query && v2State.visibleTemplates.length === 0) {
       updateV2Notice("没有匹配到相关案例。可以换一个更宽泛的描述，比如用途、主体、风格或关键材质。", "warning");
     } else {
-      updateV2Notice(query ? `已按相关度找到 ${v2State.visibleTemplates.length} 个案例。` : `已展示 ${v2State.visibleTemplates.length} 个案例。`, "success");
+      updateV2Notice(query ? `已按相关度找到 ${v2State.visibleTemplates.length} 个案例。` : `已展示 ${v2State.templates.length} / ${v2State.templateTotal || v2State.templates.length} 个案例。`, "success");
     }
   } catch (error) {
     updateV2Notice(`案例匹配失败：${friendlyError(error)}`, "error");
@@ -1531,22 +1604,28 @@ function setV2CaseSearchThinking(isLoading, query = "") {
   }
 }
 
-function renderV2CaseFacets(templates) {
+function renderV2CaseFacets() {
   if (!els.v2CaseFacetBar) return;
+  const indexFacets = !v2State.caseSearchQuery && Array.isArray(v2State.templateIndex?.facets) ? v2State.templateIndex.facets : [];
+  const facets = indexFacets.length
+    ? indexFacets.map((item) => [item.value, item.count]).slice(0, 28)
+    : v2LocalFacetCounts(v2State.templates).slice(0, 28);
+  els.v2CaseFacetBar.innerHTML = "";
+  const allCount = v2State.caseSearchQuery ? v2State.templates.length : Number(v2State.templateIndex?.total || v2State.templateTotal || v2State.templates.length);
+  const allButton = v2FacetButton("全部", "all", allCount);
+  els.v2CaseFacetBar.appendChild(allButton);
+  facets.forEach(([tag, count]) => {
+    els.v2CaseFacetBar.appendChild(v2FacetButton(v2DisplayLabel(tag), tag, count));
+  });
+}
+
+function v2LocalFacetCounts(templates) {
   const counts = new Map();
   templates.forEach((template) => {
     const templateTags = new Set([template.category, ...(template.style_tags || []), ...(template.use_case_tags || [])].filter(Boolean));
     templateTags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1));
   });
-  const facets = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 28);
-  els.v2CaseFacetBar.innerHTML = "";
-  const allButton = v2FacetButton("全部", "all", templates.length);
-  els.v2CaseFacetBar.appendChild(allButton);
-  facets.forEach(([tag, count]) => {
-    els.v2CaseFacetBar.appendChild(v2FacetButton(v2DisplayLabel(tag), tag, count));
-  });
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
 function v2FacetButton(label, value, count) {
@@ -1561,26 +1640,38 @@ function v2FacetButton(label, value, count) {
   return button;
 }
 
-function applyV2CaseFacet() {
-  const facet = v2State.activeCaseFacet;
-  v2State.visibleTemplates =
-    facet === "all"
-      ? v2State.templates
-      : v2State.templates.filter((template) =>
-          [template.category, ...(template.style_tags || []), ...(template.use_case_tags || [])].includes(facet)
-        );
-  v2State.templateRenderLimit = v2TemplatePageSize;
-  renderV2CaseFacets(v2State.templates);
-  renderV2Templates(v2State.visibleTemplates);
-  updateV2Notice(v2State.visibleTemplates.length ? `当前显示 ${v2State.visibleTemplates.length} 个案例。` : "这个分类下没有匹配案例。", v2State.visibleTemplates.length ? "success" : "warning");
+async function applyV2CaseFacet() {
+  if (v2State.caseSearchQuery) {
+    const facet = v2State.activeCaseFacet;
+    v2State.visibleTemplates =
+      facet === "all"
+        ? v2State.templates
+        : v2State.templates.filter((template) =>
+            [template.category, ...(template.style_tags || []), ...(template.use_case_tags || [])].includes(facet)
+          );
+    v2State.templateRenderLimit = v2TemplatePageSize;
+    renderV2CaseFacets();
+    renderV2Templates(v2State.visibleTemplates);
+    updateV2Notice(v2State.visibleTemplates.length ? `当前显示 ${v2State.visibleTemplates.length} 个案例。` : "这个分类下没有匹配案例。", v2State.visibleTemplates.length ? "success" : "warning");
+    return;
+  }
+  toggleV2Loading(true);
+  try {
+    await loadV2TemplatePage({ reset: true, silent: true });
+    updateV2Notice(v2State.visibleTemplates.length ? `当前显示 ${v2State.visibleTemplates.length} / ${v2State.templateTotal || v2State.visibleTemplates.length} 个案例。` : "这个分类下没有匹配案例。", v2State.visibleTemplates.length ? "success" : "warning");
+  } finally {
+    toggleV2Loading(false);
+  }
 }
 
 function renderV2Templates(templates) {
   if (!els.v2TemplateGrid) return;
   els.v2TemplateGrid.innerHTML = "";
-  const renderLimit = Math.min(v2State.templateRenderLimit, templates.length);
+  const isSearchMode = Boolean(v2State.caseSearchQuery);
+  const renderLimit = isSearchMode ? Math.min(v2State.templateRenderLimit, templates.length) : templates.length;
   const renderedTemplates = templates.slice(0, renderLimit);
-  els.v2TemplateCount.textContent = templates.length ? `${renderLimit}/${templates.length}` : "0";
+  const total = isSearchMode ? templates.length : v2State.templateTotal || templates.length;
+  els.v2TemplateCount.textContent = total ? `${renderLimit}/${total}` : "0";
   els.v2TemplateGrid.classList.toggle("empty-v2-list", templates.length === 0);
   els.v2TemplateGrid.classList.toggle("has-empty-message", templates.length === 0);
   if (templates.length === 0) {
@@ -1662,18 +1753,23 @@ function renderV2Templates(templates) {
     card.append(preview, body);
     els.v2TemplateGrid.appendChild(card);
   });
-  if (renderLimit < templates.length) {
+  if ((isSearchMode && renderLimit < templates.length) || (!isSearchMode && v2State.templateHasMore)) {
     const loadMore = document.createElement("article");
     loadMore.className = "v2-template-load-more";
     const text = document.createElement("span");
-    text.textContent = `已加载 ${renderLimit} / ${templates.length}`;
+    text.textContent = `已加载 ${renderLimit} / ${total}`;
     const button = document.createElement("button");
     button.className = "button secondary";
     button.type = "button";
-    button.textContent = "加载更多案例";
+    button.textContent = v2State.templateLoadingMore ? "加载中..." : "加载更多案例";
+    button.disabled = v2State.templateLoadingMore;
     button.addEventListener("click", () => {
-      v2State.templateRenderLimit = Math.min(v2State.templateRenderLimit + v2TemplatePageSize, templates.length);
-      renderV2Templates(templates);
+      if (isSearchMode) {
+        v2State.templateRenderLimit = Math.min(v2State.templateRenderLimit + v2TemplatePageSize, templates.length);
+        renderV2Templates(templates);
+        return;
+      }
+      loadV2TemplatePage({ silent: false });
     });
     loadMore.append(text, button);
     els.v2TemplateGrid.appendChild(loadMore);
@@ -1712,21 +1808,31 @@ function v2ReasonLabel(value) {
 
 function v2CasePreviewUrl(url) {
   if (!url) return "";
-  if (url.startsWith("/api/v2/")) return v2MediaUrl(url);
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-assets/${encodeV2CaseAssetPath(assetPath)}`;
+  if (assetPath) return `${v2ApiBase}/case-thumbnails/preview/${encodeV2CaseAssetPath(assetPath)}`;
+  if (url.startsWith("/api/v2/")) return v2MediaUrl(url);
   return url;
 }
 
-function v2CaseThumbnailUrl(url) {
-  if (url?.startsWith("/api/v2/")) return v2MediaUrl(url);
+function v2CaseThumbnailUrl(url, variant = "grid") {
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-thumbnails/${encodeV2CaseAssetPath(assetPath)}`;
+  if (assetPath) return `${v2ApiBase}/case-thumbnails/${variant}/${encodeV2CaseAssetPath(assetPath)}`;
+  if (url?.startsWith("/api/v2/")) return v2MediaUrl(url);
   return url;
 }
 
 function v2CaseAssetPath(url) {
   if (!url) return "";
+  const normalizedUrl = String(url);
+  const thumbnailMarker = "/case-thumbnails/";
+  if (normalizedUrl.includes(thumbnailMarker)) {
+    const thumbnailPath = normalizedUrl.split(thumbnailMarker)[1].split("#", 1)[0].split("?", 1)[0].replace(/^\/+/, "");
+    return thumbnailPath.replace(/^(grid|preview)\//, "");
+  }
+  const assetMarker = "/case-assets/";
+  if (normalizedUrl.includes(assetMarker)) {
+    return normalizedUrl.split(assetMarker)[1].split("#", 1)[0].split("?", 1)[0].replace(/^\/+/, "");
+  }
   if (url.startsWith("../images/")) {
     return url.replace(/^(\.\.\/)+/, "");
   }

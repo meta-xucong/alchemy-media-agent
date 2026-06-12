@@ -281,6 +281,47 @@ def test_case_search_and_template_detail() -> None:
     assert len(templates.json()["templates"]) == 2
 
 
+def test_template_index_and_page_endpoints_support_lightweight_browsing() -> None:
+    client = fresh_client()
+
+    index = client.get("/api/v2/templates/index")
+    assert index.status_code == 200
+    index_payload = index.json()
+    assert index_payload["total"] > 2
+    assert index_payload["index_version"]
+    assert index_payload["facets"]
+
+    first_page = client.get("/api/v2/templates/page", params={"limit": 2})
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert len(first_payload["items"]) == 2
+    assert first_payload["total"] == index_payload["total"]
+    assert first_payload["cursor"] == "0"
+    assert first_payload["next_cursor"] == "2"
+    assert first_payload["has_more"] is True
+
+    second_page = client.get("/api/v2/templates/page", params={"limit": 2, "cursor": first_payload["next_cursor"]})
+    assert second_page.status_code == 200
+    second_payload = second_page.json()
+    assert second_payload["cursor"] == "2"
+    assert {item["case_id"] for item in first_payload["items"]}.isdisjoint(
+        {item["case_id"] for item in second_payload["items"]}
+    )
+
+
+def test_template_page_endpoint_filters_by_facet() -> None:
+    client = fresh_client()
+    facet = client.get("/api/v2/templates/index").json()["facets"][0]["value"]
+
+    response = client.get("/api/v2/templates/page", params={"limit": 10, "facet": facet})
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert items
+    for item in items:
+        assert facet in {item["category"], *item["style_tags"], *item["use_case_tags"]}
+
+
 def test_case_asset_endpoint_serves_images_from_local_snapshot(tmp_path) -> None:
     client = fresh_client()
     snapshot_dir = tmp_path / "snapshots"
@@ -324,8 +365,16 @@ def test_case_thumbnail_endpoint_generates_cached_webp_from_snapshot(tmp_path) -
     assert response.headers["content-type"].startswith("image/webp")
     assert list(thumbnail_dir.rglob("*.webp"))
     with Image.open(BytesIO(response.content)) as image:
-        assert image.width <= 360
-        assert image.height <= 450
+        assert image.width <= 720
+        assert image.height <= 900
+
+    preview = client.get("/api/v2/case-thumbnails/preview/images/sample_case/output.jpg")
+
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("image/webp")
+    with Image.open(BytesIO(preview.content)) as image:
+        assert image.width <= 1280
+        assert image.height <= 1600
 
 
 def test_case_thumbnail_endpoint_returns_404_for_unthumbnailable_assets(tmp_path) -> None:
