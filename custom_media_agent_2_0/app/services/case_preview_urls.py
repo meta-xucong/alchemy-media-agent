@@ -3,6 +3,8 @@ from __future__ import annotations
 from urllib.parse import unquote, urlparse
 from urllib.parse import quote
 
+from app.services.github_source import allowed_case_repo_keys
+
 
 def normalize_case_preview_url(url: str | None) -> str | None:
     cleaned = str(url or "").strip()
@@ -44,14 +46,14 @@ def _github_repo_image_path(url: str) -> str | None:
         if len(path_parts) < 4:
             return None
         owner, repo = path_parts[0].lower(), path_parts[1].lower()
-        if owner != "evolinkai" or repo != "awesome-gpt-image-2-api-and-prompts":
+        if (owner, repo) not in allowed_case_repo_keys():
             return None
         return _image_path_from_parts(path_parts[2:])
     if host == "github.com":
         if len(path_parts) < 6:
             return None
         owner, repo = path_parts[0].lower(), path_parts[1].lower()
-        if owner != "evolinkai" or repo != "awesome-gpt-image-2-api-and-prompts":
+        if (owner, repo) not in allowed_case_repo_keys():
             return None
         return _image_path_from_parts(path_parts[4:] if path_parts[2] == "blob" else path_parts[2:])
     return None

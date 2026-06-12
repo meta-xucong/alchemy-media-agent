@@ -8,6 +8,8 @@ from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID, build_evolinkai_provi
 from app.repositories import repository
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_index_store import load_case_index, save_case_index
+from app.services.case_preview_urls import normalize_case_preview_url
+from app.services.github_source import github_archive_url, github_blob_url, github_commit_api_url
 import app.services.resource_sync as resource_sync
 from app.services.resource_sync_scheduler import ResourceSyncScheduler
 from app.services.case_parser import MarkdownCaseDocument, parse_evolinkai_markdown_cases
@@ -88,6 +90,60 @@ Create a clean editorial fashion advertisement poster with a pale studio backgro
 
     assert len(cases) == 1
     assert cases[0].preview_url == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
+
+
+def test_configured_github_source_builds_fork_urls(monkeypatch) -> None:
+    object.__setattr__(
+        settings,
+        "github_provider_source_uri",
+        "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
+    )
+    try:
+        assert (
+            github_archive_url()
+            == "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/archive/refs/heads/main.zip"
+        )
+        assert (
+            github_commit_api_url()
+            == "https://api.github.com/repos/meta-xucong/awesome-gpt-image-2-API-and-Prompts/commits/main"
+        )
+        assert (
+            github_blob_url("cases/poster.md")
+            == "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/blob/main/cases/poster.md"
+        )
+    finally:
+        object.__setattr__(
+            settings,
+            "github_provider_source_uri",
+            "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+        )
+
+
+def test_preview_normalizer_accepts_configured_fork_and_original_repo() -> None:
+    object.__setattr__(
+        settings,
+        "github_provider_source_uri",
+        "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
+    )
+    try:
+        assert (
+            normalize_case_preview_url(
+                "https://raw.githubusercontent.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
+            )
+            == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
+        )
+        assert (
+            normalize_case_preview_url(
+                "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
+            )
+            == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
+        )
+    finally:
+        object.__setattr__(
+            settings,
+            "github_provider_source_uri",
+            "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+        )
 
 
 def test_case_index_store_roundtrip(tmp_path) -> None:

@@ -18,7 +18,7 @@ def build_evolinkai_provider() -> ResourceProvider:
         "source_uri": settings.github_provider_source_uri,
         "display_name": "EvoLinkAI GPT Image Cases",
         "sync_mode": "scheduled_and_manual",
-        "sync_interval_minutes": 360,
+        "sync_interval_minutes": settings.resource_sync_interval_minutes,
         "update_detection": {"type": "git_commit_sha", "branch": "main"},
         "parser": {
             "type": "markdown_case_parser",

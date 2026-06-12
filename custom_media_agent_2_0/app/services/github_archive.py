@@ -8,10 +8,9 @@ import httpx
 
 from app.config import settings
 from app.services.case_parser import MarkdownCaseDocument
+from app.services.github_source import github_archive_url, github_commit_api_url
 
 
-ARCHIVE_URL = "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/archive/refs/heads/main.zip"
-COMMIT_API_URL = "https://api.github.com/repos/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/commits/main"
 CANONICAL_CASE_FILES = {
     "cases/ad-creative.md",
     "cases/character.md",
@@ -27,7 +26,7 @@ def fetch_evolinkai_github_cases() -> tuple[str, list[MarkdownCaseDocument]]:
     timeout = httpx.Timeout(settings.github_sync_timeout_seconds)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         source_version = _fetch_commit_sha(client)
-        response = client.get(ARCHIVE_URL)
+        response = client.get(github_archive_url())
         response.raise_for_status()
     documents = _extract_case_markdown(response.content)
     if not documents:
@@ -46,7 +45,7 @@ def fetch_evolinkai_source_version() -> str:
 
 def _fetch_commit_sha(client: httpx.Client) -> str:
     try:
-        response = client.get(COMMIT_API_URL, headers={"Accept": "application/vnd.github+json"})
+        response = client.get(github_commit_api_url(), headers={"Accept": "application/vnd.github+json"})
         response.raise_for_status()
         payload = response.json()
         sha = str(payload.get("sha") or "")[:12]

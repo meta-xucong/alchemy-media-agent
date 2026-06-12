@@ -10,6 +10,7 @@ from typing import Any
 from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID
 from app.schemas import LicensePolicy, PromptCase
 from app.services.case_preview_urls import normalize_case_preview_url
+from app.services.github_source import github_blob_url
 
 
 HEADING_RE = re.compile(
@@ -358,7 +359,7 @@ def _case_id(category: str, case_number: str, title: str) -> str:
 
 
 def _github_blob_url(path: str) -> str:
-    return f"https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/blob/main/{path}"
+    return github_blob_url(path)
 
 
 def _dedupe(items: list[str]) -> list[str]:
