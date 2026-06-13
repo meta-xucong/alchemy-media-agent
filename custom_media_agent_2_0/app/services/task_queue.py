@@ -44,13 +44,18 @@ def initialize_task_queue() -> None:
                 max_attempts INTEGER NOT NULL DEFAULT 3,
                 locked_by TEXT,
                 locked_at TEXT,
+                not_before TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        _ensure_column(conn, "v2_tasks", "not_before", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_run_id ON v2_tasks(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_created ON v2_tasks(status, created_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_not_before_created ON v2_tasks(status, not_before, created_at)"
+        )
 
 
 def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_run: CreativeRun) -> str:
@@ -91,7 +96,10 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
             """
             SELECT * FROM v2_tasks
             WHERE
-                status = 'queued'
+                (
+                    status = 'queued'
+                    AND (not_before IS NULL OR not_before <= ?)
+                )
                 OR (
                     status = 'running'
                     AND locked_at IS NOT NULL
@@ -101,7 +109,7 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (stale_before,),
+            (now_text, stale_before),
         ).fetchone()
         if row is None:
             conn.commit()
@@ -110,7 +118,7 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
         conn.execute(
             """
             UPDATE v2_tasks
-            SET status = 'running', attempts = ?, locked_by = ?, locked_at = ?, updated_at = ?
+            SET status = 'running', attempts = ?, locked_by = ?, locked_at = ?, not_before = NULL, updated_at = ?
             WHERE task_id = ?
             """,
             (attempts, worker_id, now_text, now_text, row["task_id"]),
@@ -133,7 +141,7 @@ def complete_task(task_id: str, run: CreativeRun) -> None:
             """
             UPDATE v2_tasks
             SET status = 'completed', result_json = ?, error_json = NULL,
-                locked_by = NULL, locked_at = NULL, updated_at = ?
+                locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
             WHERE task_id = ?
             """,
             (_json_dumps(run.model_dump(mode="json")), now, task_id),
@@ -162,17 +170,97 @@ def fail_task(task_id: str, error: str, run: CreativeRun | None = None) -> None:
             return
         can_retry = int(row["attempts"]) < int(row["max_attempts"])
         status = "queued" if can_retry else "failed"
+        run_json = _json_dumps(run.model_dump(mode="json")) if run else None
+        if can_retry:
+            conn.execute(
+                """
+                UPDATE v2_tasks
+                SET status = ?, queued_run_json = COALESCE(?, queued_run_json), result_json = NULL, error_json = ?,
+                    locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    status,
+                    run_json,
+                    _json_dumps({"message": error, "retryable": True}),
+                    now,
+                    task_id,
+                ),
+            )
+            return
         conn.execute(
             """
             UPDATE v2_tasks
             SET status = ?, result_json = COALESCE(?, result_json), error_json = ?,
-                locked_by = NULL, locked_at = NULL, updated_at = ?
+                locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
             WHERE task_id = ?
             """,
             (
                 status,
-                _json_dumps(run.model_dump(mode="json")) if run else None,
-                _json_dumps({"message": error, "retryable": can_retry}),
+                run_json,
+                _json_dumps({"message": error, "retryable": False}),
+                now,
+                task_id,
+            ),
+        )
+
+
+def retry_task(
+    task_id: str,
+    error: str,
+    run: CreativeRun,
+    *,
+    retry_delay_seconds: float,
+    consume_attempt: bool = False,
+) -> None:
+    now_dt = utc_now()
+    now = now_dt.isoformat()
+    delay = max(0.0, float(retry_delay_seconds))
+    not_before = (now_dt + timedelta(seconds=delay)).isoformat() if delay else None
+    with _connect() as conn:
+        row = conn.execute("SELECT attempts, max_attempts FROM v2_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            return
+        attempts = int(row["attempts"])
+        if not consume_attempt:
+            attempts = max(0, attempts - 1)
+        can_retry = (attempts < int(row["max_attempts"])) or not consume_attempt
+        if not can_retry:
+            conn.execute(
+                """
+                UPDATE v2_tasks
+                SET status = 'failed', attempts = ?, result_json = ?, error_json = ?,
+                    locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    attempts,
+                    _json_dumps(run.model_dump(mode="json")),
+                    _json_dumps({"message": error, "retryable": False}),
+                    now,
+                    task_id,
+                ),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE v2_tasks
+            SET status = 'queued', attempts = ?, queued_run_json = ?, result_json = NULL, error_json = ?,
+                locked_by = NULL, locked_at = NULL, not_before = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (
+                attempts,
+                _json_dumps(run.model_dump(mode="json")),
+                _json_dumps(
+                    {
+                        "message": error,
+                        "retryable": True,
+                        "retry_after_seconds": delay,
+                        "next_retry_at": not_before,
+                    }
+                ),
+                not_before,
                 now,
                 task_id,
             ),
@@ -237,6 +325,13 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(str(row["name"]) == column for row in rows):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _json_dumps(payload: dict[str, Any]) -> str:

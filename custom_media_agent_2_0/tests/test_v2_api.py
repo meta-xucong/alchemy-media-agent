@@ -19,7 +19,8 @@ import app.main as main_module
 from app.main import app
 import app.agents.runtime as runtime_module
 from app.repositories import repository
-from app.schemas import CreateImageJobRequest, ImagePromptPlan, PromptCase, PromptCaseSummary
+from app.repositories.memory import utc_now
+from app.schemas import CreateImageJobRequest, CreativeRun, ImageJob, ImagePromptPlan, PromptCase, PromptCaseSummary
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_intelligence import build_case_profile
 import app.services.claude_orchestrator as claude_orchestrator_service
@@ -2853,6 +2854,71 @@ def test_creative_run_async_entry_is_pollable() -> None:
 
     completed_status = client.get("/api/v2/task-queue/status").json()
     assert completed_status["counts"]["completed"] == 1
+
+
+def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
+    client = fresh_client()
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+    )
+    queued = response.json()
+
+    class UpstreamBalanceRuntime:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            now = utc_now()
+            prompt_plan = ImagePromptPlan(
+                plan_id="plan_upstream_wait",
+                mode="smart_enhance",
+                prompt="Create a premium skincare product hero image.",
+            )
+            job = ImageJob(
+                job_id="job_upstream_wait",
+                run_id=run_id,
+                status="failed",
+                provider_id="openai_gpt_image",
+                model="gpt-image-2",
+                prompt_plan=prompt_plan,
+                outputs=[],
+                error={
+                    "error_code": "veyra_insufficient_balance",
+                    "message": "Sub2api balance is insufficient.",
+                    "detail": {},
+                    "retryable": False,
+                    "native_v2": True,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            return CreativeRun(
+                run_id=run_id,
+                status="failed",
+                mode="smart_enhance",
+                intent_summary="premium skincare product hero image",
+                prompt_plan=prompt_plan,
+                generation_jobs=[job],
+                trace_id="trace_upstream_wait",
+                next_actions=["Sub2api balance is insufficient."],
+                created_at=now,
+                updated_at=now,
+            )
+
+    assert queue_worker_service.process_next_task_once(UpstreamBalanceRuntime(), "test-worker") is True
+
+    fetched = client.get(f"/api/v2/creative/runs/{queued['run_id']}")
+    assert fetched.status_code == 200
+    run = fetched.json()
+    assert run["status"] == "generating"
+    assert run["generation_jobs"][0]["status"] == "queued"
+    assert run["generation_jobs"][0]["error"] is None
+    assert "上游线路或额度暂时不可用" in run["next_actions"][0]
+
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["queued"] == 1
+    assert queue_worker_service.process_next_task_once(UpstreamBalanceRuntime(), "test-worker") is False
 
 
 def test_creative_run_async_result_survives_repository_reset() -> None:
