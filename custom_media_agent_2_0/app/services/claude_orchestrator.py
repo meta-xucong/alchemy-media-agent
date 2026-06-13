@@ -58,7 +58,7 @@ _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v9_template_first_content_extraction"
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v10_template_anchor_skeleton_lock"
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
