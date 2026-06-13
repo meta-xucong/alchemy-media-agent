@@ -206,16 +206,18 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
             else "Conflict policy: visual grammar wins over Claude draft wording and uploaded source layout; user semantics win over the anchor's original literal subject and copy."
         ),
     ]
-    if anchor:
-        parts.insert(2, "Reusable visual grammar from the anchor: " + anchor + ".")
     critical_asset_rules = [
         str(item)
         for item in (contract.get("critical_asset_rules") or [])
         if str(item or "").strip()
     ][:3]
     critical_asset_rules = _dedupe(critical_asset_rules)
+    insert_index = 2
     if critical_asset_rules:
-        parts.insert(3, "Critical uploaded-asset placement rules: " + " ".join(critical_asset_rules))
+        parts.insert(insert_index, "Critical uploaded-asset placement rules: " + " ".join(critical_asset_rules))
+        insert_index += 1
+    if anchor:
+        parts.insert(insert_index, "Reusable visual grammar from the anchor: " + anchor + ".")
     information_integrity = contract.get("information_integrity") if isinstance(contract.get("information_integrity"), dict) else {}
     if information_integrity.get("active"):
         fields = ", ".join(str(item) for item in (information_integrity.get("critical_fields") or [])[:6])

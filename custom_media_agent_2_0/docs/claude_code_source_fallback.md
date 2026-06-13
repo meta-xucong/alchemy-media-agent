@@ -26,7 +26,8 @@ Primary routing:
 3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
 4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
 5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
-6. If the selected source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source.
+6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source.
+7. If the selected multimodal source is required for uploaded-image understanding, V2 must fail closed when that source is unavailable. It must not continue with a text-only fallback that cannot inspect uploaded images.
 
 Current production intent:
 
@@ -36,7 +37,7 @@ multimodal source: doubao-seed-2-0-lite-260428
 fallback source: kimi-for-coding
 ```
 
-DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi remains the conservative fallback.
+DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi remains the conservative fallback for text checkpoints, not for required uploaded-image understanding.
 
 ## Configuration
 
@@ -103,11 +104,31 @@ ANTHROPIC_API_KEY=<fallback token>
 
 This keeps the fallback source stable across Claude Code versions and gateway adapters.
 
-## Reasoning Effort Guard
+## Reasoning Parameter Guard
 
 Some Anthropic-compatible non-Claude models reject `reasoning.effort` request fields. V2 removes effort-related inherited environment variables and does not pass `--effort` for external primary sources and fallback stages.
 
-This keeps DeepSeek/Doubao compatible with Claude Code while preserving compact schema-shaped output.
+VPS diagnosis on 2026-06-14 showed an additional gateway/Claude Code compatibility issue: Claude Code 2.1.153 can still send a `reasoning` parameter to the selected Anthropic-compatible model even when V2 does not pass `--effort` and strips effort-related environment variables. The current Doubao multimodal route rejected that request with:
+
+```text
+API Error: 400 The parameter `reasoning` specified in the request are not valid: reasoning is not supported by current model.
+```
+
+V2 classifies this as:
+
+```text
+claude_reasoning_not_supported
+```
+
+For text-only stages this can still fall back to the configured Claude Code fallback model queue. For uploaded-image stages where the multimodal source is required, V2 raises:
+
+```text
+claude_multimodal_required_unavailable:claude_reasoning_not_supported
+```
+
+and stops image generation instead of using Kimi or another text-only fallback. This prevents the system from producing a prompt that only pretends to understand the uploaded image.
+
+To restore Doubao multimodal execution, the upstream `aiself.vip` route for the Doubao multimodal model must strip or ignore unsupported `reasoning` fields, or the multimodal model must be changed to one that accepts the field emitted by Claude Code.
 
 ## Retryable Failures
 
@@ -115,6 +136,7 @@ Immediate fallback is attempted when the selected Claude source reports availabi
 
 ```text
 claude_api_error
+claude_reasoning_not_supported
 kimi_context_canceled
 kimi_sub2api_502
 kimi_no_available_accounts
@@ -125,6 +147,22 @@ upstream_context_canceled
 Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the selected source's micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the fallback Claude Code model queue for that same compact stage.
 
 The fallback is not a separate OpenAI-compatible executor. It is still Claude Code.
+
+Required multimodal exception:
+
+```text
+If source_reason is provider_input_images_required, hard_reference_input_image,
+asset_binding_requires_visual_understanding, or prompt_requests_uploaded_image_understanding,
+the fallback queue is blocked unless a future explicitly multimodal-capable fallback policy is added.
+```
+
+This preserves the V2 rule:
+
+```text
+Selected template controls the frame.
+Uploaded assets fill the frame.
+Claude must actually inspect required uploaded assets before composing the prompt.
+```
 
 ## Verification Checklist
 

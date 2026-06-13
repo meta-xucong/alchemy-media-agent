@@ -798,6 +798,12 @@ def _claude_required_failure_message(orchestrator_decision) -> str | None:
         return None
     status = str(orchestrator_decision.invocation_status or "")
     reason = str(orchestrator_decision.fallback_reason or "")
+    if "claude_multimodal_required_unavailable" in reason or "claude_reasoning_not_supported" in reason:
+        return (
+            "Claude Code multimodal orchestration is required for uploaded-image understanding, "
+            "but the selected multimodal source is unavailable or rejected the request. "
+            "Image generation was stopped instead of using a text-only fallback that cannot inspect uploaded images."
+        )
     if status in {"checkpoint_fallback", "fallback"} and (
         reason.startswith("claude_") or reason.startswith("claude_checkpoint")
     ):

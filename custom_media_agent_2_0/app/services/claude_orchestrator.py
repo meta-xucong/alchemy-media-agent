@@ -43,6 +43,7 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_structured_output_retries_exhausted",
     "claude_policy_refusal",
     "claude_api_error",
+    "claude_reasoning_not_supported",
     "kimi_context_canceled",
     "kimi_sub2api_502",
     "kimi_no_available_accounts",
@@ -52,6 +53,7 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
 _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "claude_policy_refusal",
     "claude_api_error",
+    "claude_reasoning_not_supported",
     "kimi_context_canceled",
     "kimi_sub2api_502",
     "kimi_no_available_accounts",
@@ -84,6 +86,12 @@ _MULTIMODAL_FUSION_MODES = {
     "face_identity",
     "background_identity",
 }
+_MULTIMODAL_REQUIRED_SOURCE_REASONS = {
+    "provider_input_images_required",
+    "hard_reference_input_image",
+    "asset_binding_requires_visual_understanding",
+    "prompt_requests_uploaded_image_understanding",
+}
 
 
 @dataclass(frozen=True)
@@ -92,6 +100,7 @@ class ClaudeSourceSelection:
     model: str
     stage_kwargs: dict[str, Any]
     reason: str
+    multimodal_requested: bool = False
 
 
 class ClaudeInvocationError(RuntimeError):
@@ -706,7 +715,36 @@ def _invoke_checkpoint_stage_with_micro(
                 raise
             if stop_on_soft_timeout and last_failure == "claude_soft_timeout":
                 return None, attempts
-            if _should_try_claude_code_model_fallback(last_failure):
+            should_try_fallback = _should_try_claude_code_model_fallback(last_failure)
+            if _requires_multimodal_claude_source(source) and (
+                last_failure == "claude_reasoning_not_supported" or should_try_fallback
+            ):
+                blocked_failure = _multimodal_required_unavailable_code(last_failure)
+                trace.append(
+                    {
+                        "stage": attempt_stage_name,
+                        "status": "failed",
+                        "provider": primary_provider,
+                        "model": primary_model,
+                        "source_reason": source.reason,
+                        "failure_code": blocked_failure,
+                        "text_fallback_blocked": True,
+                        "duration_ms": duration_ms,
+                    }
+                )
+                _emit_claude_progress(
+                    progress_callback,
+                    stage=attempt_stage_name,
+                    status="failed",
+                    provider=primary_provider,
+                    model=primary_model,
+                    timeout_seconds=timeout_seconds,
+                    duration_ms=duration_ms,
+                    failure_code=blocked_failure,
+                    attempt=attempts,
+                )
+                raise ClaudeInvocationError(blocked_failure)
+            if should_try_fallback:
                 fallback_started = time.perf_counter()
                 _emit_claude_progress(
                     progress_callback,
@@ -777,7 +815,33 @@ def _invoke_checkpoint_stage_with_micro(
         if result:
             return result, attempts
     if last_failure:
-        if _should_try_claude_code_model_fallback(last_failure, after_compression_retries=True):
+        should_try_fallback = _should_try_claude_code_model_fallback(last_failure, after_compression_retries=True)
+        if should_try_fallback and _requires_multimodal_claude_source(source):
+            blocked_failure = _multimodal_required_unavailable_code(last_failure)
+            trace.append(
+                {
+                    "stage": stage_name,
+                    "status": "failed",
+                    "provider": primary_provider,
+                    "model": primary_model,
+                    "source_reason": source.reason,
+                    "failure_code": blocked_failure,
+                    "text_fallback_blocked": True,
+                    "after_compression_retries": True,
+                }
+            )
+            _emit_claude_progress(
+                progress_callback,
+                stage=stage_name,
+                status="failed",
+                provider=primary_provider,
+                model=primary_model,
+                failure_code=blocked_failure,
+                after_compression_retries=True,
+                attempt=attempts,
+            )
+            raise ClaudeInvocationError(blocked_failure)
+        if should_try_fallback:
             fallback_started = time.perf_counter()
             _emit_claude_progress(
                 progress_callback,
@@ -884,7 +948,19 @@ def _claude_code_source_selection(workspace: Path | None = None) -> ClaudeSource
         model=model,
         stage_kwargs=_claude_code_primary_stage_kwargs(model),
         reason=reason or "default_text_primary",
+        multimodal_requested=bool(persisted.get("multimodal_requested")) if isinstance(persisted, dict) else False,
     )
+
+
+def _requires_multimodal_claude_source(source: ClaudeSourceSelection) -> bool:
+    if _text_value(source.reason) in _MULTIMODAL_REQUIRED_SOURCE_REASONS:
+        return True
+    return bool(source.multimodal_requested and _text_value(source.reason) != "uploaded_assets_soft_reference")
+
+
+def _multimodal_required_unavailable_code(failure_code: str | None) -> str:
+    detail = _text_value(failure_code) or "unknown"
+    return f"claude_multimodal_required_unavailable:{detail}"
 
 
 def _should_try_claude_code_model_fallback(
@@ -985,6 +1061,10 @@ def _claude_progress_provider_label(provider: str, model: str = "") -> str:
 
 
 def _claude_failure_label(failure_code: str) -> str:
+    if failure_code.startswith("claude_multimodal_required_unavailable"):
+        return "多模态主源不可用，已阻止文本备用源接管"
+    if failure_code == "claude_reasoning_not_supported":
+        return "模型不支持 reasoning 参数"
     if failure_code == "claude_soft_timeout":
         return "触达软上限，进入压缩续跑"
     if failure_code == "claude_timeout":
@@ -2890,6 +2970,8 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
     if returncode == 0 and _has_successful_structured_result(stdout):
         return None
     text = f"{stdout or ''}\n{stderr or ''}".lower()
+    if "reasoning" in text and ("not supported" in text or "not valid" in text):
+        return "claude_reasoning_not_supported"
     if "usage policy" in text or '"stop_reason":"refusal"' in text or '"stop_reason": "refusal"' in text:
         return "claude_policy_refusal"
     if ("context canceled" in text or "context deadline exceeded" in text) and ("kimi" in text or "api.kimi.com" in text):

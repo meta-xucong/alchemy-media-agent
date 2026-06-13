@@ -3423,6 +3423,25 @@ def test_template_lock_claude_boundary_failure_keeps_template_but_stops_generati
     assert "deterministic creative fallback" in run["next_actions"][0]
 
 
+def test_claude_required_failure_message_reports_multimodal_source_error() -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    decision = SimpleNamespace(
+        provider="deterministic-fallback",
+        invocation_status="checkpoint_fallback",
+        fallback_reason=(
+            "claude_checkpoint_error:"
+            "claude_multimodal_required_unavailable:claude_reasoning_not_supported"
+        ),
+    )
+
+    message = runtime_module._claude_required_failure_message(decision)
+
+    assert message is not None
+    assert "multimodal orchestration is required" in message
+    assert "text-only fallback" in message
+
+
 def test_template_anchor_preserves_concrete_visual_skeleton_without_copying_brand_text() -> None:
     template = make_prompt_case(
         "test_osaka_skeleton_template",
@@ -4184,6 +4203,18 @@ def test_claude_failure_classifier_detects_kimi_no_available_accounts() -> None:
     assert failure == "kimi_no_available_accounts"
 
 
+def test_claude_failure_classifier_detects_reasoning_not_supported() -> None:
+    failure = claude_orchestrator_service._classify_claude_failure(
+        '{"type":"result","is_error":true,"api_error_status":400,'
+        '"result":"API Error: 400 The parameter `reasoning` specified in the request are not valid: '
+        'reasoning is not supported by current model."}',
+        "",
+        1,
+    )
+
+    assert failure == "claude_reasoning_not_supported"
+
+
 def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
     fresh_client()
     object.__setattr__(settings, "claude_orchestrator_fallback_model", None)
@@ -4471,6 +4502,61 @@ def test_checkpoint_stage_uses_workspace_multimodal_primary(monkeypatch, tmp_pat
     assert trace[-1]["source_reason"] == "provider_input_images_required"
     assert events[0]["model"] == "doubao-seed-2-0-lite-260428"
     assert "主源 doubao-seed-2-0-lite-260428" in str(events[0]["message"])
+
+
+def test_checkpoint_stage_required_multimodal_blocks_text_model_fallback_on_reasoning_error(
+    monkeypatch, tmp_path
+) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("kimi-for-coding",))
+    (tmp_path / "claude_source_selection.json").write_text(
+        json.dumps(
+            {
+                "provider": "claude-code-primary",
+                "model": "doubao-seed-2-0-lite-260428",
+                "reason": "provider_input_images_required",
+                "multimodal_requested": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+            }
+        )
+        raise claude_orchestrator_service.ClaudeInvocationError("claude_reasoning_not_supported")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    with pytest.raises(claude_orchestrator_service.ClaudeInvocationError) as exc:
+        claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+            command=["claude"],
+            workspace=tmp_path,
+            stage_name="intent",
+            schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+            prompt="{}",
+            micro_prompt="{}",
+            trace=trace,
+            progress_callback=events.append,
+        )
+
+    assert str(exc.value) == "claude_multimodal_required_unavailable:claude_reasoning_not_supported"
+    assert calls == [{"stage_name": "intent", "model_override": "doubao-seed-2-0-lite-260428"}]
+    assert trace[-1]["text_fallback_blocked"] is True
+    assert trace[-1]["failure_code"] == "claude_multimodal_required_unavailable:claude_reasoning_not_supported"
+    assert all(item.get("provider") != "claude-code-model-fallback" for item in trace)
+    assert events[-1]["status"] == "failed"
+    assert "多模态主源不可用" in str(events[-1]["message"])
 
 
 def test_checkpoint_stage_kimi_primary_keeps_kimi_progress_label(monkeypatch, tmp_path) -> None:
