@@ -1845,20 +1845,26 @@ button.v2-template-preview {
 .v2-asset-panel {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "head head clear"
-    "preview file file"
-    "preview roles roles"
-    "preview controls controls"
-    "preview list list"
-    "preview hint hint";
+    "head"
+    "clear"
+    "preview"
+    "file"
+    "roles"
+    "controls"
+    "list"
+    "hint";
   gap: 10px 14px;
   margin-top: 0;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.58);
+}
+
+.v2-asset-panel > * {
+  min-width: 0;
 }
 
 .v2-asset-panel .mini-head {
@@ -1871,18 +1877,20 @@ button.v2-template-preview {
 .v2-asset-preview {
   grid-area: preview;
   min-height: 0;
-  height: 252px;
+  width: min(100%, 360px);
+  height: 220px;
   aspect-ratio: auto;
 }
 
 .v2-file-drop {
   grid-area: file;
   align-self: start;
+  width: 100%;
   min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
+  display: grid;
+  align-items: stretch;
+  justify-items: stretch;
+  gap: 6px;
   padding: 8px 10px;
   border-style: solid;
   background:
@@ -1891,6 +1899,8 @@ button.v2-template-preview {
 }
 
 .v2-file-drop .file-title {
+  width: 100%;
+  min-width: 0;
   min-height: 34px;
   display: inline-flex;
   align-items: center;
@@ -1903,6 +1913,7 @@ button.v2-template-preview {
   background: linear-gradient(180deg, #fff1ca 0%, #d4aa5c 100%);
   box-shadow: 0 8px 18px rgba(180, 144, 78, 0.16);
   font-weight: 750;
+  white-space: normal;
 }
 
 .v2-file-drop .file-meta {
@@ -1913,6 +1924,7 @@ button.v2-template-preview {
   grid-area: roles;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 64px), 1fr));
   gap: 6px;
+  width: 100%;
 }
 
 .v2-asset-role-checks .role-check {
@@ -1928,6 +1940,16 @@ button.v2-template-preview {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 8px;
   align-items: start;
+  width: 100%;
+}
+
+.v2-asset-mini-grid .field {
+  min-width: 0;
+}
+
+.v2-asset-mini-grid .field > span {
+  display: block;
+  white-space: normal;
 }
 
 #v2AssetNotesInput {
@@ -1949,15 +1971,16 @@ button.v2-template-preview {
 #v2ClearAssetBtn {
   grid-area: clear;
   align-self: center;
+  justify-self: start;
   min-width: 112px;
 }
 
 #v2AssetLockHint {
   grid-area: hint;
   align-self: center;
-  justify-self: end;
+  justify-self: start;
   margin: 0;
-  text-align: right;
+  text-align: left;
   max-width: 520px;
 }
 
