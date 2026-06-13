@@ -301,7 +301,7 @@ class V2OpenAIGPTImage2Provider:
 def _reference_paths(request: V2ImageProviderRequest) -> list:
     paths = []
     seen: set[str] = set()
-    for image in request.input_images[:5]:
+    for image in request.input_images[: settings.max_uploaded_asset_count]:
         if not image.provider_input_required:
             continue
         path = uploaded_asset_path(image.asset_id)

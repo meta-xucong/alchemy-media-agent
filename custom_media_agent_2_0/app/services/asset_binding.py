@@ -77,7 +77,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
     inputs_by_id: dict[str, list[CreativeRunAssetInput]] = {}
     for item in asset_inputs:
         inputs_by_id.setdefault(item.asset_id, []).append(item)
-    uploaded_assets = [_resolve_uploaded_asset(asset_id) for asset_id in inputs_by_id]
+    uploaded_assets = [_resolve_uploaded_asset(asset_id, veyra_user_id=request.veyra_user_id) for asset_id in inputs_by_id]
     uploaded_assets = [item for item in uploaded_assets if item is not None]
     brief_by_id = {item.asset_id: _brief_for(item) for item in uploaded_assets}
     template_lock = _template_lock_contract(request.template_case_id)
@@ -444,8 +444,19 @@ def _normalize_asset_inputs(raw_assets: list[str | CreativeRunAssetInput]) -> li
     return inputs
 
 
-def _resolve_uploaded_asset(asset_id: str) -> UploadedAsset | None:
-    return get_uploaded_asset(asset_id)
+def _resolve_uploaded_asset(asset_id: str, *, veyra_user_id: int | None = None) -> UploadedAsset | None:
+    asset = get_uploaded_asset(asset_id)
+    if not asset:
+        return None
+    if veyra_user_id is None:
+        return asset
+    try:
+        owner_id = int(asset.veyra_user_id or 0)
+    except (TypeError, ValueError):
+        owner_id = 0
+    if owner_id and owner_id != int(veyra_user_id):
+        return None
+    return asset
 
 
 def _brief_for(asset: UploadedAsset) -> AssetBrief:

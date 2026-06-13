@@ -217,10 +217,11 @@
                     <span id="assetPreviewLabel">未选择素材</span>
                   </div>
                   <label class="file-drop" for="assetInput">
-                    <input id="assetInput" type="file" accept="image/*" />
+                    <input id="assetInput" type="file" accept="image/*" multiple />
                     <span class="file-title">选择参考素材</span>
-                    <span id="assetName" class="file-meta">仅支持图片素材</span>
+                    <span id="assetName" class="file-meta">支持多图，单次最多 6 张</span>
                   </label>
+                  <div id="assetList" class="v2-asset-list empty-v2-list">暂无上传素材</div>
                   <div id="advancedAssetPanel" class="advanced-asset-panel">
                     <div class="advanced-role-checks" aria-label="高级素材用途">
                       <label class="role-check">
@@ -565,7 +566,7 @@
                     <span id="v2AssetPreviewLabel">未选择素材</span>
                   </div>
                   <label class="file-drop v2-file-drop" for="v2AssetInput">
-                    <input id="v2AssetInput" type="file" accept="image/*" />
+                    <input id="v2AssetInput" type="file" accept="image/*" multiple />
                     <span class="file-title">选择参考图片</span>
                     <span id="v2AssetName" class="file-meta">可与案例、提示词协作生效</span>
                   </label>
@@ -853,6 +854,16 @@
             <section class="panel flow-section account-record-section">
               <div class="panel-head section-title">
                 <div>
+                  <p class="eyebrow">Templates</p>
+                  <h3>历史使用模板</h3>
+                </div>
+              </div>
+              <div id="veyraTemplateHistoryList" class="account-template-list" aria-live="polite"></div>
+            </section>
+
+            <section class="panel flow-section account-record-section">
+              <div class="panel-head section-title">
+                <div>
                   <p class="eyebrow">Usage</p>
                   <h3>资金消耗记录</h3>
                 </div>
@@ -976,6 +987,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260612-v2-case-paging" defer></script>
+    <script src="/static/app.js?v=20260613-v2-speed3" defer></script>
   </body>
 </html>

@@ -7,7 +7,7 @@ from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
 from app.schemas import CostEstimate, ImageGenerationResult, ReviseImageRequest
 import app.services.image_service as image_service
-from app.services.image_service import create_image_job, revise_image_job
+from app.services.image_service import create_image_job, revise_image_job, run_submitted_image_job, submit_image_job
 from app.storage import media_store
 
 
@@ -101,6 +101,54 @@ def test_image_job_idempotency_returns_existing_job():
 
     assert first.id == second.id
     assert len(repository.jobs) == 1
+
+
+def test_submit_image_job_returns_generating_then_background_completes():
+    prepared = asyncio.run(
+        submit_image_job(
+            session_id="ses_test",
+            prompt="生成 1 张后台任务海报。",
+            count=1,
+        )
+    )
+
+    assert prepared.job.status == "generating"
+    assert prepared.job.outputs == []
+    assert prepared.request is not None
+    assert prepared.job.raw_response_summary["async_submission"] is True
+    assert prepared.job.prompt_plan.variables["prompt_planning_pending"] is True
+
+    completed = asyncio.run(run_submitted_image_job(prepared.job.id, prepared.request, edit=prepared.edit))
+
+    assert completed is not None
+    assert completed.status == "ready"
+    assert len(completed.outputs) == 1
+    assert completed.prompt_plan.variables["prompt_planning_pending"] is False
+    assert repository.get_job(prepared.job.id).status == "ready"
+    assert media_store.list_history_records(limit=10)[0]["job_id"] == prepared.job.id
+
+
+def test_submitted_image_job_background_failure_is_terminal(monkeypatch):
+    async def fail_provider(job, request, provider, *, edit):
+        raise RuntimeError("simulated disconnected worker")
+
+    prepared = asyncio.run(
+        submit_image_job(
+            session_id="ses_test",
+            prompt="生成 1 张会失败的后台任务海报。",
+            count=1,
+        )
+    )
+    assert prepared.request is not None
+    monkeypatch.setattr(image_service, "_try_image_provider", fail_provider)
+
+    completed = asyncio.run(run_submitted_image_job(prepared.job.id, prepared.request, edit=prepared.edit))
+
+    assert completed is not None
+    assert completed.status == "failed"
+    assert completed.error is not None
+    assert completed.error.code == "background_job_failed"
+    assert repository.get_job(prepared.job.id).status == "failed"
 
 
 def test_revise_image_job_creates_version_child():

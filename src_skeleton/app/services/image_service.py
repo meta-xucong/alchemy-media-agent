@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+from dataclasses import dataclass
 
 from app.providers.base import ProviderRuntimeError
 from app.config import settings
@@ -39,6 +41,153 @@ from app.services.veyra_auth import (
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
 from app.services.work_intensity import apply_work_intensity
 from app.storage import media_store
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class PreparedImageJob:
+    job: GenerationJob
+    request: ImageGenerationRequest | None = None
+    edit: bool = False
+
+
+TERMINAL_IMAGE_STATUSES = {
+    JobStatus.ready,
+    JobStatus.failed,
+    JobStatus.provider_not_configured,
+    JobStatus.rejected,
+    JobStatus.canceled,
+}
+
+
+async def submit_image_job(
+    *,
+    session_id: str,
+    prompt: str,
+    asset_mode: str = "basic",
+    asset_ids: list[str] | None = None,
+    asset_intents: list[AssetIntent] | None = None,
+    count: int = 1,
+    size: str | None = None,
+    quality: str = "auto",
+    output_format: str = "png",
+    work_intensity: str | None = None,
+    provider_preference: str | None = None,
+    idempotency_key: str | None = None,
+    veyra_user_id: int | None = None,
+) -> PreparedImageJob:
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        raise ValueError("请先填写生图提示词。")
+    asset_mode = asset_mode or "basic"
+    asset_intents = asset_intents or []
+    asset_ids = asset_ids or []
+    advanced_asset_plan = None
+    asset_error = None
+    if asset_mode == "advanced":
+        if asset_ids:
+            asset_error = AssetPlanError("asset_mode_conflict", "基础版素材和高级版素材用途不能混用。")
+        else:
+            try:
+                advanced_asset_plan = build_advanced_asset_plan(asset_intents, user_prompt=prompt)
+                asset_ids = [str(item["asset_id"]) for item in advanced_asset_plan.get("assets", [])]
+            except AssetPlanError as exc:
+                asset_error = exc
+    elif asset_intents:
+        asset_error = AssetPlanError("asset_mode_conflict", "基础版请求不能携带高级版素材用途。")
+
+    work_intensity = work_intensity or settings.image_work_intensity
+    prompt_plan = build_prompt_plan(
+        prompt=prompt,
+        count=count,
+        size=size,
+        quality=quality,
+        output_format=output_format,
+        asset_ids=asset_ids,
+    )
+    prompt_plan = prompt_plan.model_copy(
+        update={
+            "variables": {
+                **prompt_plan.variables,
+                "original_prompt": prompt,
+                "pending_work_intensity": work_intensity,
+                "prompt_planning_pending": True,
+            }
+        }
+    )
+    trace_id = make_id("trace")
+    created_at = now_iso()
+    job = GenerationJob(
+        id=make_id("job"),
+        session_id=session_id,
+        job_type="image",
+        status=JobStatus.created,
+        asset_mode=asset_mode,
+        asset_plan=advanced_asset_plan,
+        prompt_plan=prompt_plan,
+        idempotency_key=idempotency_key,
+        trace_id=trace_id,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    if asset_error:
+        job.status = JobStatus.failed
+        job.error = ProviderError(
+            code=asset_error.code,
+            message=str(asset_error),
+            detail=asset_error.detail,
+        )
+        job.updated_at = now_iso()
+        return PreparedImageJob(repository.save_job(job))
+
+    safety_error = check_generation_prompt(prompt)
+    if safety_error:
+        job.status = JobStatus.rejected
+        job.error = safety_error
+        job.updated_at = now_iso()
+        return PreparedImageJob(repository.save_job(job))
+
+    key = idempotency_key or _idempotency_key(
+        session_id,
+        prompt_plan.model_dump_json(),
+        asset_ids,
+        provider_preference,
+        work_intensity,
+        asset_mode,
+    )
+    existing = repository.get_job_by_idempotency_key(key)
+    if existing:
+        return PreparedImageJob(existing)
+    job.idempotency_key = key
+    job.status = JobStatus.generating
+    job.provenance = {
+        "asset_mode": asset_mode,
+        "original_prompt": prompt,
+    }
+    job.raw_response_summary = {
+        "prompt_planning": {"status": "pending", "work_intensity": work_intensity},
+        "asset_mode": asset_mode,
+        "asset_plan": advanced_asset_plan,
+        "provider_input_plan": advanced_asset_plan.get("provider_input_plan") if advanced_asset_plan else None,
+        "async_submission": True,
+    }
+    job.updated_at = now_iso()
+    request = ImageGenerationRequest(
+        prompt_plan=prompt_plan,
+        asset_ids=asset_ids,
+        asset_mode=asset_mode,
+        asset_intents=asset_intents,
+        asset_plan=advanced_asset_plan,
+        provider_preference=provider_preference,
+        idempotency_key=key,
+        trace_id=trace_id,
+        veyra_user_id=veyra_user_id,
+    )
+    saved = repository.save_job(job)
+    _emit_image_events(saved)
+    return PreparedImageJob(saved, request, edit=False)
 
 
 async def create_image_job(
@@ -206,6 +355,124 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
         veyra_user_id=veyra_user_id,
     )
     return await _run_image_request(revision, image_request, edit=True)
+
+
+async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> PreparedImageJob | None:
+    source_job = repository.get_job(job_id)
+    source_output = repository.get_output(request.output_id)
+    if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
+        return None
+
+    patch = build_revision_patch(output_id=request.output_id, feedback=request.feedback, preserve=request.preserve)
+    prompt_plan = apply_patch_to_plan(source_job.prompt_plan, patch)
+    trace_id = make_id("trace")
+    created_at = now_iso()
+    revision = GenerationJob(
+        id=make_id("job"),
+        session_id=source_job.session_id,
+        job_type="image",
+        status=JobStatus.generating,
+        prompt_plan=prompt_plan,
+        provider=source_job.provider,
+        model=source_job.model,
+        trace_id=trace_id,
+        version_parent_id=request.output_id,
+        raw_response_summary={"prompt_patch": patch.model_dump(), "async_submission": True},
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    image_request = ImageGenerationRequest(
+        prompt_plan=prompt_plan,
+        asset_ids=prompt_plan.variables.get("asset_ids", []),
+        provider_preference=request.provider_preference or source_job.provider,
+        trace_id=trace_id,
+        source_output_id=request.output_id,
+        veyra_user_id=veyra_user_id,
+    )
+    saved = repository.save_job(revision)
+    _emit_image_events(saved)
+    return PreparedImageJob(saved, image_request, edit=True)
+
+
+async def run_submitted_image_job(job_id: str, request: ImageGenerationRequest, *, edit: bool = False) -> GenerationJob | None:
+    job = repository.get_job(job_id)
+    if not job:
+        return None
+    if job.status in TERMINAL_IMAGE_STATUSES:
+        return job
+    try:
+        if not edit:
+            job, request = await _prepare_submitted_image_run(job, request)
+        return await _run_image_request(job, request, edit=edit)
+    except Exception as exc:
+        logger.exception("V1 image background job failed: %s", job_id)
+        failed = repository.get_job(job_id) or job
+        failed.status = JobStatus.failed
+        failed.error = ProviderError(
+            code="background_job_failed",
+            message="V1 image background job failed.",
+            retryable=True,
+            detail={
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:1000],
+            },
+        )
+        failed.updated_at = now_iso()
+        saved = repository.save_job(failed)
+        _emit_image_events(saved)
+        return saved
+
+
+async def _prepare_submitted_image_run(job: GenerationJob, request: ImageGenerationRequest) -> tuple[GenerationJob, ImageGenerationRequest]:
+    if not job.prompt_plan:
+        return job, request
+    variables = job.prompt_plan.variables or {}
+    if not variables.get("prompt_planning_pending"):
+        return job, request
+
+    original_prompt = str(variables.get("original_prompt") or job.provenance.get("original_prompt") or job.prompt_plan.main_subject)
+    work_intensity = str(variables.get("pending_work_intensity") or settings.image_work_intensity)
+    prompt_plan, planning_summary = await apply_work_intensity(
+        job.prompt_plan,
+        original_prompt=original_prompt,
+        work_intensity=work_intensity,
+        provider_preference=request.provider_preference,
+        asset_context=asset_context_for_prompt_planner(request.asset_plan),
+    )
+    if request.asset_plan:
+        prompt_plan = apply_asset_plan_to_prompt_plan(
+            prompt_plan,
+            original_prompt=original_prompt,
+            asset_plan=request.asset_plan,
+        )
+
+    prompt_plan = prompt_plan.model_copy(
+        update={
+            "variables": {
+                **prompt_plan.variables,
+                "prompt_planning_pending": False,
+            }
+        }
+    )
+    job.prompt_plan = prompt_plan
+    job.asset_plan = request.asset_plan
+    job.provenance = {
+        **job.provenance,
+        "asset_mode": request.asset_mode,
+        "original_prompt": original_prompt,
+        "final_prompt": _history_prompt(job),
+    }
+    job.raw_response_summary = {
+        **job.raw_response_summary,
+        "prompt_planning": planning_summary,
+        "asset_mode": request.asset_mode,
+        "asset_plan": request.asset_plan,
+        "provider_input_plan": request.asset_plan.get("provider_input_plan") if request.asset_plan else None,
+        "prompt_plan": prompt_plan.variables.get("advanced_prompt_plan") if prompt_plan.variables else None,
+    }
+    job.updated_at = now_iso()
+    repository.save_job(job)
+    return job, request.model_copy(update={"prompt_plan": prompt_plan, "asset_plan": request.asset_plan})
 
 
 async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest, *, edit: bool) -> GenerationJob:

@@ -1222,6 +1222,7 @@ def _case_summary(case: PromptCase, score: float | None = None, why_selected: st
     profile = build_case_profile(case)
     return PromptCaseSummary(
         case_id=case.case_id,
+        index_version=case.index_version,
         title=case.title,
         category=case.category,
         summary=case.summary,

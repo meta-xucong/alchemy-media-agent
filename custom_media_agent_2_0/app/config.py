@@ -82,6 +82,8 @@ class Settings:
     remote_snapshot_dir: Path = PROJECT_ROOT / ".v2_data" / "remote_snapshots"
     case_thumbnail_dir: Path = PROJECT_ROOT / ".v2_data" / "case_thumbnails"
     history_thumbnail_dir: Path = PROJECT_ROOT / ".v2_data" / "history_thumbnails"
+    max_uploaded_asset_bytes: int = 12 * 1024 * 1024
+    max_uploaded_asset_count: int = 6
     task_queue_db_path: Path = PROJECT_ROOT / ".v2_data" / "task_queue.sqlite3"
     task_queue_inline_worker_enabled: bool = True
     task_queue_poll_interval_seconds: float = 1.0
@@ -97,6 +99,9 @@ class Settings:
     sync_github_on_startup: bool = True
     resource_sync_interval_minutes: int = 360
     github_sync_timeout_seconds: float = 60.0
+    case_thumbnail_prewarm_enabled: bool = True
+    case_thumbnail_prewarm_variant: str = "grid"
+    case_thumbnail_prewarm_limit: int = 0
     image_generation_provider: str = "auto"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
@@ -215,6 +220,8 @@ def load_settings() -> Settings:
         history_thumbnail_dir=Path(
             os.getenv("V2_HISTORY_THUMBNAIL_DIR", str(PROJECT_ROOT / ".v2_data" / "history_thumbnails"))
         ),
+        max_uploaded_asset_bytes=max(1024, int(os.getenv("V2_MAX_UPLOADED_ASSET_BYTES", str(12 * 1024 * 1024)))),
+        max_uploaded_asset_count=max(1, int(os.getenv("V2_MAX_UPLOADED_ASSET_COUNT", "6"))),
         task_queue_db_path=Path(os.getenv("V2_TASK_QUEUE_DB_PATH", str(PROJECT_ROOT / ".v2_data" / "task_queue.sqlite3"))),
         task_queue_inline_worker_enabled=os.getenv("V2_TASK_QUEUE_INLINE_WORKER_ENABLED", "true").lower()
         in {"1", "true", "yes", "on"},
@@ -241,6 +248,10 @@ def load_settings() -> Settings:
         in {"1", "true", "yes", "on"},
         resource_sync_interval_minutes=max(1, int(os.getenv("V2_RESOURCE_SYNC_INTERVAL_MINUTES", "360"))),
         github_sync_timeout_seconds=float(os.getenv("V2_GITHUB_SYNC_TIMEOUT_SECONDS", "60")),
+        case_thumbnail_prewarm_enabled=os.getenv("V2_CASE_THUMBNAIL_PREWARM_ENABLED", "true").lower()
+        in {"1", "true", "yes", "on"},
+        case_thumbnail_prewarm_variant=os.getenv("V2_CASE_THUMBNAIL_PREWARM_VARIANT", "grid"),
+        case_thumbnail_prewarm_limit=max(0, int(os.getenv("V2_CASE_THUMBNAIL_PREWARM_LIMIT", "0"))),
         image_generation_provider=os.getenv("V2_IMAGE_GENERATION_PROVIDER", "auto"),
         openai_api_key=os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY") or None,
         openai_base_url=(os.getenv("V2_OPENAI_BASE_URL") or "").rstrip("/") or None,

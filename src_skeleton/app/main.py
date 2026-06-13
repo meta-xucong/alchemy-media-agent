@@ -9,7 +9,7 @@ from pathlib import Path
 import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -33,7 +33,7 @@ from app.schemas import (
 )
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content
 from app.services.events import format_sse_events
-from app.services.image_service import create_image_job, revise_image_job
+from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.session_service import create_session, handle_message
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
@@ -238,6 +238,57 @@ def _is_veyra_admin_account(account) -> bool:
     return str(getattr(account, "role", "") or "").lower() == "admin"
 
 
+def _asset_owner_id(asset_id: str) -> int | None:
+    asset = get_asset(asset_id)
+    if not asset:
+        return None
+    return _positive_int_or_none(getattr(asset, "veyra_user_id", None))
+
+
+def _require_asset_visible(request: Request, asset_id: str, authorization: str = "") -> dict:
+    asset = get_asset(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
+    if not settings.veyra_auth_enabled:
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _asset_owner_id(asset_id)}
+    context = _veyra_asset_context(request, authorization)
+    owner_id = _asset_owner_id(asset_id)
+    if context.get("is_admin") or owner_id == context.get("user_id") or owner_id is None:
+        return {**context, "owner_id": owner_id}
+    raise HTTPException(status_code=403, detail={"error_code": "veyra_asset_forbidden", "message": "Asset is not visible to this account."})
+
+
+def _require_job_assets_visible(
+    request: Request,
+    asset_ids: list[str] | None,
+    asset_intents: list[AssetIntent] | None,
+    authorization: str = "",
+) -> None:
+    seen: set[str] = set()
+    for asset_id in [*(asset_ids or []), *(intent.asset_id for intent in (asset_intents or []))]:
+        clean = str(asset_id or "").strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+    if len(seen) > settings.max_asset_upload_count:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "asset_count_exceeded",
+                "message": f"最多可绑定 {settings.max_asset_upload_count} 张上传素材。",
+            },
+        )
+    if not settings.veyra_auth_enabled:
+        return
+    for clean in seen:
+        _require_asset_visible(request, clean, authorization)
+
+
+def _veyra_asset_context(request: Request, authorization: str = "") -> dict:
+    user_id = _veyra_user_id_from_request(request, authorization)
+    return {"authenticated": True, "user_id": user_id, "is_admin": False}
+
+
 def _v1_output_owner_id(output_id: str) -> int | None:
     output = repository.get_output(output_id)
     if output:
@@ -280,24 +331,31 @@ def stream_session_events(session_id: str, request: Request, authorization: str 
 
 @app.post("/v1/assets/upload-url")
 def create_asset_upload_endpoint(body: CreateAssetUploadRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    return create_asset_upload(body)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return create_asset_upload(body, veyra_user_id=user_id)
 
 
 @app.put("/v1/assets/{asset_id}/content")
 def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     asset = store_asset_content(asset_id, body)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
     if asset.status == "failed":
-        raise HTTPException(status_code=400, detail={"code": "invalid_asset_content", "message": "Asset content is not valid base64."})
+        error = asset.error or {}
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": error.get("code") or "invalid_asset_content",
+                "message": error.get("message") or "Asset content is not valid base64.",
+            },
+        )
     return asset
 
 
 @app.get("/v1/assets/{asset_id}/content")
 def get_asset_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -309,7 +367,7 @@ def get_asset_content_endpoint(asset_id: str, request: Request, authorization: s
 
 @app.post("/v1/assets/{asset_id}/complete")
 def complete_asset_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     asset = complete_asset_upload(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -318,7 +376,7 @@ def complete_asset_upload_endpoint(asset_id: str, request: Request, authorizatio
 
 @app.get("/v1/assets/{asset_id}")
 def get_asset_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -327,7 +385,7 @@ def get_asset_endpoint(asset_id: str, request: Request, authorization: str = Hea
 
 @app.put("/v1/assets/{asset_id}/intent")
 def set_asset_intent_endpoint(asset_id: str, body: AssetIntent, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     asset = get_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -336,7 +394,7 @@ def set_asset_intent_endpoint(asset_id: str, body: AssetIntent, request: Request
 
 @app.post("/v1/assets/{asset_id}/masks")
 def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_asset_visible(request, asset_id, authorization)
     result = create_asset_mask(asset_id, body)
     if not result:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
@@ -344,8 +402,15 @@ def create_asset_mask_endpoint(asset_id: str, body: CreateAssetMaskRequest, requ
 
 
 @app.post("/v1/image/jobs")
-async def create_image_job_endpoint(body: CreateImageJobRequest, request: Request, authorization: str = Header(default="")):
-    return await create_image_job(
+async def create_image_job_endpoint(
+    body: CreateImageJobRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(default=""),
+):
+    user_id = _veyra_user_id_from_request(request, authorization)
+    _require_job_assets_visible(request, body.asset_ids, body.asset_intents, authorization)
+    prepared = await submit_image_job(
         session_id=body.session_id,
         prompt=body.prompt,
         asset_mode=body.asset_mode,
@@ -358,8 +423,11 @@ async def create_image_job_endpoint(body: CreateImageJobRequest, request: Reques
         work_intensity=body.work_intensity,
         provider_preference=body.provider_preference,
         idempotency_key=body.idempotency_key,
-        veyra_user_id=_veyra_user_id_from_request(request, authorization),
+        veyra_user_id=user_id,
     )
+    if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
+        background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
+    return prepared.job
 
 
 @app.get("/v1/image/history")
@@ -486,11 +554,19 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
 
 
 @app.post("/v1/image/jobs/{job_id}/revise")
-async def revise_image_job_endpoint(job_id: str, body: ReviseImageRequest, request: Request, authorization: str = Header(default="")):
-    job = await revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
-    if not job:
+async def revise_image_job_endpoint(
+    job_id: str,
+    body: ReviseImageRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(default=""),
+):
+    prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
+    if not prepared:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
-    return job
+    if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
+        background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
+    return prepared.job
 
 
 @app.post("/v1/video/jobs")

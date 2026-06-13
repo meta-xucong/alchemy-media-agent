@@ -1941,7 +1941,7 @@ button.v2-template-preview {
 
 .v2-asset-list {
   grid-area: list;
-  display: none;
+  display: grid;
   gap: 6px;
 }
 
@@ -2298,6 +2298,82 @@ button.v2-template-preview {
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.account-template-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.account-template-card {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 252, 0.72);
+}
+
+.account-template-preview {
+  width: 84px;
+  min-height: 112px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--sage-deep);
+  background: rgba(23, 20, 17, 0.06);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+}
+
+button.account-template-preview {
+  cursor: pointer;
+}
+
+.account-template-preview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.account-template-meta {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.account-template-meta strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.account-template-meta p {
+  margin: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.account-template-meta span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .account-usage-list {
@@ -3598,8 +3674,6 @@ h2 {
   }
 }
 
-.v2-asset-panel .v2-asset-list,
-.v2-asset-panel .v2-asset-row,
 .v2-asset-panel .v2-file-drop .file-meta {
   display: none !important;
 }
@@ -4325,6 +4399,10 @@ input[type="range"] {
   }
 
   .account-history-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-template-list {
     grid-template-columns: 1fr;
   }
 

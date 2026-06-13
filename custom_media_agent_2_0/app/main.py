@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents import AGENTS_SDK_AVAILABLE, CreativeManagerRuntime
@@ -30,7 +34,8 @@ from app.schemas import (
 )
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_assets import read_case_asset, read_case_thumbnail
-from app.services.case_intelligence import build_case_profile, get_prompt_case, list_template_index, list_templates, list_templates_page, search_prompt_cases
+from app.services import case_intelligence
+from app.services.case_intelligence import build_case_profile, get_prompt_case, list_templates, search_prompt_cases
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
 from app.services.image_history import delete_image_history_item, list_image_history
@@ -75,6 +80,8 @@ from app.services.output_storage import read_output_content
 
 
 creative_manager = CreativeManagerRuntime()
+_TEMPLATE_RESPONSE_CACHE_MAX = 128
+_template_response_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
 
 
 @asynccontextmanager
@@ -326,6 +333,47 @@ def _with_veyra_user(body: CreateCreativeRunRequest, request: Request, authoriza
     return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_request(request, authorization)})
 
 
+def _uploaded_asset_owner_id(asset_id: str) -> int | None:
+    asset = get_uploaded_asset(asset_id)
+    if not asset:
+        return None
+    try:
+        owner_id = int(getattr(asset, "veyra_user_id", None) or 0)
+    except (TypeError, ValueError):
+        return None
+    return owner_id if owner_id > 0 else None
+
+
+def _require_uploaded_asset_visible(request: Request, asset_id: str, authorization: str = "") -> dict:
+    asset = get_uploaded_asset(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
+    if not settings.veyra_auth_enabled:
+        return {"user_id": None, "is_admin": False, "owner_id": _uploaded_asset_owner_id(asset_id)}
+    user_id = _veyra_user_id_from_request(request, authorization)
+    owner_id = _uploaded_asset_owner_id(asset_id)
+    if owner_id is None or owner_id == user_id:
+        return {"user_id": user_id, "is_admin": False, "owner_id": owner_id}
+    raise HTTPException(status_code=403, detail={"error_code": "veyra_asset_forbidden", "message": "Uploaded asset is not visible to this account."})
+
+
+def _require_creative_asset_count(raw_assets) -> None:
+    seen: set[str] = set()
+    for item in raw_assets or []:
+        asset_id = item if isinstance(item, str) else getattr(item, "asset_id", "")
+        clean = str(asset_id or "").strip()
+        if clean:
+            seen.add(clean)
+    if len(seen) > settings.max_uploaded_asset_count:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "asset_count_exceeded",
+                "message": f"最多可绑定 {settings.max_uploaded_asset_count} 张上传素材。",
+            },
+        )
+
+
 def _image_job_with_veyra_user(body: CreateImageJobRequest, request: Request, authorization: str) -> CreateImageJobRequest:
     if not settings.veyra_auth_enabled:
         return body.model_copy(update={"veyra_user_id": None})
@@ -359,11 +407,13 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
 
 @app.post("/api/v2/creative/runs", status_code=202)
 async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
+    _require_creative_asset_count(body.assets)
     return await creative_manager.run(_with_veyra_user(body, request, authorization))
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
 async def create_creative_run_async(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
+    _require_creative_asset_count(body.assets)
     body = _with_veyra_user(body, request, authorization)
     queued = creative_manager.queue_run(body)
     enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
@@ -372,24 +422,31 @@ async def create_creative_run_async(body: CreateCreativeRunRequest, request: Req
 
 @app.post("/api/v2/uploads", response_model=CreateUploadedAssetResponse)
 def create_upload(body: CreateUploadedAssetRequest, request: Request, authorization: str = Header(default="")) -> CreateUploadedAssetResponse:
-    _require_veyra_user_if_enabled(request, authorization)
-    return create_uploaded_asset(body)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return create_uploaded_asset(body, veyra_user_id=user_id)
 
 
 @app.put("/api/v2/uploads/{asset_id}/content")
 def put_upload_content(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_uploaded_asset_visible(request, asset_id, authorization)
     asset = store_uploaded_asset_content(asset_id, body)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
     if asset.status == "failed":
-        raise HTTPException(status_code=400, detail={"error_code": "invalid_asset_content", "message": "Asset content is invalid."})
+        error = asset.error or {}
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": error.get("code") or "invalid_asset_content",
+                "message": error.get("message") or "Asset content is invalid.",
+            },
+        )
     return asset
 
 
 @app.post("/api/v2/uploads/{asset_id}/complete")
 def complete_upload(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_uploaded_asset_visible(request, asset_id, authorization)
     asset = complete_uploaded_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
@@ -398,7 +455,7 @@ def complete_upload(asset_id: str, request: Request, authorization: str = Header
 
 @app.get("/api/v2/uploads/{asset_id}")
 def upload_detail(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_uploaded_asset_visible(request, asset_id, authorization)
     asset = get_uploaded_asset(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
@@ -407,7 +464,7 @@ def upload_detail(asset_id: str, request: Request, authorization: str = Header(d
 
 @app.get("/api/v2/uploads/{asset_id}/content")
 def upload_content(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_uploaded_asset_visible(request, asset_id, authorization)
     asset = read_uploaded_asset_content(asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_content_not_found", "message": "Uploaded asset content not found."})
@@ -500,9 +557,14 @@ def templates(
 
 
 @app.get("/api/v2/templates/index")
-def templates_index(request: Request, authorization: str = Header(default="")):
+def templates_index(request: Request, authorization: str = Header(default=""), if_none_match: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
-    return list_template_index()
+    index_version = repository.get_active_index_version() or "none"
+    return _cacheable_template_response(
+        f"template:index:{index_version}",
+        lambda: case_intelligence.list_template_index(),
+        if_none_match=if_none_match,
+    )
 
 
 @app.get("/api/v2/templates/page")
@@ -514,9 +576,68 @@ def templates_page(
     cursor: str | None = None,
     limit: int = Query(default=24, ge=1, le=96),
     authorization: str = Header(default=""),
+    if_none_match: str = Header(default=""),
 ):
     _require_veyra_user_if_enabled(request, authorization)
-    return list_templates_page(category=category, use_case=use_case, facet=facet, cursor=cursor, limit=limit)
+    index_version = repository.get_active_index_version() or "none"
+    return _cacheable_template_response(
+        _template_page_cache_key(
+            index_version=index_version,
+            category=category,
+            use_case=use_case,
+            facet=facet,
+            cursor=cursor,
+            limit=limit,
+        ),
+        lambda: case_intelligence.list_templates_page(category=category, use_case=use_case, facet=facet, cursor=cursor, limit=limit),
+        if_none_match=if_none_match,
+    )
+
+
+def _cacheable_template_response(cache_key: str, payload_factory, *, if_none_match: str = "") -> Response:
+    body, etag = _cached_template_body(cache_key, payload_factory)
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "private, max-age=300, stale-while-revalidate=86400",
+        "Vary": "Authorization, Cookie",
+    }
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+def _cached_template_body(cache_key: str, payload_factory) -> tuple[bytes, str]:
+    cached = _template_response_cache.get(cache_key)
+    if cached:
+        _template_response_cache.move_to_end(cache_key)
+        return cached
+    payload = payload_factory()
+    body = json.dumps(jsonable_encoder(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    etag = f'"v2-templates-{hashlib.sha1(body).hexdigest()}"'
+    _template_response_cache[cache_key] = (body, etag)
+    _template_response_cache.move_to_end(cache_key)
+    while len(_template_response_cache) > _TEMPLATE_RESPONSE_CACHE_MAX:
+        _template_response_cache.popitem(last=False)
+    return body, etag
+
+
+def _template_page_cache_key(
+    *,
+    index_version: str,
+    category: str | None,
+    use_case: str | None,
+    facet: str | None,
+    cursor: str | None,
+    limit: int,
+) -> str:
+    parts = ["template:page", index_version, category or "", use_case or "", facet or "", cursor or "", str(limit)]
+    return ":".join(part.replace(":", "%3A") for part in parts)
+
+
+def _etag_matches(if_none_match: str, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    return any(candidate.strip() in {etag, "*"} for candidate in if_none_match.split(","))
 
 
 @app.get("/api/v2/case-assets/{asset_path:path}")

@@ -4,6 +4,7 @@ import hashlib
 import io
 import mimetypes
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -17,6 +18,8 @@ CASE_THUMBNAIL_VARIANTS = {
     "grid": {"size": (720, 900), "quality": 84},
     "preview": {"size": (1280, 1600), "quality": 88},
 }
+_ARCHIVE_MEMBER_INDEX_CACHE_MAX = 4
+_archive_member_index_cache: OrderedDict[tuple[str, int, int], dict[str, str]] = OrderedDict()
 
 
 def read_case_asset(asset_path: str) -> tuple[bytes, str] | None:
@@ -73,7 +76,7 @@ def _read_asset_bytes(asset_path: str, snapshot_path: Path | None = None) -> byt
     if not active_snapshot or not active_snapshot.exists():
         return None
     with zipfile.ZipFile(active_snapshot) as archive:
-        member = _find_archive_member(archive, asset_path)
+        member = _find_archive_member(archive, asset_path, active_snapshot)
         if not member:
             return None
         with archive.open(member) as file:
@@ -123,10 +126,41 @@ def _active_snapshot_path() -> Path | None:
     return snapshots[0] if snapshots else None
 
 
-def _find_archive_member(archive: zipfile.ZipFile, asset_path: str) -> str | None:
+def _find_archive_member(archive: zipfile.ZipFile, asset_path: str, snapshot_path: Path) -> str | None:
+    index = _archive_member_index(archive, snapshot_path)
+    member = index.get(asset_path)
+    if member:
+        return member
     suffix = f"/{asset_path}"
     for name in archive.namelist():
         normalized = name.replace("\\", "/")
         if normalized == asset_path or normalized.endswith(suffix):
             return name
     return None
+
+
+def _archive_member_index(archive: zipfile.ZipFile, snapshot_path: Path) -> dict[str, str]:
+    cache_key = _archive_member_index_cache_key(snapshot_path)
+    cached = _archive_member_index_cache.get(cache_key)
+    if cached is not None:
+        _archive_member_index_cache.move_to_end(cache_key)
+        return cached
+    index: dict[str, str] = {}
+    for name in archive.namelist():
+        normalized = name.replace("\\", "/")
+        index.setdefault(normalized, name)
+        images_position = normalized.find("images/")
+        if images_position >= 0:
+            index.setdefault(normalized[images_position:], name)
+    _archive_member_index_cache[cache_key] = index
+    if len(_archive_member_index_cache) > _ARCHIVE_MEMBER_INDEX_CACHE_MAX:
+        _archive_member_index_cache.popitem(last=False)
+    return index
+
+
+def _archive_member_index_cache_key(snapshot_path: Path) -> tuple[str, int, int]:
+    try:
+        stat = snapshot_path.stat()
+        return str(snapshot_path.resolve()), stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return str(snapshot_path), 0, 0

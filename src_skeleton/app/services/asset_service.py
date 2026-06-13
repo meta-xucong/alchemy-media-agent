@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
+from app.config import settings
 from app.repositories import repository
 from app.schemas import (
     Asset,
@@ -18,17 +19,20 @@ from app.services.utils import make_id, now_iso
 from app.storage import media_store
 
 
-def create_asset_upload(request: CreateAssetUploadRequest) -> CreateAssetUploadResponse:
+def create_asset_upload(request: CreateAssetUploadRequest, *, veyra_user_id: int | None = None) -> CreateAssetUploadResponse:
     now = now_iso()
     asset_id = make_id("asset")
     consent = _consent_dict(request.consent)
-    if not _has_basic_rights(consent) or not _is_image_mime(request.mime_type):
+    error = _asset_request_error(request, consent)
+    if error:
         asset = Asset(
             id=asset_id,
             filename=request.filename,
             mime_type=request.mime_type,
             size_bytes=request.size_bytes,
+            veyra_user_id=veyra_user_id,
             status="rejected",
+            error=error,
             consent=consent,
             declared_role=request.declared_role,
             intended_use=request.intended_use,
@@ -44,6 +48,7 @@ def create_asset_upload(request: CreateAssetUploadRequest) -> CreateAssetUploadR
         filename=request.filename,
         mime_type=request.mime_type,
         size_bytes=request.size_bytes,
+        veyra_user_id=veyra_user_id,
         status="upload_requested",
         upload_url=upload_url,
         consent=consent,
@@ -71,6 +76,15 @@ def store_asset_content(asset_id: str, request: AssetContentUploadRequest) -> As
         content = base64.b64decode(request.content_base64, validate=True)
     except (ValueError, TypeError):
         asset.status = "failed"
+        asset.error = {"code": "invalid_base64", "message": "Asset content is not valid base64."}
+        asset.updated_at = now_iso()
+        return repository.save_asset(asset)
+    if len(content) > settings.max_asset_upload_bytes:
+        asset.status = "failed"
+        asset.error = {
+            "code": "asset_too_large",
+            "message": f"Asset content exceeds {settings.max_asset_upload_bytes} bytes.",
+        }
         asset.updated_at = now_iso()
         return repository.save_asset(asset)
     media_store.save_asset_bytes(asset_id=asset.id, filename=asset.filename, content=content)
@@ -181,6 +195,19 @@ def _consent_dict(value) -> dict:
 
 def _has_basic_rights(consent: dict) -> bool:
     return bool(consent.get("user_confirmed_rights") or consent.get("rights_confirmed"))
+
+
+def _asset_request_error(request: CreateAssetUploadRequest, consent: dict) -> dict | None:
+    if not _has_basic_rights(consent):
+        return {"code": "asset_consent_required", "message": "Asset upload requires rights confirmation."}
+    if not _is_image_mime(request.mime_type):
+        return {"code": "unsupported_type", "message": "Advanced assets currently accept image MIME types only."}
+    if int(request.size_bytes or 0) > settings.max_asset_upload_bytes:
+        return {
+            "code": "asset_too_large",
+            "message": f"Asset upload exceeds {settings.max_asset_upload_bytes} bytes.",
+        }
+    return None
 
 
 def _is_image_mime(mime_type: str | None) -> bool:

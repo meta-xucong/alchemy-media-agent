@@ -181,6 +181,19 @@ def upload_image_asset(client: TestClient, image_content: bytes, *, role: str, f
     return asset_id
 
 
+def issue_test_veyra_session_token(user_id: int) -> str:
+    import hashlib
+    import hmac
+    import time
+
+    secret = str(settings.veyra_session_secret or settings.veyra_internal_token).encode("utf-8")
+    now = int(time.time())
+    payload = {"user_id": int(user_id), "iat": now, "exp": now + 3600}
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii").rstrip("=")
+    signature = base64.urlsafe_b64encode(hmac.new(secret, raw.encode("utf-8"), hashlib.sha256).digest()).decode("ascii").rstrip("=")
+    return raw + "." + signature
+
+
 def make_qr_reference_image(payload: str) -> bytes:
     qr = qrcode.QRCode(border=4, box_size=8)
     qr.add_data(payload)
@@ -322,6 +335,71 @@ def test_template_page_endpoint_filters_by_facet() -> None:
         assert facet in {item["category"], *item["style_tags"], *item["use_case_tags"]}
 
 
+def test_template_index_and_page_support_private_etag_cache() -> None:
+    client = fresh_client()
+
+    index = client.get("/api/v2/templates/index")
+    assert index.status_code == 200
+    assert index.headers["etag"].startswith('"v2-templates-')
+    assert "private" in index.headers["cache-control"]
+    assert "authorization" in index.headers["vary"].lower()
+
+    cached_index = client.get("/api/v2/templates/index", headers={"If-None-Match": index.headers["etag"]})
+    assert cached_index.status_code == 304
+    assert cached_index.content == b""
+    assert cached_index.headers["etag"] == index.headers["etag"]
+
+    first_page = client.get("/api/v2/templates/page", params={"limit": 2})
+    second_page = client.get("/api/v2/templates/page", params={"limit": 2, "cursor": "2"})
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert first_page.headers["etag"].startswith('"v2-templates-')
+    assert first_page.headers["etag"] != second_page.headers["etag"]
+
+    cached_page = client.get("/api/v2/templates/page", params={"limit": 2}, headers={"If-None-Match": first_page.headers["etag"]})
+    assert cached_page.status_code == 304
+    assert cached_page.content == b""
+
+
+def test_template_index_and_page_use_in_process_response_cache(monkeypatch) -> None:
+    client = fresh_client()
+    import app.main as main_module
+
+    main_module._template_response_cache.clear()
+    original_index = main_module.case_intelligence.list_template_index
+    original_page = main_module.case_intelligence.list_templates_page
+    calls = {"index": 0, "page": 0}
+
+    def counted_index():
+        calls["index"] += 1
+        return original_index()
+
+    def counted_page(**kwargs):
+        calls["page"] += 1
+        return original_page(**kwargs)
+
+    monkeypatch.setattr(main_module.case_intelligence, "list_template_index", counted_index)
+    monkeypatch.setattr(main_module.case_intelligence, "list_templates_page", counted_page)
+
+    first_index = client.get("/api/v2/templates/index")
+    second_index = client.get("/api/v2/templates/index")
+    assert first_index.status_code == 200
+    assert second_index.status_code == 200
+    assert calls["index"] == 1
+
+    first_page = client.get("/api/v2/templates/page", params={"limit": 2})
+    second_page = client.get("/api/v2/templates/page", params={"limit": 2})
+    other_page = client.get("/api/v2/templates/page", params={"limit": 3})
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert other_page.status_code == 200
+    assert calls["page"] == 2
+
+    cached_304 = client.get("/api/v2/templates/page", params={"limit": 2}, headers={"If-None-Match": first_page.headers["etag"]})
+    assert cached_304.status_code == 304
+    assert calls["page"] == 2
+
+
 def test_case_asset_endpoint_serves_images_from_local_snapshot(tmp_path) -> None:
     client = fresh_client()
     snapshot_dir = tmp_path / "snapshots"
@@ -340,6 +418,44 @@ def test_case_asset_endpoint_serves_images_from_local_snapshot(tmp_path) -> None
     assert response.status_code == 200
     assert response.content == b"fake-jpg"
     assert response.headers["content-type"].startswith("image/jpeg")
+
+
+def test_case_asset_endpoint_reuses_archive_member_index(tmp_path, monkeypatch) -> None:
+    client = fresh_client()
+    import app.services.case_assets as case_assets
+
+    case_assets._archive_member_index_cache.clear()
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    object.__setattr__(settings, "remote_snapshot_dir", snapshot_dir)
+    snapshot_path = snapshot_dir / "github-testindexcache.zip"
+    with zipfile.ZipFile(snapshot_path, "w") as archive:
+        archive.writestr("repo-main/images/sample_case/output-a.jpg", b"fake-a")
+        archive.writestr("repo-main/images/sample_case/output-b.jpg", b"fake-b")
+
+    provider = repository.get_provider("github_evolinkai_gpt_image_cases")
+    assert provider is not None
+    repository.upsert_provider(
+        provider.model_copy(update={"active_index_version": "github_evolinkai_gpt_image_cases:github-testindexcache"})
+    )
+
+    calls = {"namelist": 0}
+    original_namelist = case_assets.zipfile.ZipFile.namelist
+
+    def counted_namelist(self):
+        calls["namelist"] += 1
+        return original_namelist(self)
+
+    monkeypatch.setattr(case_assets.zipfile.ZipFile, "namelist", counted_namelist)
+
+    first = client.get("/api/v2/case-assets/images/sample_case/output-a.jpg")
+    second = client.get("/api/v2/case-assets/images/sample_case/output-b.jpg")
+
+    assert first.status_code == 200
+    assert first.content == b"fake-a"
+    assert second.status_code == 200
+    assert second.content == b"fake-b"
+    assert calls["namelist"] == 1
 
 
 def test_case_thumbnail_endpoint_generates_cached_webp_from_snapshot(tmp_path) -> None:
@@ -415,6 +531,113 @@ def test_v2_upload_image_completes_with_asset_brief() -> None:
     assert body["brief"]["image"]["width"] == 320
     assert content.status_code == 200
     assert content.headers["content-type"].startswith("image/png")
+
+
+def test_v2_upload_rejects_oversized_declared_and_actual_content() -> None:
+    client = fresh_client()
+    original_limit = settings.max_uploaded_asset_bytes
+    object.__setattr__(settings, "max_uploaded_asset_bytes", 4)
+    try:
+        upload = client.post(
+            "/api/v2/uploads",
+            json={
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "size_bytes": 5,
+                "role": "subject_reference",
+                "constraint_strength": "required",
+            },
+        )
+        assert upload.status_code == 200
+        rejected_asset = client.get(f"/api/v2/uploads/{upload.json()['asset_id']}")
+        assert rejected_asset.status_code == 200
+        assert rejected_asset.json()["status"] == "rejected"
+        assert rejected_asset.json()["error"]["code"] == "asset_too_large"
+
+        accepted = client.post(
+            "/api/v2/uploads",
+            json={
+                "filename": "small-declared.png",
+                "mime_type": "image/png",
+                "size_bytes": 4,
+                "role": "subject_reference",
+                "constraint_strength": "required",
+            },
+        )
+        assert accepted.status_code == 200
+        content = client.put(
+            f"/api/v2/uploads/{accepted.json()['asset_id']}/content",
+            json={"content_base64": base64.b64encode(b"12345").decode("ascii"), "mime_type": "image/png"},
+        )
+        assert content.status_code == 400
+        assert content.json()["detail"]["error_code"] == "asset_too_large"
+    finally:
+        object.__setattr__(settings, "max_uploaded_asset_bytes", original_limit)
+
+
+def test_v2_uploaded_assets_are_bound_to_current_veyra_account(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    owner_token = issue_test_veyra_session_token(42)
+    other_token = issue_test_veyra_session_token(77)
+
+    upload = client.post(
+        "/api/v2/uploads",
+        json={
+            "filename": "owned.png",
+            "mime_type": "image/png",
+            "size_bytes": 4,
+            "role": "subject_reference",
+            "constraint_strength": "required",
+        },
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    assert repository.get_uploaded_asset(asset_id).veyra_user_id == 42
+
+    owner_lookup = client.get(f"/api/v2/uploads/{asset_id}", headers={"Authorization": f"Bearer {owner_token}"})
+    other_lookup = client.get(f"/api/v2/uploads/{asset_id}", headers={"Authorization": f"Bearer {other_token}"})
+    assert owner_lookup.status_code == 200
+    assert other_lookup.status_code == 403
+
+    run = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Use another account's uploaded image as the required product.",
+            "assets": [{"asset_id": asset_id, "role": "subject_reference", "constraint_strength": "required"}],
+            "output": {"count": 1},
+        },
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert run.status_code == 202
+    body = run.json()
+    assert body["status"] == "failed"
+    assert "Uploaded asset binding failed" in body["next_actions"][0]
+
+
+def test_v2_creative_run_enforces_uploaded_asset_count_limit() -> None:
+    client = fresh_client()
+    original_limit = settings.max_uploaded_asset_count
+    object.__setattr__(settings, "max_uploaded_asset_count", 1)
+    try:
+        response = client.post(
+            "/api/v2/creative/runs",
+            json={
+                "user_prompt": "Combine several uploaded images into one visual.",
+                "assets": [
+                    {"asset_id": "asset_a", "role": "style_reference"},
+                    {"asset_id": "asset_b", "role": "subject_reference"},
+                ],
+                "output": {"count": 1},
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["error_code"] == "asset_count_exceeded"
+    finally:
+        object.__setattr__(settings, "max_uploaded_asset_count", original_limit)
 
 
 def test_case_search_filters_unmatched_free_text() -> None:
@@ -2302,6 +2525,34 @@ def test_creative_run_without_template_uses_free_agent_asset_binding() -> None:
     assert variables["asset_binding_plan"]["mode"] == "free_agent"
     assert variables["asset_binding_plan"]["bindings"][0]["role"] == "style_reference"
     assert variables["provider_input_plan"]["reference_image_count"] == 1
+
+
+def test_v2_creative_run_accepts_multiple_uploaded_reference_images() -> None:
+    client = fresh_client()
+    subject_asset_id = upload_test_asset(client, role="subject_reference", color=(48, 96, 192))
+    logo_asset_id = upload_test_asset(client, role="logo_reference", color=(240, 240, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把上传的产品主体和 Logo 结合起来，生成一张高级品牌广告图。",
+            "assets": [
+                {"asset_id": subject_asset_id, "role": "subject_reference", "constraint_strength": "required"},
+                {"asset_id": logo_asset_id, "role": "logo_reference", "constraint_strength": "required"},
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    provider_plan = variables["provider_input_plan"]
+    assert provider_plan["reference_image_count"] == 2
+    assert provider_plan["reference_image_asset_ids"] == [subject_asset_id, logo_asset_id]
+    input_images = run["generation_jobs"][0]["outputs"][0]["metadata"]["input_images"]
+    assert [item["asset_id"] for item in input_images] == [subject_asset_id, logo_asset_id]
+    assert [item["role"] for item in input_images] == ["subject_reference", "logo_reference"]
 
 
 def test_v2_asset_request_role_controls_provider_input_requirement() -> None:

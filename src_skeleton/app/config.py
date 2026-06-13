@@ -99,6 +99,8 @@ class Settings(BaseModel):
     persist_runtime_settings: bool = os.getenv("MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS", "true").lower() in {"1", "true", "yes", "on"}
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
     media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
+    max_asset_upload_bytes: int = _int_env("MAX_ASSET_UPLOAD_BYTES", 12 * 1024 * 1024)
+    max_asset_upload_count: int = _int_env("MAX_ASSET_UPLOAD_COUNT", 6)
     veyra_auth_enabled: bool = os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     veyra_sub2api_base_url: str = os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080")
     veyra_internal_token: str | None = os.getenv("VEYRA_INTERNAL_TOKEN")

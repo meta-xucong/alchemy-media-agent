@@ -162,6 +162,7 @@ class Asset(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    veyra_user_id: int | None = None
     status: Literal[
         "created",
         "upload_requested",
@@ -186,6 +187,7 @@ class Asset(BaseModel):
     normalized_url: str | None = None
     material_brief: MaterialBrief | None = None
     vision_profile: AssetVisionProfile | None = None
+    error: dict[str, Any] | None = None
     declared_role: str | None = None
     intended_use: str | None = None
     consent: AssetConsent | dict[str, Any] = Field(default_factory=dict)

@@ -19,7 +19,10 @@
             <h1>GALLERY RITUAL</h1>
             <p class="eyebrow">AI 影像创作</p>
           </div>
-          <a class="surface-switch-link" href="/?desktop=1" aria-label="返回桌面版">桌面版</a>
+          <div class="mobile-header-actions">
+            <button id="mobileHeaderAccountBtn" class="surface-switch-link header-action-button" data-mobile-open="account" type="button">我的账户</button>
+            <a class="surface-switch-link" href="/?desktop=1" aria-label="返回桌面版">桌面版</a>
+          </div>
         </div>
 
         <nav class="module-tabs" aria-label="生成模块" role="tablist">
@@ -197,10 +200,11 @@
                     <span id="assetPreviewLabel">未选择素材</span>
                   </div>
                   <label class="file-drop" for="assetInput">
-                    <input id="assetInput" type="file" accept="image/*" />
+                    <input id="assetInput" type="file" accept="image/*" multiple />
                     <span class="file-title">选择参考素材</span>
-                    <span id="assetName" class="file-meta">仅支持图片素材</span>
+                    <span id="assetName" class="file-meta">支持多图，单次最多 6 张</span>
                   </label>
+                  <div id="assetList" class="v2-asset-list empty-v2-list">暂无上传素材</div>
                   <div id="advancedAssetPanel" class="advanced-asset-panel">
                     <div class="advanced-role-checks" aria-label="高级素材用途">
                       <label class="role-check">
@@ -546,7 +550,7 @@
                   </div>
                   <button id="v2AssetUploadBtn" class="button secondary full-width v2-upload-button" type="button">上传图片</button>
                   <label class="file-drop v2-file-drop" for="v2AssetInput">
-                    <input id="v2AssetInput" type="file" accept="image/*" />
+                    <input id="v2AssetInput" type="file" accept="image/*" multiple />
                     <span class="file-title">点此选择参考图片</span>
                     <span id="v2AssetName" class="file-meta">PNG / JPEG / WebP</span>
                   </label>
@@ -821,6 +825,74 @@
             </div>
           </div>
         </section>
+
+        <section id="accountModule" class="mobile-account-module account-module" aria-label="我的账户">
+          <section class="panel flow-section veyra-account-panel">
+            <div class="panel-head section-title">
+              <div>
+                <p class="eyebrow">Veyra Account</p>
+                <h3>我的账户</h3>
+              </div>
+              <div class="v2-status-actions">
+                <span id="veyraAccountState" class="state-pill">未接入</span>
+                <button id="veyraRefreshAccountBtn" class="button secondary" type="button">刷新账户</button>
+              </div>
+            </div>
+
+            <div class="account-summary-grid" aria-label="账户摘要">
+              <article class="account-kpi">
+                <span>账户</span>
+                <strong id="veyraAccountEmail">从 Veyra Agent 登录后显示</strong>
+                <small id="veyraAccountUserId">-</small>
+              </article>
+              <article class="account-kpi balance-kpi">
+                <span>可用资金</span>
+                <strong id="veyraAccountBalance">-</strong>
+                <small id="veyraAccountStatus">等待登录</small>
+              </article>
+              <article class="account-kpi">
+                <span>生图记录</span>
+                <strong id="veyraAccountHistoryCount">0</strong>
+                <small id="veyraAccountHistoryScope">当前账户与旧公共记录</small>
+              </article>
+              <article class="account-kpi">
+                <span>累计消耗</span>
+                <strong id="veyraAccountUsageTotal">-</strong>
+                <small>来自资金流水</small>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel flow-section account-record-section">
+            <div class="panel-head section-title">
+              <div>
+                <p class="eyebrow">Images</p>
+                <h3 id="veyraAccountHistoryTitle">我的生成记录</h3>
+              </div>
+            </div>
+            <div id="veyraAccountHistoryGrid" class="account-history-grid" aria-live="polite"></div>
+          </section>
+
+          <section class="panel flow-section account-record-section">
+            <div class="panel-head section-title">
+              <div>
+                <p class="eyebrow">Templates</p>
+                <h3>历史使用模板</h3>
+              </div>
+            </div>
+            <div id="veyraTemplateHistoryList" class="account-template-list" aria-live="polite"></div>
+          </section>
+
+          <section class="panel flow-section account-record-section">
+            <div class="panel-head section-title">
+              <div>
+                <p class="eyebrow">Usage</p>
+                <h3>资金消耗记录</h3>
+              </div>
+            </div>
+            <div id="veyraUsageList" class="account-usage-list" aria-live="polite"></div>
+          </section>
+        </section>
       </main>
     </div>
 
@@ -904,6 +976,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260612-v2-case-paging" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260613-v2-speed3" defer></script>
   </body>
 </html>

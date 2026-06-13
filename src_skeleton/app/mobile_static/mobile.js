@@ -19,6 +19,7 @@ const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
   video: "coming soon",
+  account: "账户资金、生成历史与消耗记录集中查看。",
 };
 const coffeeSamplePrompt = "生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
 const defaultImageCount = "1";
@@ -26,7 +27,8 @@ const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
 const heroHistoryPageSize = 8;
-const v2TemplatePageSize = 16;
+const v2TemplatePageSize = 10;
+const v2TemplateEagerImageCount = 4;
 const v2HistoryPageSize = 24;
 const v2RunLongWaitAttempt = 120;
 const v2LocalApiBase = "http://127.0.0.1:8020/api/v2";
@@ -34,6 +36,7 @@ const v2ApiBase =
   window.ALCHEMY_V2_API_BASE ||
   (isLocalAlchemyHost() ? v2LocalApiBase : `${window.location.origin}/api/v2`);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
+const veyraAccountStorageKey = "alchemy_veyra_account";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
 
 function isLocalAlchemyHost() {
@@ -102,6 +105,7 @@ const v2TagLabels = {
 const state = {
   sessionId: null,
   assetIds: [],
+  assets: [],
   assetMode: "basic",
   selectedAssetRoles: ["style_reference"],
   currentJob: null,
@@ -137,6 +141,10 @@ const v2State = {
   templateNextCursor: null,
   templateHasMore: false,
   templateLoadingMore: false,
+  templatePrefetchKey: "",
+  templatePrefetchPromise: null,
+  templatePrefetchPage: null,
+  templateDetailCache: {},
   templates: [],
   visibleTemplates: [],
   history: [],
@@ -167,6 +175,11 @@ function safeImageProviderPreference(provider, fallback = "openai_gpt_image") {
 }
 
 const veyraState = {
+  account: null,
+  history: [],
+  usage: [],
+  usedTemplates: [],
+  loading: false,
   authPolicy: null,
 };
 
@@ -179,6 +192,7 @@ let mobileHistoryToken = 0;
 let activeLightboxActions = [];
 
 const els = {
+  mobileHeaderAccountBtn: document.querySelector("#mobileHeaderAccountBtn"),
   sessionLabel: document.querySelector("#sessionLabel"),
   tabs: document.querySelectorAll("[data-tab]"),
   panels: document.querySelectorAll("[data-panel]"),
@@ -252,6 +266,19 @@ const els = {
   v2HistoryCount: document.querySelector("#v2HistoryCount"),
   v2RefreshHistoryBtn: document.querySelector("#v2RefreshHistoryBtn"),
   v2HistoryGrid: document.querySelector("#v2HistoryGrid"),
+  veyraAccountState: document.querySelector("#veyraAccountState"),
+  veyraAccountEmail: document.querySelector("#veyraAccountEmail"),
+  veyraAccountBalance: document.querySelector("#veyraAccountBalance"),
+  veyraAccountStatus: document.querySelector("#veyraAccountStatus"),
+  veyraAccountUserId: document.querySelector("#veyraAccountUserId"),
+  veyraAccountHistoryCount: document.querySelector("#veyraAccountHistoryCount"),
+  veyraAccountHistoryScope: document.querySelector("#veyraAccountHistoryScope"),
+  veyraAccountHistoryTitle: document.querySelector("#veyraAccountHistoryTitle"),
+  veyraAccountUsageTotal: document.querySelector("#veyraAccountUsageTotal"),
+  veyraRefreshAccountBtn: document.querySelector("#veyraRefreshAccountBtn"),
+  veyraAccountHistoryGrid: document.querySelector("#veyraAccountHistoryGrid"),
+  veyraTemplateHistoryList: document.querySelector("#veyraTemplateHistoryList"),
+  veyraUsageList: document.querySelector("#veyraUsageList"),
   providerState: document.querySelector("#providerState"),
   openaiApiKeyInput: document.querySelector("#openaiApiKeyInput"),
   openaiBaseUrlInput: document.querySelector("#openaiBaseUrlInput"),
@@ -275,6 +302,7 @@ const els = {
   assetPreview: document.querySelector("#assetPreview"),
   assetPreviewLabel: document.querySelector("#assetPreviewLabel"),
   assetState: document.querySelector("#assetState"),
+  assetList: document.querySelector("#assetList"),
   advancedAssetPanel: document.querySelector("#advancedAssetPanel"),
   assetStrengthInput: document.querySelector("#assetStrengthInput"),
   assetStrengthValue: document.querySelector("#assetStrengthValue"),
@@ -330,6 +358,7 @@ const els = {
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
+  hydrateCachedVeyraAccount();
   bindControls();
   setupH5AdvancedPanels();
   try {
@@ -459,6 +488,7 @@ function bindControls() {
   });
   if (els.v2ClearTemplateBtn) els.v2ClearTemplateBtn.addEventListener("click", clearV2Template);
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.addEventListener("click", () => loadV2History({ silent: false }));
+  if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
   if (els.v2RunBtn) els.v2RunBtn.addEventListener("click", runV2Creative);
   bindProviderAutosave();
   els.newSessionBtn.addEventListener("click", startNewSession);
@@ -534,6 +564,8 @@ function setupH5AdvancedPanels() {
   const v2Stack = document.querySelector("#v2Tab .module-stack");
   createMobileV2Architecture(v2Stack);
   createMobileVideoArchitecture();
+  createMobileAccountArchitecture();
+  bindMobileEntryButtons(document);
   updateMobileSummaries();
 }
 
@@ -698,6 +730,7 @@ function createMobileV1Architecture(stack) {
       ${mobileEntryMarkup("v1-material", "高级素材", "未上传素材", "mobileV1MaterialSummary")}
       ${mobileEntryMarkup("v1-history", "历史图片", "查看全部历史", "mobileV1HistorySummary")}
       ${mobileEntryMarkup("v1-revision", "继续修改", "选择结果后可用", "mobileV1RevisionSummary")}
+      ${mobileEntryMarkup("account", "我的账户", "登录后查看", "mobileAccountSummary")}
       ${mobileEntryMarkup("v1-settings", "模型设置", "读取中", "mobileV1SettingsSummary")}
       ${mobileEntryMarkup("v1-events", "事件", "暂无事件", "mobileV1EventsSummary")}
     </div>
@@ -776,6 +809,7 @@ function createMobileV2Architecture(stack) {
       ${mobileEntryMarkup("v2-params", "参数", "1 张 · 默认画幅", "mobileV2ParamsSummary")}
       ${mobileEntryMarkup("v2-run-detail", "中枢详情", "等待 Agent 输出", "mobileV2RunSummary")}
       ${mobileEntryMarkup("v2-history", "2.0 历史", "查看全部历史", "mobileV2HistorySummary")}
+      ${mobileEntryMarkup("account", "我的账户", "登录后查看", "mobileAccountSummary")}
       ${mobileEntryMarkup("v2-settings", "V2 设置", "读取中", "mobileV2SettingsSummary")}
     </div>
   `;
@@ -786,6 +820,18 @@ function createMobileV2Architecture(stack) {
     outputArea.classList.add("mobile-v2-home-results");
     actions.insertAdjacentElement("afterend", outputArea);
   }
+}
+
+function createMobileAccountArchitecture() {
+  const accountModule = document.querySelector("#accountModule");
+  if (!accountModule || document.querySelector('[data-mobile-view="account"]')) return;
+  createMobileView({
+    id: "account",
+    title: "我的账户",
+    eyebrow: "Veyra Account",
+    footerLabel: "返回工作台",
+    targets: [accountModule],
+  });
 }
 
 function createV2HomeContext(agent, actions) {
@@ -960,6 +1006,11 @@ function openMobileSurface(id, opener = null) {
   if (els.sampleGuideModal && !els.sampleGuideModal.hidden) closeSampleGuide();
   closeMobileSurface({ silent: true, fromHistory: true });
   updateMobileSummaries();
+  if (id === "account") {
+    loadVeyraAccountPanel({ silent: true, force: false }).catch((error) => {
+      console.warn("Mobile Veyra account panel load failed", error);
+    });
+  }
   if (view) {
     els.mobileViewLayer.hidden = false;
     view.hidden = false;
@@ -1035,7 +1086,19 @@ function updateMobileSummaries() {
   setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2State.history.filter(isRenderableV2HistoryImage).length} 张历史` : "暂无历史");
   const v2Provider = v2EffectiveImageProvider(v2State.modelSettings || {});
   setSummaryText("mobileV2SettingsSummary", `${v2ImageChannelLabel(v2Provider)} · Claude Code`);
+  updateMobileAccountSummary();
   updateV2HomeContextSummary(template);
+}
+
+function updateMobileAccountSummary() {
+  const user = veyraAccountUser();
+  if (!getVeyraToken() || !user) {
+    setSummaryText("mobileAccountSummary", "登录后查看");
+    return;
+  }
+  const balance = formatVeyraMoney(user.balance);
+  const historyCount = veyraState.history.length || 0;
+  setSummaryText("mobileAccountSummary", `${balance} 资金 · ${historyCount} 张记录`);
 }
 
 function updateV2HomeContextSummary(template = null) {
@@ -1166,6 +1229,7 @@ function setAdvancedAssetRoles(roles = ["style_reference"]) {
 function syncAdvancedAssetRoles() {
   state.selectedAssetRoles = selectedAssetRolesFromDom();
   renderAdvancedAssetRoles();
+  renderAssetPanel();
   scheduleMobileSummaryUpdate();
 }
 
@@ -1330,19 +1394,21 @@ async function createSession({ announce = true } = {}) {
   });
   state.sessionId = session.id;
   state.assetIds = [];
+  state.assets = [];
   state.currentJob = null;
   state.selectedOutputId = null;
   els.sessionLabel.textContent = session.id;
   els.gallery.innerHTML = "";
   els.gallery.classList.remove("loading");
   els.gallery.classList.add("empty-gallery");
-  els.assetName.textContent = "仅支持图片素材";
+  els.assetName.textContent = "支持多图，单次最多 6 张";
   els.assetState.textContent = "空";
   els.assetInput.value = "";
   setAssetMode("basic");
   setAdvancedAssetRoles(["style_reference"]);
   if (els.assetIntentNotesInput) els.assetIntentNotesInput.value = "";
   resetAssetPreview();
+  renderAssetPanel();
   els.revisionInput.value = "";
   els.selectedOutputLabel.textContent = "未选";
   setStatus("待命", 0, "-");
@@ -1712,6 +1778,7 @@ async function initV2({ silent = true, force = false } = {}) {
     v2State.modelSettings = modelSettings;
     applyV2TemplateIndex(templateIndexResponse);
     applyV2TemplatePage(templatesPageResponse, { reset: true });
+    scheduleV2TemplatePrefetch();
     v2State.historyRenderLimit = v2HistoryPageSize;
     v2State.history = historyResponse.items || [];
     v2State.loaded = true;
@@ -2049,6 +2116,10 @@ function v2TemplatePageEndpoint({ cursor = null, facet = v2State.activeCaseFacet
   return `/templates/page?${params.toString()}`;
 }
 
+function v2TemplatePageKey({ cursor = null, facet = v2State.activeCaseFacet, limit = v2TemplatePageSize } = {}) {
+  return v2TemplatePageEndpoint({ cursor, facet, limit });
+}
+
 async function loadV2TemplatePage({ reset = false, refreshIndex = false, silent = true } = {}) {
   if (v2State.templateLoadingMore) return;
   if (!reset && !v2State.templateHasMore) return;
@@ -2059,13 +2130,13 @@ async function loadV2TemplatePage({ reset = false, refreshIndex = false, silent 
     if (refreshIndex) {
       applyV2TemplateIndex(await v2Request("/templates/index"));
     }
-    const page = await v2Request(
-      v2TemplatePageEndpoint({
-        cursor: reset ? null : v2State.templateNextCursor,
-      })
-    );
+    const pageRequest = {
+      cursor: reset ? null : v2State.templateNextCursor,
+    };
+    const page = await loadV2TemplatePageData(pageRequest, { allowPrefetchReuse: !reset });
     applyV2TemplatePage(page, { reset });
     pageLoaded = true;
+    scheduleV2TemplatePrefetch();
     if (!silent) {
       updateV2Notice(`已加载 ${v2State.templates.length} / ${v2State.templateTotal || v2State.templates.length} 个案例。`, "success");
     }
@@ -2078,6 +2149,68 @@ async function loadV2TemplatePage({ reset = false, refreshIndex = false, silent 
       renderV2Templates(v2State.visibleTemplates);
     }
   }
+}
+
+async function loadV2TemplatePageData(request, { allowPrefetchReuse = true } = {}) {
+  const key = v2TemplatePageKey(request);
+  if (allowPrefetchReuse && v2State.templatePrefetchKey === key) {
+    if (v2State.templatePrefetchPage) {
+      const page = v2State.templatePrefetchPage;
+      clearV2TemplatePrefetch();
+      return page;
+    }
+    if (v2State.templatePrefetchPromise) {
+      const page = await v2State.templatePrefetchPromise;
+      clearV2TemplatePrefetch();
+      if (page) return page;
+    }
+  }
+  return v2Request(key);
+}
+
+function clearV2TemplatePrefetch() {
+  v2State.templatePrefetchKey = "";
+  v2State.templatePrefetchPromise = null;
+  v2State.templatePrefetchPage = null;
+}
+
+function scheduleV2TemplatePrefetch() {
+  if (v2State.caseSearchQuery || !v2State.templateHasMore || !v2State.templateNextCursor) {
+    clearV2TemplatePrefetch();
+    return;
+  }
+  const request = { cursor: v2State.templateNextCursor };
+  const key = v2TemplatePageKey(request);
+  if (v2State.templatePrefetchKey === key && (v2State.templatePrefetchPage || v2State.templatePrefetchPromise)) return;
+  clearV2TemplatePrefetch();
+  v2State.templatePrefetchKey = key;
+  v2State.templatePrefetchPromise = v2IdleCallback(() => v2Request(key))
+    .then((page) => {
+      if (v2State.templatePrefetchKey === key) v2State.templatePrefetchPage = page;
+      return page;
+    })
+    .catch((error) => {
+      if (v2State.templatePrefetchKey === key) clearV2TemplatePrefetch();
+      console.warn("V2 template prefetch failed", error);
+      return null;
+    });
+}
+
+function v2IdleCallback(callback) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      try {
+        Promise.resolve(callback()).then(resolve, reject);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(run, { timeout: 1600 });
+    } else {
+      window.setTimeout(run, 500);
+    }
+  });
 }
 
 async function loadV2History({ silent = true } = {}) {
@@ -2104,6 +2237,7 @@ async function searchV2Templates() {
   setV2CaseSearchThinking(true, query);
   try {
     v2State.caseSearchQuery = query;
+    clearV2TemplatePrefetch();
     if (!query) {
       v2State.activeCaseFacet = "all";
       await loadV2TemplatePage({ reset: true, refreshIndex: true, silent: true });
@@ -2210,6 +2344,7 @@ async function applyV2CaseFacet() {
   }
   toggleV2Loading(true);
   try {
+    clearV2TemplatePrefetch();
     await loadV2TemplatePage({ reset: true, silent: true });
     updateV2Notice(v2State.visibleTemplates.length ? `当前显示 ${v2State.visibleTemplates.length} / ${v2State.templateTotal || v2State.visibleTemplates.length} 个案例。` : "这个分类下没有匹配案例。", v2State.visibleTemplates.length ? "success" : "warning");
   } finally {
@@ -2236,7 +2371,7 @@ function renderV2Templates(templates) {
     els.v2TemplateGrid.appendChild(empty);
     return;
   }
-  renderedTemplates.forEach((template) => {
+  renderedTemplates.forEach((template, index) => {
     const card = document.createElement("article");
     card.className = `v2-template-card ${template.case_id === v2State.selectedTemplateId ? "selected" : ""}`;
 
@@ -2244,12 +2379,15 @@ function renderV2Templates(templates) {
     preview.className = "v2-template-preview";
     if (template.preview_url) {
       preview.type = "button";
-      const fullImageUrl = v2CasePreviewUrl(template.preview_url);
+      const fullImageUrl = v2CasePreviewUrl(template.preview_url, template.index_version);
       const image = document.createElement("img");
-      image.src = v2CaseThumbnailUrl(template.preview_url) || fullImageUrl;
+      image.src = v2CaseThumbnailUrl(template.preview_url, "grid", template.index_version) || fullImageUrl;
       image.alt = template.title || "案例预览";
-      image.loading = "lazy";
+      image.width = 720;
+      image.height = 900;
+      image.loading = index < v2TemplateEagerImageCount ? "eager" : "lazy";
       image.decoding = "async";
+      image.fetchPriority = index < v2TemplateEagerImageCount ? "high" : "low";
       image.addEventListener("error", () => fallbackV2CaseImageToPreview(image, fullImageUrl, preview));
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2CasePreview(template, fullImageUrl));
@@ -2334,11 +2472,41 @@ function openV2CasePreview(template, previewUrl = null) {
   openImageLightbox({
     id: template.case_id,
     title: template.title || "案例预览",
-    url: previewUrl || v2CasePreviewUrl(template.preview_url),
+    url: previewUrl || v2CasePreviewUrl(template.preview_url, template.index_version),
     format: "jpg",
     meta: [...(template.style_tags || []), ...(template.use_case_tags || [])].slice(0, 8).map(v2DisplayLabel).join(" · ") || v2DisplayLabel(template.category),
     promptText: template.summary || template.why_selected || "",
   });
+}
+
+function findV2TemplateInCache(caseId) {
+  if (!caseId) return null;
+  const pools = [
+    v2State.selectedTemplateDetail,
+    ...(v2State.templates || []),
+    ...(v2State.visibleTemplates || []),
+    ...Object.values(v2State.templateDetailCache || {}),
+  ].filter(Boolean);
+  return pools.find((template) => template.case_id === caseId) || null;
+}
+
+async function loadV2TemplateDetailForHistory(caseId) {
+  if (!caseId) return null;
+  if (v2State.templateDetailCache?.[caseId]) return v2State.templateDetailCache[caseId];
+  const cached = findV2TemplateInCache(caseId);
+  if (cached?.preview_url && cached?.title) {
+    v2State.templateDetailCache[caseId] = cached;
+    return cached;
+  }
+  try {
+    const detail = await v2Request(`/prompt-cases/${encodeURIComponent(caseId)}`);
+    v2State.templateDetailCache[caseId] = detail;
+    return detail;
+  } catch (error) {
+    if (cached) return cached;
+    console.warn("Template history detail load failed", caseId, error);
+    return null;
+  }
 }
 
 function v2DisplayLabel(value) {
@@ -2359,19 +2527,24 @@ function v2ReasonLabel(value) {
     .replaceAll("quality", "质量分");
 }
 
-function v2CasePreviewUrl(url) {
+function v2CasePreviewUrl(url, version = "") {
   if (!url) return "";
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-thumbnails/preview/${encodeV2CaseAssetPath(assetPath)}`;
+  if (assetPath) return v2CaseThumbnailEndpoint(assetPath, "preview", version);
   if (url.startsWith("/api/v2/")) return v2MediaUrl(url);
   return url;
 }
 
-function v2CaseThumbnailUrl(url, variant = "grid") {
+function v2CaseThumbnailUrl(url, variant = "grid", version = "") {
   const assetPath = v2CaseAssetPath(url);
-  if (assetPath) return `${v2ApiBase}/case-thumbnails/${variant}/${encodeV2CaseAssetPath(assetPath)}`;
+  if (assetPath) return v2CaseThumbnailEndpoint(assetPath, variant, version);
   if (url?.startsWith("/api/v2/")) return v2MediaUrl(url);
   return url;
+}
+
+function v2CaseThumbnailEndpoint(assetPath, variant = "grid", version = "") {
+  const endpoint = `${v2ApiBase}/case-thumbnails/${variant}/${encodeV2CaseAssetPath(assetPath)}`;
+  return version ? `${endpoint}?v=${encodeURIComponent(version)}` : endpoint;
 }
 
 function v2CaseAssetPath(url) {
@@ -2714,6 +2887,7 @@ async function runV2Creative() {
     showGlobalToast("V2.0 Agent 已完成出图流程。");
     scrollV2HomeResultsIntoView(run);
     await loadV2History({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
   } catch (error) {
     const message = `V2.0 Agent 失败：${friendlyError(error)}`;
     finishV2Progress("failed", message, "error");
@@ -3195,6 +3369,7 @@ async function deleteV2HistoryItem(item, card) {
     }
     renderV2History(v2State.history);
     if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     updateV2Notice("2.0 历史图片已删除。", "success");
     showGlobalToast("2.0 历史图片已删除。");
   } catch (error) {
@@ -3276,6 +3451,10 @@ function v2MediaUrl(url) {
     return `${v2ApiBase}${url.slice("/api/v2".length)}`;
   }
   return url;
+}
+
+function v2HistoryImageUrl(item, { thumbnail = true } = {}) {
+  return v2MediaUrl((thumbnail && item?.thumbnail_url) || item?.url || "");
 }
 
 function v2ReviewLabel(decision) {
@@ -3394,6 +3573,7 @@ async function handleVeyraTicketFromUrl() {
     setVeyraToken(session.access_token || "");
     await syncVeyraSessionCookie();
     cleanVeyraTicketFromUrl();
+    await loadVeyraAccountPanel({ silent: true, force: true });
     updateV2Notice("Veyra 账户已接入。", "success");
   } catch (error) {
     setVeyraToken("");
@@ -3414,7 +3594,14 @@ async function syncVeyraSessionCookie() {
 async function hasValidVeyraSession() {
   if (getVeyraToken()) return true;
   try {
-    await v2Request("/veyra/me", { skipVeyraAuth: true });
+    const account = await v2Request("/veyra/me", { skipVeyraAuth: true });
+    veyraState.account = account;
+    try {
+      localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
+    } catch {
+      // Ignore storage failures; display state will refresh from the backend.
+    }
+    updateMobileAccountSummary();
     return true;
   } catch {
     setVeyraToken("");
@@ -3476,74 +3663,526 @@ function getVeyraToken() {
 
 function setVeyraToken(token) {
   try {
-    if (token) localStorage.setItem(veyraTokenStorageKey, token);
-    else localStorage.removeItem(veyraTokenStorageKey);
+    if (token) {
+      localStorage.setItem(veyraTokenStorageKey, token);
+    } else {
+      localStorage.removeItem(veyraTokenStorageKey);
+      localStorage.removeItem(veyraAccountStorageKey);
+      veyraState.account = null;
+      veyraState.history = [];
+      veyraState.usage = [];
+      veyraState.usedTemplates = [];
+      updateMobileAccountSummary();
+    }
   } catch {
     // Ignore unavailable storage; the backend remains the source of truth.
   }
 }
 
+function hydrateCachedVeyraAccount() {
+  if (!getVeyraToken()) {
+    updateMobileAccountSummary();
+    return;
+  }
+  try {
+    const cached = localStorage.getItem(veyraAccountStorageKey);
+    if (cached) veyraState.account = JSON.parse(cached);
+  } catch {
+    veyraState.account = null;
+  }
+  updateMobileAccountSummary();
+}
+
+async function refreshVeyraAccount() {
+  try {
+    const account = await v2Request("/veyra/me");
+    veyraState.account = account;
+    try {
+      localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
+    } catch {
+      // Ignore storage failures; this cache is only for browser display continuity.
+    }
+    updateMobileAccountSummary();
+    return account;
+  } catch (error) {
+    if (String(error?.message || error).includes("401")) setVeyraToken("");
+    updateMobileAccountSummary();
+    return null;
+  }
+}
+
+function veyraAccountUser(account = veyraState.account) {
+  return account?.user || account || null;
+}
+
+function isVeyraAdmin(account = veyraState.account) {
+  const user = veyraAccountUser(account);
+  return String(user?.role || "").toLowerCase() === "admin";
+}
+
+function formatVeyraMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "-";
+  return amount.toFixed(4).replace(/\.?0+$/, "") || "0";
+}
+
+function veyraUsageTotal(items = []) {
+  return items.reduce((sum, item) => {
+    const amount = Number(item?.amount);
+    return Number.isFinite(amount) ? sum + amount : sum;
+  }, 0);
+}
+
+function setVeyraAccountLoading(isLoading) {
+  veyraState.loading = isLoading;
+  if (els.veyraRefreshAccountBtn) {
+    els.veyraRefreshAccountBtn.disabled = isLoading;
+    els.veyraRefreshAccountBtn.textContent = isLoading ? "刷新中..." : "刷新账户";
+  }
+}
+
+function renderVeyraSignedOut() {
+  if (els.veyraAccountState) els.veyraAccountState.textContent = "未接入";
+  if (els.veyraAccountEmail) els.veyraAccountEmail.textContent = "从 Veyra Agent 登录后显示";
+  if (els.veyraAccountBalance) els.veyraAccountBalance.textContent = "-";
+  if (els.veyraAccountStatus) els.veyraAccountStatus.textContent = "等待登录";
+  if (els.veyraAccountUserId) els.veyraAccountUserId.textContent = "-";
+  if (els.veyraAccountHistoryCount) els.veyraAccountHistoryCount.textContent = "0";
+  if (els.veyraAccountHistoryScope) els.veyraAccountHistoryScope.textContent = "当前账户与旧版生图记录";
+  if (els.veyraAccountHistoryTitle) els.veyraAccountHistoryTitle.textContent = "我的生成记录";
+  if (els.veyraAccountUsageTotal) els.veyraAccountUsageTotal.textContent = "-";
+  renderVeyraAccountHistory([]);
+  renderVeyraTemplateHistory([]);
+  renderVeyraUsageList([]);
+  updateMobileAccountSummary();
+}
+
+function renderVeyraAccountSummary() {
+  const user = veyraAccountUser();
+  if (!user) {
+    renderVeyraSignedOut();
+    return;
+  }
+  const balance = Number(user.balance);
+  if (els.veyraAccountState) els.veyraAccountState.textContent = "已接入";
+  if (els.veyraAccountEmail) els.veyraAccountEmail.textContent = user.email || `用户 ${user.user_id || "-"}`;
+  if (els.veyraAccountBalance) els.veyraAccountBalance.textContent = formatVeyraMoney(balance);
+  if (els.veyraAccountStatus) {
+    els.veyraAccountStatus.textContent = Number.isFinite(balance) && balance > 0 ? "可继续生成" : "余额不足会阻止生成";
+  }
+  if (els.veyraAccountUserId) {
+    const role = user.role ? ` · ${user.role}` : "";
+    els.veyraAccountUserId.textContent = `User #${user.user_id || "-"}${role}`;
+  }
+  if (els.veyraAccountHistoryCount) els.veyraAccountHistoryCount.textContent = String(veyraState.history.length);
+  if (els.veyraAccountHistoryScope) {
+    els.veyraAccountHistoryScope.textContent = isVeyraAdmin() ? "管理员可见全部账户" : "当前账户与旧版生图记录";
+  }
+  if (els.veyraAccountHistoryTitle) {
+    els.veyraAccountHistoryTitle.textContent = isVeyraAdmin() ? "全部生成记录" : "我的生成记录";
+  }
+  if (els.veyraAccountUsageTotal) els.veyraAccountUsageTotal.textContent = formatVeyraMoney(veyraUsageTotal(veyraState.usage));
+  updateMobileAccountSummary();
+}
+
+function renderAccountEmpty(container, message, actionLabel = "", onAction = null) {
+  if (!container) return;
+  container.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "account-empty-state";
+  const text = document.createElement("p");
+  text.textContent = message;
+  empty.appendChild(text);
+  if (actionLabel && typeof onAction === "function") {
+    const button = document.createElement("button");
+    button.className = "button secondary";
+    button.type = "button";
+    button.textContent = actionLabel;
+    button.addEventListener("click", onAction);
+    empty.appendChild(button);
+  }
+  container.appendChild(empty);
+}
+
+function renderVeyraAccountHistory(items = []) {
+  if (!els.veyraAccountHistoryGrid) return;
+  els.veyraAccountHistoryGrid.innerHTML = "";
+  if (!getVeyraToken()) {
+    renderAccountEmpty(els.veyraAccountHistoryGrid, "登录后这里会按账户展示你自己的生图记录。");
+    return;
+  }
+  const adminView = isVeyraAdmin();
+  if (!items.length) {
+    renderAccountEmpty(
+      els.veyraAccountHistoryGrid,
+      adminView ? "当前还没有任何账户生成记录。" : "当前账户还没有生成记录。",
+      "去 V2.0 生图",
+      () => {
+        closeMobileSurface({ silent: true, fromHistory: true });
+        switchTab("v2");
+      }
+    );
+    return;
+  }
+  const sortedItems = [...items].sort(compareHistoryItems);
+  sortedItems.slice(0, 24).forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "account-history-card";
+    const cardPrompt = accountHistoryCardPrompt(item);
+    const imageUrl = accountHistoryImageUrl(item);
+    const mock = accountHistoryIsMock(item);
+    const preview = document.createElement(mock || !imageUrl ? "div" : "button");
+    preview.className = mock || !imageUrl ? "account-mock-preview" : "account-live-preview";
+    if (mock || !imageUrl) {
+      preview.textContent = `H${index + 1}`;
+    } else {
+      preview.type = "button";
+      const image = document.createElement("img");
+      image.src = imageUrl;
+      image.alt = cardPrompt || `账户生成记录 ${index + 1}`;
+      image.loading = "lazy";
+      image.decoding = "async";
+      preview.appendChild(image);
+      preview.addEventListener("click", () => openAccountHistoryLightbox(item, index));
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "account-history-meta";
+    const title = document.createElement("strong");
+    title.textContent = cardPrompt || item.output_id || `生成记录 ${index + 1}`;
+    const detail = document.createElement("span");
+    detail.textContent = historyDetailText(
+      accountHistorySourceLabel(item),
+      historyRecordLabel(item),
+      accountHistoryProviderText(item),
+      formatDate(item.created_at || item.updated_at)
+    );
+    meta.append(title, detail);
+    card.append(preview, meta);
+    els.veyraAccountHistoryGrid.appendChild(card);
+  });
+}
+
+function v2HistoryTemplateCaseId(item) {
+  const contract = item?.metadata?.template_lock_contract || {};
+  return String(
+    item?.template_case_id ||
+      item?.metadata?.template_case_id ||
+      item?.metadata?.primary_case_id ||
+      contract.locked_case_id ||
+      contract.case_id ||
+      ""
+  ).trim();
+}
+
+async function buildVeyraTemplateHistory(v2Items = []) {
+  const byCase = new Map();
+  v2Items.forEach((item) => {
+    const caseId = v2HistoryTemplateCaseId(item);
+    if (!caseId) return;
+    const time = historyTime(item);
+    const existing = byCase.get(caseId);
+    const next = existing || {
+      case_id: caseId,
+      usage_count: 0,
+      latest_item: item,
+      latest_time: time,
+    };
+    next.usage_count += 1;
+    if (!existing || time > existing.latest_time) {
+      next.latest_item = item;
+      next.latest_time = time;
+    }
+    byCase.set(caseId, next);
+  });
+
+  const entries = [...byCase.values()].sort((a, b) => b.latest_time - a.latest_time);
+  await Promise.all(
+    entries.slice(0, 30).map(async (entry) => {
+      const detail = await loadV2TemplateDetailForHistory(entry.case_id);
+      entry.template = detail || null;
+      entry.title = detail?.title || entry.case_id;
+      entry.summary = detail?.summary || v2HistoryCardPrompt(entry.latest_item) || "";
+      entry.preview_url = detail?.preview_url || "";
+      entry.index_version = detail?.index_version || "";
+      entry.category = detail?.category || "";
+      entry.tags = [...(detail?.style_tags || []), ...(detail?.use_case_tags || [])].slice(0, 5);
+    })
+  );
+  return entries;
+}
+
+function renderVeyraTemplateHistory(items = []) {
+  if (!els.veyraTemplateHistoryList) return;
+  els.veyraTemplateHistoryList.innerHTML = "";
+  if (!getVeyraToken()) {
+    renderAccountEmpty(els.veyraTemplateHistoryList, "登录后这里会展示 V2.0 曾经使用过的模板。");
+    return;
+  }
+  if (!items.length) {
+    renderAccountEmpty(els.veyraTemplateHistoryList, "还没有 V2.0 模板使用记录。", "去 V2.0 生图", () => {
+      closeMobileSurface({ silent: true, fromHistory: true });
+      switchTab("v2");
+    });
+    return;
+  }
+  items.slice(0, 30).forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "account-template-card";
+    const previewUrl = item.preview_url ? v2CaseThumbnailUrl(item.preview_url, "grid", item.index_version) : "";
+    const preview = document.createElement(previewUrl ? "button" : "div");
+    preview.className = "account-template-preview";
+    if (previewUrl) {
+      preview.type = "button";
+      const image = document.createElement("img");
+      image.src = previewUrl;
+      image.alt = item.title || `历史使用模板 ${index + 1}`;
+      image.loading = "lazy";
+      image.decoding = "async";
+      preview.appendChild(image);
+      preview.addEventListener("click", () => openV2CasePreview(item.template || item, v2CasePreviewUrl(item.preview_url, item.index_version)));
+    } else {
+      preview.textContent = "Case";
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "account-template-meta";
+    const title = document.createElement("strong");
+    title.textContent = item.title || item.case_id || `模板 ${index + 1}`;
+    const summary = document.createElement("p");
+    summary.textContent = item.summary || "V2.0 生成时使用过的视觉模板。";
+    const detail = document.createElement("span");
+    const tags = item.tags?.length
+      ? ` · ${item.tags.map(v2DisplayLabel).filter(Boolean).slice(0, 3).join(" / ")}`
+      : item.category
+        ? ` · ${v2DisplayLabel(item.category)}`
+        : "";
+    detail.textContent = `${formatDate(item.latest_item?.created_at || item.latest_item?.updated_at)} · 使用 ${item.usage_count} 次${tags}`;
+    meta.append(title, summary, detail);
+    card.append(preview, meta);
+    els.veyraTemplateHistoryList.appendChild(card);
+  });
+}
+
+function mergeAccountHistory(v1Items = [], v2Items = []) {
+  const normalized = [
+    ...v1Items.map((item) => ({ ...item, account_history_source: "v1" })),
+    ...v2Items.map((item) => ({ ...item, account_history_source: "v2" })),
+  ];
+  return normalized.sort(compareHistoryItems);
+}
+
+function mergeVeyraUsage(v1Items = [], v2Items = []) {
+  const seen = new Set();
+  return [...v1Items, ...v2Items]
+    .filter((item) => {
+      const key = item?.idempotency_key || item?.reference_id || JSON.stringify(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => historyTime(b) - historyTime(a));
+}
+
+function accountHistorySourceLabel(item) {
+  return item?.account_history_source === "v1" ? "V1" : "V2";
+}
+
+function accountHistoryIsV1(item) {
+  return item?.account_history_source === "v1" || Boolean(item?.id && !item?.output_id);
+}
+
+function accountHistoryIsMock(item) {
+  if (accountHistoryIsV1(item)) return false;
+  return Boolean(item?.metadata?.mock || item?.provider_id === "mock_image");
+}
+
+function accountHistoryCardPrompt(item) {
+  return accountHistoryIsV1(item) ? promptTextFromHistoryItem(item).split("\n").find(Boolean) || item?.prompt || "" : v2HistoryCardPrompt(item);
+}
+
+function accountHistoryImageUrl(item, { thumbnail = true } = {}) {
+  if (!accountHistoryIsV1(item)) return v2HistoryImageUrl(item, { thumbnail });
+  return (thumbnail && item?.thumbnail_url) || item?.url || "";
+}
+
+function accountHistoryProviderText(item) {
+  return accountHistoryIsV1(item) ? historyProviderResultText(item) : v2HistoryProviderResultText(item);
+}
+
+function openAccountHistoryLightbox(item, index = 0) {
+  if (!accountHistoryIsV1(item)) {
+    openV2HistoryLightbox(item, index);
+    return;
+  }
+  const title = accountHistoryCardPrompt(item);
+  openImageLightbox({
+    id: item.id,
+    title: title ? title.slice(0, 34) : `历史图片 ${index + 1}`,
+    url: accountHistoryImageUrl(item, { thumbnail: false }),
+    thumbnailUrl: accountHistoryImageUrl(item),
+    format: item.format || "png",
+    meta: historyMetaText(item),
+    promptText: promptTextFromHistoryItem(item),
+  });
+}
+
+function renderVeyraUsageList(items = []) {
+  if (!els.veyraUsageList) return;
+  els.veyraUsageList.innerHTML = "";
+  if (!getVeyraToken()) {
+    renderAccountEmpty(els.veyraUsageList, "登录后这里会展示 Alchemy 生图资金流水。");
+    return;
+  }
+  if (!items.length) {
+    renderAccountEmpty(els.veyraUsageList, "当前账户还没有资金消耗记录。");
+    return;
+  }
+  items.slice(0, 40).forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "account-usage-row";
+    const main = document.createElement("div");
+    const amount = document.createElement("strong");
+    amount.textContent = `-${formatVeyraMoney(item.amount)}`;
+    const meta = document.createElement("span");
+    meta.textContent = `${item.source || "alchemy"} · ${formatDate(item.created_at)}${item.replayed ? " · 已重放" : ""}`;
+    main.append(amount, meta);
+
+    const side = document.createElement("div");
+    const balance = document.createElement("strong");
+    balance.textContent = formatVeyraMoney(item.balance_after);
+    const reference = document.createElement("span");
+    reference.textContent = item.reference_id || item.idempotency_key || "-";
+    side.append(balance, reference);
+    row.append(main, side);
+    els.veyraUsageList.appendChild(row);
+  });
+}
+
+async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
+  if (!getVeyraToken()) {
+    veyraState.account = null;
+    veyraState.history = [];
+    veyraState.usage = [];
+    veyraState.usedTemplates = [];
+    renderVeyraSignedOut();
+    return null;
+  }
+  if (veyraState.loading && !force) return veyraState.account;
+  setVeyraAccountLoading(true);
+  try {
+    const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
+      refreshVeyraAccount(),
+      request("/v1/image/history?limit=1000"),
+      loadV2HistoryResponse(),
+      request("/v1/veyra/usage?limit=100"),
+      v2Request("/veyra/usage?limit=100"),
+    ]);
+    veyraState.account = account;
+    veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
+    veyraState.usage = mergeVeyraUsage(v1UsageResponse.items || [], v2UsageResponse.items || []);
+    veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);
+    renderVeyraAccountSummary();
+    renderVeyraAccountHistory(veyraState.history);
+    renderVeyraTemplateHistory(veyraState.usedTemplates);
+    renderVeyraUsageList(veyraState.usage);
+    if (!silent) showGlobalToast("账户信息已刷新。");
+    return account;
+  } catch (error) {
+    if (error?.status === 401) {
+      setVeyraToken("");
+      renderVeyraSignedOut();
+    }
+    if (!silent) showGlobalToast(`账户刷新失败：${friendlyError(error)}`, "error");
+    throw error;
+  } finally {
+    setVeyraAccountLoading(false);
+  }
+}
+
+async function refreshVeyraAccountPanelAfterHistoryChange() {
+  if (!getVeyraToken() || !els.veyraAccountHistoryGrid) return;
+  try {
+    await loadVeyraAccountPanel({ silent: true, force: true });
+  } catch (error) {
+    console.warn("Veyra account panel refresh failed", error);
+  }
+}
+
 async function handleV2Asset() {
-  const file = els.v2AssetInput?.files?.[0];
-  if (!file) return;
-  if (!isImageAssetFile(file)) {
+  const files = Array.from(els.v2AssetInput?.files || []);
+  if (!files.length) return;
+  const imageFiles = files.filter(isImageAssetFile);
+  if (imageFiles.length !== files.length) {
+    updateV2Notice("V2 上传素材目前只支持图片，已跳过非图片文件。", "warning");
+  }
+  if (!imageFiles.length) {
     clearV2Asset({ keepNotice: true });
     if (els.v2AssetInput) els.v2AssetInput.value = "";
-    updateV2Notice("V2 上传素材目前只支持图片，请选择 PNG、JPEG、WebP 等图片文件。", "warning");
+    scheduleMobileSummaryUpdate();
     return;
   }
   const role = v2PrimaryAssetRole();
   const strength = v2SelectedAssetStrength();
-  if (els.v2AssetName) els.v2AssetName.textContent = file.name;
+  if (els.v2AssetName) els.v2AssetName.textContent = `${imageFiles.length} 张素材上传中`;
   if (els.v2AssetState) els.v2AssetState.textContent = "上传中";
-  renderV2AssetPreview(file);
+  renderV2AssetPreview(imageFiles[0], imageFiles.length);
   try {
-    const upload = await v2Request("/uploads", {
-      method: "POST",
-      body: {
-        filename: file.name,
-        mime_type: file.type || imageMimeTypeFromName(file.name),
-        size_bytes: file.size,
-        role,
-        constraint_strength: strength,
-        intended_use: "v2_image_generation",
-      },
-    });
-    if (!upload.upload_url) {
-      throw new Error("素材未通过 V2 上传校验。");
+    const uploaded = [];
+    for (const file of imageFiles) {
+      uploaded.push(await uploadV2AssetFile(file, { role, strength }));
+      if (els.v2AssetState) els.v2AssetState.textContent = `上传 ${uploaded.length}/${imageFiles.length}`;
     }
-    await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/content`, {
-      method: "PUT",
-      body: {
-        content_base64: await fileToBase64(file),
-        mime_type: file.type || imageMimeTypeFromName(file.name),
-      },
-    });
-    const asset = await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/complete`, { method: "POST" });
-    if (asset.status !== "ready") {
-      throw new Error(asset.error?.message || `素材状态：${asset.status}`);
-    }
-    v2State.uploadedAssets = [
-      {
-        asset_id: asset.asset_id,
-        filename: asset.filename || file.name,
-        status: asset.status,
-        role,
-        constraint_strength: strength,
-        brief: asset.brief || null,
-        source_url: asset.source_url || null,
-      },
-    ];
+    v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded];
     renderV2AssetPanel();
-    updateV2Notice("V2 素材已分析完成；生成时会交给 Claude 中枢按当前用途绑定。", "success");
+    updateV2Notice(`V2 已分析 ${uploaded.length} 张素材；生成时会交给 Claude 中枢按当前用途绑定。`, "success");
     scheduleMobileSummaryUpdate();
   } catch (error) {
-    v2State.uploadedAssets = [];
     if (els.v2AssetState) els.v2AssetState.textContent = "失败";
     renderV2AssetPanel();
     updateV2Notice(`V2 素材上传失败：${friendlyError(error)}`, "error");
     scheduleMobileSummaryUpdate();
+  } finally {
+    if (els.v2AssetInput) els.v2AssetInput.value = "";
   }
+}
+
+async function uploadV2AssetFile(file, { role, strength }) {
+  const upload = await v2Request("/uploads", {
+    method: "POST",
+    body: {
+      filename: file.name,
+      mime_type: file.type || imageMimeTypeFromName(file.name),
+      size_bytes: file.size,
+      role,
+      constraint_strength: strength,
+      intended_use: "v2_image_generation",
+    },
+  });
+  if (!upload.upload_url) {
+    throw new Error("素材未通过 V2 上传校验。");
+  }
+  await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/content`, {
+    method: "PUT",
+    body: {
+      content_base64: await fileToBase64(file),
+      mime_type: file.type || imageMimeTypeFromName(file.name),
+    },
+  });
+  const asset = await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/complete`, { method: "POST" });
+  if (asset.status !== "ready") {
+    throw new Error(asset.error?.message || `素材状态：${asset.status}`);
+  }
+  return {
+    asset_id: asset.asset_id,
+    filename: asset.filename || file.name,
+    status: asset.status,
+    role,
+    constraint_strength: strength,
+    brief: asset.brief || null,
+    source_url: asset.source_url || null,
+    preview_url: asset.thumbnail_url || asset.source_url || null,
+  };
 }
 
 function v2SelectedAssetRoles() {
@@ -3578,11 +4217,11 @@ function v2AssetPayload() {
   );
 }
 
-function renderV2AssetPreview(file) {
+function renderV2AssetPreview(file, count = 1) {
   if (!els.v2AssetPreview || !els.v2AssetPreviewLabel) return;
   els.v2AssetPreview.classList.remove("empty-asset-preview");
   els.v2AssetPreview.style.backgroundImage = "";
-  els.v2AssetPreviewLabel.textContent = file.name;
+  els.v2AssetPreviewLabel.textContent = count > 1 ? `${file.name} 等 ${count} 张` : file.name;
   const reader = new FileReader();
   reader.addEventListener("load", () => {
     els.v2AssetPreview.style.backgroundImage = `url("${reader.result}")`;
@@ -3655,20 +4294,46 @@ function v2ConstraintStrengthLabel(value) {
 }
 
 async function handleAsset() {
-  const file = els.assetInput.files[0];
-  if (!file) return;
-  if (!isImageAssetFile(file)) {
+  const files = Array.from(els.assetInput?.files || []);
+  if (!files.length) return;
+  const imageFiles = files.filter(isImageAssetFile);
+  if (imageFiles.length !== files.length) {
+    showNotice("高级版素材目前只支持图片，已跳过非图片文件。", "warning");
+  }
+  if (!imageFiles.length) {
     els.assetInput.value = "";
-    els.assetName.textContent = "仅支持图片素材";
+    els.assetName.textContent = "支持多图，单次最多 6 张";
     els.assetState.textContent = "拒绝";
     resetAssetPreview();
-    showNotice("高级版素材目前只支持图片，请选择 PNG、JPEG、WebP 等图片文件。", "warning");
+    renderAssetPanel();
+    scheduleMobileSummaryUpdate();
     return;
   }
   state.assetMode = "advanced";
-  els.assetName.textContent = file.name;
   els.assetState.textContent = "上传";
-  renderAssetPreview(file);
+  renderAssetPreview(imageFiles[0], imageFiles.length);
+  try {
+    const uploaded = [];
+    for (const file of imageFiles) {
+      uploaded.push(await uploadV1AssetFile(file));
+      els.assetState.textContent = `上传 ${uploaded.length}/${imageFiles.length}`;
+    }
+    state.assets = [...state.assets, ...uploaded];
+    state.assetIds = state.assets.map((asset) => asset.asset_id);
+    renderAssetPanel();
+    els.assetState.textContent = "高级";
+    showNotice(`已上传 ${uploaded.length} 张素材；生成时会作为多图参考传入。`, "success");
+  } catch (error) {
+    els.assetState.textContent = "失败";
+    renderAssetPanel();
+    showNotice(`高级素材上传失败：${friendlyError(error)}`, "error");
+  } finally {
+    els.assetInput.value = "";
+    scheduleMobileSummaryUpdate();
+  }
+}
+
+async function uploadV1AssetFile(file) {
   const consent = assetConsentPayload();
   const upload = await request("/v1/assets/upload-url", {
     method: "POST",
@@ -3682,9 +4347,7 @@ async function handleAsset() {
     },
   });
   if (!upload.upload_url) {
-    els.assetState.textContent = "拒绝";
-    showNotice("素材未通过校验，请更换素材后重试。", "warning");
-    return;
+    throw new Error("素材未通过校验，请更换素材后重试。");
   }
   await request(`/v1/assets/${upload.asset_id}/content`, {
     method: "PUT",
@@ -3694,14 +4357,17 @@ async function handleAsset() {
     },
   });
   const asset = await request(`/v1/assets/${upload.asset_id}/complete`, { method: "POST" });
-  if (asset.status === "ready") {
-    state.assetIds = [asset.id];
-    els.assetState.textContent = "高级";
-    addEvent("asset.status", `${asset.id} · ${asset.material_brief.asset_type}`);
-  } else {
-    els.assetState.textContent = asset.status;
+  if (asset.status !== "ready") {
+    throw new Error(asset.error?.message || `素材状态：${asset.status}`);
   }
-  scheduleMobileSummaryUpdate();
+  addEvent("asset.status", `${asset.id} · ${asset.material_brief?.asset_type || "image"}`);
+  return {
+    asset_id: asset.id,
+    filename: asset.filename || file.name,
+    status: asset.status,
+    material_brief: asset.material_brief || null,
+    source_url: asset.source_url || `/v1/assets/${asset.id}/content`,
+  };
 }
 
 function isImageAssetFile(file) {
@@ -3741,10 +4407,10 @@ async function fileToBase64(file) {
   return window.btoa(chunks.join(""));
 }
 
-function renderAssetPreview(file) {
+function renderAssetPreview(file, count = 1) {
   els.assetPreview.classList.remove("empty-asset-preview");
   els.assetPreview.style.backgroundImage = "";
-  els.assetPreviewLabel.textContent = file.name;
+  els.assetPreviewLabel.textContent = count > 1 ? `${file.name} 等 ${count} 张` : file.name;
   if (!file.type.startsWith("image/")) {
     els.assetPreview.classList.add("document-preview");
     return;
@@ -3765,6 +4431,35 @@ function resetAssetPreview() {
   els.assetPreviewLabel.textContent = "未选择素材";
 }
 
+function renderAssetPanel() {
+  const hasAssets = state.assets.length > 0;
+  if (els.assetState) els.assetState.textContent = hasAssets ? "高级" : "空";
+  if (els.assetName) {
+    els.assetName.textContent = hasAssets ? `${state.assets.length} 张素材已就绪` : "支持多图，单次最多 6 张";
+  }
+  if (!els.assetList) return;
+  els.assetList.innerHTML = "";
+  els.assetList.classList.toggle("empty-v2-list", !hasAssets);
+  if (!hasAssets) {
+    els.assetList.textContent = "暂无上传素材";
+    return;
+  }
+  const roles = selectedAssetRolesFromDom();
+  const strength = Number(els.assetStrengthInput?.value || 65);
+  state.assets.forEach((asset, index) => {
+    const row = document.createElement("div");
+    row.className = "v2-asset-row";
+    const title = document.createElement("strong");
+    title.textContent = `${index + 1}. ${asset.filename || asset.asset_id}`;
+    const detail = document.createElement("span");
+    const summary = asset.material_brief?.summary || asset.material_brief?.asset_type || "";
+    const roleText = roles.length ? roles.map(assetRoleLabel).join(" + ") : "请选择用途";
+    detail.textContent = `${roleText} · 强度 ${strength}%${summary ? ` · ${summary}` : ""}`;
+    row.append(title, detail);
+    els.assetList.appendChild(row);
+  });
+}
+
 function imageAssetPayload() {
   if (!state.assetIds.length) {
     state.assetMode = "basic";
@@ -3781,7 +4476,7 @@ function imageAssetPayload() {
   }
   return {
     asset_mode: "advanced",
-    asset_intents: roles.map((role) => advancedAssetIntentPayload(state.assetIds[0], role)),
+    asset_intents: state.assetIds.flatMap((assetId) => roles.map((role) => advancedAssetIntentPayload(assetId, role))),
   };
 }
 
@@ -3806,6 +4501,53 @@ function advancedAssetIntentPayload(assetId, role) {
         : null,
     consent: assetConsentPayload(),
   };
+}
+
+function v1ImageJobReady(job) {
+  return job?.status === "ready" && Array.isArray(job.outputs) && job.outputs.length > 0;
+}
+
+function v1ImageJobTerminal(job) {
+  return ["ready", "failed", "provider_not_configured", "rejected", "canceled"].includes(job?.status);
+}
+
+function v1ImageJobPollDelay(attempt) {
+  if (attempt < 4) return 1200;
+  if (attempt < 30) return 2500;
+  return 5000;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttempts = 120 } = {}) {
+  let job = initialJob;
+  let transientErrors = 0;
+  for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+    state.currentJob = job;
+    setStatus(job?.status || "生成中", job?.outputs?.length || 0, job?.trace_id || "-");
+    if (v1ImageJobReady(job) || v1ImageJobTerminal(job)) {
+      return job;
+    }
+    if (!job?.id) {
+      return job;
+    }
+    if (attempt === 0) {
+      showNotice(`${actionLabel}任务已提交，后台正在生成。`, "info");
+    }
+    await delay(v1ImageJobPollDelay(attempt));
+    try {
+      job = await request(`/v1/image/jobs/${encodeURIComponent(job.id)}`);
+      transientErrors = 0;
+    } catch (error) {
+      transientErrors += 1;
+      if (transientErrors >= 3) {
+        throw new Error(`${actionLabel}状态查询中断：${friendlyError(error)}。任务可能仍在后台继续，请稍后刷新历史。`);
+      }
+    }
+  }
+  throw new Error(`${actionLabel}仍在后台进行，请稍后刷新历史查看结果。`);
 }
 
 async function generateImage() {
@@ -3842,6 +4584,7 @@ async function generateImage() {
   showNotice(`${modeText}正在生成 ${count} 张图片；优先使用 ${providerName}，质量：${qualityMap[state.selectedQuality]}。`, "info");
   startImageProgress({ label: "生成中", count, providerName });
   renderSkeleton(count);
+  let submittedJob = null;
   try {
     const body = {
       session_id: state.sessionId,
@@ -3856,29 +4599,34 @@ async function generateImage() {
     if (state.selectedSize) {
       body.size = state.selectedSize;
     }
-    const job = await request("/v1/image/jobs", {
+    submittedJob = await request("/v1/image/jobs", {
       method: "POST",
       body,
     });
+    const completedJob = await waitForV1ImageJob(submittedJob, { actionLabel: "生成" });
     stopImageProgress();
-    state.currentJob = job;
-    setStatus(job.status, job.outputs.length, job.trace_id);
-    if (job.status !== "ready" || job.outputs.length === 0) {
+    state.currentJob = completedJob;
+    setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
+    if (!v1ImageJobReady(completedJob)) {
       renderGallery([]);
-      showNotice(`生成失败：${jobErrorMessage(job)}`, "error");
+      showNotice(`生成失败：${jobErrorMessage(completedJob)}`, "error");
       await refreshEvents();
       return;
     }
-    renderGallery(job.outputs);
-    showNotice(`已生成 ${job.outputs.length} 张图片：${imageProviderResultText(job)}。`, "success");
+    renderGallery(completedJob.outputs);
+    showNotice(`已生成 ${completedJob.outputs.length} 张图片：${imageProviderResultText(completedJob)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
     await refreshHistory({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
   } catch (error) {
     stopImageProgress();
-    showNotice(`生成失败：${friendlyError(error)}`, "error");
-    setStatus("失败", 0, "-");
-    renderGallery([]);
+    const submitted = Boolean(submittedJob?.id);
+    showNotice(submitted ? friendlyError(error) : `生成失败：${friendlyError(error)}`, submitted ? "warning" : "error");
+    setStatus(submitted ? "后台处理中" : "失败", 0, submittedJob?.trace_id || "-");
+    if (!submitted) {
+      renderGallery([]);
+    }
   } finally {
     stopImageProgress();
     toggleBusy(false);
@@ -3894,9 +4642,11 @@ async function reviseSelectedOutput() {
   await ensureSession();
   toggleBusy(true);
   showNotice("V1.0 基础版正在生成修改版本。", "info");
+  const sourceJobId = state.currentJob.id;
   startImageProgress({ label: "修改中", count: 1, providerName: providerLabel(state.selectedProvider), traceId: state.currentJob.trace_id });
+  let submittedJob = null;
   try {
-    const job = await request(`/v1/image/jobs/${state.currentJob.id}/revise`, {
+    submittedJob = await request(`/v1/image/jobs/${sourceJobId}/revise`, {
       method: "POST",
       body: {
         output_id: state.selectedOutputId,
@@ -3905,22 +4655,25 @@ async function reviseSelectedOutput() {
         provider_preference: state.selectedProvider,
       },
     });
+    const completedJob = await waitForV1ImageJob(submittedJob, { actionLabel: "修改" });
     stopImageProgress();
-    state.currentJob = job;
-    setStatus(job.status, job.outputs.length, job.trace_id);
-    if (job.status !== "ready" || job.outputs.length === 0) {
-      showNotice(`修改失败：${jobErrorMessage(job)}`, "error");
+    state.currentJob = completedJob;
+    setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
+    if (!v1ImageJobReady(completedJob)) {
+      showNotice(`修改失败：${jobErrorMessage(completedJob)}`, "error");
       await refreshEvents();
       return;
     }
-    renderGallery(job.outputs);
-    showNotice(`修改版本已生成：${imageProviderResultText(job)}。`, "success");
+    renderGallery(completedJob.outputs);
+    showNotice(`修改版本已生成：${imageProviderResultText(completedJob)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
     await refreshHistory({ silent: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
   } catch (error) {
     stopImageProgress();
-    showNotice(`修改失败：${friendlyError(error)}`, "error");
+    const submitted = Boolean(submittedJob?.id);
+    showNotice(submitted ? friendlyError(error) : `修改失败：${friendlyError(error)}`, submitted ? "warning" : "error");
   } finally {
     stopImageProgress();
     toggleBusy(false);

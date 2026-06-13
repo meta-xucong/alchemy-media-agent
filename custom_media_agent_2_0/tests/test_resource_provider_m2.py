@@ -7,6 +7,7 @@ from app.config import settings
 from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID, build_evolinkai_provider
 from app.repositories import repository
 from app.services.bootstrap import bootstrap_v2_repository
+from app.services.case_thumbnail_prewarm import case_preview_asset_path, prewarm_case_thumbnails
 from app.services.case_index_store import load_case_index, save_case_index
 from app.services.case_preview_urls import normalize_case_preview_url
 from app.services.github_source import github_archive_url, github_blob_url, github_commit_api_url
@@ -293,3 +294,48 @@ def test_resource_sync_scheduler_uses_configured_interval(monkeypatch) -> None:
     asyncio.run(scheduler.run_forever(stop_event))
 
     assert intervals == [420]
+
+
+def test_case_thumbnail_prewarm_extracts_asset_paths() -> None:
+    assert (
+        case_preview_asset_path("/api/v2/case-thumbnails/images/poster_case147/output.jpg")
+        == "images/poster_case147/output.jpg"
+    )
+    assert (
+        case_preview_asset_path("/api/v2/case-thumbnails/grid/images/poster_case147/output.jpg")
+        == "images/poster_case147/output.jpg"
+    )
+    assert case_preview_asset_path("../images/poster_case147/output.jpg") == "images/poster_case147/output.jpg"
+    assert (
+        case_preview_asset_path(
+            "https://raw.githubusercontent.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
+        )
+        == "images/poster_case147/output.jpg"
+    )
+
+
+def test_case_thumbnail_prewarm_uses_current_cases(monkeypatch) -> None:
+    repository.reset()
+    _, seed_cases = load_seed_cases()
+    current_cases = [
+        seed_cases[0].model_copy(update={"preview_url": "/api/v2/case-thumbnails/images/poster_case147/output.jpg"}),
+        seed_cases[1].model_copy(update={"preview_url": "/api/v2/case-thumbnails/grid/images/poster_case147/output.jpg"}),
+        seed_cases[2].model_copy(update={"preview_url": None}),
+    ]
+    repository.upsert_provider(build_evolinkai_provider().model_copy(update={"active_index_version": current_cases[0].index_version}))
+    repository.replace_cases_for_provider(EVOLINKAI_PROVIDER_ID, current_cases)
+    calls = []
+
+    def fake_read_case_thumbnail(asset_path: str, variant: str = "grid"):
+        calls.append((asset_path, variant))
+        return b"thumb", "image/webp"
+
+    monkeypatch.setattr("app.services.case_thumbnail_prewarm.bootstrap_v2_repository", lambda seed_cases=True: None)
+    monkeypatch.setattr("app.services.case_thumbnail_prewarm.read_case_thumbnail", fake_read_case_thumbnail)
+
+    result = prewarm_case_thumbnails(variant="grid", limit=0)
+
+    assert result.succeeded == 1
+    assert result.failed == 0
+    assert result.skipped == 2
+    assert calls == [("images/poster_case147/output.jpg", "grid")]

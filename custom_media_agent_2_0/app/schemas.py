@@ -88,6 +88,7 @@ class UploadedAsset(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    veyra_user_id: int | None = None
     status: Literal["upload_requested", "stored", "ready", "rejected", "failed"] = "upload_requested"
     role: AssetRole | None = None
     constraint_strength: ConstraintStrength = "strong"
@@ -205,6 +206,7 @@ class LicensePolicy(BaseModel):
 
 class PromptCaseSummary(BaseModel):
     case_id: str
+    index_version: str | None = None
     title: str
     category: str
     summary: str = ""

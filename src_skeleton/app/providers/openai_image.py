@@ -176,7 +176,7 @@ class OpenAIGPTImageProvider:
         output_count = plan.count
         outputs = []
         asset_plan = request.asset_plan or (plan.variables.get("asset_plan") if getattr(plan, "variables", None) else None)
-        reference_paths = reference_image_paths(asset_plan, max_images=5)
+        reference_paths = reference_image_paths(asset_plan, max_images=settings.max_asset_upload_count)
         # The upstream image gateway may enforce account-level concurrency. Keep
         # image requests serialized in this process so the UI waits in a local
         # queue instead of immediately tripping a provider-side 429.

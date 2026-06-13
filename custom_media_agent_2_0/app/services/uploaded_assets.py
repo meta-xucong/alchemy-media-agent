@@ -17,15 +17,17 @@ from app.services.ids import new_id
 from app.services.uploaded_asset_vision import analyze_uploaded_asset
 
 
-def create_uploaded_asset(request: CreateUploadedAssetRequest) -> CreateUploadedAssetResponse:
+def create_uploaded_asset(request: CreateUploadedAssetRequest, *, veyra_user_id: int | None = None) -> CreateUploadedAssetResponse:
     now = utc_now()
     asset_id = new_id("asset")
-    upload_url = f"/api/v2/uploads/{asset_id}/content" if _is_image_mime(request.mime_type) else ""
+    error = _upload_request_error(request)
+    upload_url = f"/api/v2/uploads/{asset_id}/content" if not error else ""
     asset = UploadedAsset(
         asset_id=asset_id,
         filename=_safe_filename(request.filename),
         mime_type=request.mime_type,
         size_bytes=request.size_bytes,
+        veyra_user_id=veyra_user_id,
         status="upload_requested" if upload_url else "rejected",
         role=request.role,
         constraint_strength=request.constraint_strength,
@@ -33,6 +35,7 @@ def create_uploaded_asset(request: CreateUploadedAssetRequest) -> CreateUploaded
         upload_url=upload_url or None,
         source_url=f"/api/v2/uploads/{asset_id}/content" if upload_url else None,
         thumbnail_url=f"/api/v2/uploads/{asset_id}/content" if upload_url else None,
+        error=error,
         created_at=now,
         updated_at=now,
     )
@@ -67,6 +70,18 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
             update={
                 "status": "failed",
                 "error": {"code": "invalid_base64", "message": str(exc)[:200]},
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
+    if len(content) > settings.max_uploaded_asset_bytes:
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "error": {
+                    "code": "asset_too_large",
+                    "message": f"Uploaded asset exceeds {settings.max_uploaded_asset_bytes} bytes.",
+                },
                 "updated_at": utc_now(),
             }
         )
@@ -200,6 +215,7 @@ def _recover_uploaded_asset_from_file(asset_id: str) -> UploadedAsset | None:
         status="ready",
         role="subject_reference",
         constraint_strength="strong",
+        veyra_user_id=None,
         source_url=f"/api/v2/uploads/{asset_id}/content",
         thumbnail_url=f"/api/v2/uploads/{asset_id}/content",
         storage_path=str(path),
@@ -235,3 +251,14 @@ def _safe_filename(filename: str) -> str:
 
 def _is_image_mime(mime_type: str | None) -> bool:
     return bool(mime_type and mime_type.lower().startswith("image/"))
+
+
+def _upload_request_error(request: CreateUploadedAssetRequest) -> dict[str, str] | None:
+    if not _is_image_mime(request.mime_type):
+        return {"code": "unsupported_type", "message": "V2 uploads currently accept image MIME types only."}
+    if int(request.size_bytes or 0) > settings.max_uploaded_asset_bytes:
+        return {
+            "code": "asset_too_large",
+            "message": f"Uploaded asset exceeds {settings.max_uploaded_asset_bytes} bytes.",
+        }
+    return None

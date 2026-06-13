@@ -10,6 +10,7 @@ from app.config import settings
 import app.main as main_module
 import app.services.image_service as image_service_module
 from app.main import app
+from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
 from app.storage import media_store
 
@@ -23,10 +24,13 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_gemini_key = settings.gemini_image_api_key
     original_gemini_base_url = settings.gemini_image_base_url
     original_gemini_enabled = settings.gemini_image_generation_enabled
+    original_mock_enabled = settings.mock_image_provider_enabled
     original_veyra_usage_path = settings.veyra_usage_path
     monkeypatch.setattr(media_store, "root", tmp_path)
+    monkeypatch.setitem(image_service_module.registry.image_providers, "mock_image", MockImageProvider())
     settings.default_image_provider = "mock_image"
     settings.default_image_model = "mock-image"
+    settings.mock_image_provider_enabled = True
     settings.openai_image_model = "gpt-image-2"
     settings.gemini_image_model = "gemini-3-pro-image-preview"
     settings.gemini_image_api_key = None
@@ -43,7 +47,20 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_api_key = original_gemini_key
     settings.gemini_image_base_url = original_gemini_base_url
     settings.gemini_image_generation_enabled = original_gemini_enabled
+    settings.mock_image_provider_enabled = original_mock_enabled
     settings.veyra_usage_path = original_veyra_usage_path
+
+
+def _completed_image_job(client: TestClient, response, *, headers: dict[str, str] | None = None, max_attempts: int = 30) -> dict:
+    assert response.status_code == 200
+    body = response.json()
+    for _ in range(max_attempts):
+        if body["status"] != "generating":
+            return body
+        lookup = client.get(f"/v1/image/jobs/{body['id']}", headers=headers or {})
+        assert lookup.status_code == 200
+        body = lookup.json()
+    raise AssertionError(f"Image job did not reach a terminal state: {body['id']}")
 
 
 def test_http_smoke_image_revision_video_and_providers():
@@ -89,8 +106,7 @@ def test_http_smoke_image_revision_video_and_providers():
             "count": 4,
         },
     )
-    assert image_job.status_code == 200
-    image_body = image_job.json()
+    image_body = _completed_image_job(client, image_job)
     assert image_body["status"] == "ready"
     assert len(image_body["outputs"]) == 4
 
@@ -109,8 +125,8 @@ def test_http_smoke_image_revision_video_and_providers():
         f"/v1/image/jobs/{image_body['id']}/revise",
         json={"output_id": image_body["outputs"][0]["id"], "feedback": "保持构图，把背景改成冬天。"},
     )
-    assert revision.status_code == 200
-    assert revision.json()["version_parent_id"] == image_body["outputs"][0]["id"]
+    revision_body = _completed_image_job(client, revision)
+    assert revision_body["version_parent_id"] == image_body["outputs"][0]["id"]
 
     history = client.get(f"/v1/image/history?session_id={session_id}")
     assert history.status_code == 200
@@ -187,6 +203,49 @@ def test_asset_upload_rejects_non_image_materials():
     assert asset.json()["status"] == "rejected"
 
 
+def test_asset_upload_rejects_oversized_declared_and_actual_content():
+    client = TestClient(app)
+    original_limit = settings.max_asset_upload_bytes
+    settings.max_asset_upload_bytes = 4
+    try:
+        upload = client.post(
+            "/v1/assets/upload-url",
+            json={
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "size_bytes": 5,
+                "consent": {"rights_confirmed": True},
+            },
+        )
+        assert upload.status_code == 200
+        oversized_asset_id = upload.json()["asset_id"]
+        assert upload.json()["upload_url"] == ""
+        oversized_asset = client.get(f"/v1/assets/{oversized_asset_id}")
+        assert oversized_asset.status_code == 200
+        assert oversized_asset.json()["status"] == "rejected"
+        assert oversized_asset.json()["error"]["code"] == "asset_too_large"
+
+        accepted = client.post(
+            "/v1/assets/upload-url",
+            json={
+                "filename": "small-declared.png",
+                "mime_type": "image/png",
+                "size_bytes": 4,
+                "consent": {"rights_confirmed": True},
+            },
+        )
+        assert accepted.status_code == 200
+        asset_id = accepted.json()["asset_id"]
+        content = client.put(
+            f"/v1/assets/{asset_id}/content",
+            json={"content_base64": base64.b64encode(b"12345").decode("ascii"), "mime_type": "image/png"},
+        )
+        assert content.status_code == 400
+        assert content.json()["detail"]["code"] == "asset_too_large"
+    finally:
+        settings.max_asset_upload_bytes = original_limit
+
+
 def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
     client = TestClient(app)
     session_id = client.post("/v1/sessions", json={"project_id": "proj_advanced"}).json()["id"]
@@ -251,8 +310,7 @@ def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
             "provider_preference": "mock_image",
         },
     )
-    assert image_job.status_code == 200
-    body = image_job.json()
+    body = _completed_image_job(client, image_job)
     assert body["status"] == "ready"
     assert body["asset_mode"] == "advanced"
     assert body["asset_plan"]["provider_requirements"]["needs_image_reference"] is True
@@ -284,6 +342,51 @@ def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
     assert item["visual_review"]["review_status"] == "ready"
 
 
+def test_v1_advanced_job_accepts_multiple_uploaded_reference_images():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_multi_asset"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    asset_ids = []
+    for index, role in enumerate(["style_reference", "subject_reference"], start=1):
+        upload = client.post(
+            "/v1/assets/upload-url",
+            json={
+                "filename": f"reference-{index}.png",
+                "mime_type": "image/png",
+                "size_bytes": len(base64.b64decode(png_b64)),
+                "declared_role": role,
+                "intended_use": "image_generation",
+                "consent": {"user_confirmed_rights": True},
+            },
+        )
+        assert upload.status_code == 200
+        asset_id = upload.json()["asset_id"]
+        assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+        assert client.post(f"/v1/assets/{asset_id}/complete").status_code == 200
+        asset_ids.append(asset_id)
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "结合两张上传图，生成 1 张高级咖啡产品海报。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {"asset_id": asset_ids[0], "role": "style_reference", "priority": 80, "consent": {"user_confirmed_rights": True}},
+                {"asset_id": asset_ids[1], "role": "subject_reference", "priority": 90, "consent": {"user_confirmed_rights": True}},
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+
+    body = _completed_image_job(client, image_job)
+    assert body["status"] == "ready"
+    provider_plan = body["asset_plan"]["provider_input_plan"]
+    assert provider_plan["reference_image_count"] == 2
+    assert set(provider_plan["reference_image_asset_ids"]) == set(asset_ids)
+    assert len(body["prompt_plan"]["variables"]["asset_vision_profiles"]) == 2
+
+
 def test_chinese_corner_quote_text_is_preserved_in_prompt_plan():
     client = TestClient(app)
     session_id = client.post("/v1/sessions", json={"project_id": "proj_text"}).json()["id"]
@@ -298,8 +401,7 @@ def test_chinese_corner_quote_text_is_preserved_in_prompt_plan():
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    body = _completed_image_job(client, response)
     assert body["prompt_plan"]["text"]["required"] is True
     assert body["prompt_plan"]["text"]["content"] == "新品拿铁"
     assert "文字必须严格为“新品拿铁”" in body["prompt_plan"]["variables"]["generation_prompt"]
@@ -353,8 +455,8 @@ def test_advanced_asset_vision_keeps_small_but_important_accent_colors():
             "provider_preference": "mock_image",
         },
     )
-    assert image_job.status_code == 200
-    prompt = image_job.json()["prompt_plan"]["variables"]["generation_prompt"]
+    body = _completed_image_job(client, image_job)
+    prompt = body["prompt_plan"]["variables"]["generation_prompt"]
     assert "深色强调 #002000" in prompt
     assert "暖金/琥珀点缀" in prompt
     assert "文字必须严格为“新品拿铁”" in prompt
@@ -400,8 +502,7 @@ def test_advanced_logo_mode_requires_logo_rights():
             "provider_preference": "mock_image",
         },
     )
-    assert image_job.status_code == 200
-    body = image_job.json()
+    body = _completed_image_job(client, image_job)
     assert body["status"] == "failed"
     assert body["error"]["code"] == "asset_consent_required"
 
@@ -448,8 +549,7 @@ def test_advanced_logo_on_scene_surface_uses_reference_image_not_canvas_overlay(
         },
     )
 
-    assert image_job.status_code == 200
-    body = image_job.json()
+    body = _completed_image_job(client, image_job)
     assert body["status"] == "ready"
     asset = body["asset_plan"]["assets"][0]
     assert asset["provider_input_mode"] == "reference_image"
@@ -510,8 +610,7 @@ def test_advanced_logo_canvas_badge_still_uses_postprocess_overlay():
         },
     )
 
-    assert image_job.status_code == 200
-    body = image_job.json()
+    body = _completed_image_job(client, image_job)
     assert body["status"] == "ready"
     asset = body["asset_plan"]["assets"][0]
     assert asset["provider_input_mode"] == "postprocess_only"
@@ -544,7 +643,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260612-v2-media-url-fix" in index.text
+    assert "20260613-v2-speed3" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "生视频（DEMO）" in index.text
@@ -586,7 +685,8 @@ def test_frontend_static_app_is_served():
     assert "Your Work" not in index.text
     assert "assetPreview" in index.text
     assert 'accept="image/*"' in index.text
-    assert "仅支持图片素材" in index.text
+    assert "multiple" in index.text
+    assert "支持多图，单次最多 6 张" in index.text
     assert "图片、PDF、文档或表格" not in index.text
     assert "advanced-role-checks" in index.text
     assert 'rows="1"' in index.text
@@ -698,7 +798,7 @@ def test_frontend_static_app_is_served():
     assert "anthropicBaseUrlInput" in script.text
     assert "default_llm_provider" in script.text
     assert "selectedAssetRoles" in script.text
-    assert "asset_intents: roles.map" in script.text
+    assert "asset_intents: state.assetIds.flatMap" in script.text
     assert "default_llm_model" in script.text
     assert "openai_image_model" in script.text
     assert "gemini_image_model" in script.text
@@ -744,6 +844,10 @@ def test_frontend_static_app_is_served():
     assert "mergeAccountHistory" in script.text
     assert "account_history_source" in script.text
     assert "mergeVeyraUsage" in script.text
+    assert "veyraTemplateHistoryList" in index.text
+    assert "历史使用模板" in index.text
+    assert "buildVeyraTemplateHistory" in script.text
+    assert "v2HistoryTemplateCaseId" in script.text
     assert "/v1/veyra/usage?limit=100" in script.text
     assert "refreshVeyraAccountPanelAfterHistoryChange" in script.text
     assert script.text.count("await refreshVeyraAccountPanelAfterHistoryChange();") >= 4
@@ -764,7 +868,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260612-v2-media-url-fix" in h5.text
+    assert "20260613-v2-speed3" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -773,6 +877,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "coming soon" in h5.text
     assert 'href="/?desktop=1"' in h5.text
     assert "桌面版" in h5.text
+    assert "mobileHeaderAccountBtn" in h5.text
+    assert "accountModule" in h5.text
+    assert "历史使用模板" in h5.text
     assert "基础版" in h5.text
     assert "高级版" in h5.text
     assert "继续修改" in h5.text
@@ -809,6 +916,11 @@ def test_mobile_h5_app_is_served_independently():
     assert "const historyPageSize = 24" in mobile_script.text
     assert "const v2HistoryPageSize = 24" in mobile_script.text
     assert "const veyraTokenStorageKey" in mobile_script.text
+    assert "const veyraAccountStorageKey" in mobile_script.text
+    assert "createMobileAccountArchitecture" in mobile_script.text
+    assert "mobileAccountSummary" in mobile_script.text
+    assert "buildVeyraTemplateHistory" in mobile_script.text
+    assert "v2HistoryTemplateCaseId" in mobile_script.text
     assert "function isLocalAlchemyHost()" in mobile_script.text
     assert "(isLocalAlchemyHost() ? v2LocalApiBase" in mobile_script.text
     assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in mobile_script.text
@@ -821,6 +933,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
     assert "/veyra/history?limit=1000" in mobile_script.text
+    assert "/v1/veyra/usage?limit=100" in mobile_script.text
+    assert "await refreshVeyraAccountPanelAfterHistoryChange();" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
     assert "share-poster-download" not in mobile_script.text
     assert "长按保存，扫码打开。" in mobile_script.text
@@ -926,8 +1040,8 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
             "provider_preference": "mock_image",
         },
     )
-    assert image_job.status_code == 200
-    output_url = image_job.json()["outputs"][0]["url"]
+    image_body = _completed_image_job(client, image_job)
+    output_url = image_body["outputs"][0]["url"]
 
     repository.reset()
     stray_dir = tmp_path / "generated_images" / "job_stray"
@@ -1190,6 +1304,91 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
         settings.veyra_session_secret = original_session_secret
 
 
+def test_v1_asset_uploads_are_bound_to_current_veyra_account(monkeypatch):
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+    try:
+        client = TestClient(app)
+        owner_token = _issue_test_veyra_session_token(42)
+        other_token = _issue_test_veyra_session_token(77)
+
+        upload = client.post(
+            "/v1/assets/upload-url",
+            json={
+                "filename": "owned.png",
+                "mime_type": "image/png",
+                "size_bytes": 4,
+                "consent": {"rights_confirmed": True},
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert upload.status_code == 200
+        asset_id = upload.json()["asset_id"]
+        assert repository.get_asset(asset_id).veyra_user_id == 42
+
+        owner_lookup = client.get(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {owner_token}"})
+        other_lookup = client.get(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {other_token}"})
+        assert owner_lookup.status_code == 200
+        assert other_lookup.status_code == 403
+
+        session = client.post(
+            "/v1/sessions",
+            json={"project_id": "proj_asset_owner"},
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert session.status_code == 200
+        blocked_job = client.post(
+            "/v1/image/jobs",
+            json={
+                "session_id": session.json()["id"],
+                "prompt": "尝试使用其他账号上传的素材。",
+                "asset_mode": "advanced",
+                "asset_intents": [
+                    {
+                        "asset_id": asset_id,
+                        "role": "style_reference",
+                        "consent": {"rights_confirmed": True},
+                    }
+                ],
+            },
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert blocked_job.status_code == 403
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_advanced_asset_request_enforces_asset_count_limit():
+    client = TestClient(app)
+    original_limit = settings.max_asset_upload_count
+    settings.max_asset_upload_count = 1
+    try:
+        session = client.post("/v1/sessions", json={"project_id": "proj_asset_count"})
+        assert session.status_code == 200
+        response = client.post(
+            "/v1/image/jobs",
+            json={
+                "session_id": session.json()["id"],
+                "prompt": "用多张参考图生成商品海报。",
+                "asset_mode": "advanced",
+                "asset_intents": [
+                    {"asset_id": "asset_a", "role": "style_reference", "consent": {"rights_confirmed": True}},
+                    {"asset_id": "asset_b", "role": "subject_reference", "consent": {"rights_confirmed": True}},
+                ],
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "asset_count_exceeded"
+    finally:
+        settings.max_asset_upload_count = original_limit
+
+
 def test_v1_veyra_usage_filters_current_user(monkeypatch):
     original_auth_enabled = settings.veyra_auth_enabled
     original_internal_token = settings.veyra_internal_token
@@ -1281,8 +1480,7 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        assert image_job.status_code == 200
-        job = image_job.json()
+        job = _completed_image_job(client, image_job, headers={"Authorization": f"Bearer {token}"})
         assert job["status"] == "ready"
         output_id = job["outputs"][0]["id"]
         assert job["outputs"][0]["metadata"]["veyra_user_id"] == 42
@@ -1331,8 +1529,7 @@ def test_image_quality_request_is_preserved_in_prompt_plan():
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    body = _completed_image_job(client, response)
     assert body["prompt_plan"]["quality"] == "low"
 
 
@@ -1351,8 +1548,7 @@ def test_image_work_intensity_changes_prompt_planning():
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    body = _completed_image_job(client, response)
     variables = body["prompt_plan"]["variables"]
     assert variables["work_intensity"] == "atelier"
     assert variables["reasoning_effort"] == "high"
@@ -1399,8 +1595,7 @@ def test_unknown_provider_returns_controlled_error_instead_of_500():
         "/v1/image/jobs",
         json={"session_id": session_id, "prompt": "生成 1 张电商主图", "provider_preference": "missing_provider"},
     )
-    assert image_response.status_code == 200
-    image_body = image_response.json()
+    image_body = _completed_image_job(client, image_response)
     assert image_body["status"] == "failed"
     assert image_body["error"]["code"] == "provider_capability_mismatch"
 
