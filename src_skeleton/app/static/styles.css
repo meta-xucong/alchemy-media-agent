@@ -4143,6 +4143,75 @@ input[type="range"] {
   background: rgba(255, 255, 252, 0.36);
 }
 
+@media (max-width: 760px) {
+  .v2-asset-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "head"
+      "clear"
+      "preview"
+      "file"
+      "roles"
+      "controls"
+      "list"
+      "hint";
+  }
+
+  .v2-asset-panel > * {
+    min-width: 0;
+  }
+
+  .v2-file-drop,
+  .v2-asset-role-checks,
+  .v2-asset-mini-grid,
+  #v2ClearAssetBtn,
+  #v2AssetLockHint,
+  .v2-asset-list {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .v2-file-drop {
+    display: grid;
+    align-items: stretch;
+    justify-items: stretch;
+    gap: 6px;
+  }
+
+  .v2-file-drop .file-title {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .v2-asset-role-checks {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .v2-asset-role-checks .role-check {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .v2-asset-mini-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-asset-mini-grid .field {
+    min-width: 0;
+  }
+
+  .v2-asset-mini-grid .field > span {
+    display: block;
+    white-space: normal;
+  }
+
+  #v2AssetNotesInput {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 .gallery {
   grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
 }
