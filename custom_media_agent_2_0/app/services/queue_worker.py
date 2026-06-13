@@ -78,9 +78,12 @@ def _queued_run_retry_directive(run: CreativeRun) -> QueueRetryDirective | None:
 def _job_retry_directive(error: dict) -> QueueRetryDirective | None:
     code = str(error.get("error_code") or "")
     message = str(error.get("message") or "")
+    provider = str(error.get("provider") or "")
     lowered = message.lower()
     detail = error.get("detail") if isinstance(error.get("detail"), dict) else {}
-    if code == "veyra_insufficient_balance" or "sub2api balance is insufficient" in lowered:
+    if provider == "veyra_billing" and code == "veyra_insufficient_balance":
+        return None
+    if "sub2api balance is insufficient" in lowered:
         return QueueRetryDirective(
             message="上游线路或额度暂时不可用，任务已保留在队列中，约 5 分钟后自动重试。",
             retry_delay_seconds=_retry_after_seconds(detail, _UPSTREAM_BALANCE_WAIT_SECONDS),

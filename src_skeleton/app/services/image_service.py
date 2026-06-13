@@ -832,10 +832,10 @@ def _billing_provider_error(error: Exception) -> ProviderError:
     if isinstance(error, VeyraInsufficientBalance):
         return ProviderError(
             code="veyra_insufficient_balance",
-            message="Sub2api balance is insufficient.",
+            message="账户余额不足，请先充值后再生成。",
             provider="veyra_billing",
             retryable=False,
-            detail={},
+            detail={"reason": "user_balance_insufficient"},
         )
     return ProviderError(
         code=getattr(error, "code", "veyra_billing_error"),

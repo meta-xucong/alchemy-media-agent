@@ -661,6 +661,10 @@ def test_veyra_generation_billing_insufficient_balance_stops_provider(monkeypatc
     assert job.provider_id == "mock_image"
     assert job.outputs == []
     assert job.error["error_code"] == "veyra_insufficient_balance"
+    assert job.error["provider"] == "veyra_billing"
+    assert "账户余额不足" in job.error["message"]
+    assert job.error["detail"]["reason"] == "user_balance_insufficient"
+    assert job.error["retryable"] is False
 
 
 def test_veyra_generation_provider_failure_does_not_debit(monkeypatch: pytest.MonkeyPatch) -> None:

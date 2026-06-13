@@ -281,6 +281,7 @@ def _provider_error_payload(error: V2ImageProviderError | None) -> dict | None:
         "error_code": error.code,
         "message": str(error),
         "detail": error.detail,
+        "provider": error.provider,
         "retryable": bool(getattr(error, "retryable", False)),
         "native_v2": True,
     }
@@ -345,11 +346,11 @@ def _billing_metadata(result) -> dict | None:
 def _billing_provider_error(error: Exception) -> V2ImageProviderError:
     if isinstance(error, VeyraInsufficientBalance):
         return VeyraBillingProviderError(
-            "Sub2api balance is insufficient.",
+            "账户余额不足，请先充值后再生成。",
             provider="veyra_billing",
             code="veyra_insufficient_balance",
             retryable=False,
-            detail={},
+            detail={"reason": "user_balance_insufficient"},
         )
     return VeyraBillingProviderError(
         "Veyra billing failed.",

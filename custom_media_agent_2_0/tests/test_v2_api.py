@@ -2897,6 +2897,72 @@ def test_creative_run_async_entry_is_pollable() -> None:
     assert completed_status["counts"]["completed"] == 1
 
 
+def test_creative_run_async_user_balance_failure_stops_queue() -> None:
+    client = fresh_client()
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+    )
+    queued = response.json()
+
+    class UserBalanceRuntime:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            now = utc_now()
+            prompt_plan = ImagePromptPlan(
+                plan_id="plan_user_balance_stop",
+                mode="smart_enhance",
+                prompt="Create a premium skincare product hero image.",
+            )
+            job = ImageJob(
+                job_id="job_user_balance_stop",
+                run_id=run_id,
+                status="failed",
+                provider_id="veyra_billing",
+                model="gpt-image-2",
+                prompt_plan=prompt_plan,
+                outputs=[],
+                error={
+                    "error_code": "veyra_insufficient_balance",
+                    "message": "账户余额不足，请先充值后再生成。",
+                    "detail": {"reason": "user_balance_insufficient"},
+                    "provider": "veyra_billing",
+                    "retryable": False,
+                    "native_v2": True,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            return CreativeRun(
+                run_id=run_id,
+                status="failed",
+                mode="smart_enhance",
+                intent_summary="premium skincare product hero image",
+                prompt_plan=prompt_plan,
+                generation_jobs=[job],
+                trace_id="trace_upstream_wait",
+                next_actions=["账户余额不足，请先充值后再生成。"],
+                created_at=now,
+                updated_at=now,
+            )
+
+    assert queue_worker_service.process_next_task_once(UserBalanceRuntime(), "test-worker") is True
+
+    fetched = client.get(f"/api/v2/creative/runs/{queued['run_id']}")
+    assert fetched.status_code == 200
+    run = fetched.json()
+    assert run["status"] == "failed"
+    assert run["generation_jobs"][0]["status"] == "failed"
+    assert run["generation_jobs"][0]["error"]["provider"] == "veyra_billing"
+    assert "账户余额不足" in run["next_actions"][0]
+
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["completed"] == 1
+    assert queue_status["counts"].get("queued", 0) == 0
+
+
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     client = fresh_client()
     response = client.post(
@@ -2925,9 +2991,10 @@ def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
                 prompt_plan=prompt_plan,
                 outputs=[],
                 error={
-                    "error_code": "veyra_insufficient_balance",
+                    "error_code": "provider_runtime_error",
                     "message": "Sub2api balance is insufficient.",
                     "detail": {},
+                    "provider": "openai_gpt_image",
                     "retryable": False,
                     "native_v2": True,
                 },

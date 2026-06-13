@@ -2224,7 +2224,7 @@ function v2QueuedRetryMessage(run) {
   }
   const job = (run.generation_jobs || [])[0];
   const error = job?.error || {};
-  if (error.retryable || ["veyra_insufficient_balance", "provider_rate_limit"].includes(error.error_code)) {
+  if (error.retryable || error.error_code === "provider_rate_limit") {
     return message || "上游暂时不可用，任务已保留在队列中，稍后自动重试。";
   }
   return "";
