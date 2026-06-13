@@ -6,9 +6,14 @@ from dataclasses import dataclass
 
 from app.agents import CreativeManagerRuntime
 from app.config import settings
+from app.repositories import repository
 from app.repositories.memory import utc_now
-from app.schemas import CreateCreativeRunRequest, CreativeRun
+from app.schemas import CreateCreativeRunRequest, CreativeRun, ImageJob, ImagePromptPlan
 from app.services import task_queue
+from app.services.ids import new_id
+from app.services.prompting import summarize_intent
+from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
+from app.services.veyra_billing_settings import get_billing_rule
 
 
 _UPSTREAM_BALANCE_WAIT_SECONDS = 300.0
@@ -41,7 +46,7 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str = "v2
         if record.kind not in {"creative_run", "revision_run"}:
             raise ValueError(f"Unsupported task kind: {record.kind}")
         request = CreateCreativeRunRequest.model_validate(record.payload)
-        run = asyncio.run(runtime.complete_queued_run(request, record.run_id))
+        run = asyncio.run(_preflight_veyra_balance(request, record.run_id)) or asyncio.run(runtime.complete_queued_run(request, record.run_id))
         retry_directive = _queued_run_retry_directive(run)
         if retry_directive:
             task_queue.retry_task(
@@ -63,6 +68,72 @@ class QueueRetryDirective:
     message: str
     retry_delay_seconds: float
     consume_attempt: bool = True
+
+
+async def _preflight_veyra_balance(request: CreateCreativeRunRequest, run_id: str) -> CreativeRun | None:
+    rule = get_billing_rule("alchemy:v2")
+    if not (settings.veyra_auth_enabled and rule.enabled and request.veyra_user_id and rule.charge_amount > 0):
+        return None
+    try:
+        account = await VeyraSub2APIClient().account(int(request.veyra_user_id))
+        if float(account.balance) + 1e-9 >= float(rule.charge_amount):
+            return None
+        raise VeyraInsufficientBalance("Insufficient sub2api balance.")
+    except VeyraInsufficientBalance:
+        return _veyra_balance_failed_run(request, run_id)
+    except VeyraAuthError:
+        return None
+
+
+def _veyra_balance_failed_run(request: CreateCreativeRunRequest, run_id: str) -> CreativeRun:
+    now = utc_now()
+    mode = request.mode_hint or ("template_customize" if request.template_case_id else "smart_enhance")
+    prompt_plan = ImagePromptPlan(
+        plan_id=new_id("plan"),
+        mode=mode,  # type: ignore[arg-type]
+        prompt=summarize_intent(request.user_prompt) or "Veyra balance preflight failed.",
+        explanation="Stopped before creative orchestration because the linked Veyra account balance is insufficient.",
+    )
+    job = ImageJob(
+        job_id=new_id("job"),
+        run_id=run_id,
+        status="failed",
+        provider_id="veyra_billing",
+        model="veyra-billing-preflight",
+        prompt_plan=prompt_plan,
+        outputs=[],
+        error=_veyra_balance_error_payload(),
+        created_at=now,
+        updated_at=now,
+    )
+    repository.save_image_job(job)
+    run = CreativeRun(
+        run_id=run_id,
+        status="failed",
+        mode=mode,  # type: ignore[arg-type]
+        intent_summary=summarize_intent(request.user_prompt),
+        prompt_plan=prompt_plan,
+        generation_jobs=[job],
+        trace_id=new_id("trace"),
+        next_actions=[_VEYRA_BALANCE_MESSAGE],
+        created_at=now,
+        updated_at=now,
+    )
+    return repository.save_creative_run(run)
+
+
+_VEYRA_BALANCE_MESSAGE = "账户余额不足，请先充值后再生成。"
+
+
+def _veyra_balance_error_payload() -> dict:
+    return {
+        "error_code": "veyra_insufficient_balance",
+        "message": _VEYRA_BALANCE_MESSAGE,
+        "detail": {"reason": "user_balance_insufficient"},
+        "provider": "veyra_billing",
+        "retryable": False,
+        "native_v2": True,
+    }
 
 
 def _queued_run_retry_directive(run: CreativeRun) -> QueueRetryDirective | None:

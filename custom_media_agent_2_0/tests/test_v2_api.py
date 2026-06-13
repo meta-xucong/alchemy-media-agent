@@ -29,6 +29,9 @@ import app.services.qr_preservation as qr_preservation_service
 from app.services.prompting import compose_prompt_plan
 import app.services.queue_worker as queue_worker_service
 import app.services.task_queue as task_queue_service
+import app.services.veyra_auth as veyra_auth_module
+from app.services.veyra_auth import issue_session_token
+from app.services.veyra_billing_settings import reset_billing_settings_cache
 from app.services.visual_signals import build_case_visual_signals
 
 
@@ -2959,6 +2962,55 @@ def test_creative_run_async_user_balance_failure_stops_queue() -> None:
     assert "账户余额不足" in run["next_actions"][0]
 
     queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["completed"] == 1
+    assert queue_status["counts"].get("queued", 0) == 0
+
+
+def test_creative_run_async_preflights_user_balance_before_runtime(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_billing_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "veyra_session_ttl_seconds", 3600)
+    object.__setattr__(settings, "veyra_generation_charge_amount", 20.0)
+    reset_billing_settings_cache()
+
+    async def fake_account(self, user_id: int):
+        assert user_id == 42
+        return veyra_auth_module.VeyraAccount(user_id=42, email="low@example.com", balance=1.0, status="active")
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
+    token = issue_session_token(42)
+    auth_headers = {"Authorization": f"Bearer {token}"}
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 202
+    queued = response.json()
+
+    class RuntimeShouldNotRun:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            raise AssertionError("runtime should not run when Veyra balance preflight fails")
+
+    assert queue_worker_service.process_next_task_once(RuntimeShouldNotRun(), "test-worker") is True
+
+    fetched = client.get(f"/api/v2/creative/runs/{queued['run_id']}", headers=auth_headers)
+    assert fetched.status_code == 200
+    run = fetched.json()
+    assert run["status"] == "failed"
+    assert run["generation_jobs"][0]["provider_id"] == "veyra_billing"
+    assert run["generation_jobs"][0]["model"] == "veyra-billing-preflight"
+    assert run["generation_jobs"][0]["error"]["error_code"] == "veyra_insufficient_balance"
+    assert run["generation_jobs"][0]["error"]["provider"] == "veyra_billing"
+    assert "账户余额不足" in run["next_actions"][0]
+
+    queue_status = client.get("/api/v2/task-queue/status", headers=auth_headers).json()
     assert queue_status["counts"]["completed"] == 1
     assert queue_status["counts"].get("queued", 0) == 0
 
