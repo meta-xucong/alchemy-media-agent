@@ -620,9 +620,9 @@ def _prompt_instruction(
     subject_rule = "Replace the template's original subject with the uploaded subject while preserving the selected template's visual frame."
     if role == "subject_reference" and fusion_mode == "composite_content_source":
         subject_rule = (
-            "Treat the uploaded image as a source of semantic content, food/product evidence, copy, QR, or business information. "
-            "Do not copy its whole poster/menu/screenshot layout, grid, background, density, or visual rhythm; fit extracted content into the selected visual grammar. "
-            "Preserve the complete business-critical information set where present: key food/product images, names, copy, prices, counts, dates, packages, discounts, purchase policies, delivery/add-on/gift rules, CTA, and QR."
+            "Treat the uploaded image as a source of extractable content, not as the visual frame. "
+            "Extract only the user-requested food/product evidence, copy, QR, logo, or business facts, then rebuild those elements inside the selected visual grammar. "
+            "Do not copy its whole poster/menu/screenshot layout, grid, background, density, original information architecture, or visual rhythm."
         )
     role_rule = {
         "subject_reference": subject_rule,
@@ -753,7 +753,7 @@ def _role_for_prompt_intent(
     upgraded_strength: ConstraintStrength = "required" if strength == "soft" else strength
     reason = (
         "user prompt asks to migrate uploaded image content/copy/QR into the selected template frame; "
-        "treat the uploaded asset as hard semantic content evidence"
+        "treat the uploaded asset as semantic content evidence, not as the frame"
         if template_locked
         else "user prompt asks to extract uploaded image content/copy/QR into a new visual frame"
     )

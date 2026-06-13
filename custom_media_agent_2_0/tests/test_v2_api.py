@@ -3554,7 +3554,8 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert binding["fusion_mode"] == "composite_content_source"
     assert binding["target_surface"] == "semantic_content_slots"
     assert "Do not copy its whole poster/menu/screenshot layout" in binding["prompt_instruction"]
-    assert "complete business-critical information" in binding["prompt_instruction"]
+    assert "source of extractable content" in binding["prompt_instruction"]
+    assert "original information architecture" in binding["prompt_instruction"]
     assert "uploaded_source_layout_not_copied" in binding["review_expectations"]
     assert "uploaded_information_complete" in binding["review_expectations"]
     assert "business_offer_policy_preserved" in binding["review_expectations"]
@@ -3567,12 +3568,12 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     prompt = run["prompt_plan"]["prompt"]
     assert "Source-layout risk detected" in prompt
     assert "do not copy its overall grid" in prompt
-    assert "INFORMATION INTEGRITY LOCK" in prompt
-    assert "purchase offers" in prompt
-    assert "dedicated QR/CTA card" in prompt
-    assert "expand the canvas" in prompt
+    assert "CONTENT EXTRACTION LOCK" in prompt
+    assert "template's own information hierarchy" in prompt
+    assert "full menu grid" in prompt
+    assert "original information architecture" in prompt
     assert "aspect_ratio" not in run["prompt_plan"]["provider_parameters"]
-    assert "missing purchase offers" in run["prompt_plan"]["negative_prompt"]
+    assert "copied source menu grid" in run["prompt_plan"]["negative_prompt"]
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
 
@@ -3612,10 +3613,13 @@ def test_uploaded_style_reference_with_food_copy_qr_auto_becomes_content_source(
     assert variables["asset_frame_strategy"]["mode"] == "template_frame_primary"
     assert variables["asset_frame_strategy"]["content_extraction"] is True
     assert variables["visual_grammar_contract"]["source_layout_risk"]["detected"] is True
+    assert variables["information_integrity_contract"]["priority"] == "strong"
     prompt = run["prompt_plan"]["prompt"]
     assert "UPLOADED CONTENT SOURCE" in prompt
     assert "use the selected template for the new visual frame" in prompt
     assert "Provider input images required: 1 uploaded reference image(s)" in prompt
+    assert "CONTENT EXTRACTION LOCK" in prompt
+    assert "INFORMATION INTEGRITY LOCK" not in prompt
 
 
 def test_product_qr_preservation_stays_subject_identity_under_template_lock() -> None:

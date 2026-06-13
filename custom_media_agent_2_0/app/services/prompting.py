@@ -77,11 +77,11 @@ def compose_prompt_plan(
         negative_prompt = _merge_negative_prompt(
             negative_prompt,
             [
-                "missing business-critical copy",
-                "missing purchase offers",
-                "missing prices or package rules",
-                "missing QR or CTA",
-                "over-simplified information layout",
+                "missing requested source content",
+                "missing requested QR or CTA",
+                "copied source menu grid",
+                "copied source poster layout",
+                "source layout overriding selected template",
             ],
         )
     provider_parameters = _build_provider_parameters(

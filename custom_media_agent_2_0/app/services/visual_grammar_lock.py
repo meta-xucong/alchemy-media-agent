@@ -219,11 +219,10 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     if information_integrity.get("active"):
         fields = ", ".join(str(item) for item in (information_integrity.get("critical_fields") or [])[:6])
         parts.append(
-            "INFORMATION INTEGRITY LOCK: this is an information-dense commercial poster/menu/flyer task. "
-            f"Preserve the user's and uploaded source's complete business-critical information: {fields}. "
-            "Do not omit purchase offers, price/package/count/date details, delivery/add-on/gift rules, QR/CTA, or key product/food images merely to make the layout cleaner. "
-            "Keep a dedicated QR/CTA card in a side or lower-side action area, never overlapping menu text, item images, price/offer policy, or the footer rules. "
-            "You may condense wording only when the same facts remain visible. If the selected visual grammar feels too tight, expand the canvas, use denser secondary modules, or add orderly information bands/cards instead of deleting content."
+            "CONTENT EXTRACTION LOCK: this task uses an uploaded poster/menu/flyer as source material. "
+            f"Extract the user-requested content categories where present: {fields}. "
+            "Keep the selected visual grammar as the frame owner; condense, curate, and reposition extracted copy, food imagery, QR, or offer facts into the template's own information hierarchy. "
+            "Do not preserve the uploaded source's full menu grid, weekly-card structure, footer policy block, background color field, or original information architecture merely because those facts were visible."
         )
     if aux_titles:
         parts.append("Auxiliary cases may contribute only compatible local cues, not the main composition: " + ", ".join(aux_titles) + ".")
@@ -377,7 +376,7 @@ def _information_integrity_contract(
     active = bool(composite_source or explicit_retention or (source_layout_risk.get("detected") and len(hits) >= 2))
     return {
         "active": active,
-        "priority": "hard" if composite_source or explicit_retention else "strong",
+        "priority": "hard" if explicit_retention else "strong",
         "scope": "commercial_poster_information_integrity",
         "triggers": hits[:10],
         "critical_fields": CRITICAL_INFORMATION_FIELDS,
@@ -388,7 +387,7 @@ def _information_integrity_contract(
             "do not preserve the old source layout."
         ),
         "canvas_policy": (
-            "Prefer a larger vertical/poster canvas, denser secondary modules, or additional information bands over deleting business-critical content."
+            "Prefer concise template-native content modules over copying the source poster's complete information architecture."
         ),
     }
 
@@ -407,7 +406,7 @@ def _critical_asset_rules(asset_context: dict[str, Any] | None) -> list[str]:
             rules.append(f"Uploaded logo must appear on {label} as a real scene-surface mark, never as a footer, corner badge, watermark, or sticker.")
         elif fusion == "composite_content_source":
             rules.append(
-                "Uploaded composite/menu/poster image supplies content evidence only; preserve its business-critical facts, copy, offers, item imagery, QR, and purchase rules while not inheriting its full layout."
+                "Uploaded composite/menu/poster image supplies content evidence only; extract requested food/product, copy, QR, or offer facts and rebuild them inside the selected visual grammar without inheriting the source layout."
             )
         elif item.get("provider_input_required") and item.get("role") in {"subject_reference", "face_reference", "background_reference"}:
             rules.append(f"Uploaded {item.get('role')} remains a hard reference for {label}, adapted inside the visual grammar.")
