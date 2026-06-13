@@ -163,10 +163,9 @@ def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
 
 
-def _veyra_login_redirect_url(target: str) -> str:
+def _veyra_return_router_url(target: str) -> str:
     base_url = (settings.veyra_login_base_url or "https://aiself.vip").rstrip("/")
-    redirect = "/_veyra/return?" + urlencode({"target": target})
-    return base_url + "/login?" + urlencode({"redirect": redirect})
+    return base_url + "/_veyra/return?" + urlencode({"target": target})
 
 
 def _veyra_page_gate(request: Request, *, target: str) -> RedirectResponse | None:
@@ -185,7 +184,7 @@ def _veyra_page_gate(request: Request, *, target: str) -> RedirectResponse | Non
             raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
         except VeyraAuthError as exc:
             raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra auth failed."}) from exc
-    return RedirectResponse(_veyra_login_redirect_url(target), status_code=307)
+    return RedirectResponse(_veyra_return_router_url(target), status_code=307)
 
 
 def _veyra_session_token_from_request(request: Request, authorization: str = "") -> str:

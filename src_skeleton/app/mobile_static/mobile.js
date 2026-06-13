@@ -3550,8 +3550,7 @@ async function loadVeyraAuthPolicy() {
 function veyraLoginUrl(target = "alchemy-mobile") {
   const policy = veyraState.authPolicy || {};
   const base = String(policy.login_base_url || defaultVeyraLoginBaseUrl).replace(/\/+$/, "");
-  const redirect = `/_veyra/return?target=${encodeURIComponent(target)}`;
-  return `${base}/login?redirect=${encodeURIComponent(redirect)}`;
+  return `${base}/_veyra/return?target=${encodeURIComponent(target)}`;
 }
 
 function cleanVeyraTicketFromUrl() {

@@ -942,6 +942,30 @@ def test_mobile_h5_app_is_served_independently():
     assert "分享链接" in mobile_script.text
 
 
+def test_veyra_ui_gate_enters_return_router_before_login():
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_require_ui_auth = settings.veyra_require_ui_auth
+    original_login_base_url = settings.veyra_login_base_url
+    settings.veyra_auth_enabled = True
+    settings.veyra_require_ui_auth = True
+    settings.veyra_login_base_url = "https://aiself.vip/"
+    try:
+        client = TestClient(app)
+        desktop = client.get("/", follow_redirects=False)
+        mobile = client.get("/h5", follow_redirects=False)
+
+        assert desktop.status_code == 307
+        assert desktop.headers["location"] == "https://aiself.vip/_veyra/return?target=alchemy"
+        assert "/login?" not in desktop.headers["location"]
+        assert mobile.status_code == 307
+        assert mobile.headers["location"] == "https://aiself.vip/_veyra/return?target=alchemy-mobile"
+        assert "/login?" not in mobile.headers["location"]
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_require_ui_auth = original_require_ui_auth
+        settings.veyra_login_base_url = original_login_base_url
+
+
 def test_image_share_landing_page_has_wechat_friendly_metadata():
     client = TestClient(app)
 
