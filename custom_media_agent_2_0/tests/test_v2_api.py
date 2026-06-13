@@ -12,8 +12,10 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from PIL import Image
 import qrcode
+import pytest
 
 from app.config import settings
+import app.providers.images.openai_gpt_image_2 as openai_image_provider
 from app.providers.images.registry import get_v2_image_provider
 import app.main as main_module
 from app.main import app
@@ -3042,6 +3044,16 @@ def test_task_worker_startup_releases_own_running_locks() -> None:
     reclaimed = task_queue_service.claim_next_task("v2-worker-1")
     assert reclaimed is not None
     assert reclaimed.run_id == queued["run_id"]
+
+
+def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:
+    object.__setattr__(settings, "openai_image_timeout_seconds", 0.01)
+
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(openai_image_provider._call_openai_image_operation(never_returns))
 
 
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:

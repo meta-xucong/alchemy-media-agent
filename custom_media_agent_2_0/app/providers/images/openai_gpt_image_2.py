@@ -366,9 +366,15 @@ def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
 
 async def _call_openai_image_operation(operation):
     last_error: Exception | None = None
+    timeout = max(1.0, float(settings.openai_image_timeout_seconds))
     for attempt in range(1, _OPENAI_TRANSIENT_MAX_ATTEMPTS + 1):
         try:
-            return await operation()
+            return await asyncio.wait_for(operation(), timeout=timeout)
+        except TimeoutError as exc:
+            last_error = exc
+            if attempt >= _OPENAI_TRANSIENT_MAX_ATTEMPTS:
+                raise
+            await asyncio.sleep(_openai_transient_retry_delay(attempt, exc))
         except Exception as exc:
             last_error = exc
             if _is_image_quota_limit(exc):

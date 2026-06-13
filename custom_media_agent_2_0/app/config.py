@@ -106,7 +106,7 @@ class Settings:
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_image_model: str = "gpt-image-2"
-    openai_image_timeout_seconds: float = 900.0
+    openai_image_timeout_seconds: float = 240.0
     openai_image_local_max_requests_per_minute: int = 12
     openai_image_local_max_outputs_per_minute: int = 24
     openai_image_local_queue_timeout_seconds: float = 900.0
@@ -256,7 +256,7 @@ def load_settings() -> Settings:
         openai_api_key=os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY") or None,
         openai_base_url=(os.getenv("V2_OPENAI_BASE_URL") or "").rstrip("/") or None,
         openai_image_model=os.getenv("V2_OPENAI_IMAGE_MODEL", "gpt-image-2"),
-        openai_image_timeout_seconds=float(os.getenv("V2_OPENAI_IMAGE_TIMEOUT_SECONDS", "900")),
+        openai_image_timeout_seconds=float(os.getenv("V2_OPENAI_IMAGE_TIMEOUT_SECONDS", "240")),
         openai_image_local_max_requests_per_minute=max(
             1,
             int(os.getenv("V2_OPENAI_IMAGE_LOCAL_MAX_REQUESTS_PER_MINUTE", "12")),
