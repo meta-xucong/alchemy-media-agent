@@ -3015,6 +3015,35 @@ def test_creative_run_async_preflights_user_balance_before_runtime(monkeypatch) 
     assert queue_status["counts"].get("queued", 0) == 0
 
 
+def test_task_worker_startup_releases_own_running_locks() -> None:
+    client = fresh_client()
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+    )
+    queued = response.json()
+
+    claimed = task_queue_service.claim_next_task("v2-worker-1")
+    assert claimed is not None
+    assert claimed.run_id == queued["run_id"]
+
+    assert task_queue_service.release_worker_running_tasks("other-worker") == 0
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["running"] == 1
+
+    assert task_queue_service.release_worker_running_tasks("v2-worker-1") == 1
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["queued"] == 1
+    assert queue_status["counts"].get("running", 0) == 0
+
+    reclaimed = task_queue_service.claim_next_task("v2-worker-1")
+    assert reclaimed is not None
+    assert reclaimed.run_id == queued["run_id"]
+
+
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     client = fresh_client()
     response = client.post(

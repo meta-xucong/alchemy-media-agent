@@ -7,7 +7,7 @@ from app.agents import CreativeManagerRuntime
 from app.config import ensure_runtime_dirs, settings
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.queue_worker import process_next_task_once
-from app.services.task_queue import initialize_task_queue
+from app.services.task_queue import initialize_task_queue, release_worker_running_tasks
 
 
 def main() -> None:
@@ -20,6 +20,7 @@ def main() -> None:
     ensure_runtime_dirs()
     bootstrap_v2_repository(seed_cases=True)
     initialize_task_queue()
+    release_worker_running_tasks(args.worker_id)
     runtime = CreativeManagerRuntime()
 
     while True:

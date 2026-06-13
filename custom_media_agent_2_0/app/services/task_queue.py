@@ -134,6 +134,21 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
     )
 
 
+def release_worker_running_tasks(worker_id: str) -> int:
+    initialize_task_queue()
+    now = utc_now().isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE v2_tasks
+            SET status = 'queued', locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
+            WHERE status = 'running' AND locked_by = ?
+            """,
+            (now, worker_id),
+        )
+        return int(cursor.rowcount or 0)
+
+
 def complete_task(task_id: str, run: CreativeRun) -> None:
     now = utc_now().isoformat()
     with _connect() as conn:
