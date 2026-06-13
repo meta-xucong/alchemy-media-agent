@@ -86,6 +86,7 @@ systemctl restart alchemy-v2-api alchemy-v2-worker alchemy-v2-sync-worker
 发布后最少验证：
 
 ```bash
+curl -fsS http://127.0.0.1:8017/healthz
 curl -fsS https://alchemy.aiself.vip/api/v2/health
 curl -i -X POST https://alchemy.aiself.vip/api/v2/veyra/login \
   -H 'Content-Type: application/json' \

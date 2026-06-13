@@ -208,7 +208,7 @@ start_stack() {
 }
 
 health_check() {
-  local url="http://127.0.0.1:${APP_PORT}/v1/providers"
+  local url="http://127.0.0.1:${APP_PORT}/healthz"
   for _ in $(seq 1 30); do
     if curl -fsS "${url}" >/dev/null 2>&1; then
       echo "Alchemy Media Agent is running: http://127.0.0.1:${APP_PORT}/"
