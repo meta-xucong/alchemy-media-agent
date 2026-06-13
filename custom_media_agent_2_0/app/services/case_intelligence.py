@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 from app.config import settings
 from app.repositories import repository
@@ -16,6 +17,8 @@ _CASE_BASE_TEXT_CACHE: dict[tuple[str, str], str] = {}
 _CASE_FEATURE_CACHE: dict[tuple[str, str], set[str]] = {}
 _CASE_PROFILE_CACHE: dict[tuple[str, str, str, str | None], CaseProfile] = {}
 _CASE_SEARCH_TEXT_CACHE: dict[tuple[str, str, str, str | None], str] = {}
+_CASE_TOKEN_COUNTER_CACHE: dict[tuple[str, str, str, str | None], Counter[str]] = {}
+_CASE_TOKEN_SET_CACHE: dict[tuple[str, str, str, str | None], set[str]] = {}
 CORE_SUBJECT_FEATURES = {
     "subject.perfume",
     "subject.skincare",
@@ -607,11 +610,22 @@ FEATURE_LABELS_ZH.update(
 )
 
 
+@dataclass(frozen=True)
+class _SearchQueryContext:
+    expanded_text: str
+    counter: Counter[str]
+    tokens: set[str]
+    specific_tokens: set[str]
+    features: set[str]
+    normalized_query: str
+
+
 def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesResponse:
     bootstrap_v2_repository(seed_cases=True)
     cases = repository.list_cases(active_only=True)
     scored: list[tuple[float, str, PromptCase]] = []
     has_free_text_query = bool(request.query_text.strip())
+    query_context = _search_query_context(request)
     for case in cases:
         if request.category_filters and case.category not in request.category_filters:
             continue
@@ -621,8 +635,8 @@ def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesR
             continue
         if _excluded_by_risk(request.risk_filters, case):
             continue
-        score, reason = _score_case(request, case)
-        if has_free_text_query and not _case_has_relevance_evidence(request, case, score):
+        score, reason = _score_case(request, case, query_context=query_context)
+        if has_free_text_query and not _case_has_relevance_evidence(request, case, score, query_context=query_context):
             continue
         scored.append((score, reason, case))
 
@@ -750,15 +764,33 @@ def _excluded_by_risk(risk_filters: list[str], case: PromptCase) -> bool:
     return False
 
 
-def _score_case(request: SearchPromptCasesRequest, case: PromptCase) -> tuple[float, str]:
-    query_text = _expanded_query_text(request.query_text)
-    query_counter = Counter(_tokens(query_text))
+def _search_query_context(request: SearchPromptCasesRequest) -> _SearchQueryContext:
+    expanded_text = _expanded_query_text(request.query_text)
+    tokens = set(_tokens(expanded_text))
+    specific_tokens = {token for token in tokens if token not in GENERIC_QUERY_TOKENS and len(token) > 2}
+    return _SearchQueryContext(
+        expanded_text=expanded_text,
+        counter=Counter(_tokens(expanded_text)),
+        tokens=tokens,
+        specific_tokens=specific_tokens,
+        features=_query_feature_tags(request.query_text),
+        normalized_query=request.query_text.strip().lower(),
+    )
+
+
+def _score_case(
+    request: SearchPromptCasesRequest,
+    case: PromptCase,
+    *,
+    query_context: _SearchQueryContext,
+) -> tuple[float, str]:
+    query_counter = query_context.counter
     case_text = _case_search_text(case)
-    case_counter = Counter(_tokens(case_text))
+    case_counter = _case_token_counter(case)
     overlap = sum((query_counter & case_counter).values())
     semantic = overlap / max(1, sum(query_counter.values()))
     substring_match = _substring_match_score(request.query_text, case_text)
-    query_features = _query_feature_tags(request.query_text)
+    query_features = query_context.features
     case_features = _case_feature_tags(case)
     feature_hits = query_features.intersection(case_features)
     feature_match = len(feature_hits) / max(1, len(query_features)) if query_features else 0.0
@@ -806,8 +838,13 @@ def _tokens(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text or "")]
 
 
-def _case_matches_free_text_query(request: SearchPromptCasesRequest, case: PromptCase) -> bool:
-    query_features = _query_feature_tags(request.query_text)
+def _case_matches_free_text_query(
+    request: SearchPromptCasesRequest,
+    case: PromptCase,
+    *,
+    query_context: _SearchQueryContext,
+) -> bool:
+    query_features = query_context.features
     if query_features:
         case_features = _case_feature_tags(case)
         feature_hits = query_features.intersection(case_features)
@@ -825,16 +862,16 @@ def _case_matches_free_text_query(request: SearchPromptCasesRequest, case: Promp
         elif len(query_features) >= 2:
             required_feature_hits = 2
         return len(feature_hits) >= required_feature_hits
-    query_tokens = set(_tokens(_expanded_query_text(request.query_text)))
+    query_tokens = query_context.tokens
     if not query_tokens:
-        normalized_query = request.query_text.strip().lower()
+        normalized_query = query_context.normalized_query
         if not normalized_query:
             return True
         if _contains_cjk(normalized_query):
             return normalized_query in _case_base_text(case).lower()
         return False
-    case_tokens = set(_tokens(_case_search_text(case)))
-    specific_tokens = {token for token in query_tokens if token not in GENERIC_QUERY_TOKENS and len(token) > 2}
+    case_tokens = _case_token_set(case)
+    specific_tokens = query_context.specific_tokens
     if specific_tokens:
         required_specific_hits = 1
         if len(specific_tokens) >= 5:
@@ -846,15 +883,18 @@ def _case_matches_free_text_query(request: SearchPromptCasesRequest, case: Promp
     return len(query_tokens.intersection(case_tokens)) >= required_hits
 
 
-def _case_has_relevance_evidence(request: SearchPromptCasesRequest, case: PromptCase, score: float) -> bool:
-    if _case_matches_free_text_query(request, case):
+def _case_has_relevance_evidence(
+    request: SearchPromptCasesRequest,
+    case: PromptCase,
+    score: float,
+    *,
+    query_context: _SearchQueryContext,
+) -> bool:
+    if _case_matches_free_text_query(request, case, query_context=query_context):
         return True
-    if _query_specific_subject_features(_query_feature_tags(request.query_text)):
+    if _query_specific_subject_features(query_context.features):
         return False
-    expanded_query_tokens = {
-        token for token in _tokens(_expanded_query_text(request.query_text)) if token not in GENERIC_QUERY_TOKENS and len(token) > 2
-    }
-    if expanded_query_tokens and expanded_query_tokens.intersection(_tokens(_case_search_text(case))) and score >= MIN_FREE_TEXT_RELEVANCE_SCORE:
+    if query_context.specific_tokens and query_context.specific_tokens.intersection(_case_token_set(case)) and score >= MIN_FREE_TEXT_RELEVANCE_SCORE:
         return True
     return score >= MIN_FREE_TEXT_RELEVANCE_SCORE
 
@@ -892,6 +932,26 @@ def _case_search_text(case: PromptCase) -> str:
     return text
 
 
+def _case_token_counter(case: PromptCase) -> Counter[str]:
+    cache_key = _case_profile_cache_key(case)
+    cached = _CASE_TOKEN_COUNTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    counter = Counter(_tokens(_case_search_text(case)))
+    _CASE_TOKEN_COUNTER_CACHE[cache_key] = counter
+    return counter
+
+
+def _case_token_set(case: PromptCase) -> set[str]:
+    cache_key = _case_profile_cache_key(case)
+    cached = _CASE_TOKEN_SET_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    tokens = set(_case_token_counter(case))
+    _CASE_TOKEN_SET_CACHE[cache_key] = tokens
+    return tokens
+
+
 def _case_base_text(case: PromptCase) -> str:
     cache_key = _case_cache_key(case)
     cached = _CASE_BASE_TEXT_CACHE.get(cache_key)
@@ -916,10 +976,11 @@ def _case_base_text(case: PromptCase) -> str:
 
 def _query_feature_tags(query_text: str) -> set[str]:
     lower = _expanded_query_text(query_text).lower()
+    tokens = set(_tokens(lower))
     return {
         feature
         for feature, aliases in FEATURE_RULES.items()
-        if any(_contains_alias(lower, alias) for alias in aliases["query"])
+        if any(_contains_feature_alias(lower, tokens, alias) for alias in aliases["query"])
     }
 
 
@@ -962,14 +1023,26 @@ def _case_feature_tags(case: PromptCase) -> set[str]:
     if cached is not None:
         return set(cached)
     lower = _case_base_text(case).lower()
+    tokens = set(_tokens(lower))
     features = {
         feature
         for feature, aliases in FEATURE_RULES.items()
-        if any(_contains_alias(lower, alias) for alias in aliases["case"])
+        if any(_contains_feature_alias(lower, tokens, alias) for alias in aliases["case"])
     }
     refined = _refine_case_features(case, features)
     _CASE_FEATURE_CACHE[cache_key] = set(refined)
     return refined
+
+
+def _contains_feature_alias(lower_text: str, token_set: set[str], alias: str) -> bool:
+    normalized = alias.lower().strip()
+    if not normalized:
+        return False
+    if re.search(r"[\u4e00-\u9fff]", normalized):
+        return normalized in lower_text
+    if re.fullmatch(r"[a-z0-9]+", normalized):
+        return normalized in token_set
+    return normalized in lower_text
 
 
 def _refine_case_features(case: PromptCase, features: set[str]) -> set[str]:

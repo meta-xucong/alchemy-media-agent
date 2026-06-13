@@ -715,6 +715,32 @@ def test_case_search_filters_unmatched_free_text() -> None:
     )
 
 
+def test_case_search_computes_query_features_once(monkeypatch) -> None:
+    client = fresh_client()
+    calls = 0
+    original = main_module.case_intelligence._query_feature_tags
+
+    def counted_query_features(query_text: str):
+        nonlocal calls
+        calls += 1
+        return original(query_text)
+
+    monkeypatch.setattr(main_module.case_intelligence, "_query_feature_tags", counted_query_features)
+    response = client.post(
+        "/api/v2/prompt-cases/search",
+        json={
+            "query_text": "premium skincare product advertising studio lighting",
+            "use_case_filters": ["ecommerce"],
+            "style_filters": ["premium"],
+            "limit": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["cases"]
+    assert calls == 1
+
+
 def test_chinese_case_search_uses_feature_tags() -> None:
     client = fresh_client()
     response = client.post(
