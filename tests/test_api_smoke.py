@@ -643,7 +643,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260613-v2-speed3" in index.text
+    assert "20260613-veyra-loopfix" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "生视频（DEMO）" in index.text
@@ -752,6 +752,8 @@ def test_frontend_static_app_is_served():
 
     script = client.get("/static/app.js")
     assert script.status_code == 200
+    assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in script.text
+    assert "if (hadVeyraTicket && !ticketAccepted) return;" in script.text
     assert "/v1/image/jobs" in script.text
     assert "/v1/image/history" in script.text
     assert "output.thumbnail_url || output.url" in script.text
@@ -868,7 +870,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260613-v2-speed3" in h5.text
+    assert "20260613-veyra-loopfix" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -903,6 +905,8 @@ def test_mobile_h5_app_is_served_independently():
 
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
+    assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in mobile_script.text
+    assert "if (hadVeyraTicket && !ticketAccepted) return;" in mobile_script.text
     assert "/creative/runs/async" in mobile_script.text
     assert "/v1/image/jobs" in mobile_script.text
     assert "setupH5AdvancedPanels" in mobile_script.text

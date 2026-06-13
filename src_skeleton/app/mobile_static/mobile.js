@@ -361,8 +361,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   hydrateCachedVeyraAccount();
   bindControls();
   setupH5AdvancedPanels();
+  const hadVeyraTicket = new URLSearchParams(window.location.search).has("ticket");
   try {
-    await handleVeyraTicketFromUrl();
+    const ticketAccepted = await handleVeyraTicketFromUrl();
+    if (hadVeyraTicket && !ticketAccepted) return;
     if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
     syncVeyraSessionCookie();
     await createSession({ announce: false });
@@ -3562,7 +3564,7 @@ function cleanVeyraTicketFromUrl() {
 
 async function handleVeyraTicketFromUrl() {
   const ticket = new URLSearchParams(window.location.search).get("ticket");
-  if (!ticket) return;
+  if (!ticket) return true;
   try {
     const session = await v2Request("/veyra/login", {
       method: "POST",
@@ -3574,10 +3576,14 @@ async function handleVeyraTicketFromUrl() {
     cleanVeyraTicketFromUrl();
     await loadVeyraAccountPanel({ silent: true, force: true });
     updateV2Notice("Veyra 账户已接入。", "success");
+    return true;
   } catch (error) {
     setVeyraToken("");
     cleanVeyraTicketFromUrl();
-    updateV2Notice(`Veyra 登录失败：${friendlyError(error)}`, "error");
+    const message = `Veyra 登录失败：${friendlyError(error)}`;
+    updateV2Notice(message, "error");
+    showNotice(message, "error");
+    return false;
   }
 }
 

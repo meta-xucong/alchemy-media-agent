@@ -32,7 +32,67 @@
 5. Alchemy V1 如果运行在 Docker 容器中，`VEYRA_BILLING_SETTINGS_URL` 必须使用容器可访问地址。生产推荐：
    - `VEYRA_BILLING_SETTINGS_URL=https://alchemy.aiself.vip/api/v2/veyra/billing/settings/public`
    - 不要使用 `http://127.0.0.1:8020/...`，除非 V2 也在同一容器网络中且该地址真实可达。
-6. 最后切换域名/反代，不在代码推送阶段触碰 VPS。
+6. 如果生产使用“新 release 目录 + `/opt/alchemy-media-agent` symlink”发布，切换 symlink 前必须从当前线上目录复制运行时目录：
+   - `src_skeleton/.env`
+   - `src_skeleton/.media_storage`
+   - `custom_media_agent_2_0/.env`
+   - `custom_media_agent_2_0/.venv`
+   - `custom_media_agent_2_0/.v2_data`
+   - `custom_media_agent_2_0/.v2_storage`
+7. symlink 切换后必须同时重启 V1 Docker 容器和 V2 systemd 服务：
+   - `alchemy-v2-api`
+   - `alchemy-v2-worker`
+   - `alchemy-v2-sync-worker`
+8. 最后切换域名/反代，不在代码推送阶段触碰 VPS。
+
+## Alchemy release 发布保护
+
+Alchemy 当前线上不是单一进程：
+
+- V1 shell/API 由 Docker 容器承载，监听 `127.0.0.1:8017`。
+- V2 API/worker 由 systemd 承载，Nginx 将 `/api/v2/` 转发到 `127.0.0.1:8020`。
+- V2 service 读取 `/opt/alchemy-media-agent/custom_media_agent_2_0` 下的 `.env`、`.venv`、`.v2_data`、`.v2_storage`。
+
+因此 release 发布时不能只把 GitHub 代码解包到新目录后切 symlink，否则 V2 会缺少虚拟环境或运行时数据，典型症状是：
+
+```text
+POST /api/v2/veyra/login -> 500
+前端拿到 ticket 后换 token 失败，并反复回到 Veyra return router
+```
+
+标准发布步骤：
+
+```bash
+current_dir="$(readlink -f /opt/alchemy-media-agent)"
+release_dir="/opt/alchemy-media-agent-releases/<timestamp>-<sha>"
+
+mkdir -p "$release_dir"
+# 解包 GitHub archive 到 "$release_dir" 后，复制运行时：
+cp -a "$current_dir/src_skeleton/.env" "$release_dir/src_skeleton/.env"
+cp -a "$current_dir/src_skeleton/.media_storage" "$release_dir/src_skeleton/.media_storage"
+
+for item in .env .venv .v2_data .v2_storage; do
+  if [ -e "$current_dir/custom_media_agent_2_0/$item" ]; then
+    rm -rf "$release_dir/custom_media_agent_2_0/$item"
+    cp -a "$current_dir/custom_media_agent_2_0/$item" "$release_dir/custom_media_agent_2_0/$item"
+  fi
+done
+
+chown -R alchemy:alchemy "$release_dir/custom_media_agent_2_0"
+ln -sfn "$release_dir" /opt/alchemy-media-agent
+systemctl restart alchemy-v2-api alchemy-v2-worker alchemy-v2-sync-worker
+```
+
+发布后最少验证：
+
+```bash
+curl -fsS https://alchemy.aiself.vip/api/v2/health
+curl -i -X POST https://alchemy.aiself.vip/api/v2/veyra/login \
+  -H 'Content-Type: application/json' \
+  --data '{"ticket":"fake-ticket"}'
+```
+
+第二条应返回 401 `veyra_auth_unauthorized`，不能返回 500。
 
 ## 回归矩阵
 
@@ -47,6 +107,7 @@ sub2api：
 Alchemy：
 
 - 桌面和 H5 都能消费 `?ticket=...`。
+- 如果 ticket 交换失败，前端只显示错误并停在当前页，不能立刻再次跳回 `/_veyra/return` 形成循环。
 - 生产强制登录开启后，匿名用户不能读取 V1/V2 历史、输出、runtime/provider 设置或管理员页面。
 - 未登录直接打开 Alchemy 桌面/H5 时，应回到 sub2api 登录页，登录后自动回到对应 Alchemy 入口。
 - 账户页展示 sub2api 余额、当前用户生成记录、扣费流水。
