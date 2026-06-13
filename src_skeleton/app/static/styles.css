@@ -1851,6 +1851,7 @@ button.v2-template-preview {
     "preview file file"
     "preview roles roles"
     "preview controls controls"
+    "preview list list"
     "preview hint hint";
   gap: 10px 14px;
   margin-top: 0;
@@ -1910,7 +1911,7 @@ button.v2-template-preview {
 
 .v2-asset-role-checks {
   grid-area: roles;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 64px), 1fr));
   gap: 6px;
 }
 
@@ -1924,7 +1925,7 @@ button.v2-template-preview {
 .v2-asset-mini-grid {
   grid-area: controls;
   display: grid;
-  grid-template-columns: minmax(138px, 0.36fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 8px;
   align-items: start;
 }
@@ -3091,21 +3092,69 @@ button.v2-live-preview:focus-visible {
   }
 
   .v2-asset-panel {
-    grid-template-columns: minmax(220px, 290px) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "head head clear"
-      "preview file file"
-      "preview roles roles"
-      "controls controls controls"
-      "hint hint hint";
+      "head"
+      "clear"
+      "preview"
+      "file"
+      "roles"
+      "controls"
+      "list"
+      "hint";
+  }
+
+  .v2-asset-panel > * {
+    min-width: 0;
   }
 
   .v2-asset-preview {
     height: 220px;
   }
 
+  .v2-file-drop,
+  .v2-asset-role-checks,
+  .v2-asset-mini-grid,
+  #v2ClearAssetBtn,
+  #v2AssetLockHint,
+  .v2-asset-list {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .v2-file-drop {
+    display: grid;
+    align-items: stretch;
+    justify-items: stretch;
+    gap: 6px;
+  }
+
+  .v2-file-drop .file-title {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+
   .v2-asset-role-checks {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .v2-asset-mini-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-asset-mini-grid .field {
+    min-width: 0;
+  }
+
+  .v2-asset-mini-grid .field > span {
+    display: block;
+    white-space: normal;
+  }
+
+  #v2AssetNotesInput {
+    width: 100%;
+    min-width: 0;
   }
 
   .hero-gallery-lane {
