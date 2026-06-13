@@ -643,7 +643,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260613-veyra-loopfix" in index.text
+    assert "20260613-queue-wait-ui" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "生视频（DEMO）" in index.text

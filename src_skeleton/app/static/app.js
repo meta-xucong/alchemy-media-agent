@@ -2183,10 +2183,12 @@ function v2ProgressDetailForRun(stageKey, run) {
   const claudeProgress = v2ClaudeProgressSummary(run);
   const jobs = run?.generation_jobs || [];
   const outputs = jobs.flatMap((job) => job.outputs || []);
+  const waitingMessage = v2QueuedRetryMessage(run);
   if (run?.status === "failed") return run.next_actions?.[0] || "任务失败，已停止生成。";
   if (run?.status === "blocked_by_policy") return "安全策略要求停止本次生成。";
   if (run?.status === "waiting_for_user") return "需要用户确认后继续。";
   if (run?.status === "completed") return outputs.length ? `流程完成，共得到 ${outputs.length} 张输出。` : "流程结束。";
+  if (waitingMessage) return waitingMessage;
   if (stageKey === "composing_prompt" && claudeProgress?.message) {
     const elapsed = v2DurationFromMs(claudeProgress.elapsed_ms);
     return elapsed ? `${claudeProgress.message} · Claude累计 ${elapsed}` : claudeProgress.message;
@@ -2207,8 +2209,25 @@ function v2ProgressTypeForRun(run) {
   if (run?.status === "failed" || run?.status === "cancelled") return "error";
   if (run?.status === "blocked_by_policy" || run?.status === "waiting_for_user") return "warning";
   if (run?.status === "completed") return "success";
+  if (v2QueuedRetryMessage(run)) return "warning";
   if (run?.orchestrator_decision?.fallback_reason) return "warning";
   return "info";
+}
+
+function v2QueuedRetryMessage(run) {
+  if (!run || run.status === "completed" || run.status === "failed") return "";
+  const actions = Array.isArray(run.next_actions) ? run.next_actions : [];
+  const message = String(actions[0] || "").trim();
+  if (!message) return "";
+  if (/上游|线路|额度|限流|队列|自动重试|稍后重试|暂时不可用|rate limit|retry/i.test(message)) {
+    return message;
+  }
+  const job = (run.generation_jobs || [])[0];
+  const error = job?.error || {};
+  if (error.retryable || ["veyra_insufficient_balance", "provider_rate_limit"].includes(error.error_code)) {
+    return message || "上游暂时不可用，任务已保留在队列中，稍后自动重试。";
+  }
+  return "";
 }
 
 function v2FallbackReasonLabel(reason) {
