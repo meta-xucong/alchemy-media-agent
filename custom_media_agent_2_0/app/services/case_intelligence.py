@@ -652,6 +652,27 @@ def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesR
     )
 
 
+def prewarm_case_search_index() -> dict[str, int]:
+    bootstrap_v2_repository(seed_cases=True)
+    cases = repository.list_cases(active_only=True)
+    for case in cases:
+        _case_base_text(case)
+        _case_feature_tags(case)
+        build_case_profile(case)
+        _case_search_text(case)
+        _case_token_counter(case)
+        _case_token_set(case)
+    return {
+        "cases": len(cases),
+        "base_text_cache": len(_CASE_BASE_TEXT_CACHE),
+        "feature_cache": len(_CASE_FEATURE_CACHE),
+        "profile_cache": len(_CASE_PROFILE_CACHE),
+        "search_text_cache": len(_CASE_SEARCH_TEXT_CACHE),
+        "token_counter_cache": len(_CASE_TOKEN_COUNTER_CACHE),
+        "token_set_cache": len(_CASE_TOKEN_SET_CACHE),
+    }
+
+
 def list_template_index() -> dict:
     cases = _sorted_template_cases()
     categories = _count_case_values(cases, lambda case: [case.category] if case.category else [])

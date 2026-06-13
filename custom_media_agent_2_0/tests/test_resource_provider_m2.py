@@ -239,12 +239,20 @@ def test_remote_sync_rebuilds_current_index_when_previews_are_missing(monkeypatc
         lambda: (expected_source_version, [MarkdownCaseDocument(path="cases/poster.md", text="unused")]),
     )
     monkeypatch.setattr(resource_sync, "parse_evolinkai_markdown_cases", lambda documents, source_version: rebuilt_cases)
+    prewarm_calls = []
+
+    def fake_prewarm_case_search_index():
+        prewarm_calls.append(True)
+        return {"cases": len(rebuilt_cases)}
+
+    monkeypatch.setattr("app.services.case_intelligence.prewarm_case_search_index", fake_prewarm_case_search_index)
 
     sync = resource_sync.sync_resource_provider(EVOLINKAI_PROVIDER_ID, mode="remote")
 
     assert sync.status == "completed"
     assert sync.stats.get("skipped") is not True
     assert all(case.preview_url for case in repository.list_cases(active_only=True))
+    assert prewarm_calls == [True]
 
 
 def test_remote_sync_rebuilds_current_index_when_previews_are_repo_relative(monkeypatch) -> None:

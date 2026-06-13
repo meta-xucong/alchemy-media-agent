@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
@@ -35,7 +36,13 @@ from app.schemas import (
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_assets import read_case_asset, read_case_thumbnail
 from app.services import case_intelligence
-from app.services.case_intelligence import build_case_profile, get_prompt_case, list_templates, search_prompt_cases
+from app.services.case_intelligence import (
+    build_case_profile,
+    get_prompt_case,
+    list_templates,
+    prewarm_case_search_index,
+    search_prompt_cases,
+)
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
 from app.services.image_history import delete_image_history_item, list_image_history
@@ -79,6 +86,7 @@ from app.providers.images import list_v2_image_provider_capabilities
 from app.services.output_storage import read_output_content
 
 
+logger = logging.getLogger(__name__)
 creative_manager = CreativeManagerRuntime()
 _TEMPLATE_RESPONSE_CACHE_MAX = 128
 _template_response_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
@@ -94,6 +102,7 @@ async def lifespan(_: FastAPI):
     bootstrap_v2_repository(seed_cases=True)
     initialize_task_queue()
     startup_sync_task: asyncio.Task | None = None
+    search_prewarm_task: asyncio.Task | None = None
     resource_sync_task: asyncio.Task | None = None
     resource_sync_stop: asyncio.Event | None = None
     queue_worker_task: asyncio.Task | None = None
@@ -102,6 +111,7 @@ async def lifespan(_: FastAPI):
         startup_sync_task = asyncio.create_task(
             asyncio.to_thread(sync_resource_provider, EVOLINKAI_PROVIDER_ID, "remote")
         )
+    search_prewarm_task = asyncio.create_task(_prewarm_case_search_index())
     if settings.enable_remote_github_sync and settings.resource_sync_interval_minutes > 0:
         resource_sync_stop = asyncio.Event()
         resource_sync_task = asyncio.create_task(
@@ -115,11 +125,21 @@ async def lifespan(_: FastAPI):
     yield
     if startup_sync_task and not startup_sync_task.done():
         startup_sync_task.cancel()
+    if search_prewarm_task and not search_prewarm_task.done():
+        search_prewarm_task.cancel()
     await ResourceSyncScheduler.stop(resource_sync_task, resource_sync_stop)
     if queue_worker_stop:
         queue_worker_stop.set()
     if queue_worker_task and not queue_worker_task.done():
         queue_worker_task.cancel()
+
+
+async def _prewarm_case_search_index() -> None:
+    try:
+        stats = await asyncio.to_thread(prewarm_case_search_index)
+        logger.info("V2 case search index prewarmed: %s", stats)
+    except Exception:
+        logger.exception("V2 case search index prewarm failed")
 
 
 app = FastAPI(title="Custom Media Agent 2.0 API", version=settings.version, lifespan=lifespan)

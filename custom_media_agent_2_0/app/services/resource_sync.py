@@ -125,6 +125,9 @@ def sync_resource_provider(provider_id: str, mode: SyncMode = "auto") -> Provide
         }
     )
     repository.upsert_provider(updated_provider)
+    from app.services.case_intelligence import prewarm_case_search_index
+
+    prewarm_case_search_index()
     completed = sync_run.model_copy(
         update={
             "status": "completed",

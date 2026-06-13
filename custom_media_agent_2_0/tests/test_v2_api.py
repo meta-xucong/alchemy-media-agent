@@ -741,6 +741,21 @@ def test_case_search_computes_query_features_once(monkeypatch) -> None:
     assert calls == 1
 
 
+def test_case_search_prewarm_populates_case_caches() -> None:
+    fresh_client()
+    intelligence = main_module.case_intelligence
+    intelligence._CASE_SEARCH_TEXT_CACHE.clear()
+    intelligence._CASE_TOKEN_COUNTER_CACHE.clear()
+    intelligence._CASE_TOKEN_SET_CACHE.clear()
+
+    stats = intelligence.prewarm_case_search_index()
+
+    assert stats["cases"] == len(repository.list_cases(active_only=True))
+    assert stats["search_text_cache"] >= stats["cases"]
+    assert stats["token_counter_cache"] >= stats["cases"]
+    assert stats["token_set_cache"] >= stats["cases"]
+
+
 def test_chinese_case_search_uses_feature_tags() -> None:
     client = fresh_client()
     response = client.post(
