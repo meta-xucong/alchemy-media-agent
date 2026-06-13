@@ -395,6 +395,9 @@ class V2RuntimeModelSettingsResponse(BaseModel):
     openai_image_model: str
     openai_api_key_configured: bool = False
     openai_base_url_configured: bool = False
+    doubao_image_model: str
+    doubao_image_api_key_configured: bool = False
+    doubao_image_base_url_configured: bool = False
     gemini_image_model: str
     gemini_api_key_configured: bool = False
     gemini_base_url_configured: bool = False
@@ -422,6 +425,7 @@ class V2RuntimeModelSettingsResponse(BaseModel):
 class V2RuntimeModelSettingsRequest(BaseModel):
     image_generation_provider: str | None = Field(default=None, max_length=80)
     openai_image_model: str | None = Field(default=None, max_length=120)
+    doubao_image_model: str | None = Field(default=None, max_length=120)
     gemini_image_model: str | None = Field(default=None, max_length=120)
     default_agent_model: str | None = Field(default=None, max_length=120)
     output_review_agent_enabled: bool | None = None

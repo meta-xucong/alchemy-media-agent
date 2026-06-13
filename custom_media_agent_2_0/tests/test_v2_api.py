@@ -16,6 +16,7 @@ import pytest
 
 from app.config import settings
 import app.providers.images.openai_gpt_image_2 as openai_image_provider
+from app.providers.images.base import V2ImageProviderNotConfiguredError, V2ImageProviderRequest
 from app.providers.images.registry import get_v2_image_provider
 import app.main as main_module
 from app.main import app
@@ -46,6 +47,9 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "default_agent_model", "gpt-4.1-mini")
     object.__setattr__(settings, "image_generation_provider", "mock_image")
     object.__setattr__(settings, "openai_api_key", "sk-test-openai")
+    object.__setattr__(settings, "doubao_image_api_key", "sk-test-doubao")
+    object.__setattr__(settings, "doubao_image_base_url", "https://aiself.example.test/v1")
+    object.__setattr__(settings, "doubao_image_model", "doubao-seedream-4-0-250828")
     object.__setattr__(settings, "gemini_api_key", "sk-test-gemini")
     object.__setattr__(settings, "gemini_image_generation_enabled", False)
     object.__setattr__(settings, "persist_image_history", False)
@@ -2217,8 +2221,28 @@ def test_runtime_model_settings_rejects_temporarily_disabled_gemini_image_provid
     response = client.post("/api/v2/runtime/model-settings", json={"image_generation_provider": "gemini_image"})
 
     assert response.status_code == 200
-    assert response.json()["image_generation_provider"] == "openai_gpt_image"
-    assert settings.image_generation_provider == "openai_gpt_image"
+    assert response.json()["image_generation_provider"] == "auto"
+    assert settings.image_generation_provider == "auto"
+
+
+def test_runtime_model_settings_can_select_doubao_image_provider() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/runtime/model-settings",
+        json={
+            "image_generation_provider": "doubao_image",
+            "doubao_image_model": "doubao-seedream-v2-test",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["image_generation_provider"] == "doubao_image"
+    assert body["doubao_image_model"] == "doubao-seedream-v2-test"
+    assert body["doubao_image_api_key_configured"] is True
+    assert settings.image_generation_provider == "doubao_image"
+    assert settings.doubao_image_model == "doubao-seedream-v2-test"
 
 
 def test_v2_auto_provider_hint_ignores_temporarily_disabled_gemini_setting() -> None:
@@ -2239,6 +2263,52 @@ def test_v2_auto_provider_hint_ignores_temporarily_disabled_gemini_setting() -> 
     provider = asyncio.run(get_v2_image_provider(request.provider_hint))
     assert provider.name == "openai_gpt_image"
     assert generation_service._requested_model(request.provider_hint) == settings.openai_image_model
+
+
+def test_v2_auto_provider_hint_can_use_doubao_when_openai_missing() -> None:
+    fresh_client()
+    object.__setattr__(settings, "image_generation_provider", "auto")
+    object.__setattr__(settings, "openai_api_key", None)
+    object.__setattr__(settings, "doubao_image_api_key", "test-doubao-key")
+    request = CreateImageJobRequest(
+        prompt_plan=ImagePromptPlan(
+            plan_id="plan_test_doubao_auto_provider_hint",
+            mode="smart_enhance",
+            prompt="Create a premium tea poster.",
+            provider_parameters={"provider_hint": "auto"},
+        ),
+        provider_hint="auto",
+    )
+
+    provider = asyncio.run(get_v2_image_provider(request.provider_hint))
+    assert provider.name == "doubao_image"
+    assert generation_service._requested_model(request.provider_hint) == settings.doubao_image_model
+
+
+def test_v2_doubao_image_provider_requires_dedicated_key_even_when_openai_is_configured() -> None:
+    fresh_client()
+    object.__setattr__(settings, "openai_api_key", "sk-openai-only")
+    object.__setattr__(settings, "doubao_image_api_key", None)
+
+    provider = asyncio.run(get_v2_image_provider("doubao_image"))
+    caps = asyncio.run(provider.capabilities())
+
+    assert provider.name == "doubao_image"
+    assert caps.configured is False
+    assert "V2_OPENAI_API_KEY" not in (caps.reason or "")
+
+    with pytest.raises(V2ImageProviderNotConfiguredError):
+        asyncio.run(
+            provider.generate(
+                V2ImageProviderRequest(
+                    prompt_plan=ImagePromptPlan(
+                        plan_id="plan_test_doubao_key_isolation",
+                        mode="smart_enhance",
+                        prompt="Create a poster.",
+                    )
+                )
+            )
+        )
 
 
 def test_v2_gemini_image_provider_can_be_reenabled_by_flag() -> None:

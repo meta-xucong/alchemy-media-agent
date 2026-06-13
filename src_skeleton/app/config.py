@@ -87,6 +87,11 @@ class Settings(BaseModel):
     default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
     default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")
     openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2"))
+    doubao_image_api_key: str | None = os.getenv("DOUBAO_IMAGE_API_KEY")
+    doubao_image_base_url: str | None = _normalize_openai_base_url(
+        os.getenv("DOUBAO_IMAGE_BASE_URL") or "https://aiself.vip"
+    )
+    doubao_image_model: str = os.getenv("DOUBAO_IMAGE_MODEL", "doubao-seedream-4-0-250828")
     openai_image_local_max_requests_per_minute: int = _int_env("OPENAI_IMAGE_LOCAL_MAX_REQUESTS_PER_MINUTE", 12)
     openai_image_local_max_outputs_per_minute: int = _int_env("OPENAI_IMAGE_LOCAL_MAX_OUTPUTS_PER_MINUTE", 24)
     openai_image_local_queue_timeout_seconds: float = _float_env("OPENAI_IMAGE_LOCAL_QUEUE_TIMEOUT_SECONDS", 900.0)
@@ -127,6 +132,9 @@ def update_runtime_settings(
     default_image_provider: str | None = None,
     default_image_model: str | None = None,
     openai_image_model: str | None = None,
+    doubao_image_model: str | None = None,
+    doubao_image_api_key: str | None = None,
+    doubao_image_base_url: str | None = None,
     gemini_image_model: str | None = None,
     default_llm_provider: str | None = None,
     default_llm_model: str | None = None,
@@ -145,12 +153,16 @@ def update_runtime_settings(
         settings.default_image_provider = default_image_provider
     if openai_image_model:
         settings.openai_image_model = openai_image_model.strip()
+    if doubao_image_model:
+        settings.doubao_image_model = doubao_image_model.strip()
     if gemini_image_model:
         settings.gemini_image_model = gemini_image_model.strip()
     if default_image_model:
         settings.default_image_model = default_image_model.strip()
         if settings.default_image_provider == "gemini_image":
             settings.gemini_image_model = default_image_model.strip()
+        elif settings.default_image_provider == "doubao_image":
+            settings.doubao_image_model = default_image_model.strip()
         else:
             settings.openai_image_model = default_image_model.strip()
     if default_llm_provider:
@@ -179,6 +191,8 @@ def update_runtime_settings(
         settings.backup_llm_model = settings.kimi_llm_model
     if settings.default_image_provider == "gemini_image" and settings.gemini_image_generation_enabled:
         settings.default_image_model = settings.gemini_image_model
+    elif settings.default_image_provider == "doubao_image":
+        settings.default_image_model = settings.doubao_image_model
     else:
         settings.default_image_provider = "openai_gpt_image"
         settings.default_image_model = settings.openai_image_model
@@ -188,6 +202,10 @@ def update_runtime_settings(
         settings.openai_api_key = openai_api_key.strip()
     if openai_base_url is not None:
         settings.openai_base_url = _normalize_openai_base_url(openai_base_url.strip()) if openai_base_url.strip() else None
+    if doubao_image_api_key:
+        settings.doubao_image_api_key = doubao_image_api_key.strip()
+    if doubao_image_base_url is not None:
+        settings.doubao_image_base_url = _normalize_openai_base_url(doubao_image_base_url.strip()) if doubao_image_base_url.strip() else None
     if anthropic_api_key:
         settings.anthropic_auth_token = anthropic_api_key.strip()
     if anthropic_base_url is not None:
@@ -207,6 +225,8 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         "DEFAULT_IMAGE_PROVIDER": settings.default_image_provider,
         "DEFAULT_IMAGE_MODEL": settings.default_image_model,
         "OPENAI_IMAGE_MODEL": settings.openai_image_model,
+        "DOUBAO_IMAGE_MODEL": settings.doubao_image_model,
+        "DOUBAO_IMAGE_BASE_URL": settings.doubao_image_base_url or "",
         "GEMINI_IMAGE_MODEL": settings.gemini_image_model,
         "GEMINI_IMAGE_BASE_URL": settings.gemini_image_base_url or "",
         "DEFAULT_LLM_PROVIDER": settings.default_llm_provider,

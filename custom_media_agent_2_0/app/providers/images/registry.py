@@ -4,6 +4,7 @@ import asyncio
 
 from app.config import settings
 from app.providers.images.base import V2ImageProvider, V2ImageProviderCapabilities
+from app.providers.images.doubao_image import V2DoubaoImageProvider
 from app.providers.images.gemini_image import V2GeminiImageProvider
 from app.providers.images.mock import V2MockImageProvider
 from app.providers.images.openai_gpt_image_2 import V2OpenAIGPTImage2Provider
@@ -12,6 +13,7 @@ from app.providers.images.openai_gpt_image_2 import V2OpenAIGPTImage2Provider
 def _providers() -> dict[str, V2ImageProvider]:
     return {
         "openai_gpt_image": V2OpenAIGPTImage2Provider(),
+        "doubao_image": V2DoubaoImageProvider(),
         "gemini_image": V2GeminiImageProvider(),
         "mock_image": V2MockImageProvider(),
     }
@@ -24,7 +26,7 @@ async def get_v2_image_provider(provider_hint: str | None = None) -> V2ImageProv
         requested = "auto"
     if requested != "auto":
         return providers.get(requested) or providers["mock_image"]
-    provider_order = ["openai_gpt_image"]
+    provider_order = ["openai_gpt_image", "doubao_image"]
     if settings.gemini_image_generation_enabled:
         provider_order.append("gemini_image")
     for provider_id in provider_order:
@@ -48,6 +50,6 @@ def _normalize_provider(provider_hint: str | None) -> str:
         return "auto"
     if requested == "":
         return "auto"
-    if requested not in {"auto", "openai_gpt_image", "gemini_image", "mock_image"}:
+    if requested not in {"auto", "openai_gpt_image", "doubao_image", "gemini_image", "mock_image"}:
         return "auto"
     return requested

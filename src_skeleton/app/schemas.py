@@ -435,9 +435,10 @@ class ProviderCapabilitiesResponse(BaseModel):
 
 
 class RuntimeProviderSettingsRequest(BaseModel):
-    default_image_provider: Literal["openai_gpt_image", "gemini_image"] | None = None
+    default_image_provider: Literal["openai_gpt_image", "doubao_image", "gemini_image"] | None = None
     default_image_model: str | None = Field(default=None, min_length=1, max_length=120)
     openai_image_model: str | None = Field(default=None, min_length=1, max_length=120)
+    doubao_image_model: str | None = Field(default=None, min_length=1, max_length=120)
     gemini_image_model: str | None = Field(default=None, min_length=1, max_length=120)
     default_llm_provider: Literal["openai", "anthropic"] | None = None
     default_llm_model: str | None = Field(default=None, min_length=1, max_length=120)
@@ -447,6 +448,8 @@ class RuntimeProviderSettingsRequest(BaseModel):
     image_work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
     openai_api_key: str | None = Field(default=None, max_length=4096)
     openai_base_url: str | None = Field(default=None, max_length=512)
+    doubao_image_api_key: str | None = Field(default=None, max_length=4096)
+    doubao_image_base_url: str | None = Field(default=None, max_length=512)
     anthropic_api_key: str | None = Field(default=None, max_length=4096)
     anthropic_base_url: str | None = Field(default=None, max_length=512)
     gemini_image_api_key: str | None = Field(default=None, max_length=4096)
@@ -457,6 +460,7 @@ class RuntimeProviderSettingsResponse(BaseModel):
     default_image_provider: str
     default_image_model: str
     openai_image_model: str
+    doubao_image_model: str
     gemini_image_model: str
     default_llm_provider: str
     default_llm_model: str
@@ -467,6 +471,8 @@ class RuntimeProviderSettingsResponse(BaseModel):
     image_work_intensity: str
     openai_base_url: str | None = None
     openai_api_key_configured: bool
+    doubao_image_base_url: str | None = None
+    doubao_image_api_key_configured: bool
     anthropic_base_url: str | None = None
     anthropic_api_key_configured: bool
     gemini_image_base_url: str | None = None

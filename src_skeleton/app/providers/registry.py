@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.config import settings
+from app.providers.doubao_image import DoubaoImageProvider
 from app.providers.openai_image import OpenAIGPTImageProvider
 from app.providers.gemini_image import GeminiImageProvider
 from app.providers.mock_image import MockImageProvider
@@ -12,6 +13,7 @@ class ProviderRegistry:
     def __init__(self):
         self.image_providers = {
             "openai_gpt_image": OpenAIGPTImageProvider(),
+            "doubao_image": DoubaoImageProvider(),
             "gemini_image": GeminiImageProvider(),
         }
         if settings.mock_image_provider_enabled:

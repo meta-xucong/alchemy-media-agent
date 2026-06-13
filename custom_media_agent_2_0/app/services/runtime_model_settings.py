@@ -7,12 +7,13 @@ from app.config import settings
 from app.schemas import V2RuntimeModelSettingsRequest, V2RuntimeModelSettingsResponse
 
 
-VALID_IMAGE_PROVIDERS = {"auto", "openai_gpt_image", "gemini_image", "mock_image"}
+VALID_IMAGE_PROVIDERS = {"auto", "openai_gpt_image", "doubao_image", "gemini_image", "mock_image"}
 VALID_CASE_INTELLIGENCE_PROVIDERS = {"rules", "claude-code"}
 VALID_CLAUDE_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 RUNTIME_MODEL_FIELDS = {
     "image_generation_provider",
     "openai_image_model",
+    "doubao_image_model",
     "gemini_image_model",
     "default_agent_model",
     "output_review_agent_enabled",
@@ -51,6 +52,9 @@ def get_runtime_model_settings() -> V2RuntimeModelSettingsResponse:
         openai_image_model=settings.openai_image_model,
         openai_api_key_configured=bool(settings.openai_api_key),
         openai_base_url_configured=bool(settings.openai_base_url),
+        doubao_image_model=settings.doubao_image_model,
+        doubao_image_api_key_configured=bool(settings.doubao_image_api_key),
+        doubao_image_base_url_configured=bool(settings.doubao_image_base_url),
         gemini_image_model=settings.gemini_image_model,
         gemini_api_key_configured=bool(settings.gemini_api_key),
         gemini_base_url_configured=bool(settings.gemini_base_url),
@@ -111,6 +115,8 @@ def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
         updates.pop("default_agent_model", None)
     if updates.get("openai_image_model") is None:
         updates.pop("openai_image_model", None)
+    if updates.get("doubao_image_model") is None:
+        updates.pop("doubao_image_model", None)
     if updates.get("gemini_image_model") is None:
         updates.pop("gemini_image_model", None)
 
@@ -120,15 +126,9 @@ def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
 def _coerce_configured_provider(provider: str) -> str:
     if provider in {"auto", "mock_image"}:
         return provider
-    if provider == "openai_gpt_image" and settings.openai_api_key:
-        return provider
-    if provider == "gemini_image" and settings.gemini_api_key and settings.gemini_image_generation_enabled:
-        return provider
-    if settings.openai_api_key:
-        return "openai_gpt_image"
-    if settings.gemini_api_key and settings.gemini_image_generation_enabled:
-        return "gemini_image"
-    return "mock_image" if settings.allow_mock_fallback else "auto"
+    if provider == "gemini_image" and not settings.gemini_image_generation_enabled:
+        return "auto"
+    return provider
 
 
 def _apply_runtime_updates(updates: dict[str, Any], *, persist: bool) -> None:

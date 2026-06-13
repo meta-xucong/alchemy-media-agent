@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.providers.base import ProviderRateLimitError
+from app.providers.base import ProviderNotConfiguredError, ProviderRateLimitError
+import app.providers.doubao_image as doubao_image_provider
 import app.providers.gemini_image as gemini_image_provider
 import app.providers.openai_image as openai_image_provider
 from app.providers.registry import registry
@@ -34,6 +35,93 @@ def test_openai_image_provider_cost_uses_runtime_model():
     )
     assert estimate.provider == "openai_gpt_image"
     assert estimate.model == "gpt-image-2"
+
+
+def test_doubao_image_provider_generates_via_openai_compatible_endpoint(monkeypatch):
+    provider = registry.image("doubao_image")
+    captured = {}
+    original_key = settings.doubao_image_api_key
+    original_base_url = settings.doubao_image_base_url
+    original_model = settings.doubao_image_model
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"data": [{"b64_json": base64.b64encode(b"fake-png").decode("ascii"), "size": "1024x1024"}]}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return FakeResponse()
+
+    try:
+        settings.doubao_image_api_key = "sk-doubao-test"
+        settings.doubao_image_base_url = "https://aiself.example.test/v1"
+        settings.doubao_image_model = "doubao-seedream-4-0-250828"
+        monkeypatch.setattr(doubao_image_provider.httpx, "AsyncClient", FakeAsyncClient)
+
+        result = asyncio.run(
+            provider.generate(
+                ImageGenerationRequest(
+                    prompt_plan=ImagePromptPlan(
+                        main_subject="精品咖啡海报",
+                        count=1,
+                        size="1024x1024",
+                        quality="high",
+                    )
+                )
+            )
+        )
+    finally:
+        settings.doubao_image_api_key = original_key
+        settings.doubao_image_base_url = original_base_url
+        settings.doubao_image_model = original_model
+
+    assert captured["url"] == "https://aiself.example.test/v1/images/generations"
+    assert captured["headers"]["Authorization"] == "Bearer sk-doubao-test"
+    assert captured["payload"]["model"] == "doubao-seedream-4-0-250828"
+    assert captured["payload"]["response_format"] == "b64_json"
+    assert result.provider == "doubao_image"
+    assert result.model == "doubao-seedream-4-0-250828"
+    assert result.outputs[0]["format"] == "png"
+    assert result.raw_response_summary["supports_reference_images"] is False
+
+
+def test_doubao_image_provider_requires_dedicated_key_even_when_openai_is_configured():
+    provider = registry.image("doubao_image")
+    original_doubao_key = settings.doubao_image_api_key
+    original_openai_key = settings.openai_api_key
+
+    try:
+        settings.openai_api_key = "sk-openai-only"
+        settings.doubao_image_api_key = None
+
+        caps = asyncio.run(provider.capabilities())
+        assert caps.configured is False
+        assert "OPENAI_API_KEY" not in (caps.reason or "")
+
+        with pytest.raises(ProviderNotConfiguredError):
+            asyncio.run(
+                provider.generate(
+                    ImageGenerationRequest(prompt_plan=ImagePromptPlan(main_subject="豆包隔离测试", count=1))
+                )
+            )
+    finally:
+        settings.doubao_image_api_key = original_doubao_key
+        settings.openai_api_key = original_openai_key
 
 
 def test_openai_image_provider_detects_concurrency_limit():

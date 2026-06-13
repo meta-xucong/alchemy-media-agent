@@ -250,6 +250,8 @@ def _requested_model(provider_hint: str | None) -> str | None:
     provider = _requested_provider(provider_hint)
     if provider == "openai_gpt_image":
         return settings.openai_image_model
+    if provider == "doubao_image":
+        return settings.doubao_image_model
     if provider == "gemini_image" and settings.gemini_image_generation_enabled:
         return settings.gemini_image_model
     if provider == "mock_image":
@@ -257,6 +259,8 @@ def _requested_model(provider_hint: str | None) -> str | None:
     if provider == "auto":
         if settings.openai_api_key:
             return settings.openai_image_model
+        if settings.doubao_image_api_key:
+            return settings.doubao_image_model
         if settings.gemini_api_key and settings.gemini_image_generation_enabled:
             return settings.gemini_image_model
         return "mock-image-v2-native"

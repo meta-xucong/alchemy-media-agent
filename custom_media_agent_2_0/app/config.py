@@ -63,6 +63,17 @@ def _codex_auth_value(name: str) -> str | None:
     return value or None
 
 
+def _normalize_openai_base_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    stripped = value.rstrip("/")
+    if stripped.endswith("/v1"):
+        return stripped
+    if "://" in stripped and "/" not in stripped.split("://", 1)[1]:
+        return f"{stripped}/v1"
+    return stripped
+
+
 @dataclass(frozen=True)
 class Settings:
     service_name: str = "custom-media-agent-v2"
@@ -112,6 +123,10 @@ class Settings:
     openai_image_local_queue_timeout_seconds: float = 900.0
     openai_image_upstream_cooldown_seconds: float = 90.0
     openai_image_max_retry_after_seconds: float = 900.0
+    doubao_image_api_key: str | None = None
+    doubao_image_base_url: str | None = None
+    doubao_image_model: str = "doubao-seedream-4-0-250828"
+    doubao_image_timeout_seconds: float = 300.0
     gemini_api_key: str | None = None
     gemini_base_url: str | None = None
     gemini_image_model: str = "gemini-2.5-flash-image"
@@ -254,7 +269,7 @@ def load_settings() -> Settings:
         case_thumbnail_prewarm_limit=max(0, int(os.getenv("V2_CASE_THUMBNAIL_PREWARM_LIMIT", "0"))),
         image_generation_provider=os.getenv("V2_IMAGE_GENERATION_PROVIDER", "auto"),
         openai_api_key=os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY") or None,
-        openai_base_url=(os.getenv("V2_OPENAI_BASE_URL") or "").rstrip("/") or None,
+        openai_base_url=_normalize_openai_base_url(os.getenv("V2_OPENAI_BASE_URL")),
         openai_image_model=os.getenv("V2_OPENAI_IMAGE_MODEL", "gpt-image-2"),
         openai_image_timeout_seconds=float(os.getenv("V2_OPENAI_IMAGE_TIMEOUT_SECONDS", "240")),
         openai_image_local_max_requests_per_minute=max(
@@ -277,6 +292,21 @@ def load_settings() -> Settings:
             1.0,
             float(os.getenv("V2_OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", "900")),
         ),
+        doubao_image_api_key=(
+            os.getenv("V2_DOUBAO_IMAGE_API_KEY")
+            or os.getenv("DOUBAO_IMAGE_API_KEY")
+            or None
+        ),
+        doubao_image_base_url=_normalize_openai_base_url(
+            os.getenv("V2_DOUBAO_IMAGE_BASE_URL")
+            or os.getenv("DOUBAO_IMAGE_BASE_URL")
+            or "https://aiself.vip"
+        ),
+        doubao_image_model=os.getenv(
+            "V2_DOUBAO_IMAGE_MODEL",
+            os.getenv("DOUBAO_IMAGE_MODEL", "doubao-seedream-4-0-250828"),
+        ),
+        doubao_image_timeout_seconds=float(os.getenv("V2_DOUBAO_IMAGE_TIMEOUT_SECONDS", "300")),
         gemini_api_key=os.getenv("V2_GEMINI_API_KEY") or None,
         gemini_base_url=(os.getenv("V2_GEMINI_BASE_URL") or "").rstrip("/") or None,
         gemini_image_model=os.getenv("V2_GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),

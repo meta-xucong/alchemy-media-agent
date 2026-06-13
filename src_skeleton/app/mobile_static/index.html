@@ -317,7 +317,7 @@
                   <div class="mini-head">
                     <div>
                       <h4>生图模型</h4>
-                      <p class="model-help">点击选择优先用于出图的模型，另一个会自动兜底。</p>
+                      <p class="model-help">点击选择本次出图通道；GPT 与豆包使用各自独立 API Key。</p>
                     </div>
                     <span id="imageActiveLabel" class="state-pill">GPT</span>
                   </div>
@@ -326,6 +326,11 @@
                       <span>GPT</span>
                       <strong>GPT Image</strong>
                       <small id="openaiImageState">检查中</small>
+                    </button>
+                    <button class="model-option" data-image-provider="doubao_image" type="button">
+                      <span>豆包</span>
+                      <strong>Seedream</strong>
+                      <small id="doubaoImageState">检查中</small>
                     </button>
                     <button class="model-option temporarily-disabled" data-image-provider="gemini_image" type="button" disabled aria-disabled="true" title="Gemini 生图暂不可用">
                       <span>Gemini</span>
@@ -379,6 +384,21 @@
                       <input id="openaiImageModelInput" type="text" list="imageModelList" placeholder="gpt-image-2" />
                       <datalist id="imageModelList">
                         <option value="gpt-image-2"></option>
+                      </datalist>
+                    </label>
+                    <label class="field">
+                      <span>豆包 API Key</span>
+                      <input id="doubaoImageApiKeyInput" type="password" autocomplete="off" placeholder="火山生图分组 Key，不复用 GPT Key" />
+                    </label>
+                    <label class="field">
+                      <span>豆包 Base URL</span>
+                      <input id="doubaoImageBaseUrlInput" type="url" placeholder="https://aiself.vip/v1" />
+                    </label>
+                    <label class="field">
+                      <span>豆包生图模型</span>
+                      <input id="doubaoImageModelInput" type="text" list="doubaoImageModelList" placeholder="doubao-seedream-4-0-250828" />
+                      <datalist id="doubaoImageModelList">
+                        <option value="doubao-seedream-4-0-250828"></option>
                       </datalist>
                     </label>
                     <label class="field">
@@ -693,6 +713,7 @@
                     <select id="v2ImageProviderInput">
                       <option value="auto">自动：V2 可用通道优先</option>
                       <option value="openai_gpt_image">OpenAI GPT Image</option>
+                      <option value="doubao_image">豆包 Seedream</option>
                       <option value="gemini_image" disabled>Gemini Image（暂不可用）</option>
                       <option value="mock_image">Mock 测试图</option>
                     </select>
@@ -764,6 +785,11 @@
                       <span>GPT</span>
                       <strong>GPT Image 2</strong>
                       <small id="v2OpenaiImageState">检查中</small>
+                    </button>
+                    <button class="model-option" data-v2-image-provider="doubao_image" type="button">
+                      <span>豆包</span>
+                      <strong>Seedream</strong>
+                      <small id="v2DoubaoImageState">检查中</small>
                     </button>
                     <button class="model-option temporarily-disabled" data-v2-image-provider="gemini_image" type="button" disabled aria-disabled="true" title="Gemini 生图暂不可用">
                       <span>Gemini</span>

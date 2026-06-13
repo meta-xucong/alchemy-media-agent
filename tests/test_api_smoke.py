@@ -803,12 +803,15 @@ def test_frontend_static_app_is_served():
     assert "asset_intents: state.assetIds.flatMap" in script.text
     assert "default_llm_model" in script.text
     assert "openai_image_model" in script.text
+    assert "doubao_image_model" in script.text
     assert "gemini_image_model" in script.text
     assert "openai_llm_model" in script.text
     assert "kimi_llm_model" in script.text
     assert "anthropic_api_key" in script.text
     assert "gemini_image_base_url" in script.text
     assert "gemini_image_api_key" in script.text
+    assert "doubaoImageModelInput" in script.text
+    assert "doubaoImageApiKeyInput" in script.text
     assert "geminiImageBaseUrlInput" in script.text
     assert "geminiImageApiKeyInput" in script.text
     assert "bindProviderAutosave" in script.text
@@ -1651,6 +1654,9 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
     original_provider = settings.default_image_provider
     original_llm_provider = settings.default_llm_provider
     original_openai_image_model = settings.openai_image_model
+    original_doubao_image_model = settings.doubao_image_model
+    original_doubao_image_base_url = settings.doubao_image_base_url
+    original_doubao_image_api_key = settings.doubao_image_api_key
     original_gemini_image_model = settings.gemini_image_model
     original_gemini_image_base_url = settings.gemini_image_base_url
     original_gemini_image_api_key = settings.gemini_image_api_key
@@ -1675,6 +1681,9 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
                 "default_image_provider": "openai_gpt_image",
                 "default_image_model": "gpt-image-2-test",
                 "openai_image_model": "gpt-image-2-test",
+                "doubao_image_model": "doubao-seedream-test",
+                "doubao_image_api_key": "sk-test-doubao-image-only",
+                "doubao_image_base_url": "https://doubao-image.example.test",
                 "gemini_image_model": "gemini-image-test",
                 "gemini_image_api_key": "sk-test-gemini-image-only",
                 "gemini_image_base_url": "https://gemini-image.example.test",
@@ -1694,6 +1703,9 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         body = response.json()
         assert body["default_image_model"] == "gpt-image-2-test"
         assert body["openai_image_model"] == "gpt-image-2-test"
+        assert body["doubao_image_model"] == "doubao-seedream-test"
+        assert body["doubao_image_base_url"] == "https://doubao-image.example.test/v1"
+        assert body["doubao_image_api_key_configured"] is True
         assert body["gemini_image_model"] == "gemini-image-test"
         assert body["gemini_image_base_url"] == "https://gemini-image.example.test"
         assert body["gemini_image_api_key_configured"] is True
@@ -1709,6 +1721,7 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         assert body["openai_api_key_configured"] is True
         assert body["anthropic_api_key_configured"] is True
         assert "sk-test-runtime-only" not in response.text
+        assert "sk-test-doubao-image-only" not in response.text
         assert "sk-test-backup-only" not in response.text
         assert "sk-test-gemini-image-only" not in response.text
         env_text = settings.runtime_env_path.read_text(encoding="utf-8")
@@ -1719,17 +1732,24 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         assert "BACKUP_LLM_PROVIDER=openai" in env_text
         assert "BACKUP_LLM_MODEL=gpt-5.5-test" in env_text
         assert "OPENAI_BASE_URL=https://example.test/v1" in env_text
+        assert "DOUBAO_IMAGE_MODEL=doubao-seedream-test" in env_text
+        assert "DOUBAO_IMAGE_BASE_URL=https://doubao-image.example.test/v1" in env_text
         assert "GEMINI_IMAGE_BASE_URL=https://gemini-image.example.test" in env_text
         assert "ANTHROPIC_BASE_URL=https://backup.example.test" in env_text
         assert "sk-test-runtime-only" not in env_text
+        assert "sk-test-doubao-image-only" not in env_text
         assert "sk-test-backup-only" not in env_text
         assert "sk-test-gemini-image-only" not in env_text
 
         providers = client.get("/v1/providers").json()
         openai_caps = next(provider for provider in providers["image"] if provider["provider"] == "openai_gpt_image")
+        doubao_caps = next(provider for provider in providers["image"] if provider["provider"] == "doubao_image")
         gemini_caps = next(provider for provider in providers["image"] if provider["provider"] == "gemini_image")
         seedance_caps = next(provider for provider in providers["video"] if provider["provider"] == "seedance")
         assert openai_caps["models"] == ["gpt-image-2-test"]
+        assert doubao_caps["models"] == ["doubao-seedream-test"]
+        assert doubao_caps["configured"] is True
+        assert doubao_caps["limits"]["supports_reference_images"] is False
         assert gemini_caps["models"] == ["gemini-image-test"]
         assert gemini_caps["configured"] is False
         assert gemini_caps["limits"]["temporarily_disabled"] is True
@@ -1742,6 +1762,9 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         settings.default_image_provider = original_provider
         settings.default_llm_provider = original_llm_provider
         settings.openai_image_model = original_openai_image_model
+        settings.doubao_image_model = original_doubao_image_model
+        settings.doubao_image_base_url = original_doubao_image_base_url
+        settings.doubao_image_api_key = original_doubao_image_api_key
         settings.gemini_image_model = original_gemini_image_model
         settings.gemini_image_base_url = original_gemini_image_base_url
         settings.gemini_image_api_key = original_gemini_image_api_key
