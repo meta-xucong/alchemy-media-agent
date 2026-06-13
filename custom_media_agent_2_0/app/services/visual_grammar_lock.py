@@ -213,6 +213,7 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
         for item in (contract.get("critical_asset_rules") or [])
         if str(item or "").strip()
     ][:3]
+    critical_asset_rules = _dedupe(critical_asset_rules)
     if critical_asset_rules:
         parts.insert(3, "Critical uploaded-asset placement rules: " + " ".join(critical_asset_rules))
     information_integrity = contract.get("information_integrity") if isinstance(contract.get("information_integrity"), dict) else {}
@@ -222,6 +223,8 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
             "CONTENT EXTRACTION LOCK: this task uses an uploaded poster/menu/flyer as source material. "
             f"Extract the user-requested content categories where present: {fields}. "
             "Keep the selected visual grammar as the frame owner; condense, curate, and reposition extracted copy, food imagery, QR, or offer facts into the template's own information hierarchy. "
+            "Food-to-copy, offer-to-product, and QR/CTA correspondence must be preserved as semantic pairings inside the template's existing modules; "
+            "this pairing requirement must not stretch the canvas, add a new menu grid, change the selected template composition, or make the uploaded source frame dominant. "
             "Do not preserve the uploaded source's full menu grid, weekly-card structure, footer policy block, background color field, or original information architecture merely because those facts were visible."
         )
     if aux_titles:
@@ -261,7 +264,8 @@ def _anchor_directive(case: PromptCase) -> str:
     elements.extend(signals.reusable_principles[:4])
     if case.style_tags:
         elements.append("style tags: " + ", ".join(case.style_tags[:6]))
-    return "; ".join(_dedupe(_compact_text(item, 280) for item in elements if item))[:12]
+    unique = _dedupe(_compact_text(item, 280) for item in elements if item)
+    return "; ".join(unique[:12])
 
 
 def _raw_visual_skeleton(raw_text: str) -> str:
@@ -388,6 +392,10 @@ def _information_integrity_contract(
         ),
         "canvas_policy": (
             "Prefer concise template-native content modules over copying the source poster's complete information architecture."
+        ),
+        "correspondence_policy": (
+            "Preserve requested food/copy/QR relationships as semantic pairings inside the selected template modules; "
+            "do not let correspondence or completeness requests change the locked frame."
         ),
     }
 

@@ -3640,12 +3640,89 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert "do not copy its overall grid" in prompt
     assert "CONTENT EXTRACTION LOCK" in prompt
     assert "template's own information hierarchy" in prompt
+    assert "Food-to-copy, offer-to-product, and QR/CTA correspondence" in prompt
+    assert "must not stretch the canvas" in prompt
     assert "full menu grid" in prompt
     assert "original information architecture" in prompt
     assert "aspect_ratio" not in run["prompt_plan"]["provider_parameters"]
     assert "copied source menu grid" in run["prompt_plan"]["negative_prompt"]
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
+
+
+def test_template_content_correspondence_keeps_full_anchor_skeleton_primary() -> None:
+    template = make_prompt_case(
+        "test_recipe_correspondence_template",
+        "Premium Food Recipe Poster Elegant Layout",
+        "poster",
+        (
+            "Create a premium food preparation poster with a beautiful hero dish, warm natural lighting, cream "
+            "background, elegant step-by-step recipe layout, ingredients, cooking process, refined English "
+            "typography, clear information modules, centered hero product hierarchy, poster layout with "
+            "typography-safe space, and paper card print texture."
+        ),
+        summary="Premium recipe poster with hero dish, step-by-step modules, ingredients cards, QR-safe lower area.",
+        style_tags=["premium", "minimal", "typography"],
+        use_case_tags=["poster"],
+    )
+
+    plan = compose_prompt_plan(
+        mode="template_customize",
+        user_prompt=(
+            "把上传图片的食物内容、文案、二维码，单独拆分出来。用这个模板样式形成新的海报。"
+            "上传图片拆分出的文字与食物内容，要严格对应，不要漏信息。"
+        ),
+        cases=[template],
+        output={"count": 1, "provider_hint": "mock_image"},
+        asset_context={
+            "uploaded_assets": [
+                {
+                    "asset_id": "asset_source_menu",
+                    "filename": "source_menu.png",
+                    "role": "subject_reference",
+                    "brief": {
+                        "visual_summary": "finished menu poster with food images, item names, prices, copy and QR",
+                        "detected_text": ["menu", "offer", "qr"],
+                    },
+                }
+            ],
+            "template_lock_contract": {"locked_case_id": template.case_id},
+            "asset_frame_strategy": {
+                "mode": "template_frame_primary",
+                "frame_source": "selected_template",
+                "uploaded_layout_may_override_case": False,
+                "content_extraction": True,
+            },
+            "asset_binding_plan": {
+                "bindings": [
+                    {
+                        "role": "subject_reference",
+                        "fusion_mode": "composite_content_source",
+                        "binding_slot": "semantic_content",
+                        "target_surface": "semantic_content_slots",
+                        "provider_input_required": True,
+                        "placement_intent": {"target_label": "内容、文案、二维码、菜品或业务信息槽"},
+                        "prompt_instruction": "Treat uploaded image as content evidence only.",
+                        "not_allowed_to_override": ["composition", "spatial_hierarchy", "layout_structure"],
+                        "review_expectations": ["selected_template_frame_preserved", "uploaded_information_complete"],
+                    }
+                ],
+                "provider_input_plan": {"reference_image_count": 1, "requires_image_reference": True},
+            },
+            "provider_input_plan": {"reference_image_count": 1, "requires_image_reference": True},
+            "provider_input_images": [],
+        },
+    )
+
+    prompt = plan.prompt
+    assert "Reusable visual grammar from the anchor: visual skeleton:" in prompt
+    assert "beautiful hero dish" in prompt
+    assert "step-by-step recipe layout" in prompt
+    assert "centered hero product hierarchy" in prompt
+    assert "visual skele." not in prompt
+    assert "Food-to-copy, offer-to-product, and QR/CTA correspondence" in prompt
+    assert "must not stretch the canvas" in prompt
+    assert "source frame dominant" in prompt
 
 
 def test_uploaded_style_reference_with_food_copy_qr_auto_becomes_content_source() -> None:

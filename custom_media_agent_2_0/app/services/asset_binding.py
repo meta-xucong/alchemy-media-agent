@@ -143,7 +143,15 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         parts.append(
             "UPLOADED CONTENT SOURCE: use uploaded poster/menu/screenshot-like assets as content evidence and hard references only. "
             "Extract semantic content, product/food identity, copy, QR, and offer details; "
-            f"use {frame_source} for the new visual frame."
+            f"use {frame_source} for the new visual frame. "
+            "If the user asks to keep text-food, offer-product, or QR-copy correspondence, preserve those relationships only as semantic pairings inside the frame owner's existing modules; "
+            "do not expand, re-grid, or recompose the selected frame to mirror the source image."
+        )
+    provider_plan = asset_context.get("provider_input_plan") if isinstance(asset_context.get("provider_input_plan"), dict) else {}
+    if provider_plan.get("reference_image_count"):
+        parts.append(
+            f"Provider input images required: {provider_plan.get('reference_image_count')} uploaded reference image(s). "
+            "The prompt must refer to them as uploaded reference images, not by internal IDs."
         )
     plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
     bindings = plan.get("bindings") if isinstance(plan, dict) else []
@@ -166,12 +174,6 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
                 blocked = item.get("not_allowed_to_override") or []
                 if blocked:
                     parts.append("- Do not let this uploaded image override: " + ", ".join(str(value) for value in blocked[:5]) + ".")
-    provider_plan = asset_context.get("provider_input_plan") if isinstance(asset_context.get("provider_input_plan"), dict) else {}
-    if provider_plan.get("reference_image_count"):
-        parts.append(
-            f"Provider input images required: {provider_plan.get('reference_image_count')} uploaded reference image(s). "
-            "The prompt must refer to them as uploaded reference images, not by internal IDs."
-        )
     return "\n".join(parts)
 
 
