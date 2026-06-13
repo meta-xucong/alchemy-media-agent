@@ -3628,7 +3628,7 @@ function v2SelectedAssetStrength() {
 
 function v2AssetPayload() {
   if (!v2State.uploadedAssets.length) return [];
-  const roles = v2SelectedAssetRoles();
+  const roles = v2RolesForCurrentPrompt();
   if (!roles.length) {
     throw new Error("请至少选择一个 V2 素材用途。");
   }
@@ -3642,6 +3642,27 @@ function v2AssetPayload() {
       notes,
     }))
   );
+}
+
+function v2RolesForCurrentPrompt() {
+  const roles = v2SelectedAssetRoles();
+  if (v2PromptRequestsUploadedContentSource() && !roles.includes("subject_reference")) {
+    return [...roles, "subject_reference"];
+  }
+  return roles;
+}
+
+function v2PromptRequestsUploadedContentSource() {
+  const text = `${els.v2PromptInput?.value || ""} ${els.v2AssetNotesInput?.value || ""}`.toLowerCase();
+  if (!text.trim()) return false;
+  const hasUploadedSource =
+    /(上传(的)?(图片|图|素材|参考图)|参考图|上次(的)?图片|原图|图里|图中|图片里|图片中|uploaded\s+(image|asset|reference)|source\s+(image|poster|asset))/i.test(text);
+  const hasContent =
+    /(食物内容|食物部分|菜品|菜名|食品|美食|餐食|商品内容|产品内容|文案|文字|标题|价格|优惠|套餐|配送|加购|页脚|购买|规则|二维码|qr|copy|text|menu|food|dish|product|offer|price)/i.test(text);
+  const hasTransfer =
+    /(摘取|提取|抽取|取出|保留|完整保留|体现|放到|匹配到|迁移|转移|套到|套进|设计成|改成|替换|replace|extract|migrate|transfer|preserve|fit\s+into|adapt\s+into)/i.test(text);
+  const hasTemplate = /(模板|案例|海报|poster|template|case|layout)/i.test(text);
+  return hasUploadedSource && hasContent && (hasTransfer || hasTemplate);
 }
 
 function renderV2AssetPreview(file, count = 1) {

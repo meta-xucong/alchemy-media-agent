@@ -135,10 +135,15 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
             "Preserve the uploaded frame's composition, layout rhythm, major spatial hierarchy, and camera/design structure. "
             "Retrieved cases may add polish, lighting, materials, and commercial finish only; they must not replace the uploaded frame."
         )
-    elif frame_strategy.get("mode") == "case_frame_primary" and frame_strategy.get("content_extraction"):
+    elif (
+        frame_strategy.get("content_extraction")
+        and frame_strategy.get("mode") in {"template_frame_primary", "case_frame_primary"}
+    ):
+        frame_source = "the selected template" if frame_strategy.get("mode") == "template_frame_primary" else "retrieved cases"
         parts.append(
             "UPLOADED CONTENT SOURCE: use uploaded poster/menu/screenshot-like assets as content evidence and hard references only. "
-            "Extract semantic content, product/food identity, copy, QR, and offer details; use retrieved cases for the new visual frame."
+            "Extract semantic content, product/food identity, copy, QR, and offer details; "
+            f"use {frame_source} for the new visual frame."
         )
     plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
     bindings = plan.get("bindings") if isinstance(plan, dict) else []
@@ -342,6 +347,8 @@ def _layout_rejection_requested(text: str) -> bool:
 def _content_extraction_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
     if any(isinstance(item, dict) and item.get("fusion_mode") == "composite_content_source" for item in bindings):
         return True
+    if _uploaded_content_source_requested(text):
+        return True
     return bool(
         re.search(
             r"(菜单|周卡|整图|旧图|旧海报|截图|二维码|优惠|价格|套餐|配送|加购|文案|提取|摘取|内容|"
@@ -506,9 +513,18 @@ def _binding_plan(
         if not brief:
             conflicts.append({"type": "asset_missing", "asset_id": item.asset_id, "resolution": "ignore_missing_asset"})
             continue
-        role = item.role or brief.role
+        requested_role = item.role or brief.role
         strength: ConstraintStrength = item.constraint_strength or brief.constraint_strength
-        brief = _brief_for_binding(brief, item)
+        role, strength, intent_upgrade = _role_for_prompt_intent(
+            role=requested_role,
+            strength=strength,
+            user_prompt=user_prompt,
+            notes=item.notes,
+            brief=brief,
+            template_locked=template_lock is not None,
+        )
+        binding_input = item.model_copy(update={"role": role, "constraint_strength": strength})
+        brief = _brief_for_binding(brief, binding_input)
         fusion_policy = _fusion_policy(
             role=role,
             strength=strength,
@@ -525,7 +541,7 @@ def _binding_plan(
         if strength == "required" and role in {"style_reference", "composition_reference", "color_reference"}:
             provider_required = True
         blocked = LOCKED_TEMPLATE_ELEMENTS if template_lock else []
-        conflict_resolution = None
+        conflict_resolution = intent_upgrade
         if template_lock and role in {"style_reference", "composition_reference", "color_reference", "background_reference"}:
             conflict_resolution = "keep selected template as frame; use uploaded asset only as compatible slot evidence"
             conflicts.append(
@@ -534,6 +550,16 @@ def _binding_plan(
                     "asset_id": item.asset_id,
                     "role": role,
                     "resolution": conflict_resolution,
+                }
+            )
+        if intent_upgrade:
+            conflicts.append(
+                {
+                    "type": "asset_intent_auto_upgrade",
+                    "asset_id": item.asset_id,
+                    "from_role": requested_role,
+                    "to_role": role,
+                    "resolution": intent_upgrade,
                 }
             )
         bindings.append(
@@ -708,6 +734,32 @@ def _asset_for_context(asset: UploadedAsset, brief: AssetBrief | None, requested
         "source_url": asset.source_url,
         "brief": display_brief.model_dump(mode="json") if display_brief else None,
     }
+
+
+def _role_for_prompt_intent(
+    *,
+    role: str,
+    strength: ConstraintStrength,
+    user_prompt: str,
+    notes: str | None,
+    brief: AssetBrief,
+    template_locked: bool,
+) -> tuple[str, ConstraintStrength, str | None]:
+    source_text, _ = _intent_source_text(user_prompt=user_prompt, notes=notes, brief=brief)
+    if not _uploaded_content_source_requested(source_text):
+        return role, strength, None
+    if role in {"logo_reference", "face_reference", "background_reference", "negative_reference"}:
+        return role, strength, None
+    upgraded_strength: ConstraintStrength = "required" if strength == "soft" else strength
+    reason = (
+        "user prompt asks to migrate uploaded image content/copy/QR into the selected template frame; "
+        "treat the uploaded asset as hard semantic content evidence"
+        if template_locked
+        else "user prompt asks to extract uploaded image content/copy/QR into a new visual frame"
+    )
+    if role != "subject_reference":
+        return "subject_reference", upgraded_strength, reason
+    return role, upgraded_strength, reason
 
 
 def _fusion_policy(
@@ -993,16 +1045,60 @@ def _composite_source_requested(text: str) -> bool:
     has_extraction = any(re.search(marker, text, flags=re.IGNORECASE) for marker in extraction_markers)
     has_source_layout = any(re.search(marker, text, flags=re.IGNORECASE) for marker in source_layout_markers)
     explicit_content_only = any(re.search(marker, text, flags=re.IGNORECASE) for marker in content_only_markers)
-    hard_single_subject = bool(
+    hard_single_subject = _hard_single_subject_requested(text)
+    if explicit_content_only:
+        return True
+    return (has_extraction and has_source_layout and not hard_single_subject) or _uploaded_content_source_requested(text)
+
+
+def _uploaded_content_source_requested(text: str) -> bool:
+    if not text:
+        return False
+    if _hard_single_subject_requested(text) and not re.search(
+        r"(文案|文字|标题|菜品|菜名|菜单|套餐|价格|优惠|配送|加购|页脚|购买|规则|食物内容|食物部分|copy|text|menu|offer|price)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    uploaded_source = bool(
+        re.search(
+            r"(上传(的)?(图片|图|素材|参考图)|参考图|上次(的)?图片|原图|图里|图中|图片里|图片中|uploaded\s+(image|asset|reference)|source\s+(image|poster|asset))",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    content_markers = bool(
+        re.search(
+            r"(食物内容|食物部分|菜品|菜名|食品|美食|餐食|商品内容|产品内容|文案|文字|标题|价格|优惠|套餐|配送|加购|页脚|购买|规则|二维码|qr|copy|text|menu|food|dish|product|offer|price)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    transfer_markers = bool(
+        re.search(
+            r"(摘取|提取|抽取|取出|保留|完整保留|体现|放到|匹配到|迁移|转移|套到|套进|设计成|改成|替换|replace|extract|migrate|transfer|preserve|fit\s+into|adapt\s+into)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    template_markers = bool(
+        re.search(
+            r"(模板|案例|海报|poster|template|case|layout)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    return uploaded_source and content_markers and (transfer_markers or template_markers)
+
+
+def _hard_single_subject_requested(text: str) -> bool:
+    return bool(
         re.search(
             r"(产品作为主体|商品作为主体|主体必须|保留.*产品|保留.*商品|产品.*保留|商品.*保留|保留.*包装|保留.*logo|保留.*人脸|preserve.*product identity|preserve.*product|use.*as main subject)",
             text,
             flags=re.IGNORECASE,
         )
     )
-    if explicit_content_only:
-        return True
-    return has_extraction and has_source_layout and not hard_single_subject
 
 
 def _logo_prompt_rule(*, fusion_mode: str, target_label: str | None) -> str:

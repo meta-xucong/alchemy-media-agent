@@ -575,6 +575,56 @@ def test_v2_upload_rejects_oversized_declared_and_actual_content() -> None:
         object.__setattr__(settings, "max_uploaded_asset_bytes", original_limit)
 
 
+def test_v2_upload_rejects_invalid_image_content() -> None:
+    client = fresh_client()
+    upload = client.post(
+        "/api/v2/uploads",
+        json={
+            "filename": "fake.png",
+            "mime_type": "image/png",
+            "size_bytes": 11,
+            "role": "subject_reference",
+            "constraint_strength": "required",
+        },
+    )
+
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    content = client.put(
+        f"/api/v2/uploads/{asset_id}/content",
+        json={"content_base64": base64.b64encode(b"not an image").decode("ascii"), "mime_type": "image/png"},
+    )
+
+    assert content.status_code == 400
+    assert content.json()["detail"]["error_code"] == "invalid_image_content"
+    asset = client.get(f"/api/v2/uploads/{asset_id}")
+    assert asset.status_code == 200
+    assert asset.json()["status"] == "failed"
+
+
+def test_v2_upload_complete_requires_stored_image_content() -> None:
+    client = fresh_client()
+    upload = client.post(
+        "/api/v2/uploads",
+        json={
+            "filename": "missing.png",
+            "mime_type": "image/png",
+            "size_bytes": 10,
+            "role": "subject_reference",
+            "constraint_strength": "required",
+        },
+    )
+
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    completed = client.post(f"/api/v2/uploads/{asset_id}/complete")
+
+    assert completed.status_code == 200
+    body = completed.json()
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "asset_file_missing"
+
+
 def test_v2_uploaded_assets_are_bound_to_current_veyra_account(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "veyra_auth_enabled", True)
@@ -3258,6 +3308,47 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert "missing purchase offers" in run["prompt_plan"]["negative_prompt"]
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
+
+
+def test_uploaded_style_reference_with_food_copy_qr_auto_becomes_content_source() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="style_reference", color=(180, 220, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把上传图片的食物内容、文案、二维码，设计成Premium Food Recipe Poster Elegant Layout模板的样式。 替换主体：poster",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "constraint_strength": "strong",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["role"] == "subject_reference"
+    assert binding["binding_slot"] == "semantic_content"
+    assert binding["fusion_mode"] == "composite_content_source"
+    assert binding["provider_input_required"] is True
+    assert binding["target_surface"] == "semantic_content_slots"
+    assert variables["provider_input_plan"]["operation"] == "image_edit_with_reference_images"
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == [asset_id]
+    assert variables["provider_input_plan"]["reference_image_count"] == 1
+    assert variables["asset_frame_strategy"]["mode"] == "template_frame_primary"
+    assert variables["asset_frame_strategy"]["content_extraction"] is True
+    assert variables["visual_grammar_contract"]["source_layout_risk"]["detected"] is True
+    prompt = run["prompt_plan"]["prompt"]
+    assert "UPLOADED CONTENT SOURCE" in prompt
+    assert "use the selected template for the new visual frame" in prompt
+    assert "Provider input images required: 1 uploaded reference image(s)" in prompt
 
 
 def test_product_qr_preservation_stays_subject_identity_under_template_lock() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 from pathlib import Path
 
@@ -86,6 +87,16 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
             }
         )
         return _save_uploaded_asset(failed)
+    validation_error = _validate_image_content(content)
+    if validation_error:
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "error": {"code": "invalid_image_content", "message": validation_error},
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
     path = _asset_content_path(asset)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -110,7 +121,42 @@ def complete_uploaded_asset(asset_id: str) -> UploadedAsset | None:
     if asset.status in {"rejected", "failed"}:
         return asset
     path = uploaded_asset_path(asset_id)
+    if not path or not path.exists():
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "error": {"code": "asset_file_missing", "message": "Uploaded asset content is missing."},
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
+    try:
+        validation_error = _validate_image_content(path.read_bytes())
+    except OSError as exc:
+        validation_error = str(exc)[:200]
+    if validation_error:
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "error": {"code": "invalid_image_content", "message": validation_error},
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
     brief = analyze_uploaded_asset(asset, path)
+    if not brief.usable_as_input_image or any(str(item).startswith(("asset_file_missing", "asset_vision_failed")) for item in brief.warnings):
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "brief": brief,
+                "error": {
+                    "code": "asset_analysis_failed",
+                    "message": "Uploaded image could not be analyzed as a usable input image.",
+                },
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
     ready = asset.model_copy(
         update={
             "status": "ready",
@@ -242,6 +288,19 @@ def _mime_for_suffix(suffix: str) -> str:
     if suffix == ".gif":
         return "image/gif"
     return "image/png"
+
+
+def _validate_image_content(content: bytes) -> str | None:
+    if not content:
+        return "Uploaded image content is empty."
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(content)) as image:
+            image.verify()
+    except Exception as exc:
+        return f"Uploaded content is not a valid image: {type(exc).__name__}."
+    return None
 
 
 def _safe_filename(filename: str) -> str:

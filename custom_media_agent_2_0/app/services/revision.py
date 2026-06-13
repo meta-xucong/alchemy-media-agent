@@ -41,9 +41,9 @@ def build_revision_request(output_id: str, body: CreateRevisionRunRequest) -> Cr
         user_prompt="\n".join(
             [
                 "Create a revised image generation plan based on a previous Custom Media Agent 2.0 output.",
-                f"Original prompt: {job.prompt_plan.prompt}",
                 f"Revision reason: {reason}",
                 "Preserve the original client intent and selected-case strategy unless the review reason requires changing it.",
+                f"Original prompt: {job.prompt_plan.prompt}",
             ]
         ),
         mode_hint="revision",
