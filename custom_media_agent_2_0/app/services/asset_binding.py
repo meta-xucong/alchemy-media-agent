@@ -318,16 +318,10 @@ def _frame_strategy_text(
 
 
 def _uploaded_frame_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
-    if any(
-        isinstance(item, dict)
-        and item.get("role") == "composition_reference"
-        and item.get("constraint_strength") in {"required", "strong"}
-        for item in bindings
-    ):
-        return True
     return bool(
         re.search(
             r"(按.*(版式|布局|构图|排版|画面结构)|参考.*(版式|布局|构图|排版|画面结构)|沿用.*(版式|布局|构图|排版)|保持.*(版式|布局|构图|排版)|"
+            r"以.*(上传|原图|参考图).*(底版|基础|基底)|基于.*(上传|原图|参考图).*(设计|修改|改造)|"
             r"same\s+(layout|composition|framing)|follow\s+(the\s+)?(layout|composition|framing)|use\s+.*(layout|composition|framing)\s+as\s+(the\s+)?(frame|reference))",
             text,
             flags=re.IGNORECASE,
@@ -535,13 +529,14 @@ def _binding_plan(
             notes=item.notes,
             template_locked=template_lock is not None,
         )
-        provider_required = bool(
-            brief.provider_input_required
-            or role in HARD_REFERENCE_ROLES
-            or fusion_policy.get("provider_input_required")
+        provider_required = _provider_input_required_for_binding(
+            role=role,
+            strength=strength,
+            brief=brief,
+            fusion_policy=fusion_policy,
+            user_prompt=user_prompt,
+            notes=item.notes,
         )
-        if strength == "required" and role in {"style_reference", "composition_reference", "color_reference"}:
-            provider_required = True
         blocked = LOCKED_TEMPLATE_ELEMENTS if template_lock else []
         conflict_resolution = intent_upgrade
         if template_lock and role in {"style_reference", "composition_reference", "color_reference", "background_reference"}:
@@ -666,10 +661,31 @@ def _provider_input_plan(bindings: list[AssetBinding]) -> dict[str, Any]:
         "placement_targets": placement_targets,
         "review_expectations": _dedupe([expectation for item in bindings for expectation in item.review_expectations]),
         "provider_contract": (
-            "Hard visual constraints such as product, logo, face, or required background must be sent to capable providers "
-            "as input images. Do not silently reduce them to text-only prompts."
+            "Uploaded references that the user expects to influence the result must be sent to capable providers as input images. "
+            "Provider visibility does not make the uploaded image the frame owner; template and asset-frame strategy still control visual priority."
         ),
     }
+
+
+def _provider_input_required_for_binding(
+    *,
+    role: str,
+    strength: ConstraintStrength,
+    brief: AssetBrief,
+    fusion_policy: dict[str, Any],
+    user_prompt: str,
+    notes: str | None,
+) -> bool:
+    if role == "negative_reference":
+        return False
+    if brief.provider_input_required or role in HARD_REFERENCE_ROLES or fusion_policy.get("provider_input_required"):
+        return True
+    if strength == "required":
+        return True
+    source_text, _ = _intent_source_text(user_prompt=user_prompt, notes=notes, brief=brief)
+    if strength == "strong" and role in {"style_reference", "composition_reference", "color_reference"}:
+        return True
+    return _uploaded_reference_visibility_requested(source_text)
 
 
 def _brief_for_binding(brief: AssetBrief, requested: CreativeRunAssetInput) -> AssetBrief:
@@ -1091,6 +1107,17 @@ def _uploaded_content_source_requested(text: str) -> bool:
         )
     )
     return uploaded_source and content_markers and (transfer_markers or template_markers)
+
+
+def _uploaded_reference_visibility_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(上传(的)?(图片|图|素材|参考图)|参考图|上次(的)?图片|原图|图里|图中|图片里|图片中|"
+            r"uploaded\s+(image|asset|reference)|source\s+(image|poster|asset))",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _hard_single_subject_requested(text: str) -> bool:

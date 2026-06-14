@@ -3578,6 +3578,33 @@ def test_no_template_uploaded_layout_reference_becomes_frame_primary() -> None:
     assert "uploaded layout/composition wins" in prompt
 
 
+def test_no_template_composition_reference_strong_is_visible_but_not_frame_primary_without_explicit_layout_intent() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="composition_reference", color=(245, 220, 180))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "用上传图片作为参考素材，做一张高级餐饮活动海报，整体更精致。",
+            "assets": [{"asset_id": asset_id, "role": "composition_reference", "constraint_strength": "strong"}],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    strategy = variables["asset_frame_strategy"]
+    assert strategy["mode"] == "case_frame_primary"
+    assert strategy["uploaded_layout_may_override_case"] is False
+    assert variables["visual_grammar_contract"]["mode"] == "auto_visual_grammar_lock"
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == [asset_id]
+    assert variables["provider_input_plan"]["reference_image_count"] == 1
+    input_images = run["generation_jobs"][0]["outputs"][0]["metadata"]["input_images"]
+    assert input_images[0]["asset_id"] == asset_id
+    assert input_images[0]["role"] == "composition_reference"
+
+
 def test_no_template_content_source_keeps_case_frame_primary() -> None:
     client = fresh_client()
     asset_id = upload_test_asset(client, role="subject_reference", color=(180, 220, 240))
@@ -3786,6 +3813,43 @@ def test_uploaded_style_reference_with_food_copy_qr_auto_becomes_content_source(
     assert "Provider input images required: 1 uploaded reference image(s)" in prompt
     assert "CONTENT EXTRACTION LOCK" in prompt
     assert "INFORMATION INTEGRITY LOCK" not in prompt
+
+
+def test_v2_template_style_reference_strong_is_sent_to_provider_without_overriding_template_frame() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="style_reference", color=(180, 220, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "参考上传图片的整体质感，使用选定案例模板做一张高级海报。",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "constraint_strength": "strong",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["role"] == "style_reference"
+    assert binding["fusion_mode"] == "style_signal"
+    assert binding["provider_input_required"] is True
+    assert "composition" in binding["not_allowed_to_override"]
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == [asset_id]
+    assert variables["provider_input_plan"]["reference_image_count"] == 1
+    assert variables["asset_frame_strategy"]["mode"] == "template_frame_primary"
+    assert variables["asset_frame_strategy"]["uploaded_layout_may_override_case"] is False
+    input_images = run["generation_jobs"][0]["outputs"][0]["metadata"]["input_images"]
+    assert input_images[0]["asset_id"] == asset_id
+    assert input_images[0]["role"] == "style_reference"
 
 
 def test_product_qr_preservation_stays_subject_identity_under_template_lock() -> None:
