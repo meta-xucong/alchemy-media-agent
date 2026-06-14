@@ -15,7 +15,9 @@ import qrcode
 import pytest
 
 from app.config import settings
+import app.providers.images.doubao_image as doubao_image_provider
 import app.providers.images.openai_gpt_image_2 as openai_image_provider
+import app.providers.images.response_payloads as response_payloads
 from app.providers.images.base import V2ImageProviderNotConfiguredError, V2ImageProviderRequest
 from app.providers.images.registry import get_v2_image_provider
 import app.main as main_module
@@ -23,7 +25,7 @@ from app.main import app
 import app.agents.runtime as runtime_module
 from app.repositories import repository
 from app.repositories.memory import utc_now
-from app.schemas import CreateImageJobRequest, CreativeRun, ImageJob, ImagePromptPlan, PromptCase, PromptCaseSummary
+from app.schemas import CreateImageJobRequest, CreativeRun, ImageJob, ImagePromptPlan, PromptCase, PromptCaseSummary, ProviderInputImage
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_intelligence import build_case_profile
 import app.services.claude_orchestrator as claude_orchestrator_service
@@ -2309,6 +2311,137 @@ def test_v2_doubao_image_provider_requires_dedicated_key_even_when_openai_is_con
                 )
             )
         )
+
+
+def test_openai_image_provider_accepts_proxy_wrapped_data_url_response() -> None:
+    plan = ImagePromptPlan(
+        plan_id="plan_proxy_wrapped_openai_response",
+        mode="template_customize",
+        prompt="Create a product poster.",
+        provider_parameters={"size": "1024x1024", "output_format": "png"},
+    )
+    response = {"data": [{"result": {"url": "data:image/png;base64,ZmFrZS1wbmc="}}]}
+
+    outputs = asyncio.run(
+        openai_image_provider._outputs_from_openai_response(
+            response,
+            plan,
+            index=0,
+            operation="images.edit",
+            reference_count=1,
+        )
+    )
+
+    assert outputs[0].b64_json == "ZmFrZS1wbmc="
+    assert outputs[0].mime_type == "image/png"
+    assert outputs[0].metadata["response_delivery"] == "data_url"
+    assert outputs[0].metadata["reference_image_count"] == 1
+
+
+def test_openai_image_provider_accepts_proxy_image_url_response(monkeypatch) -> None:
+    png_bytes = b"\x89PNG\r\n\x1a\nproxy-image"
+
+    class FakeResponse:
+        content = png_bytes
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            assert url == "https://proxy.example.test/image.png?token=secret"
+            return FakeResponse()
+
+    monkeypatch.setattr(response_payloads.httpx, "AsyncClient", FakeAsyncClient)
+    plan = ImagePromptPlan(
+        plan_id="plan_proxy_url_openai_response",
+        mode="template_customize",
+        prompt="Create a product poster.",
+        provider_parameters={"size": "1024x1024", "output_format": "png"},
+    )
+    response = {"output": [{"image_url": "https://proxy.example.test/image.png?token=secret"}]}
+
+    outputs = asyncio.run(
+        openai_image_provider._outputs_from_openai_response(
+            response,
+            plan,
+            index=0,
+            operation="images.edit",
+            reference_count=1,
+        )
+    )
+
+    assert base64.b64decode(outputs[0].b64_json) == png_bytes
+    assert outputs[0].metadata["response_delivery"] == "url"
+
+
+def test_doubao_image_provider_sends_reference_images_to_proxy_edit_endpoint(monkeypatch) -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(20, 130, 90))
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"data":[{"b64_json":"ZmFrZS1wbmc="}]}'
+
+        def json(self):
+            return {"data": [{"b64_json": "ZmFrZS1wbmc="}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None, data=None, files=None):
+            calls.append({"url": url, "headers": headers, "json": json, "data": data, "files": files})
+            return FakeResponse()
+
+    monkeypatch.setattr(doubao_image_provider.httpx, "AsyncClient", FakeAsyncClient)
+    provider = asyncio.run(get_v2_image_provider("doubao_image"))
+
+    result = asyncio.run(
+        provider.generate(
+            V2ImageProviderRequest(
+                prompt_plan=ImagePromptPlan(
+                    plan_id="plan_doubao_reference_edit",
+                    mode="template_customize",
+                    prompt="Create a product poster using the uploaded product.",
+                    provider_parameters={"size": "1024x1024"},
+                ),
+                input_images=[
+                    ProviderInputImage(
+                        asset_id=asset_id,
+                        role="subject_reference",
+                        mime_type="image/png",
+                        provider_input_required=True,
+                    )
+                ],
+            )
+        )
+    )
+
+    assert calls[0]["url"] == "https://aiself.example.test/v1/images/edits"
+    assert calls[0]["json"] is None
+    assert calls[0]["data"]["model"] == settings.doubao_image_model
+    assert calls[0]["files"][0][0] == "image"
+    assert result.outputs[0].b64_json == "ZmFrZS1wbmc="
+    assert result.outputs[0].metadata["api_operation"] == "images.edit"
+    assert result.outputs[0].metadata["reference_image_count"] == 1
 
 
 def test_v2_gemini_image_provider_can_be_reenabled_by_flag() -> None:

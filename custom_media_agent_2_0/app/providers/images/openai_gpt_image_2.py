@@ -19,6 +19,7 @@ from app.providers.images.base import (
     V2ImageProviderResult,
     V2ImageProviderRuntimeError,
 )
+from app.providers.images.response_payloads import outputs_from_image_response
 from app.services.uploaded_assets import uploaded_asset_path
 
 
@@ -228,7 +229,7 @@ class V2OpenAIGPTImage2Provider:
                     },
                 ) from exc
             raise _openai_error(exc, provider=self.name, operation="images.generate", index=index) from exc
-        return _outputs_from_openai_response(response, plan, index=index, operation="images.generate", reference_count=0)
+        return await _outputs_from_openai_response(response, plan, index=index, operation="images.generate", reference_count=0)
 
     async def _generate_one_with_references(
         self,
@@ -289,7 +290,7 @@ class V2OpenAIGPTImage2Provider:
                     },
                 ) from exc
             raise _openai_error(exc, provider=self.name, operation="images.edit", index=index) from exc
-        return _outputs_from_openai_response(
+        return await _outputs_from_openai_response(
             response,
             plan,
             index=index,
@@ -319,29 +320,20 @@ def _reference_paths(request: V2ImageProviderRequest) -> list:
     return paths
 
 
-def _outputs_from_openai_response(response, plan, *, index: int, operation: str, reference_count: int) -> list[V2ImageProviderOutput]:
-    outputs: list[V2ImageProviderOutput] = []
-    for item in getattr(response, "data", []) or []:
-        encoded = getattr(item, "b64_json", None)
-        if not encoded:
-            raise V2ImageProviderRuntimeError("OpenAI image response did not include image bytes.", provider="openai_gpt_image")
-        width, height = _dimensions(plan)
-        fmt = _output_format(plan)
-        outputs.append(
-            V2ImageProviderOutput(
-                b64_json=encoded,
-                mime_type=f"image/{fmt}",
-                format=fmt,
-                width=width,
-                height=height,
-                metadata={
-                    "request_index": index,
-                    "api_operation": operation,
-                    "reference_image_count": reference_count,
-                },
-            )
-        )
-    return outputs
+async def _outputs_from_openai_response(response, plan, *, index: int, operation: str, reference_count: int) -> list[V2ImageProviderOutput]:
+    fmt = _output_format(plan)
+    return await outputs_from_image_response(
+        response,
+        plan,
+        provider="openai_gpt_image",
+        missing_message="OpenAI image response did not include image bytes.",
+        index=index,
+        operation=operation,
+        reference_count=reference_count,
+        default_format=fmt,
+        default_mime_type=f"image/{fmt}",
+        url_timeout_seconds=settings.openai_image_timeout_seconds,
+    )
 
 
 def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
