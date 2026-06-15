@@ -1,79 +1,93 @@
-# Prompt Transform Layer - Conjure Integration
+# Prompt Transform Layer for V2
 
-This folder contains the development documents for adding a Conjure-inspired prompt enhancement layer to Alchemy Media Agent V2.
+This folder contains Codex-ready development documents for adding a source-aligned prompt transform layer to Alchemy Media Agent V2.
 
 Reference repository:
 
+```text
 https://github.com/kadevin/ilab-gpt-conjure
+```
 
-Important scope note:
+## Important Scope Correction
 
-The public reference source mainly provides prompt fidelity, prompt guard, prompt template, provider payload, and revised-prompt handling patterns. It does not expose a separate hidden LLM expand/rewrite/refine pipeline. The first implementation should therefore reuse the public prompt-guard and fidelity behavior instead of inventing a new prompt rewriting system.
+The reference repository does **not** expose a hidden LLM-based `expand -> rewrite -> refine` algorithm.
 
----
+Its reusable public value for this project is mainly:
 
-## Target V2 Flow
+- prompt fidelity modes
+- prompt guard instruction construction
+- user constraint extraction
+- original prompt preservation
+- guarded prompt wrapping
+- prompt template import and normalization
+- prompt snippet management
+- image/reference input handling patterns
+- provider payload shaping and prompt transport boundaries
 
-Current:
+Therefore the first implementation target is not a creative prompt generator. It is a **provider-safe prompt fidelity and guard layer** for V2.
 
-`V2 -> ImagePromptPlan -> Safety -> Image Provider`
+## Target Runtime Position
 
-Target:
+```text
+V2 compose_prompt_plan
+  -> apply_conjure_prompt_transform
+  -> safety_check
+  -> create_image_job
+  -> provider.generate
+```
 
-`V2 -> ImagePromptPlan -> Conjure Prompt Transform -> Safety -> Image Provider`
+The transform layer must run after V2 creates `ImagePromptPlan` and before safety checking / image generation.
 
-The transform runs before safety so the safety service checks the final prompt.
+## Key Runtime Rule
 
----
+Do not overwrite:
 
-## Three Modes
+```text
+ImagePromptPlan.prompt
+```
 
-### stable
+Write the final provider-facing prompt to:
 
-Preserve the V2/template prompt as much as possible.
+```text
+ImagePromptPlan.user_variables["generation_prompt"]
+```
 
-Use for template-sensitive tasks.
+Store metadata in:
 
-### enhanced
-
-Apply source-compatible prompt guard behavior:
-
-- extract hard constraints
-- build preservation text
-- embed or pass preservation text according to provider capability
-- record metadata
-
-This should be the default once the feature is enabled.
-
-### exploration
-
-Reserved for a future V2-native variant mode.
-
-It may initially reuse enhanced behavior or remain disabled.
-
----
+```text
+ImagePromptPlan.user_variables["prompt_transform"]
+```
 
 ## Documents
 
 Read in this order:
 
-1. `00_ROOT_RULES.md`
-2. `01_SOURCE_REUSE_MAP.md`
-3. `02_CODE_STRUCTURE.md`
-4. `03_IMPLEMENTATION_GUIDE.md`
-5. `04_FUNCTION_CONTRACTS.md`
-6. `05_TEST_PLAN.md`
-7. `06_CODEX_TASKS.md`
+```text
+00_ROOT_RULES.md
+01_SOURCE_REUSE_MAP.md
+02_CODE_STRUCTURE.md
+03_IMPLEMENTATION_STEPS.md
+04_API_CONTRACTS.md
+05_TEST_PLAN.md
+06_CODEX_TASK_PROMPT.md
+```
 
----
+## Three V2-Facing Modes
 
-## Development Rule
+```text
+stable      -> preserve original/template prompt as much as possible
+enhanced    -> apply strict prompt guard behavior and constraint preservation
+exploration -> V2-native future variant path; not directly provided by the reference source
+```
 
-Codex should inspect the reference source before writing code, especially:
+## Phase 1 Non-goals
 
-- `codex_image/prompt_guard.py`
-- `codex_image/webui/executor_transport.py`
-- `codex_image/webui/executor.py`
-- `codex_image/webui/prompt_templates.py`
+Do not implement these as if they came from `ilab-gpt-conjure`:
 
-The implementation should adapt these public behaviors into V2 instead of creating unrelated prompt logic.
+- hidden LLM rewrite chain
+- image critic loop
+- visual planning system
+- prompt scoring model
+- photography-specific optimizer
+
+These can be future Alchemy-native extensions, but they are outside the source-aligned phase.
