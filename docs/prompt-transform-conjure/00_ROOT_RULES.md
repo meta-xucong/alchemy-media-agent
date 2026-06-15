@@ -1,72 +1,117 @@
-# Conjure Integration - Root Development Rules (Codex Ready)
+# Conjure Integration - Root Development Rules
 
-This document defines the development rules for integrating a Conjure-style Prompt Transformation Layer into V2.
+This document defines the root rules for adding the Conjure-inspired prompt enhancement layer into Alchemy Media Agent V2.
 
----
-
-# 1. Core Principle
-
-The transformation layer should be designed with reference to:
+The reference repository is:
 
 https://github.com/kadevin/ilab-gpt-conjure
 
-All implementation should stay consistent with the behavior and structure of that repository.
+Important correction: the reference repository is a GPT-image-2 WebUI/workbench. Its reusable open-source value for our V2 enhancement layer is mainly prompt fidelity, prompt guarding, prompt template management, provider payload shaping, and queue/provider boundary patterns.
+
+It does not expose a separate LLM-based expand/rewrite/refine algorithm. Codex must not pretend such an algorithm exists in the reference source.
 
 ---
 
-# 2. Reuse Principle
+## 1. Fundamental Rule
 
-Codex should prioritize reusing existing transformation patterns where possible:
+Use the reference repository as the source of truth for these behaviors:
 
-- expand step logic
-- rewrite step logic
-- refine step logic
-- normalize step logic
+1. Prompt fidelity modes.
+2. Prompt guard instruction construction.
+3. Constraint extraction from user prompt text.
+4. Original-prompt preservation behavior.
+5. Guarded prompt wrapping when the image API does not support a separate instructions field.
+6. Prompt template import, normalization, categorization, and metadata handling.
+7. Image provider payload shape and revised-prompt capture.
 
-If equivalent logic exists in the reference repository, it should be adapted rather than re-implemented from scratch.
-
----
-
-# 3. System Boundary
-
-V2 Responsibilities:
-- intent understanding
-- template selection
-- base prompt generation
-
-Conjure Layer Responsibilities:
-- prompt transformation only
-- no intent parsing
-- no scene planning
+Do not redesign these behaviors unless the current V2 runtime requires a small adapter.
 
 ---
 
-# 4. Architecture Constraint
+## 2. Code Reuse Scope
+
+Codex should inspect and reuse/adapt these source files first:
+
+- `codex_image/prompt_guard.py`
+- `codex_image/webui/executor_transport.py`
+- `codex_image/webui/executor.py`
+- `codex_image/webui/prompt_templates.py`
+- `codex_image/client_types.py`
+- `codex_image/openai_images_client.py`
+- `codex_image/codex_responses_client.py`
+
+If direct source copy is used, preserve license attribution and verify compatibility first. The reference repository declares AGPL-3.0-only. If direct copy is not acceptable for this project, implement a behavior-compatible adapter from the same public behavior.
+
+---
+
+## 3. What Must Not Be Invented as Reference Behavior
+
+The following must not be documented or implemented as if it comes from `ilab-gpt-conjure`:
+
+- A hidden LLM prompt expansion engine.
+- A hidden rewrite/refine chain.
+- A hidden visual planning system.
+- A hidden image critic loop.
+- A hidden prompt scoring model.
+
+If Alchemy V2 later adds these, label them as V2-native extensions, not Conjure source reuse.
+
+---
+
+## 4. V2 Boundary
+
+V2 remains responsible for:
+
+- User intent understanding.
+- Case/template retrieval.
+- Template Lock and Visual Grammar Lock.
+- Base `ImagePromptPlan` creation.
+- Safety check.
+- Provider job creation.
+
+The new enhancement layer is responsible only for:
+
+- Prompt fidelity mode routing.
+- Constraint extraction.
+- Guard instruction generation.
+- Guarded prompt construction.
+- Optional prompt-template pack normalization/import support.
+- Metadata recording of what was changed or preserved.
+
+---
+
+## 5. Required Insertion Point
+
+The enhancement layer must run after V2 creates `ImagePromptPlan` and before safety check and image generation.
+
+Current V2 order:
 
 ```
-V2 → Base Prompt → Conjure Transform → Final Prompt → Image Model
+compose_prompt_plan -> safety_check -> create_image_job
 ```
 
-This pipeline must remain strictly separated.
+Target order:
+
+```
+compose_prompt_plan -> apply_conjure_prompt_transform -> safety_check -> create_image_job
+```
+
+This ensures the safety service checks the actual final prompt that will be sent to the image provider.
 
 ---
 
-# 5. Implementation Guidance
+## 6. Mode Mapping
 
-- Do not merge V2 logic into transformation layer
-- Do not alter transformation order without necessity
-- Keep transformation steps modular
+Use three V2-facing modes:
 
----
+1. `stable`: preserve original/template prompt as much as possible.
+2. `enhanced`: apply strict prompt guard behavior and constraint preservation.
+3. `exploration`: V2-native optional extension for variants. This is not directly provided by the reference source.
 
-# 6. Reference Source
-
-All transformation behavior should align with the ilab-gpt-conjure repository:
-
-https://github.com/kadevin/ilab-gpt-conjure
+The stable/enhanced modes should be implemented first.
 
 ---
 
-# 7. Final Rule
+## 7. Final Rule
 
-Transformation layer should behave as a post-processing system for prompts, not a generator.
+The first implementation target is not a creative generator. It is a provider-safe prompt fidelity and prompt guard layer inspired by and adapted from the public `ilab-gpt-conjure` source.
