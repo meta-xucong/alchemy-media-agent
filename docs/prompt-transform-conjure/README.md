@@ -1,35 +1,79 @@
-Prompt Transform Layer (Conjure Integration)
+# Prompt Transform Layer - Conjure Integration
 
-Overview
-This module integrates a prompt transformation pipeline into V2 as an independent enhancement layer.
+This folder contains the development documents for adding a Conjure-inspired prompt enhancement layer to Alchemy Media Agent V2.
 
-V2 defines intent and base prompt.
-This layer improves prompt expression without changing meaning.
+Reference repository:
 
-Architecture
-User -> V2 -> Base Prompt -> Conjure Layer -> Final Prompt -> Image Model
+https://github.com/kadevin/ilab-gpt-conjure
 
-Modes
-1. Stable Mode
-- minimal modification
-- preserve structure
+Important scope note:
 
-2. Enhanced Mode
-- expand
-- rewrite
-- refine
-- normalize
+The public reference source mainly provides prompt fidelity, prompt guard, prompt template, provider payload, and revised-prompt handling patterns. It does not expose a separate hidden LLM expand/rewrite/refine pipeline. The first implementation should therefore reuse the public prompt-guard and fidelity behavior instead of inventing a new prompt rewriting system.
 
-3. Exploration Mode
-- allow variation
-- generate multiple prompts
+---
 
-Pipeline
-expand -> rewrite -> refine -> normalize
+## Target V2 Flow
 
-Rule
-Do not change V2 intent, only improve expression.
+Current:
 
-Config
-mode: stable / enhanced / exploration
-max_variants: 3
+`V2 -> ImagePromptPlan -> Safety -> Image Provider`
+
+Target:
+
+`V2 -> ImagePromptPlan -> Conjure Prompt Transform -> Safety -> Image Provider`
+
+The transform runs before safety so the safety service checks the final prompt.
+
+---
+
+## Three Modes
+
+### stable
+
+Preserve the V2/template prompt as much as possible.
+
+Use for template-sensitive tasks.
+
+### enhanced
+
+Apply source-compatible prompt guard behavior:
+
+- extract hard constraints
+- build preservation text
+- embed or pass preservation text according to provider capability
+- record metadata
+
+This should be the default once the feature is enabled.
+
+### exploration
+
+Reserved for a future V2-native variant mode.
+
+It may initially reuse enhanced behavior or remain disabled.
+
+---
+
+## Documents
+
+Read in this order:
+
+1. `00_ROOT_RULES.md`
+2. `01_SOURCE_REUSE_MAP.md`
+3. `02_CODE_STRUCTURE.md`
+4. `03_IMPLEMENTATION_GUIDE.md`
+5. `04_FUNCTION_CONTRACTS.md`
+6. `05_TEST_PLAN.md`
+7. `06_CODEX_TASKS.md`
+
+---
+
+## Development Rule
+
+Codex should inspect the reference source before writing code, especially:
+
+- `codex_image/prompt_guard.py`
+- `codex_image/webui/executor_transport.py`
+- `codex_image/webui/executor.py`
+- `codex_image/webui/prompt_templates.py`
+
+The implementation should adapt these public behaviors into V2 instead of creating unrelated prompt logic.
