@@ -1,181 +1,121 @@
-# Conjure Prompt Transformation Layer - Architecture (Codex Ready)
+# Architecture - Conjure Prompt Enhancement Layer
 
-## 1. Overview
-This document defines the **implementation-level architecture** for integrating a Conjure-style prompt transformation pipeline into V2.
+This document supersedes the earlier generic expand/rewrite/refine wording.
 
-It is designed for direct implementation using Codex.
-
----
-
-## 2. System Goal
-Transform a V2-generated base prompt into a higher-quality image-ready prompt using a deterministic multi-stage pipeline.
+The implementation scope is now source-backed by the public `kadevin/ilab-gpt-conjure` repository.
 
 ---
 
-## 3. High-Level Architecture
+## 1. Target Flow
 
-```
-User Input
-   ↓
-V2 Core Engine
-   ↓
-Base Prompt
-   ↓
-Conjure Transformation Layer
-   ↓
-Final Prompt
-   ↓
-Image Generation Engine
-```
+Current V2 flow:
+
+`compose_prompt_plan -> safety_check -> create_image_job`
+
+Target V2 flow:
+
+`compose_prompt_plan -> apply_conjure_prompt_transform -> safety_check -> create_image_job`
+
+The transform runs before safety so the final provider prompt is the one being checked.
 
 ---
 
-## 4. Module Breakdown
+## 2. Source-Backed Capabilities
 
-### 4.1 V2 Core (Existing System)
-Responsible for:
-- Intent parsing
-- Template selection
-- Base prompt generation
+The public Conjure source supports these reusable behaviors:
 
-Output:
-```
-BasePrompt
-```
+1. Prompt constraint extraction.
+2. Prompt preservation text.
+3. Original prompt preservation mode.
+4. Guarded prompt wrapping.
+5. Prompt fidelity routing.
+6. Prompt template import and normalization.
+7. Provider payload shape and revised prompt capture.
 
----
+Reference files:
 
-### 4.2 Conjure Transformation Layer (New Module)
-Responsible for multi-stage prompt optimization.
-
-Pipeline:
-```
-expand → rewrite → refine → normalize
-```
-
----
-
-## 5. Mode System
-
-### 5.1 Stable Mode
-- Preserve structure
-- Minimal modification
-- No semantic drift allowed
-
-### 5.2 Enhanced Mode (default)
-- Full pipeline enabled
-- Balanced transformation
-
-### 5.3 Exploration Mode
-- Allow semantic variation
-- Generate multiple prompt candidates
+- `codex_image/prompt_guard.py`
+- `codex_image/webui/executor_transport.py`
+- `codex_image/webui/executor.py`
+- `codex_image/webui/prompt_templates.py`
+- `codex_image/client_types.py`
+- `codex_image/openai_images_client.py`
+- `codex_image/codex_responses_client.py`
 
 ---
 
-## 6. Data Flow
+## 3. Three Modes
 
-### Input
-```
-BasePrompt (string)
-```
+### stable
 
-### Processing
-```
-Step 1: expand
-Step 2: rewrite
-Step 3: refine
-Step 4: normalize
-```
+Preserve current V2 prompt and template structure. Use for template-sensitive runs.
 
-### Output
-```
-FinalPrompt (string)
-```
+### enhanced
+
+Extract constraints and add preservation behavior before provider submission.
+
+### exploration
+
+Reserved for future V2-native variants. It can initially fall back to enhanced.
 
 ---
 
-## 7. Functional Contracts
+## 4. V2 Boundary
 
-### expand(prompt)
-Adds missing visual details:
-- lighting
-- environment
-- texture
-- composition hints
+V2 continues to own:
 
----
+- intent understanding
+- case/template retrieval
+- Template Lock
+- Visual Grammar Lock
+- ImagePromptPlan construction
+- safety
+- provider job creation
 
-### rewrite(prompt)
-Improves structure:
-- reorder elements
-- improve clarity
-- convert to structured language
+Conjure layer owns only:
 
----
-
-### refine(prompt)
-Improves generation quality:
-- remove ambiguity
-- resolve conflicts
-- align style consistency
+- prompt constraint extraction
+- prompt fidelity routing
+- provider-safe prompt preservation
+- metadata recording
 
 ---
 
-### normalize(prompt)
-Ensures format consistency:
-- standard camera syntax
-- standard lighting syntax
-- ordering rules
+## 5. Metadata
+
+Store metadata in:
+
+`ImagePromptPlan.user_variables["conjure_transform"]`
+
+Fields:
+
+- enabled
+- mode
+- source_repo
+- base_prompt
+- final_prompt
+- constraints
+- transport_kind
+- guard_applied
+- warnings
 
 ---
 
-## 8. Mode Routing Logic
+## 6. First Implementation Scope
 
-```
-if mode == stable:
-    skip expand/rewrite/refine, only normalize
+Implement:
 
-if mode == enhanced:
-    run full pipeline
+- package skeleton
+- stable mode
+- enhanced mode
+- source guard adapter
+- fidelity adapter
+- integration before safety
+- tests
 
-if mode == exploration:
-    run pipeline + generate variants
-```
+Defer:
 
----
-
-## 9. Integration Contract with V2
-
-### Input from V2
-```json
-{
-  "prompt": "...",
-  "style": "...",
-  "scene": "..."
-}
-```
-
-### Output to Image Engine
-```
-FinalPrompt: string
-```
-
----
-
-## 10. Implementation Notes (Codex Guidance)
-- Each pipeline step MUST be a pure function
-- No shared mutable state between steps
-- Mode routing must be deterministic
-- Output must always remain valid prompt string
-
----
-
-## 11. Success Criteria
-- Stable Mode: zero semantic drift
-- Enhanced Mode: improved detail richness
-- Exploration Mode: controlled diversity
-
----
-
-## 12. Positioning
-This module is a **post-processing transformation layer**, not a generator.
+- exploration variants
+- extra LLM rewriting
+- scoring
+- image review feedback
