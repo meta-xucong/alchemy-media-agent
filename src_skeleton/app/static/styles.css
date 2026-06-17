@@ -1078,6 +1078,44 @@ input[type="range"] {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.segmented.v2-transform-segmented {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.v2-transform-control {
+  position: relative;
+}
+
+.v2-transform-hint {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.v2-transform-segmented .segment {
+  position: relative;
+}
+
+.v2-transform-segmented .segment[data-tooltip]:hover::after,
+.v2-transform-segmented .segment[data-tooltip]:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(260px, 78vw);
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgba(255, 252, 246, 0.98);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  transform: translateX(-50%);
+}
+
 .segment {
   min-height: 32px;
   border: 0;
@@ -4159,7 +4197,8 @@ select:focus,
 
 .segmented.aspect-segmented,
 .segmented.quality,
-.segmented.intensity {
+.segmented.intensity,
+.segmented.v2-transform-segmented {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 

@@ -17,6 +17,7 @@ from app.services.ids import new_id
 from app.services.image_history import persist_image_job_history
 from app.services.output_review import review_image_job
 from app.services.output_storage import save_provider_output
+from app.services.prompt_transform.transformer import fallback_prompt_plan, transform_prompt_plan
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
 from app.services.veyra_billing_settings import get_billing_rule
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
@@ -24,6 +25,7 @@ from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
 
 async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
     provider = await get_v2_image_provider(request.provider_hint)
+    request = _with_prompt_transform(request)
     now = utc_now()
     job = ImageJob(
         job_id=new_id("job"),
@@ -46,6 +48,7 @@ async def create_image_job(
     created_at: datetime | None = None,
 ) -> ImageJob:
     provider = await get_v2_image_provider(request.provider_hint)
+    request = _with_prompt_transform(request)
     job_id = job_id or new_id("job")
     created_at = created_at or utc_now()
     if not repository.get_image_job(job_id):
@@ -171,6 +174,8 @@ def _job_from_result(
                 "provider_fallback": _fallback_payload(fallback_error),
                 "user_prompt": request.prompt_plan.user_variables.get("user_prompt"),
                 "input_images": [image.model_dump(mode="json") for image in request.input_images],
+                "generation_prompt": request.prompt_plan.user_variables.get("generation_prompt"),
+                "prompt_transform": request.prompt_plan.user_variables.get("prompt_transform"),
                 "provider_input_plan": request.prompt_plan.user_variables.get("provider_input_plan"),
                 "visual_grammar_contract": request.prompt_plan.user_variables.get("visual_grammar_contract"),
                 "information_integrity_lock_enabled": request.prompt_plan.user_variables.get(
@@ -230,6 +235,16 @@ def _failed_job(
         created_at=created_at,
         updated_at=now,
     )
+
+
+def _with_prompt_transform(request: CreateImageJobRequest) -> CreateImageJobRequest:
+    try:
+        prompt_plan = transform_prompt_plan(request.prompt_plan)
+    except Exception as exc:
+        prompt_plan = fallback_prompt_plan(request.prompt_plan, exc)
+    if prompt_plan is request.prompt_plan:
+        return request
+    return request.model_copy(update={"prompt_plan": prompt_plan})
 
 
 def _can_fallback_to_mock(provider_hint: str | None) -> bool:

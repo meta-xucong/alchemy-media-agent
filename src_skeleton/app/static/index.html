@@ -560,6 +560,16 @@
                       <button class="segment" data-v2-ratio="1536x1024" type="button">横版</button>
                     </div>
                   </div>
+                  <div class="control-block v2-transform-control">
+                    <span>提示词增强模块 <strong id="v2PromptTransformState">自动</strong></span>
+                    <div class="segmented v2-transform-segmented" role="radiogroup" aria-label="提示词转换模式">
+                      <button class="segment active" data-v2-prompt-transform="auto" role="radio" aria-checked="true" type="button">自动</button>
+                      <button class="segment" data-v2-prompt-transform="enhanced" role="radio" aria-checked="false" type="button">增强</button>
+                      <button class="segment" data-v2-prompt-transform="stable" role="radio" aria-checked="false" type="button">原样</button>
+                      <button class="segment" data-v2-prompt-transform="exploration" role="radio" aria-checked="false" type="button">探索</button>
+                    </div>
+                    <small id="v2PromptTransformHint" class="v2-transform-hint">自动推荐会根据模板和任务决定是否保护硬约束。</small>
+                  </div>
                   <button id="v2ClearTemplateBtn" class="button full-width ghost" type="button">清空模板选择</button>
                   <details class="v2-template-vars">
                     <summary>模板微调</summary>

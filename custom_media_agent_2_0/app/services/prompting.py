@@ -235,7 +235,14 @@ def _build_provider_parameters(
     *,
     visual_grammar_contract: dict[str, object] | None = None,
 ) -> dict:
-    internal_keys = {"prompt", "negative_prompt", "revision_source"}
+    internal_keys = {
+        "prompt",
+        "negative_prompt",
+        "revision_source",
+        "disable_semantic_cache",
+        "prompt_transform_mode",
+        "prompt_transform_profile",
+    }
     params: dict[str, object] = {}
     if orchestrator_decision:
         params.update(

@@ -1332,6 +1332,49 @@ select:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.segmented.v2-transform-segmented {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.v2-transform-control {
+  position: relative;
+}
+
+.v2-transform-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.v2-transform-segmented .segment {
+  position: relative;
+  min-height: 40px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.v2-transform-segmented .segment[data-tooltip]:hover::after,
+.v2-transform-segmented .segment[data-tooltip]:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(250px, 84vw);
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgba(255, 252, 246, 0.98);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  transform: translateX(-50%);
+}
+
 .segment,
 .model-option,
 .role-check,

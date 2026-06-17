@@ -28,7 +28,7 @@ def persist_image_job_history(job: ImageJob) -> None:
                 model=job.model,
                 mode=job.prompt_plan.mode,
                 template_case_id=_template_case_id(job),
-                prompt=job.prompt_plan.prompt,
+                prompt=_generation_prompt(job),
                 url=output.url,
                 thumbnail_url=_thumbnail_url(output),
                 score=output.score,
@@ -148,7 +148,9 @@ def _history_metadata(job: ImageJob, output: ImageOutput) -> dict[str, Any]:
     metadata = dict(output.metadata)
     user_variables = job.prompt_plan.user_variables or {}
     metadata.setdefault("original_prompt", str(user_variables.get("user_prompt") or ""))
-    metadata.setdefault("final_prompt", job.prompt_plan.prompt)
+    metadata.setdefault("final_prompt", _generation_prompt(job))
+    if user_variables.get("prompt_transform"):
+        metadata.setdefault("prompt_transform", user_variables["prompt_transform"])
     if job.prompt_plan.negative_prompt:
         metadata.setdefault("negative_prompt", job.prompt_plan.negative_prompt)
     if job.prompt_plan.explanation:
@@ -172,6 +174,10 @@ def _history_metadata(job: ImageJob, output: ImageOutput) -> dict[str, Any]:
         if key in user_variables:
             metadata.setdefault(key, user_variables[key])
     return metadata
+
+
+def _generation_prompt(job: ImageJob) -> str:
+    return str((job.prompt_plan.user_variables or {}).get("generation_prompt") or job.prompt_plan.prompt)
 
 
 def _thumbnail_url(output: ImageOutput) -> str | None:

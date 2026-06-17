@@ -66,6 +66,14 @@ _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
 _CLAUDE_INLINE_RATIONALE_CHAR_BUDGET = 140
 _CLAUDE_CHECKPOINT_MAX_OUTPUT_TOKENS = 4096
+_INTERNAL_GENERATION_KEYS = {
+    "prompt",
+    "negative_prompt",
+    "revision_source",
+    "disable_semantic_cache",
+    "prompt_transform_mode",
+    "prompt_transform_profile",
+}
 ClaudeProgressCallback = Callable[[dict[str, Any]], None]
 
 
@@ -221,6 +229,7 @@ def orchestrate_creative_request(
         fallback_mode=fallback_mode,
         candidate_cases=candidate_cases,
     )
+    cache_read_disabled = _disable_claude_cache_read(request.output)
     workspace_id = fallback.decision_id
     if not settings.claude_orchestrator_enabled:
         decision = fallback.model_copy(
@@ -235,7 +244,7 @@ def orchestrate_creative_request(
         _record_invocation(decision)
         return decision
 
-    cached_raw_decision = _read_cached_decision(cache_key)
+    cached_raw_decision = None if cache_read_disabled else _read_cached_decision(cache_key)
     if cached_raw_decision:
         decision = _normalize_decision(
             cached_raw_decision,
@@ -255,7 +264,7 @@ def orchestrate_creative_request(
         _record_invocation(decision)
         return decision
 
-    semantic_cached = _read_semantic_cached_decision(cache_metadata)
+    semantic_cached = None if cache_read_disabled else _read_semantic_cached_decision(cache_metadata)
     if semantic_cached:
         cached_key, cached_raw_decision, score = semantic_cached
         decision = _normalize_decision(
@@ -1468,6 +1477,7 @@ def _build_checkpoint_stage_prompt(
     visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
     template_case_id = (context.get("request") or {}).get("template_case_id")
+    prompt_transform_profile = context.get("prompt_transform_profile") if isinstance(context.get("prompt_transform_profile"), dict) else {}
     compact_cases = _compact_inline_cases(
         _read_json_list(workspace / "candidate_cases.json"),
         _read_json_list(workspace / "candidate_case_details.json"),
@@ -1490,13 +1500,13 @@ def _build_checkpoint_stage_prompt(
     request_payload = {
         "user_prompt": (context.get("request") or {}).get("user_prompt", ""),
         "template_case_id": template_case_id,
-        "output": (context.get("request") or {}).get("output", {}),
+        "output": _provider_visible_output((context.get("request") or {}).get("output", {})),
     }
     if stage_name.startswith("generation_decision"):
         request_payload = {
             "user_prompt_brief": _truncate(_text_value((context.get("request") or {}).get("user_prompt")), 260),
             "template_case_id": template_case_id,
-            "output": (context.get("request") or {}).get("output", {}),
+            "output": _provider_visible_output((context.get("request") or {}).get("output", {})),
         }
 
     payload = {
@@ -1513,10 +1523,14 @@ def _build_checkpoint_stage_prompt(
             "If visual_grammar_contract.info.active, keep key poster/menu info; use larger canvas/modules instead of dropping offers, prices, rules, QR, CTA, or item imagery. "
             "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
             "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
-            "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers."
+            "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers. "
+            f"Prompt transform mode: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
+            f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
+            f"{prompt_transform_profile.get('claude_instruction') or ''}"
         ),
         "output_contract": _checkpoint_output_contract(stage_name),
         "request": request_payload,
+        "prompt_transform": prompt_transform_profile,
         "fallback": {
             "mode": fallback.get("mode"),
             "selected_case_ids": [template_case_id] if template_case_id else fallback.get("selected_case_ids", [])[:4],
@@ -2316,7 +2330,7 @@ def _normalize_provider_parameters(raw: Any, generation_directives: dict[str, An
             merged[key] = directives[key]
     if isinstance(raw, dict):
         for key, value in raw.items():
-            if value is not None:
+            if value is not None and str(key) not in _INTERNAL_GENERATION_KEYS:
                 merged[str(key)] = value
     if "count" in merged:
         try:
@@ -2329,7 +2343,7 @@ def _normalize_provider_parameters(raw: Any, generation_directives: dict[str, An
 def _apply_request_output_overrides(params: dict[str, Any], request_output: dict[str, Any] | None) -> dict[str, Any]:
     merged = dict(params or {})
     for key, value in (request_output or {}).items():
-        if value is not None:
+        if value is not None and str(key) not in _INTERNAL_GENERATION_KEYS:
             merged[str(key)] = value
     if "count" not in merged:
         merged["count"] = 1
@@ -2338,6 +2352,80 @@ def _apply_request_output_overrides(params: dict[str, Any], request_output: dict
     except Exception:
         merged["count"] = 1
     return merged
+
+
+def _provider_visible_output(output: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in dict(output or {}).items()
+        if str(key) not in _INTERNAL_GENERATION_KEYS
+    }
+
+
+def _disable_claude_cache_read(output: dict[str, Any] | None) -> bool:
+    value = (output or {}).get("disable_semantic_cache")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _prompt_transform_profile(request: CreateCreativeRunRequest, *, fallback_mode: str) -> dict[str, str]:
+    output = request.output or {}
+    requested = str(output.get("prompt_transform_mode") or "").strip().lower()
+    v2_mode = str(request.mode_hint or fallback_mode or "").strip()
+    if requested not in {"stable", "enhanced", "exploration", "original", "strict", "off"}:
+        requested = _default_prompt_transform_mode(v2_mode)
+        source = "v2_mode_fallback"
+    else:
+        source = "output.prompt_transform_mode"
+
+    alias_map = {
+        "original": "stable",
+        "strict": "enhanced",
+        "off": "exploration",
+    }
+    transform_mode = alias_map.get(requested, requested)
+    fidelity_mode = {
+        "stable": "original",
+        "enhanced": "strict",
+        "exploration": "off",
+    }.get(transform_mode, "strict")
+    return {
+        "source": source,
+        "v2_mode": v2_mode,
+        "transform_mode": transform_mode,
+        "fidelity_mode": fidelity_mode,
+        "claude_instruction": _prompt_transform_claude_instruction(transform_mode),
+    }
+
+
+def _default_prompt_transform_mode(v2_mode: str) -> str:
+    if v2_mode == "template_customize":
+        return "stable"
+    if v2_mode in {"smart_enhance", "revision", "batch"}:
+        return "enhanced"
+    return "enhanced"
+
+
+def _prompt_transform_claude_instruction(transform_mode: str) -> str:
+    if transform_mode == "stable":
+        return (
+            "Stable mode: preserve the selected template and user intent closely; avoid unnecessary new creative direction. "
+            "Produce a clean final prompt without extra prompt-guard wrapping."
+        )
+    if transform_mode == "exploration":
+        return (
+            "Exploration mode: deliberately choose a visibly different creative path from stable mode. Vary at least one "
+            "major artistic lever such as camera angle, pose, lighting mood, background depth, framing, color contrast, "
+            "material atmosphere, or scene staging; make the final prompt read as an intentional creative alternative, "
+            "not only a slightly richer version of the baseline. Still obey safety, selected template priority, uploaded "
+            "hard references, exact required text/logo constraints, and explicit negative requirements."
+        )
+    return (
+        "Enhanced mode: optimize the creative prompt while preserving hard constraints; emphasize exact text, logo, "
+        "template lock, uploaded asset intent, composition requirements, and negative requirements so downstream generation "
+        "does not weaken them."
+    )
 
 
 def _selection_rationale_from_cases(selected_cases: Any) -> str:
@@ -2434,7 +2522,14 @@ def _build_workspace(
         asset_context=asset_context,
         orchestrator_decision=fallback,
     )
-    _write_json(workspace / "context.json", {"request": request.model_dump(mode="json")})
+    prompt_transform_profile = _prompt_transform_profile(request, fallback_mode=fallback.mode)
+    _write_json(
+        workspace / "context.json",
+        {
+            "request": request.model_dump(mode="json"),
+            "prompt_transform_profile": prompt_transform_profile,
+        },
+    )
     _write_json(workspace / "candidate_cases.json", [item.model_dump(mode="json") for item in candidate_cases])
     _write_json(workspace / "candidate_case_details.json", [_case_detail_for_claude(item) for item in candidate_case_details])
     _write_json(workspace / "uploaded_assets.json", asset_context.get("uploaded_assets", []))
@@ -2469,6 +2564,7 @@ def _build_workspace(
                 "- 如果上传图是主体、Logo、人脸或必须背景，请在 final_prompt 中把它称为 uploaded reference image，并要求 provider 使用图片输入；不要只把硬约束降级为文字描述。",
                 "- candidate_case_details.json 中的 visual_signal_brief 是系统提炼出的视觉 DNA，优先关注强调色、材质、光影、构图和审美方向。",
                 "- 不要只迁移背景主色；如果案例有小面积但关键的金色、墨绿、玻璃高光、金属边缘或深色对比，也要判断是否应抽象迁移。",
+                "- context.prompt_transform_profile 定义本次提示词转换档位：enhanced/strict 需要更强保真和硬约束保护；stable/original 需要轻整理、贴近原意；exploration/off 必须主动给出可见差异化的创意替代方案，例如改变角度、姿态、光影情绪、背景层次、裁切、色彩对比、材质氛围或场景调度中的至少一类，但仍必须服从安全、模板优先级、上传硬引用、精确文字/Logo约束和用户明确禁项。",
                 "- 你必须直接输出 final_prompt、negative_prompt、provider_parameters 和 prompt_rationale。",
                 "- final_prompt 是给 gpt-image-2 或兼容 ImageProvider 的最终输入，不要让下游再猜你的审美意图。",
                 "- final_prompt 不得包含内部 case_id、asset_id、provider_id、source_url、API 或仓库工程标识。",
@@ -2577,6 +2673,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
     template_case_id = (context.get("request") or {}).get("template_case_id")
+    prompt_transform_profile = context.get("prompt_transform_profile") if isinstance(context.get("prompt_transform_profile"), dict) else {}
     fallback_selected_case_ids = fallback.get("selected_case_ids", [])
     if template_case_id:
         fallback_selected_case_ids = [template_case_id]
@@ -2591,11 +2688,15 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
             f"If anchor needs a hero/key visual and uploads lack it, synthesize suitable virtual content. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
             f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
-            f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying."
+            f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying. "
+            f"Prompt transform: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
+            f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
+            f"{prompt_transform_profile.get('claude_instruction') or ''}"
         ),
         "user_request": (context.get("request") or {}).get("user_prompt", ""),
         "template_case_id": template_case_id,
-        "requested_output": (context.get("request") or {}).get("output", {}),
+        "requested_output": _provider_visible_output((context.get("request") or {}).get("output", {})),
+        "prompt_transform": prompt_transform_profile,
         "fallback": {
             "mode": fallback.get("mode"),
             "selected_case_ids": fallback_selected_case_ids[:3],
@@ -3081,9 +3182,10 @@ def _cache_key(
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
         "user_prompt": request.user_prompt,
         "mode_hint": request.mode_hint,
+        "prompt_transform": _prompt_transform_profile(request, fallback_mode=fallback_mode),
         "template_case_id": request.template_case_id,
         "assets": _request_assets_for_cache(request),
-        "output": request.output,
+        "output": _provider_visible_output(request.output),
         "fallback_mode": fallback_mode,
         "retrieval_plan": fallback_retrieval_plan.model_dump(mode="json"),
         "candidate_case_ids": [item.case_id for item in candidate_cases[:8]],
@@ -3175,11 +3277,16 @@ def _cache_metadata(
         for key in ("aspect_ratio", "size", "count", "quality", "provider_hint")
         if output.get(key) not in (None, "", "auto", "default")
     }
+    prompt_transform_profile = _prompt_transform_profile(request, fallback_mode=fallback_mode)
     return {
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
         "normalized_user_prompt": normalized_prompt,
         "prompt_tokens": tokens,
         "mode": request.mode_hint or fallback_mode,
+        "prompt_transform": {
+            "transform_mode": prompt_transform_profile["transform_mode"],
+            "fidelity_mode": prompt_transform_profile["fidelity_mode"],
+        },
         "template_case_id": request.template_case_id or "",
         "output_signature": output_signature,
         "assets": _request_assets_for_cache(request),
@@ -3231,7 +3338,7 @@ def _asset_cache_payload(asset_id: str, *, role: str | None = None, constraint_s
 
 
 def _semantic_cache_score(current: dict[str, Any], cached: dict[str, Any]) -> float:
-    for key in ["cache_schema", "mode", "template_case_id", "output_signature", "assets"]:
+    for key in ["cache_schema", "mode", "prompt_transform", "template_case_id", "output_signature", "assets"]:
         if current.get(key) != cached.get(key):
             return 0.0
     current_cases = [str(item) for item in current.get("candidate_case_ids", []) if str(item)]

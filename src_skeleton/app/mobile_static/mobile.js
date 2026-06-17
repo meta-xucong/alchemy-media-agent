@@ -101,6 +101,12 @@ const v2TagLabels = {
   "avoid_real_brand_copying": "避免真实品牌",
   "requires_portrait_authorization": "需肖像授权",
 };
+const v2PromptTransformModes = {
+  auto: { label: "自动", hint: "系统按当前 V2 场景选择强度：模板和硬约束多时更保护，开放创意时更轻。" },
+  enhanced: { label: "增强", hint: "让 Claude 优化创意提示词，并在生成前加保真守护，适合模板、文字、Logo、尺寸或素材用途必须稳住的任务。" },
+  stable: { label: "原样", hint: "保留 Claude 输出的最终提示词，不额外包增强规则，适合做基准对比或想看自然稳定效果时使用。" },
+  exploration: { label: "探索", hint: "让 Claude 主动换一种创意路径，例如角度、姿态、光影、背景层次或色彩氛围；生成前不加保真守护，适合找灵感和更大胆的备选方向。" },
+};
 
 const state = {
   sessionId: null,
@@ -164,6 +170,7 @@ const v2State = {
   progressType: "info",
   progressNoticeKey: "",
   progressTimer: null,
+  promptTransformMode: "auto",
 };
 
 function isGeminiImageTemporarilyDisabled(provider) {
@@ -235,6 +242,8 @@ const els = {
   v2TemplateGrid: document.querySelector("#v2TemplateGrid"),
   v2ModeState: document.querySelector("#v2ModeState"),
   v2PromptInput: document.querySelector("#v2PromptInput"),
+  v2PromptTransformState: document.querySelector("#v2PromptTransformState"),
+  v2PromptTransformHint: document.querySelector("#v2PromptTransformHint"),
   v2NoticeBar: document.querySelector("#v2NoticeBar"),
   v2ProgressPanel: document.querySelector("#v2ProgressPanel"),
   v2ProgressTitle: document.querySelector("#v2ProgressTitle"),
@@ -495,6 +504,11 @@ function bindControls() {
       v2State.selectedRatio = button.dataset.v2Ratio || "";
     });
   });
+  document.querySelectorAll("[data-v2-prompt-transform]").forEach((button) => {
+    button.addEventListener("click", () => setV2PromptTransformMode(button.dataset.v2PromptTransform || "auto"));
+  });
+  hydrateV2PromptTransformButtons();
+  setV2PromptTransformMode(v2State.promptTransformMode);
   if (els.v2ClearTemplateBtn) els.v2ClearTemplateBtn.addEventListener("click", clearV2Template);
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.addEventListener("click", () => loadV2History({ silent: false }));
   if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
@@ -893,6 +907,12 @@ function v2RenderContextChips(template) {
       value: shortSizeLabel(v2State.selectedRatio),
       state: v2State.selectedRatio ? "ready" : "idle",
     },
+    {
+      key: "transform",
+      label: "增强",
+      value: v2PromptTransformLabel(v2PromptTransformMode(), ""),
+      state: v2PromptTransformMode() === "auto" ? "idle" : "ready",
+    },
     ...(assetCount && roles
       ? [
           {
@@ -1089,7 +1109,10 @@ function updateMobileSummaries() {
   setSummaryText("mobileV2TemplateSummary", template ? `${template.title || "已选模板"} · 框架锁定` : "未选择模板");
   const v2Roles = v2SelectedAssetRoles().map(assetRoleLabel).slice(0, 3).join("/");
   setSummaryText("mobileV2AssetSummary", v2State.uploadedAssets.length ? `${v2State.uploadedAssets.length} 张 · ${v2Roles || "素材约束"}` : "未上传素材");
-  setSummaryText("mobileV2ParamsSummary", `${els.v2CountInput?.value || "1"} 张 · ${sizeLabel(v2State.selectedRatio)}`);
+  setSummaryText(
+    "mobileV2ParamsSummary",
+    `${els.v2CountInput?.value || "1"} 张 · ${sizeLabel(v2State.selectedRatio)} · ${v2PromptTransformLabel(v2PromptTransformMode(), "")}`
+  );
   const runStatus = v2State.currentRun?.status || v2State.progressStageKey;
   setSummaryText("mobileV2RunSummary", v2State.currentRun ? `${v2RunStatusLabel(runStatus)} · ${els.v2TraceId?.textContent || "-"}` : "等待 Agent 输出");
   setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2State.history.filter(isRenderableV2HistoryImage).length} 张历史` : "暂无历史");
@@ -2913,6 +2936,10 @@ async function runV2Creative() {
     if (v2State.selectedRatio) {
       output.aspect_ratio = v2State.selectedRatio;
     }
+    const promptTransformMode = v2PromptTransformMode();
+    if (promptTransformMode !== "auto") {
+      output.prompt_transform_mode = promptTransformMode;
+    }
     const queuedRun = await v2Request("/creative/runs/async", {
       method: "POST",
       body: {
@@ -3004,6 +3031,44 @@ function buildV2UserPrompt() {
 
 function v2HasGenerationInput(prompt = "") {
   return Boolean(String(prompt || "").trim() || v2State.selectedTemplateId || v2State.uploadedAssets.length);
+}
+
+function setV2PromptTransformMode(mode) {
+  const nextMode = Object.prototype.hasOwnProperty.call(v2PromptTransformModes, mode) ? mode : "auto";
+  v2State.promptTransformMode = nextMode;
+  document.querySelectorAll("[data-v2-prompt-transform]").forEach((button) => {
+    const active = button.dataset.v2PromptTransform === nextMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+  if (els.v2PromptTransformState) {
+    els.v2PromptTransformState.textContent = v2PromptTransformModes[nextMode].label;
+  }
+  updateV2PromptTransformHint();
+  scheduleMobileSummaryUpdate();
+}
+
+function v2PromptTransformMode() {
+  const mode = v2State.promptTransformMode || "auto";
+  return Object.prototype.hasOwnProperty.call(v2PromptTransformModes, mode) ? mode : "auto";
+}
+
+function hydrateV2PromptTransformButtons() {
+  document.querySelectorAll("[data-v2-prompt-transform]").forEach((button) => {
+    const mode = button.dataset.v2PromptTransform || "auto";
+    const profile = v2PromptTransformModes[mode];
+    if (!profile) return;
+    button.textContent = profile.label;
+    button.dataset.tooltip = profile.hint;
+    button.setAttribute("aria-label", `${profile.label}：${profile.hint}`);
+    button.title = profile.hint;
+  });
+}
+
+function updateV2PromptTransformHint() {
+  if (!els.v2PromptTransformHint) return;
+  const mode = v2PromptTransformMode();
+  els.v2PromptTransformHint.textContent = v2PromptTransformModes[mode]?.hint || "";
 }
 
 function v2RunNotice(run) {
@@ -3167,6 +3232,87 @@ function v2BrainStatusLabel(decision) {
   return status;
 }
 
+function v2PlanVariables(plan) {
+  return plan?.user_variables || plan?.variables || {};
+}
+
+function v2FirstGenerationJob(run) {
+  const jobs = Array.isArray(run?.generation_jobs) ? run.generation_jobs : [];
+  return jobs.find((job) => v2PlanVariables(job?.prompt_plan).prompt_transform) || jobs.find((job) => job?.prompt_plan) || null;
+}
+
+function v2PromptTransformMetadata(plan, run = v2State.currentRun) {
+  const variables = v2PlanVariables(plan);
+  const jobVariables = v2PlanVariables(v2FirstGenerationJob(run)?.prompt_plan);
+  return variables.prompt_transform || jobVariables.prompt_transform || null;
+}
+
+function v2GenerationPromptFromPlan(plan, run = v2State.currentRun) {
+  const variables = v2PlanVariables(plan);
+  const jobVariables = v2PlanVariables(v2FirstGenerationJob(run)?.prompt_plan);
+  return v2CleanPromptText(variables.generation_prompt || jobVariables.generation_prompt || "");
+}
+
+function v2PromptTransformLabel(mode, fidelity) {
+  const normalized = String(mode || "").toLowerCase();
+  if (normalized && v2PromptTransformModes[normalized]) return v2PromptTransformModes[normalized].label;
+  if (fidelity === "strict") return v2PromptTransformModes.enhanced.label;
+  if (fidelity === "original") return v2PromptTransformModes.stable.label;
+  if (fidelity === "off") return v2PromptTransformModes.exploration.label;
+  return v2PromptTransformModes.auto.label;
+}
+
+function v2PromptTransformStatus(transform) {
+  if (!transform) return "等待生成";
+  if (transform.fallback_used) return "已回退";
+  return transform.applied ? "已应用" : "未改写";
+}
+
+function v2PromptPreviewText(text, limit = 900) {
+  const value = v2CleanPromptText(text);
+  if (!value || value.length <= limit) return value;
+  return `${value.slice(0, limit).trimEnd()}\n...`;
+}
+
+function v2PromptTransformPlanLines(transform, plan, run) {
+  const variables = v2PlanVariables(plan);
+  const requested = variables.prompt_transform_mode || "auto";
+  const lines = [];
+  if (!transform) {
+    lines.push(`Prompt Transform: ${v2PromptTransformLabel(requested, "")} · 待生成`);
+    return lines;
+  }
+  const label = v2PromptTransformLabel(transform.transform_mode, transform.fidelity_mode);
+  lines.push(`Prompt Transform: ${label} · ${v2PromptTransformStatus(transform)}`);
+  if (Number(transform.constraint_count || 0) > 0) {
+    lines.push(`Hard Constraints: ${transform.constraint_count}`);
+    (transform.constraints || []).slice(0, 6).forEach((item) => lines.push(`- ${item}`));
+  }
+  const generationPrompt = v2GenerationPromptFromPlan(plan, run);
+  const originalPrompt = v2CleanPromptText(plan?.prompt || "");
+  if (generationPrompt && generationPrompt !== originalPrompt) {
+    lines.push("Provider Prompt Preview:");
+    lines.push(v2PromptPreviewText(generationPrompt));
+  }
+  return lines;
+}
+
+function v2PromptTransformText(transform) {
+  if (!transform) return "";
+  const lines = [
+    "提示词转换",
+    `${v2PromptTransformLabel(transform.transform_mode, transform.fidelity_mode)} · ${v2PromptTransformStatus(transform)}`,
+  ];
+  if (Number(transform.constraint_count || 0) > 0) {
+    lines.push(`硬约束 ${transform.constraint_count} 条`);
+    (transform.constraints || []).slice(0, 8).forEach((item) => lines.push(`- ${item}`));
+  }
+  if (transform.fallback_used && transform.error) {
+    lines.push(`回退原因：${transform.error}`);
+  }
+  return lines.join("\n");
+}
+
 function renderV2PromptPlan(plan, run = v2State.currentRun) {
   if (!plan) {
     const claudeProgress = v2ClaudeProgressSummary(run);
@@ -3195,6 +3341,7 @@ function renderV2PromptPlan(plan, run = v2State.currentRun) {
   const providerPlan = variables.provider_input_plan || variables.asset_binding_plan?.provider_input_plan || null;
   const uploadedAssets = Array.isArray(variables.uploaded_assets) ? variables.uploaded_assets : [];
   const bindingPlan = variables.asset_binding_plan || null;
+  const transformLines = v2PromptTransformPlanLines(v2PromptTransformMetadata(plan, run), plan, run);
   const assetLines = [];
   if (variables.template_lock_enabled) {
     assetLines.push("Template Lock: 已启用，手选案例优先锁定画面框架。");
@@ -3229,6 +3376,7 @@ function renderV2PromptPlan(plan, run = v2State.currentRun) {
   }
   const lines = [
     plan.prompt,
+    ...(transformLines.length ? ["", transformLines.join("\n")] : []),
     "",
     `Negative: ${plan.negative_prompt || "-"}`,
     "",
@@ -3432,11 +3580,14 @@ async function deleteV2HistoryItem(item, card) {
 function v2PromptTextFromJob(job) {
   const plan = job?.prompt_plan;
   if (!plan) return "";
-  const original = v2CleanPromptText(plan.user_variables?.user_prompt || plan.user_variables?.original_prompt);
-  const finalPrompt = v2CleanPromptText(plan.prompt);
+  const variables = v2PlanVariables(plan);
+  const original = v2CleanPromptText(variables.user_prompt || variables.original_prompt);
+  const finalPrompt = v2CleanPromptText(variables.generation_prompt || plan.prompt);
   const finalLabel = plan.user_variables?.claude_final_prompt_used ? "Claude 思考后的最终提示词" : "Agent 最终提示词";
   const blocks = [`原始提示词\n${original || "未记录原始提示词。"}`];
   if (finalPrompt) blocks.push(`${finalLabel}\n${finalPrompt}`);
+  const transformText = v2PromptTransformText(variables.prompt_transform);
+  if (transformText) blocks.push(transformText);
   if (plan.negative_prompt) blocks.push(`Negative\n${plan.negative_prompt}`);
   if (plan.explanation) blocks.push(`说明\n${plan.explanation}`);
   return blocks.join("\n\n");
@@ -3449,6 +3600,8 @@ function v2PromptTextFromHistory(item) {
   const finalLabel = metadata.claude_final_prompt_used ? "Claude 思考后的最终提示词" : "Agent 最终提示词";
   const blocks = [`原始提示词\n${original || "这条旧历史记录未保存原始提示词。"}`];
   if (finalPrompt) blocks.push(`${finalLabel}\n${finalPrompt}`);
+  const transformText = v2PromptTransformText(metadata.prompt_transform);
+  if (transformText) blocks.push(transformText);
   if (metadata.negative_prompt) blocks.push(`Negative\n${metadata.negative_prompt}`);
   if (metadata.prompt_explanation || metadata.explanation) blocks.push(`说明\n${metadata.prompt_explanation || metadata.explanation}`);
   return blocks.join("\n\n");
