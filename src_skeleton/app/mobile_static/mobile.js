@@ -240,7 +240,6 @@ const els = {
   v2SearchThinking: document.querySelector("#v2SearchThinking"),
   v2CaseFacetBar: document.querySelector("#v2CaseFacetBar"),
   v2TemplateGrid: document.querySelector("#v2TemplateGrid"),
-  v2ModeState: document.querySelector("#v2ModeState"),
   v2PromptInput: document.querySelector("#v2PromptInput"),
   v2PromptTransformState: document.querySelector("#v2PromptTransformState"),
   v2PromptTransformHint: document.querySelector("#v2PromptTransformHint"),
@@ -2686,7 +2685,6 @@ async function selectV2Template(caseId) {
   v2State.selectedTemplateId = caseId;
   const template = v2State.templates.find((item) => item.case_id === caseId);
   els.v2SelectedTemplateLabel.textContent = template ? `模板：${template.title}` : `模板：${caseId}`;
-  els.v2ModeState.textContent = "模板定制";
   renderV2Templates(v2State.visibleTemplates);
   renderV2AssetPanel();
   scheduleMobileSummaryUpdate();
@@ -2706,7 +2704,6 @@ function clearV2Template() {
   v2State.selectedTemplateDetail = null;
   v2State.templateAutoFields = { subject: "", style: "", useCase: "" };
   els.v2SelectedTemplateLabel.textContent = "未选择模板";
-  els.v2ModeState.textContent = "智能增强";
   renderV2Templates(v2State.visibleTemplates);
   renderV2AssetPanel();
   scheduleMobileSummaryUpdate();
@@ -3704,7 +3701,6 @@ function resetV2SessionState() {
   if (els.v2StyleInput) els.v2StyleInput.value = "";
   if (els.v2UseCaseInput) els.v2UseCaseInput.value = "";
   if (els.v2SelectedTemplateLabel) els.v2SelectedTemplateLabel.textContent = "未选择模板";
-  if (els.v2ModeState) els.v2ModeState.textContent = "智能增强";
   clearV2Asset({ keepNotice: true });
   clearV2RunResult();
   renderV2Templates(v2State.visibleTemplates);

@@ -1333,12 +1333,43 @@ select:focus {
 }
 
 .segmented.v2-transform-segmented {
+  width: 188px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  flex: 0 0 188px;
   gap: 4px;
 }
 
 .v2-transform-control {
   position: relative;
+  gap: 8px;
+  isolation: isolate;
+}
+
+.v2-transform-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v2-transform-label {
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.v2-transform-state {
+  color: var(--sage-deep);
+  font-weight: 720;
+}
+
+.v2-transform-state[hidden] {
+  display: none !important;
 }
 
 .v2-transform-hint {
@@ -1349,9 +1380,12 @@ select:focus {
 
 .v2-transform-segmented .segment {
   position: relative;
+  z-index: 1;
   min-height: 40px;
   padding: 0 4px;
   font-size: 11px;
+  white-space: nowrap;
+  pointer-events: auto;
 }
 
 .v2-transform-segmented .segment[data-tooltip]:hover::after,
@@ -2514,6 +2548,27 @@ select:focus {
   min-height: 37px;
   font-size: 11px;
   font-weight: 520;
+}
+
+.v2-transform-segmented .segment {
+  min-height: 36px;
+}
+
+@media (max-width: 380px) {
+  .v2-transform-row {
+    align-items: center;
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  .v2-transform-label {
+    gap: 4px;
+  }
+
+  .segmented.v2-transform-segmented {
+    width: 148px;
+    flex: 0 0 148px;
+  }
 }
 
 .model-option {

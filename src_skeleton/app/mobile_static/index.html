@@ -502,7 +502,6 @@
                   <p class="eyebrow">02 / AI Agent Studio</p>
                   <h3>AI Agent 生图区</h3>
                 </div>
-                <span id="v2ModeState" class="state-pill">智能增强</span>
               </div>
 
               <div class="v2-run-grid">
@@ -544,12 +543,15 @@
                     </div>
                   </div>
                   <div class="control-block v2-transform-control">
-                    <span>提示词增强模块 <strong id="v2PromptTransformState">自动</strong></span>
-                    <div class="segmented v2-transform-segmented" role="radiogroup" aria-label="提示词转换模式">
-                      <button class="segment active" data-v2-prompt-transform="auto" role="radio" aria-checked="true" type="button">自动</button>
-                      <button class="segment" data-v2-prompt-transform="stable" role="radio" aria-checked="false" type="button">原样</button>
-                      <button class="segment" data-v2-prompt-transform="enhanced" role="radio" aria-checked="false" type="button">增强</button>
-                      <button class="segment" data-v2-prompt-transform="exploration" role="radio" aria-checked="false" type="button">探索</button>
+                    <div class="v2-transform-row">
+                      <span class="v2-transform-label">增强模块</span>
+                      <strong id="v2PromptTransformState" class="v2-transform-state" hidden>自动</strong>
+                      <div class="segmented v2-transform-segmented" role="radiogroup" aria-label="提示词转换模式">
+                        <button class="segment active" data-v2-prompt-transform="auto" role="radio" aria-checked="true" type="button">自动</button>
+                        <button class="segment" data-v2-prompt-transform="stable" role="radio" aria-checked="false" type="button">原样</button>
+                        <button class="segment" data-v2-prompt-transform="enhanced" role="radio" aria-checked="false" type="button">增强</button>
+                        <button class="segment" data-v2-prompt-transform="exploration" role="radio" aria-checked="false" type="button">探索</button>
+                      </div>
                     </div>
                     <small id="v2PromptTransformHint" class="v2-transform-hint">自动推荐会根据模板和任务决定是否保护硬约束。</small>
                   </div>
