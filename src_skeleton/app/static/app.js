@@ -104,10 +104,10 @@ const v2TagLabels = {
   "requires_portrait_authorization": "需肖像授权",
 };
 const v2PromptTransformModes = {
-  auto: { label: "自动", hint: "系统按当前 V2 场景选择强度：模板和硬约束多时更保护，开放创意时更轻。" },
-  enhanced: { label: "增强", hint: "让 Claude 优化创意提示词，并在生成前加保真守护，适合模板、文字、Logo、尺寸或素材用途必须稳住的任务。" },
-  stable: { label: "原样", hint: "保留 Claude 输出的最终提示词，不额外包增强规则，适合做基准对比或想看自然稳定效果时使用。" },
-  exploration: { label: "探索", hint: "让 Claude 主动换一种创意路径，例如角度、姿态、光影、背景层次或色彩氛围；生成前不加保真守护，适合找灵感和更大胆的备选方向。" },
+  auto: { label: "自动", hint: "系统按 V2 场景自动选择：手选模板走原样保框架；智能增强、修图和批量走增强保约束；不会自动进入探索。" },
+  stable: { label: "原样", hint: "弱介入：保留 Claude 输出的最终提示词，不额外包增强规则，适合做基准对比或看自然稳定效果。" },
+  enhanced: { label: "增强", hint: "中介入：让 Claude 优化创意提示词，并在生成前加保真守护，适合文字、Logo、尺寸或素材用途必须稳住的任务。" },
+  exploration: { label: "探索", hint: "强创意介入：让 Claude 主动换一种创意路径，例如角度、姿态、光影、背景层次或色彩氛围；适合找灵感和更大胆的备选方向。" },
 };
 
 const state = {
