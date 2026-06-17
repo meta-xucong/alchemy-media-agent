@@ -6,7 +6,7 @@ This document defines how rare-style-explorer should run on the backend.
 
 The key rule:
 
-> rare-style-explorer orchestrates exploration. Existing Alchemy services should still handle prompt processing, model routing, image generation, asset persistence, auth, and shared error handling whenever those services already exist.
+> rare-style-explorer orchestrates exploration. Existing Alchemy services should still handle model routing, image generation, asset persistence, auth, and shared error handling whenever those services already exist. The Lab module owns the rare-style prompt composition layer.
 
 ## Execution Shape
 
@@ -26,7 +26,7 @@ Use direct service orchestration:
 ```text
 Lab controller
   -> rare-style-explorer orchestrator
-  -> existing prompt transformation
+  -> Lab rare-style prompt composer
   -> existing image generation service
   -> existing asset storage
 ```
@@ -63,13 +63,13 @@ For each selected style:
 
 1. Start from the user idea.
 2. Resolve style directives.
-3. Use existing prompt transformation logic if available.
+3. Apply Lab rare-style prompt composition.
 4. Create one final prompt.
 5. Store the final prompt in the session.
 
 ### 4. Create Variant Jobs
 
-For each composed prompt, create `imagesPerStyle` generation variants.
+For each composed prompt, create `images_per_style` generation variants.
 
 Each variant starts as:
 
@@ -173,6 +173,21 @@ Avoid:
 ```
 
 If the existing prompt transformer expects a different shape, adapt this content into that shape.
+
+## Rare Style Composition Rules
+
+The composer should preserve the upstream rare-style-explorer behavior:
+
+- Use Chinese prompt text by default.
+- Use one strong base style.
+- Add zero or one surface/light layer.
+- Add zero or one format/space layer.
+- Add at most one defect layer when an analog/media-specific finish is useful.
+- Prefer concrete sub-style phrases over isolated generic words.
+- Always include anti-drift constraints such as avoiding generic modern minimalism, random text, chaotic symbols, malformed hands/faces, and lost subject identity.
+- For product ideas, add recognizability and clean-background constraints.
+- For character or portrait ideas, add clear-face, expressive-pose, and limited-accessory constraints.
+- For poster or cover ideas, add small pseudo-text and clear title-area constraints, but avoid long readable text.
 
 ## Storage Requirements
 

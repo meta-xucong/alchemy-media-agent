@@ -4,7 +4,7 @@
 
 rare-style-explorer must feel simple enough for a beginner.
 
-The user should not need to understand prompt engineering, batch jobs, model routing, or style metadata.
+The user should not need to understand prompt engineering, batch jobs, model routing, or style metadata. Friendly style labels are allowed, but result details should expose the concrete rare-style prompt used.
 
 The visible workflow should be:
 
@@ -92,19 +92,20 @@ Choose styles to try
 
 Default style cards:
 
-- Cinematic
-- Photorealistic
-- Editorial
-- Illustration
-- Minimalist
-- Cyberpunk
-- Watercolor
-- Retro poster
+- Folk horror poster photo
+- Chrome fashion editorial
+- Ceramic toy photo
+- Tropical VHS travelogue
+- Risograph catalog
+- Brutalist product plinth
+- CRT interface still life
+- Hand-tinted archive portrait
 
 Each card should show:
 
 - style name
 - one-sentence description
+- style family or mode hint
 - selected state
 
 Beginner default:

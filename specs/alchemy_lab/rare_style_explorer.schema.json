@@ -1,0 +1,647 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/alchemy-media-agent/specs/alchemy_lab/rare_style_explorer.schema.json",
+  "title": "Alchemy Lab rare-style-explorer API contracts",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/styleListResponse"
+    },
+    {
+      "$ref": "#/$defs/sessionResponse"
+    },
+    {
+      "$ref": "#/$defs/moduleListResponse"
+    }
+  ],
+  "$defs": {
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxSelectedStyles",
+        "maxImagesPerStyle",
+        "maxTotalImages",
+        "maxConcurrentGenerations",
+        "maxRetriesPerVariant"
+      ],
+      "properties": {
+        "maxSelectedStyles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "maxImagesPerStyle": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "maxTotalImages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "maxConcurrentGenerations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "maxRetriesPerVariant": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "moduleListResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modules"
+      ],
+      "properties": {
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title",
+              "description"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "styleListResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "styles",
+        "limits"
+      ],
+      "properties": {
+        "styles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stylePreset"
+          }
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        }
+      }
+    },
+    "sessionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session",
+        "board"
+      ],
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/explorationSession"
+        },
+        "board": {
+          "$ref": "#/$defs/comparisonBoard"
+        }
+      }
+    },
+    "stylePreset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "display_name",
+        "short_description",
+        "family",
+        "category",
+        "tags",
+        "mode_affinity",
+        "prompt_directives",
+        "negative_directives",
+        "freshness",
+        "is_beginner_default",
+        "is_enabled"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,80}$"
+        },
+        "version": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "short_description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "family": {
+          "type": "string",
+          "enum": [
+            "film",
+            "fashion",
+            "product",
+            "photography",
+            "illustration",
+            "graphic",
+            "craft",
+            "digital",
+            "space",
+            "material"
+          ]
+        },
+        "category": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode_affinity": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "product",
+              "character",
+              "poster",
+              "scene",
+              "material-series"
+            ]
+          }
+        },
+        "prompt_directives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "negative_directives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "high"
+          ]
+        },
+        "is_beginner_default": {
+          "type": "boolean"
+        },
+        "is_enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "explorationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idea",
+        "selected_style_ids",
+        "mode",
+        "freshness",
+        "images_per_style"
+      ],
+      "properties": {
+        "idea": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selected_style_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "product",
+            "character",
+            "poster",
+            "scene",
+            "material-series"
+          ]
+        },
+        "style_family": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "film",
+            "fashion",
+            "product",
+            "photography",
+            "illustration",
+            "graphic",
+            "craft",
+            "digital",
+            "space",
+            "material",
+            null
+          ]
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "high"
+          ]
+        },
+        "images_per_style": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "aspect_ratio": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_preference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "explorationSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "feature",
+        "status",
+        "created_at",
+        "updated_at",
+        "request",
+        "style_presets",
+        "prompts",
+        "variants",
+        "favorites",
+        "errors"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "feature": {
+          "const": "rare-style-explorer"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "partial_success",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/explorationRequest"
+        },
+        "style_presets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stylePreset"
+          }
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/composedPrompt"
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/generationVariant"
+          }
+        },
+        "favorites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/explorationError"
+          }
+        }
+      }
+    },
+    "composedPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "session_id",
+        "style_preset_id",
+        "style_preset_version",
+        "idea",
+        "final_prompt",
+        "prompt_metadata"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "style_preset_id": {
+          "type": "string"
+        },
+        "style_preset_version": {
+          "type": "string"
+        },
+        "idea": {
+          "type": "string"
+        },
+        "final_prompt": {
+          "type": "string"
+        },
+        "prompt_metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "generationVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "session_id",
+        "prompt_id",
+        "style_preset_id",
+        "index_within_style",
+        "status",
+        "created_at",
+        "provider_metadata"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "prompt_id": {
+          "type": "string"
+        },
+        "style_preset_id": {
+          "type": "string"
+        },
+        "index_within_style": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "asset": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "provider_metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/explorationError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "comparisonBoard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "status",
+        "idea",
+        "groups",
+        "favorites",
+        "errors",
+        "limits"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idea": {
+          "type": "string"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/comparisonGroup"
+          }
+        },
+        "favorites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/explorationError"
+          }
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        }
+      }
+    },
+    "comparisonGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "style_preset_id",
+        "style_name",
+        "cards"
+      ],
+      "properties": {
+        "style_preset_id": {
+          "type": "string"
+        },
+        "style_name": {
+          "type": "string"
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/comparisonCard"
+          }
+        }
+      }
+    },
+    "comparisonCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant_id",
+        "style_preset_id",
+        "style_name",
+        "status",
+        "prompt",
+        "is_favorite"
+      ],
+      "properties": {
+        "variant_id": {
+          "type": "string"
+        },
+        "style_preset_id": {
+          "type": "string"
+        },
+        "style_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "image_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnail_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/explorationError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_favorite": {
+          "type": "boolean"
+        }
+      }
+    },
+    "favoriteSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant_ids"
+      ],
+      "properties": {
+        "variant_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "explorationError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "detail"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

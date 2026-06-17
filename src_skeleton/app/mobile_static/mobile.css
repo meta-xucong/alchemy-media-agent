@@ -2886,6 +2886,186 @@ select:focus {
   grid-template-columns: 72px minmax(0, 1fr);
 }
 
+.lab-workbench,
+.lab-layout,
+.lab-composer,
+.lab-style-panel,
+.lab-results-panel,
+.lab-comparison-grid,
+.lab-style-result,
+.lab-card-grid {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lab-layout,
+.lab-control-row,
+.lab-card-grid {
+  grid-template-columns: 1fr;
+}
+
+.lab-idea-field textarea {
+  min-height: 132px;
+}
+
+.lab-aspect-segmented {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.lab-style-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+}
+
+.lab-style-grid.empty-v2-list,
+.lab-comparison-grid.empty-v2-list {
+  min-height: 118px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.lab-style-card {
+  min-height: 118px;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 11px;
+  color: var(--ink);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.lab-style-card.active {
+  border-color: rgba(34, 93, 168, 0.36);
+  background:
+    linear-gradient(135deg, rgba(34, 93, 168, 0.08), rgba(47, 90, 69, 0.07)),
+    rgba(255, 255, 255, 0.82);
+}
+
+.lab-style-card span,
+.lab-card-meta span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.lab-style-card strong,
+.lab-style-result h4 {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.32;
+}
+
+.lab-style-card small {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.lab-progress {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+}
+
+.lab-result-card {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.lab-image-button,
+.lab-error-tile {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-deep);
+}
+
+.lab-image-button {
+  padding: 0;
+}
+
+.lab-image-button img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.lab-error-tile {
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: var(--red);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(184, 51, 51, 0.06);
+}
+
+.lab-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lab-favorite-btn {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lab-favorite-btn.active {
+  border-color: rgba(154, 117, 53, 0.34);
+  color: var(--brass);
+  background: rgba(154, 117, 53, 0.1);
+}
+
+.lab-prompt-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.lab-prompt-detail summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lab-prompt-detail pre {
+  max-height: 160px;
+  margin: 8px 0 0;
+  overflow: auto;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .video-frame {
   padding: 14px;
 }

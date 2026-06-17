@@ -10,7 +10,7 @@
 
 ## Short Description
 
-rare-style-explorer helps users generate and compare multiple visual styles for the same image idea.
+rare-style-explorer helps users generate and compare multiple rare visual sub-styles for the same image idea.
 
 It is designed for exploration, not final delivery. The user should be able to quickly discover which visual direction is most promising.
 
@@ -20,7 +20,7 @@ It is designed for exploration, not final delivery. The user should be able to q
 
 A user who has an idea but does not know how to write strong image prompts.
 
-They need simple presets, plain language, and visual comparison.
+They need simple presets, plain language, and visual comparison. The UI may use friendly labels, but the generated prompts must use concrete rare sub-style language rather than broad words alone.
 
 ### Designer or Operator
 
@@ -126,20 +126,31 @@ Validation:
 - Minimum useful length should be enforced by the UI or API.
 - Empty input must show a friendly error.
 
-### R-004: Style Presets
+### R-004: Rare Style Presets
 
-The user can choose from preset style directions.
+The user can choose from preset rare style directions.
 
-MVP default presets:
+MVP default presets should be rewritten, prompt-ready sub-style presets inspired by rare-style-explorer behavior. Avoid isolated generic labels such as only `cinematic`, `retro`, `cyberpunk`, or `minimalist`.
 
-- Cinematic
-- Photorealistic
-- Editorial
-- Illustration
-- Minimalist
-- Cyberpunk
-- Watercolor
-- Retro poster
+Recommended MVP presets:
+
+- Sun-faded folk horror poster photography
+- Chrome Y2K fashion editorial
+- Pastel ceramic toy photography
+- Overexposed tropical VHS travelogue
+- Risograph botanical catalog
+- Brutalist museum product plinth
+- CRT pixel interface still life
+- Hand-tinted archival portrait
+
+Each preset must include:
+
+- beginner display name
+- one-sentence description
+- style family
+- mode affinity
+- prompt directives
+- negative or anti-drift directives
 
 The implementation may add or remove presets if the repository already has a style system, but the UI must still expose beginner-friendly names.
 
@@ -151,7 +162,7 @@ The backend must enforce max batch size.
 
 Recommended MVP defaults:
 
-- `imagesPerStyle`: 1
+- `images_per_style`: 1
 - `maxSelectedStyles`: 8
 - `maxTotalImages`: 12
 
@@ -160,6 +171,8 @@ Recommended MVP defaults:
 The feature must use the existing generation path for actual image creation.
 
 Do not call image provider SDKs directly from the Lab module if an existing generation service exists.
+
+The Lab prompt composer is Lab-owned. It may call the existing generic image generation service, but it must not silently enter V2 template locking, V2 mode routing, V2 prompt transform, or V2 Claude creative orchestration.
 
 ### R-007: Prompt Transparency
 
@@ -227,6 +240,7 @@ Required controls:
 - Video support.
 - Prompt marketplace.
 - Real-time collaborative sessions.
+- Full verbatim import of the upstream 620-entry style library until licensing or permission is confirmed.
 
 ## Future Extensions
 
@@ -239,3 +253,4 @@ Potential future Alchemy Lab modules or rare-style-explorer upgrades:
 - Prompt evolution across generations.
 - Project-level style libraries.
 - Brand kit aware style presets.
+- Full licensed rare style library import.

@@ -12,6 +12,8 @@ specs/alchemy_lab/rare_style_explorer.schema.json
 
 Codex should translate these contracts into the target repository's existing language, framework, and model conventions.
 
+This repository uses snake_case for the API wire contract and Pydantic models. Conceptual names from upstream or product notes may be camelCase, but implementation payloads must follow the snake_case schema in this file.
+
 ## Core Objects
 
 The MVP uses these objects:
@@ -35,17 +37,19 @@ Required fields:
 
 - `id`
 - `version`
-- `displayName`
-- `shortDescription`
+- `display_name`
+- `short_description`
+- `family`
+- `mode_affinity`
 - `category`
 - `tags`
-- `promptDirectives`
-- `isBeginnerDefault`
-- `isEnabled`
+- `prompt_directives`
+- `is_beginner_default`
+- `is_enabled`
 
-`promptDirectives` should describe visual traits such as style family, lighting, camera, composition, color palette, texture, mood, detail level, and avoid-list.
+`prompt_directives` should describe concrete rare visual traits such as style family, lighting, camera, composition, color palette, texture, medium, defect layer, and detail level. `negative_directives` stores anti-drift constraints.
 
-The UI should display `displayName` and `shortDescription`, not raw prompt text.
+The UI should display `display_name` and `short_description`, not raw prompt text.
 
 ## ExplorationRequest
 
@@ -54,13 +58,16 @@ The request sent when a user starts an exploration run.
 Required fields:
 
 - `idea`
-- `selectedStyleIds`
+- `selected_style_ids`
 
 Optional fields:
 
-- `imagesPerStyle`
-- `aspectRatio`
-- `modelId`
+- `images_per_style`
+- `aspect_ratio`
+- `mode`
+- `style_family`
+- `freshness`
+- `provider_preference`
 - `seed`
 - `userControls`
 
@@ -69,7 +76,7 @@ Validation rules:
 - `idea` is required after trimming.
 - At least one enabled style must be selected.
 - The total requested images must not exceed the server batch cap.
-- The selected model must be allowed by the existing generation service.
+- The selected provider preference must be allowed by the existing generation service.
 
 ## ExplorationSession
 
@@ -80,10 +87,10 @@ Required fields:
 - `id`
 - `feature`
 - `status`
-- `createdAt`
-- `updatedAt`
+- `created_at`
+- `updated_at`
 - `request`
-- `stylePresets`
+- `style_presets`
 - `prompts`
 - `variants`
 - `favorites`
@@ -110,12 +117,12 @@ The generated prompt for one style direction.
 Required fields:
 
 - `id`
-- `sessionId`
-- `stylePresetId`
-- `stylePresetVersion`
+- `session_id`
+- `style_preset_id`
+- `style_preset_version`
 - `idea`
-- `finalPrompt`
-- `promptMetadata`
+- `final_prompt`
+- `prompt_metadata`
 
 The final prompt must be visible in the saved session and available to the UI behind a details toggle.
 
@@ -126,19 +133,19 @@ One image generation attempt.
 Required fields:
 
 - `id`
-- `sessionId`
-- `promptId`
-- `stylePresetId`
-- `indexWithinStyle`
+- `session_id`
+- `prompt_id`
+- `style_preset_id`
+- `index_within_style`
 - `status`
-- `createdAt`
+- `created_at`
 
 Optional fields:
 
 - `asset`
-- `providerMetadata`
+- `provider_metadata`
 - `error`
-- `completedAt`
+- `completed_at`
 
 Variant status values:
 
@@ -156,7 +163,7 @@ The UI-facing view model.
 
 Required fields:
 
-- `sessionId`
+- `session_id`
 - `status`
 - `idea`
 - `groups`
@@ -172,11 +179,11 @@ The board must preserve failed variants so users can understand partial failures
 Logical API operations:
 
 ```text
-GET  /lab/modules
-GET  /lab/rare-style-explorer/styles
-POST /lab/rare-style-explorer/sessions
-GET  /lab/rare-style-explorer/sessions/:sessionId
-POST /lab/rare-style-explorer/sessions/:sessionId/favorites
+GET  /api/lab/modules
+GET  /api/lab/rare-style-explorer/styles
+POST /api/lab/rare-style-explorer/sessions
+GET  /api/lab/rare-style-explorer/sessions/:session_id
+POST /api/lab/rare-style-explorer/sessions/:session_id/favorites
 ```
 
 If the implementation repository uses RPC, server actions, or internal service calls instead of REST, Codex should keep the same logical operations and adapt the transport.

@@ -8,13 +8,15 @@
 
 ## Backend
 
-- Style presets can be listed.
+- Rare style presets can be listed.
 - Invalid empty ideas are rejected.
 - Total image count is capped.
 - Prompt composition stores the final prompt.
+- Prompt composition uses rare-style grammar and anti-drift constraints.
 - Batch generation supports partial success.
 - Sessions store successful and failed variants.
 - Favorites are saved.
+- Lab generation reuses the existing image generation service without changing V1/V2 behavior.
 
 ## UI
 
@@ -29,10 +31,11 @@
 
 ## Tests
 
-- Style list test.
+- Rare style list test.
 - Request validation test.
 - Batch size test.
 - Prompt composer test.
+- V1/V2 isolation test.
 - Partial success test.
 - Comparison grouping test.
 - Favorite persistence test.

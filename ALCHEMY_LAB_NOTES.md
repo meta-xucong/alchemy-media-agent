@@ -14,3 +14,11 @@ Read order:
 8. `ALCHEMY_LAB_ACCEPTANCE_CHECKLIST.md`
 
 The first Lab feature is `rare-style-explorer`.
+
+Behavior reference:
+
+```text
+https://github.com/vibeshotclub/vsc-skills/tree/main/rare-style-explorer
+```
+
+Important migration note: the upstream repository is public but has no declared license at the time of this planning document. The Alchemy MVP should use behavior-compatible migration with a rewritten curated rare-style subset unless explicit permission is confirmed for copying the full style library.

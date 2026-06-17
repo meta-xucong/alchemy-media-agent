@@ -4,9 +4,11 @@
 
 rare-style-explorer should be implemented as a thin exploration layer over the existing Alchemy backend.
 
-The backend must reuse existing application services for prompt transformation, model routing, image generation, asset storage, and session persistence whenever those services exist.
+The backend must reuse existing application services for model routing, image generation, asset storage, and session persistence whenever those services exist.
 
 The feature should not fork or duplicate the stable V1/V2 generation pipeline.
+
+The Lab module owns its own prompt composer. It must not default to V2-specific template locking, V2 mode routing, V2 prompt transform, or V2 Claude orchestration.
 
 ## High-Level Architecture
 
@@ -14,12 +16,12 @@ The feature should not fork or duplicate the stable V1/V2 generation pipeline.
 Client UI
   |
   v
-Alchemy Lab API / Controller
+Alchemy Lab API / Controller (/api/lab/*)
   |
   v
 rare-style-explorer Orchestrator
   |
-  +--> Style Library
+  +--> Rare Style Library
   +--> Prompt Composer
   +--> Batch Controller
   |
@@ -65,18 +67,20 @@ Responsibilities:
 - Persist the session.
 - Return a comparison board payload.
 
-### 3. Style Library
+### 3. Rare Style Library
 
-The style library contains predefined style presets.
+The style library contains predefined rare sub-style presets.
 
 Responsibilities:
 
-- Provide beginner-friendly style names.
-- Store structured style descriptors.
+- Provide beginner-friendly style names backed by concrete rare visual DNA.
+- Store structured style descriptors based on style family, mode affinity, prompt directives, and negative directives.
 - Make style presets stable and versioned.
 - Avoid provider-specific wording in the public UI when possible.
 
 A style preset is not just a text suffix. It should be a structured object with fields such as style family, lighting, camera, mood, texture, and negative constraints.
+
+The upstream `rare-style-explorer` has a 620-entry library, `mode`, `style-family`, `freshness`, and anti-generic selection logic. Unless full copying is licensed or explicitly approved, Alchemy should implement a curated rewritten subset first and keep the schema ready for later authorized import.
 
 ### 4. Prompt Composer
 
@@ -86,7 +90,7 @@ Responsibilities:
 
 - Normalize the user idea.
 - Merge style descriptors into the prompt.
-- Use existing prompt transformation logic if available.
+- Apply the rare-style-explorer combination grammar: one strong base style, zero or one surface/light layer, zero or one format/space layer, and at most one defect layer.
 - Keep output prompt deterministic enough for replay.
 - Preserve the original user idea in session state.
 
@@ -210,11 +214,11 @@ The exact framework route names depend on the implementation repository.
 Conceptual endpoints:
 
 ```text
-GET  /lab/modules
-GET  /lab/rare-style-explorer/styles
-POST /lab/rare-style-explorer/sessions
-GET  /lab/rare-style-explorer/sessions/:sessionId
-POST /lab/rare-style-explorer/sessions/:sessionId/favorites
+GET  /api/lab/modules
+GET  /api/lab/rare-style-explorer/styles
+POST /api/lab/rare-style-explorer/sessions
+GET  /api/lab/rare-style-explorer/sessions/:session_id
+POST /api/lab/rare-style-explorer/sessions/:session_id/favorites
 ```
 
 If the existing codebase uses RPC, server actions, or internal service methods instead of REST routes, implement the same logical operations using that pattern.
@@ -223,6 +227,7 @@ If the existing codebase uses RPC, server actions, or internal service methods i
 
 - Do not change V1/V2 generation behavior.
 - Do not change existing provider defaults unless required by the existing service contract.
+- Do not route Lab prompts through V2-only prompt transform or V2 template lock by default.
 - Do not introduce duplicate auth/session systems.
 - Do not add a new storage mechanism if existing asset/session storage can be reused.
 - Do not hide batch failures.

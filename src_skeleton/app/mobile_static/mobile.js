@@ -18,6 +18,7 @@ const geminiImageUnavailableShortLabel = "暂不可用";
 const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
+  lab: "用稀有视觉亚风格快速对比同一个创意方向。",
   video: "coming soon",
   account: "账户资金、生成历史与消耗记录集中查看。",
 };
@@ -173,6 +174,18 @@ const v2State = {
   promptTransformMode: "auto",
 };
 
+const labState = {
+  loaded: false,
+  loading: false,
+  styles: [],
+  limits: { maxSelectedStyles: 8, maxImagesPerStyle: 2, maxTotalImages: 12, maxConcurrentGenerations: 3 },
+  selectedStyleIds: [],
+  imagesPerStyle: 1,
+  aspectRatio: "square",
+  currentSession: null,
+  currentBoard: null,
+};
+
 function isGeminiImageTemporarilyDisabled(provider) {
   return geminiImageGenerationTemporarilyDisabled && provider === "gemini_image";
 }
@@ -277,6 +290,19 @@ const els = {
   v2HistoryCount: document.querySelector("#v2HistoryCount"),
   v2RefreshHistoryBtn: document.querySelector("#v2RefreshHistoryBtn"),
   v2HistoryGrid: document.querySelector("#v2HistoryGrid"),
+  labStyleCount: document.querySelector("#labStyleCount"),
+  labLimitsLabel: document.querySelector("#labLimitsLabel"),
+  labIdeaInput: document.querySelector("#labIdeaInput"),
+  labNoticeBar: document.querySelector("#labNoticeBar"),
+  labImagesPerStyleInput: document.querySelector("#labImagesPerStyleInput"),
+  labImagesPerStyleValue: document.querySelector("#labImagesPerStyleValue"),
+  labImageCountLabel: document.querySelector("#labImageCountLabel"),
+  labGenerateBtn: document.querySelector("#labGenerateBtn"),
+  labResetBtn: document.querySelector("#labResetBtn"),
+  labStyleGrid: document.querySelector("#labStyleGrid"),
+  labSessionState: document.querySelector("#labSessionState"),
+  labProgress: document.querySelector("#labProgress"),
+  labComparisonGrid: document.querySelector("#labComparisonGrid"),
   veyraAccountState: document.querySelector("#veyraAccountState"),
   veyraAccountEmail: document.querySelector("#veyraAccountEmail"),
   veyraAccountBalance: document.querySelector("#veyraAccountBalance"),
@@ -512,6 +538,26 @@ function bindControls() {
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.addEventListener("click", () => loadV2History({ silent: false }));
   if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
   if (els.v2RunBtn) els.v2RunBtn.addEventListener("click", runV2Creative);
+  if (els.labImagesPerStyleInput) {
+    els.labImagesPerStyleInput.addEventListener("input", () => {
+      labState.imagesPerStyle = Number(els.labImagesPerStyleInput.value || 1);
+      updateLabCountLabel();
+    });
+  }
+  document.querySelectorAll("[data-lab-aspect]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setActive(button, "[data-lab-aspect]");
+      labState.aspectRatio = button.dataset.labAspect || "square";
+    });
+  });
+  if (els.labStyleGrid) {
+    els.labStyleGrid.addEventListener("click", handleLabStyleGridClick);
+  }
+  if (els.labComparisonGrid) {
+    els.labComparisonGrid.addEventListener("click", handleLabComparisonClick);
+  }
+  if (els.labGenerateBtn) els.labGenerateBtn.addEventListener("click", runLabExploration);
+  if (els.labResetBtn) els.labResetBtn.addEventListener("click", resetLabExplorer);
   bindProviderAutosave();
   els.newSessionBtn.addEventListener("click", startNewSession);
   els.smokeBtn.addEventListener("click", openSampleGuide);
@@ -561,6 +607,13 @@ function switchTab(tabName) {
     });
   } else if (tabName === "v2") {
     renderHeroHistory(v2State.history, { source: "v2" });
+  } else if (tabName === "lab") {
+    if (!labState.loaded && !labState.loading) {
+      loadLabStyles().catch((error) => {
+        updateLabNotice(`风格加载失败：${friendlyError(error)}`, "error");
+      });
+    }
+    renderHeroHistory(state.historyItems, { source: "v1" });
   } else {
     renderHeroHistory(state.historyItems, { source: "v1" });
   }
@@ -570,6 +623,284 @@ function updateHeroCopy(tabName) {
   if (!els.heroLine) return;
   const moduleName = Object.prototype.hasOwnProperty.call(heroCopyByTab, tabName) ? tabName : "image";
   els.heroLine.textContent = heroCopyByTab[moduleName];
+}
+
+async function loadLabStyles({ force = false } = {}) {
+  if (labState.loading || (labState.loaded && !force)) return;
+  labState.loading = true;
+  updateLabNotice("正在载入稀有风格预设。", "info");
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/styles");
+    labState.styles = Array.isArray(payload.styles) ? payload.styles : [];
+    labState.limits = payload.limits || labState.limits;
+    labState.selectedStyleIds = labState.styles
+      .filter((style) => style.is_beginner_default)
+      .slice(0, Math.min(4, labState.limits.maxSelectedStyles || 4))
+      .map((style) => style.id);
+    labState.loaded = true;
+    renderLabStyles();
+    updateLabCountLabel();
+    updateLabNotice(`已载入 ${labState.styles.length} 个稀有风格预设。`, "success");
+  } finally {
+    labState.loading = false;
+    updateLabCountLabel();
+  }
+}
+
+function renderLabStyles() {
+  if (!els.labStyleGrid) return;
+  const styles = labState.styles || [];
+  els.labStyleGrid.innerHTML = "";
+  els.labStyleGrid.classList.toggle("empty-v2-list", styles.length === 0);
+  if (els.labStyleCount) els.labStyleCount.textContent = String(styles.length);
+  if (els.labLimitsLabel) els.labLimitsLabel.textContent = `最多 ${labState.limits.maxSelectedStyles || 8} 种`;
+  if (!styles.length) {
+    els.labStyleGrid.textContent = "暂无可用风格。";
+    return;
+  }
+  styles.forEach((style) => {
+    const selected = labState.selectedStyleIds.includes(style.id);
+    const button = document.createElement("button");
+    button.className = `lab-style-card${selected ? " active" : ""}`;
+    button.type = "button";
+    button.dataset.labStyleId = style.id;
+    button.setAttribute("aria-pressed", String(selected));
+    button.innerHTML = `
+      <span>${escapeHtml(style.category || style.family || "style")}</span>
+      <strong>${escapeHtml(style.display_name || style.id)}</strong>
+      <small>${escapeHtml(style.short_description || "")}</small>
+    `;
+    els.labStyleGrid.appendChild(button);
+  });
+}
+
+function handleLabStyleGridClick(event) {
+  const button = event.target.closest("[data-lab-style-id]");
+  if (!button) return;
+  const styleId = button.dataset.labStyleId;
+  if (labState.selectedStyleIds.includes(styleId)) {
+    labState.selectedStyleIds = labState.selectedStyleIds.filter((id) => id !== styleId);
+  } else if (labState.selectedStyleIds.length < (labState.limits.maxSelectedStyles || 8)) {
+    labState.selectedStyleIds = [...labState.selectedStyleIds, styleId];
+  } else {
+    updateLabNotice(`一次最多选择 ${labState.limits.maxSelectedStyles || 8} 种风格。`, "warning");
+  }
+  renderLabStyles();
+  updateLabCountLabel();
+}
+
+function updateLabCountLabel() {
+  const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
+  const total = labState.selectedStyleIds.length * imagesPerStyle;
+  if (els.labImagesPerStyleValue) els.labImagesPerStyleValue.textContent = String(imagesPerStyle);
+  if (els.labImageCountLabel) els.labImageCountLabel.textContent = `预计 ${total} 张`;
+  if (els.labGenerateBtn) els.labGenerateBtn.disabled = labState.loading || total <= 0 || total > (labState.limits.maxTotalImages || 12);
+}
+
+async function runLabExploration() {
+  if (labState.loading) return;
+  if (!labState.loaded) await loadLabStyles();
+  const idea = (els.labIdeaInput?.value || "").trim();
+  if (!idea) {
+    updateLabNotice("请先填写画面想法。", "warning");
+    els.labIdeaInput?.focus();
+    return;
+  }
+  if (!labState.selectedStyleIds.length) {
+    updateLabNotice("请至少选择一种稀有风格。", "warning");
+    return;
+  }
+  const total = labState.selectedStyleIds.length * Math.max(1, Number(labState.imagesPerStyle || 1));
+  if (total > (labState.limits.maxTotalImages || 12)) {
+    updateLabNotice(`本次共 ${total} 张，超过单次上限 ${labState.limits.maxTotalImages || 12} 张。`, "warning");
+    return;
+  }
+  labState.loading = true;
+  setLabBusy(true);
+  updateLabNotice(`正在生成 ${total} 张对比图。`, "info");
+  updateLabSessionState("生成中");
+  if (els.labProgress) els.labProgress.textContent = "批次已提交，正在逐张生成。";
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/sessions", {
+      method: "POST",
+      body: {
+        idea,
+        selected_style_ids: labState.selectedStyleIds,
+        mode: inferLabMode(idea),
+        images_per_style: Math.max(1, Number(labState.imagesPerStyle || 1)),
+        aspect_ratio: labState.aspectRatio,
+        provider_preference: labProviderPreference(),
+      },
+    });
+    labState.currentSession = payload.session;
+    labState.currentBoard = payload.board;
+    renderLabBoard(payload.board);
+    const okCount = countLabCards(payload.board, "succeeded");
+    const failedCount = countLabCards(payload.board, "failed");
+    updateLabSessionState(labStatusLabel(payload.board?.status));
+    updateLabNotice(`已完成 ${okCount} 张，失败 ${failedCount} 张。`, failedCount ? "warning" : "success");
+  } catch (error) {
+    updateLabNotice(`生成失败：${friendlyError(error)}`, "error");
+    updateLabSessionState("失败");
+  } finally {
+    labState.loading = false;
+    setLabBusy(false);
+  }
+}
+
+function inferLabMode(idea) {
+  const text = idea.toLowerCase();
+  if (/人像|肖像|portrait|角色|模特|美女|男士/.test(text)) return "character";
+  if (/海报|poster|标题|封面|banner/.test(text)) return "poster";
+  if (/产品|商品|包装|瓶|杯|鞋|包|香水|食物|甜品|咖啡/.test(text)) return "product";
+  return "minimal";
+}
+
+function labProviderPreference() {
+  const provider = safeImageProviderPreference(state.selectedProvider, "");
+  return provider || null;
+}
+
+function renderLabBoard(board) {
+  if (!els.labComparisonGrid) return;
+  const groups = Array.isArray(board?.groups) ? board.groups : [];
+  els.labComparisonGrid.innerHTML = "";
+  els.labComparisonGrid.classList.toggle("empty-v2-list", groups.length === 0);
+  if (!groups.length) {
+    els.labComparisonGrid.textContent = "暂无对比结果。";
+    if (els.labProgress) els.labProgress.textContent = "等待创建探索批次。";
+    return;
+  }
+  if (els.labProgress) {
+    els.labProgress.textContent = `${groups.length} 组风格 · ${countLabCards(board)} 张结果 · ${labStatusLabel(board.status)}`;
+  }
+  groups.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "lab-style-result";
+    section.innerHTML = `<h4>${escapeHtml(group.style_name || group.style_preset_id)}</h4>`;
+    const grid = document.createElement("div");
+    grid.className = "lab-card-grid";
+    (group.cards || []).forEach((card) => {
+      const article = document.createElement("article");
+      article.className = `lab-result-card ${card.status === "succeeded" ? "is-ready" : "is-failed"}`;
+      const imageHtml = card.image_url
+        ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(group.style_name || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(group.style_name || "Lab result")}" /></button>`
+        : `<div class="lab-error-tile">${escapeHtml(card.error?.message || "生成失败")}</div>`;
+      article.innerHTML = `
+        ${imageHtml}
+        <div class="lab-card-meta">
+          <span>${escapeHtml(group.style_name || group.style_preset_id)} · ${escapeHtml(labCardStatusLabel(card.status))}</span>
+          <button class="lab-favorite-btn${card.is_favorite ? " active" : ""}" data-lab-favorite="${escapeHtml(card.variant_id)}" type="button" aria-pressed="${String(Boolean(card.is_favorite))}">收藏</button>
+        </div>
+        <details class="lab-prompt-detail">
+          <summary>提示词</summary>
+          <pre>${escapeHtml(card.prompt || "")}</pre>
+        </details>
+      `;
+      grid.appendChild(article);
+    });
+    section.appendChild(grid);
+    els.labComparisonGrid.appendChild(section);
+  });
+}
+
+async function handleLabComparisonClick(event) {
+  const previewButton = event.target.closest("[data-lab-preview]");
+  if (previewButton) {
+    openLabPreview(previewButton.dataset.labPreview, previewButton.dataset.labTitle || "Alchemy Lab", previewButton.dataset.labPrompt || "");
+    return;
+  }
+  const favoriteButton = event.target.closest("[data-lab-favorite]");
+  if (!favoriteButton || !labState.currentSession) return;
+  const variantId = favoriteButton.dataset.labFavorite;
+  const favorites = new Set(labState.currentBoard?.favorites || []);
+  if (favorites.has(variantId)) favorites.delete(variantId);
+  else favorites.add(variantId);
+  try {
+    const payload = await request(`/api/lab/rare-style-explorer/sessions/${labState.currentSession.id}/favorites`, {
+      method: "POST",
+      body: { variant_ids: Array.from(favorites) },
+    });
+    labState.currentSession = payload.session;
+    labState.currentBoard = payload.board;
+    renderLabBoard(payload.board);
+    updateLabNotice(`已收藏 ${payload.board?.favorites?.length || 0} 张。`, "success");
+  } catch (error) {
+    updateLabNotice(`收藏失败：${friendlyError(error)}`, "error");
+  }
+}
+
+function openLabPreview(url, title, prompt) {
+  if (!url || !els.imageLightbox) return;
+  openImageLightbox({
+    id: "alchemy-lab",
+    title: title || "Alchemy Lab",
+    url,
+    thumbnailUrl: url,
+    format: "png",
+    meta: "Alchemy Lab",
+    promptText: prompt || "",
+  });
+}
+
+function resetLabExplorer() {
+  if (els.labIdeaInput) els.labIdeaInput.value = "";
+  labState.selectedStyleIds = labState.styles
+    .filter((style) => style.is_beginner_default)
+    .slice(0, Math.min(4, labState.limits.maxSelectedStyles || 4))
+    .map((style) => style.id);
+  labState.currentSession = null;
+  labState.currentBoard = null;
+  renderLabStyles();
+  renderLabBoard(null);
+  updateLabCountLabel();
+  updateLabSessionState("待生成");
+  updateLabNotice("选择稀有风格后创建对比批次。", "info");
+}
+
+function setLabBusy(isBusy) {
+  if (els.labGenerateBtn) {
+    els.labGenerateBtn.disabled = isBusy;
+    els.labGenerateBtn.textContent = isBusy ? "生成中..." : "生成对比";
+  }
+  if (els.labResetBtn) els.labResetBtn.disabled = isBusy;
+}
+
+function updateLabNotice(message, type = "info") {
+  if (!els.labNoticeBar) return;
+  els.labNoticeBar.textContent = message;
+  els.labNoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
+}
+
+function updateLabSessionState(label) {
+  if (els.labSessionState) els.labSessionState.textContent = label || "待生成";
+}
+
+function countLabCards(board, status = "") {
+  return (board?.groups || []).reduce((total, group) => {
+    return total + (group.cards || []).filter((card) => !status || card.status === status).length;
+  }, 0);
+}
+
+function labStatusLabel(status) {
+  const labels = {
+    queued: "排队中",
+    running: "生成中",
+    completed: "已完成",
+    partial_success: "部分完成",
+    failed: "失败",
+  };
+  return labels[status] || "待生成";
+}
+
+function labCardStatusLabel(status) {
+  const labels = {
+    succeeded: "已生成",
+    failed: "失败",
+    running: "生成中",
+    queued: "排队中",
+  };
+  return labels[status] || status || "-";
 }
 
 function setupH5AdvancedPanels() {

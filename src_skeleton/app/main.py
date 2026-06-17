@@ -32,6 +32,16 @@ from app.schemas import (
     RuntimeProviderSettingsResponse,
 )
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content
+from app.services.alchemy_lab import (
+    ExplorationRequest,
+    FavoriteSelection,
+    comparison_board,
+    create_exploration_session,
+    get_exploration_session,
+    list_lab_modules,
+    list_style_presets,
+    update_favorites,
+)
 from app.services.events import format_sse_events
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.session_service import create_session, handle_message
@@ -161,6 +171,55 @@ def image_share_poster(
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
+
+
+@app.get("/api/lab/modules")
+def list_lab_modules_endpoint(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return list_lab_modules()
+
+
+@app.get("/api/lab/rare-style-explorer/styles")
+def list_rare_style_explorer_styles(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return list_style_presets()
+
+
+@app.post("/api/lab/rare-style-explorer/sessions")
+async def create_rare_style_explorer_session(
+    body: ExplorationRequest,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _veyra_user_id_from_request(request, authorization)
+    try:
+        session = await create_exploration_session(body, veyra_user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
+    return {"session": session, "board": comparison_board(session)}
+
+
+@app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
+def get_rare_style_explorer_session(session_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    session = get_exploration_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
+    return {"session": session, "board": comparison_board(session)}
+
+
+@app.post("/api/lab/rare-style-explorer/sessions/{session_id}/favorites")
+def update_rare_style_explorer_favorites(
+    session_id: str,
+    body: FavoriteSelection,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_veyra_user_if_enabled(request, authorization)
+    session = update_favorites(session_id, body)
+    if not session:
+        raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
+    return {"session": session, "board": comparison_board(session)}
 
 
 def _veyra_return_router_url(target: str) -> str:
