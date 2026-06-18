@@ -130,18 +130,18 @@ Validation:
 
 The user can choose from preset rare style directions.
 
-MVP default presets should be rewritten, prompt-ready sub-style presets inspired by rare-style-explorer behavior. Avoid isolated generic labels such as only `cinematic`, `retro`, `cyberpunk`, or `minimalist`.
+The product should expose the upstream rare-style library as structured Alchemy presets. The current target library contains 620 styles grouped into 10 style families:
 
-Recommended MVP presets:
-
-- Sun-faded folk horror poster photography
-- Chrome Y2K fashion editorial
-- Pastel ceramic toy photography
-- Overexposed tropical VHS travelogue
-- Risograph botanical catalog
-- Brutalist museum product plinth
-- CRT pixel interface still life
-- Hand-tinted archival portrait
+- film
+- fashion
+- product
+- photography
+- illustration
+- graphic
+- craft
+- digital
+- space
+- material
 
 Each preset must include:
 
@@ -152,7 +152,7 @@ Each preset must include:
 - prompt directives
 - negative or anti-drift directives
 
-The implementation may add or remove presets if the repository already has a style system, but the UI must still expose beginner-friendly names.
+The UI must keep this large library clean by using search, family filters, and collapsible style lists. A small rewritten fallback subset may exist for recovery, but it is not the primary product experience.
 
 ### R-005: Batch Generation
 
@@ -164,7 +164,10 @@ Recommended MVP defaults:
 
 - `images_per_style`: 1
 - `maxSelectedStyles`: 8
+- `maxImagesPerStyle`: 4
 - `maxTotalImages`: 12
+- `target_count`: 4 when no manual style is selected
+- `generation_interval_seconds`: 0 by default, capped at 60
 
 ### R-006: Existing Backend Reuse
 
@@ -240,7 +243,7 @@ Required controls:
 - Video support.
 - Prompt marketplace.
 - Real-time collaborative sessions.
-- Full verbatim import of the upstream 620-entry style library until licensing or permission is confirmed.
+- Direct provider SDK calls from the Lab module.
 
 ## Future Extensions
 
@@ -253,4 +256,4 @@ Potential future Alchemy Lab modules or rare-style-explorer upgrades:
 - Prompt evolution across generations.
 - Project-level style libraries.
 - Brand kit aware style presets.
-- Full licensed rare style library import.
+- Saved style collections.

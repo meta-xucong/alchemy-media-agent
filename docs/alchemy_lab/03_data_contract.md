@@ -58,23 +58,31 @@ The request sent when a user starts an exploration run.
 Required fields:
 
 - `idea`
-- `selected_style_ids`
 
 Optional fields:
 
+- `selected_style_ids`
+- `target_count`
 - `images_per_style`
+- `generation_interval_seconds`
 - `aspect_ratio`
 - `mode`
 - `style_family`
 - `freshness`
-- `provider_preference`
 - `seed`
-- `userControls`
+- `style_id`
+- `avoid_generic`
+- `provider_preference`
+
+`seed` enables repeatable automatic style sampling. `style_id` runs a single explicit style. `avoid_generic` keeps the upstream anti-generic de-duplication behavior enabled by default.
+
+When no style is manually selected, `target_count` is the exact output count and the service normalizes `images_per_style` to `1`. When styles are manually selected, total output count is `selected_style_count * images_per_style`.
 
 Validation rules:
 
 - `idea` is required after trimming.
-- At least one enabled style must be selected.
+- If `selected_style_ids` is omitted or empty, the server automatically samples `target_count` enabled styles, optionally filtered by `style_family`.
+- If style ids are supplied, at least one enabled style must resolve after optional family filtering.
 - The total requested images must not exceed the server batch cap.
 - The selected provider preference must be allowed by the existing generation service.
 
@@ -99,7 +107,6 @@ Required fields:
 Status values:
 
 ```text
-draft
 queued
 running
 completed

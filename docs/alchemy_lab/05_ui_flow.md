@@ -90,16 +90,13 @@ Label:
 Choose styles to try
 ```
 
-Default style cards:
+Style library:
 
-- Folk horror poster photo
-- Chrome fashion editorial
-- Ceramic toy photo
-- Tropical VHS travelogue
-- Risograph catalog
-- Brutalist product plinth
-- CRT interface still life
-- Hand-tinted archive portrait
+- Load the 620-entry rare-style library.
+- Show selected beginner defaults first.
+- Provide search by style name, ID, or keyword.
+- Provide a style-family filter.
+- Keep the full library in a disclosure section so the setup screen stays calm.
 
 Each card should show:
 
@@ -110,20 +107,33 @@ Each card should show:
 
 Beginner default:
 
-- preselect 4 to 6 styles, or provide a `Select recommended styles` action
+- do not require any style to be selected on first entry
+- if no style is selected, let the server automatically sample by `target_count`, `style_family`, `freshness`, and `seed`
+- if the user manually selects styles, calculate total output as selected styles times images per style
+- disable the images-per-style control until at least one style is manually selected
 
 #### Basic Options
 
 Keep options minimal:
 
-- aspect ratio
+- total image count
 - images per style
+- interval between generated images
+- aspect ratio
+- exploration mode
+- style family
+- freshness
+- seed
 
 Default:
 
 ```text
-Aspect ratio: existing default
+Aspect ratio: square
+Target count: 4
 Images per style: 1
+Interval: 0 seconds
+Mode: quick exploration
+Freshness: high
 ```
 
 #### Generation Button
@@ -144,7 +154,7 @@ This will create 6 images.
 
 ### Purpose
 
-Show the batch is running without exposing technical details.
+Show the style variations are being created without exposing technical details.
 
 ### Copy
 

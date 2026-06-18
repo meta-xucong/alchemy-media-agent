@@ -106,10 +106,11 @@ Recommended MVP defaults:
 
 ```text
 maxSelectedStyles = 8
-maxImagesPerStyle = 2
+maxImagesPerStyle = 4
 maxTotalImages = 12
 maxConcurrentGenerations = 3
 maxRetriesPerVariant = 1
+maxGenerationIntervalSeconds = 60
 ```
 
 The server must enforce these limits even if the UI validates them too.

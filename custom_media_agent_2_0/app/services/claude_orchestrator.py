@@ -1585,7 +1585,7 @@ def _build_checkpoint_stage_prompt(
     if stage_name.endswith("_micro"):
         payload["rules"] += " This is a retry micro-stage: finish only the missing decision; no broad re-analysis."
     return (
-        "Return schema-valid compact JSON only. Start with { immediately. No prose, no markdown, no analysis.\n"
+        "Return schema JSON only. Start with { immediately. No prose/markdown/analysis.\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -1594,7 +1594,7 @@ def _checkpoint_output_contract(stage_name: str) -> str:
     if stage_name.startswith("intent"):
         return (
             "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
-            "asset_requirements, risk_notes, confidence. Use short strings; arrays max 6."
+            "asset_requirements, risk_notes, confidence. Short strings; arrays<=6."
         )
     if stage_name.startswith("visual_strategy"):
         return (
@@ -2565,6 +2565,7 @@ def _build_workspace(
                 "- candidate_case_details.json 中的 visual_signal_brief 是系统提炼出的视觉 DNA，优先关注强调色、材质、光影、构图和审美方向。",
                 "- 不要只迁移背景主色；如果案例有小面积但关键的金色、墨绿、玻璃高光、金属边缘或深色对比，也要判断是否应抽象迁移。",
                 "- context.prompt_transform_profile 定义本次提示词转换档位：enhanced/strict 需要更强保真和硬约束保护；stable/original 需要轻整理、贴近原意；exploration/off 必须主动给出可见差异化的创意替代方案，例如改变角度、姿态、光影情绪、背景层次、裁切、色彩对比、材质氛围或场景调度中的至少一类，但仍必须服从安全、模板优先级、上传硬引用、精确文字/Logo约束和用户明确禁项。",
+                "- context.request.output 若含非 auto/default 的 size/aspect_ratio，即手动画幅锁；可在该画幅内探索，但不得改写尺寸/比例。",
                 "- 你必须直接输出 final_prompt、negative_prompt、provider_parameters 和 prompt_rationale。",
                 "- final_prompt 是给 gpt-image-2 或兼容 ImageProvider 的最终输入，不要让下游再猜你的审美意图。",
                 "- final_prompt 不得包含内部 case_id、asset_id、provider_id、source_url、API 或仓库工程标识。",

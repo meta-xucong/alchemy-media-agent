@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from datetime import datetime, timezone
 import hashlib
+import httpx
 import logging
 from html import escape
 from pathlib import Path
@@ -10,7 +11,7 @@ import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
@@ -33,11 +34,14 @@ from app.schemas import (
 )
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content
 from app.services.alchemy_lab import (
+    LAB_PROJECT_ID,
     ExplorationRequest,
     FavoriteSelection,
     comparison_board,
     create_exploration_session,
     get_exploration_session,
+    is_lab_history_record,
+    list_lab_history,
     list_lab_modules,
     list_style_presets,
     update_favorites,
@@ -185,6 +189,16 @@ def list_rare_style_explorer_styles(request: Request, authorization: str = Heade
     return list_style_presets()
 
 
+@app.get("/api/lab/rare-style-explorer/history")
+def list_rare_style_explorer_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=1000),
+    authorization: str = Header(default=""),
+):
+    _require_veyra_user_if_enabled(request, authorization)
+    return list_lab_history(limit=limit)
+
+
 @app.post("/api/lab/rare-style-explorer/sessions")
 async def create_rare_style_explorer_session(
     body: ExplorationRequest,
@@ -220,6 +234,11 @@ def update_rare_style_explorer_favorites(
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
     return {"session": session, "board": comparison_board(session)}
+
+
+@app.api_route("/api/v2/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+async def proxy_v2_api(path: str, request: Request):
+    return await _proxy_v2_request(path, request)
 
 
 def _veyra_return_router_url(target: str) -> str:
@@ -294,6 +313,71 @@ async def _veyra_account(user_id: int):
 
 def _is_veyra_admin_account(account) -> bool:
     return str(getattr(account, "role", "") or "").lower() == "admin"
+
+
+async def _proxy_v2_request(path: str, request: Request) -> Response:
+    target_url = _v2_proxy_target_url(path, str(request.url.query))
+    headers = _v2_proxy_request_headers(request)
+    body = await request.body()
+    timeout = httpx.Timeout(settings.v2_api_proxy_timeout_seconds, connect=8.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            upstream = await client.request(
+                request.method,
+                target_url,
+                content=body,
+                headers=headers,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("V2 API proxy failed for %s: %s", target_url, exc)
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "v2_proxy_unavailable", "message": "V2 local API is not reachable."},
+        ) from exc
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_v2_proxy_response_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+def _v2_proxy_target_url(path: str, query: str = "") -> str:
+    clean_path = str(path or "").lstrip("/")
+    target = f"{settings.v2_api_proxy_base_url}/api/v2/{clean_path}"
+    return f"{target}?{query}" if query else target
+
+
+def _v2_proxy_request_headers(request: Request) -> dict[str, str]:
+    excluded = {
+        "host",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    }
+    return {key: value for key, value in request.headers.items() if key.lower() not in excluded}
+
+
+def _v2_proxy_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    excluded = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "content-encoding",
+        "content-length",
+    }
+    return {key: value for key, value in headers.items() if key.lower() not in excluded}
 
 
 def _asset_owner_id(asset_id: str) -> int | None:
@@ -500,7 +584,7 @@ async def list_image_history(
     known_output_ids: set[str] = set()
     blocked_output_ids: set[str] = set()
     for job in repository.list_jobs(job_type="image", session_id=session_id):
-        if _is_v2_bridge_job(job):
+        if _is_non_v1_history_job(job):
             blocked_output_ids.update(output.id for output in job.outputs)
             continue
         for output in job.outputs:
@@ -544,7 +628,7 @@ async def list_image_history(
             )
 
     for record in media_store.list_history_records(limit=limit, session_id=session_id):
-        if _is_v2_bridge_history_record(record):
+        if _is_non_v1_history_record(record):
             blocked_output_ids.add(record["id"])
             continue
         if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
@@ -554,6 +638,9 @@ async def list_image_history(
 
     if not session_id:
         for record in media_store.list_generated_output_records(limit=limit):
+            if _is_non_v1_history_record(record):
+                blocked_output_ids.add(record["id"])
+                continue
             if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
                 continue
             known_output_ids.add(record["id"])
@@ -1254,12 +1341,27 @@ def _is_v2_bridge_job(job) -> bool:
     return session.project_id == V2_BRIDGE_PROJECT_ID if session else False
 
 
+def _is_lab_history_job(job) -> bool:
+    if str(job.idempotency_key or "").startswith("lab:"):
+        return True
+    session = repository.get_session(job.session_id) if job.session_id else None
+    return session.project_id == LAB_PROJECT_ID if session else False
+
+
+def _is_non_v1_history_job(job) -> bool:
+    return _is_v2_bridge_job(job) or _is_lab_history_job(job)
+
+
 def _is_v2_bridge_history_record(record: dict) -> bool:
     if record.get("source_app") == V2_BRIDGE_PROJECT_ID:
         return True
     if str(record.get("idempotency_key") or "").startswith(V2_IDEMPOTENCY_PREFIX):
         return True
     return False
+
+
+def _is_non_v1_history_record(record: dict) -> bool:
+    return _is_v2_bridge_history_record(record) or is_lab_history_record(record)
 
 
 def _runtime_provider_settings_response(runtime_persistence_warning: str | None = None) -> RuntimeProviderSettingsResponse:

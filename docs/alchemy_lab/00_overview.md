@@ -88,7 +88,7 @@ The MVP is successful when a user can:
 - Open Alchemy Lab.
 - Start rare-style-explorer.
 - Enter one image idea.
-- Select at least two style presets.
+- Select style presets or let the server automatically sample styles from a selected family.
 - Generate a batch of images using the existing backend generation path.
 - View all results in a grid with style labels.
 - See the prompt used for each result.
@@ -117,4 +117,4 @@ Behavior reference:
 https://github.com/vibeshotclub/vsc-skills/tree/main/rare-style-explorer
 ```
 
-The upstream repository is public, but it does not currently declare a license. Implementation should therefore use behavior-compatible migration unless explicit permission is confirmed for copying the full 620-entry style library. The Alchemy MVP may ship with a curated, rewritten rare-style preset subset that preserves the original combination rules without copying the upstream library verbatim.
+Current implementation uses a project-owned copy of the upstream 620-entry style library as an Alchemy data asset at `src_skeleton/app/data/rare_style_library.json`, with a small rewritten fallback subset only for local recovery if the data file is missing or unreadable. The behavior should remain compatible with the upstream selection ideas: `mode`, `style-family`, `freshness`, seeded sampling, and anti-generic de-duplication.

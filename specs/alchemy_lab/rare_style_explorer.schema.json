@@ -22,7 +22,9 @@
         "maxImagesPerStyle",
         "maxTotalImages",
         "maxConcurrentGenerations",
-        "maxRetriesPerVariant"
+        "maxRetriesPerVariant",
+        "maxGenerationIntervalSeconds",
+        "styleLibrarySize"
       ],
       "properties": {
         "maxSelectedStyles": {
@@ -33,7 +35,7 @@
         "maxImagesPerStyle": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2
+          "maximum": 4
         },
         "maxTotalImages": {
           "type": "integer",
@@ -49,6 +51,15 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 1
+        },
+        "maxGenerationIntervalSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60
+        },
+        "styleLibrarySize": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -89,7 +100,9 @@
       "additionalProperties": false,
       "required": [
         "styles",
-        "limits"
+        "limits",
+        "families",
+        "modes"
       ],
       "properties": {
         "styles": {
@@ -100,6 +113,34 @@
         },
         "limits": {
           "$ref": "#/$defs/limits"
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/labeledOption"
+          }
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/labeledOption"
+          }
+        }
+      }
+    },
+    "labeledOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
         }
       }
     },
@@ -140,7 +181,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9_-]{1,80}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,80}$"
         },
         "version": {
           "type": "string"
@@ -223,11 +264,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "idea",
-        "selected_style_ids",
-        "mode",
-        "freshness",
-        "images_per_style"
+        "idea"
       ],
       "properties": {
         "idea": {
@@ -278,10 +315,36 @@
             "high"
           ]
         },
+        "target_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
         "images_per_style": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2
+          "maximum": 4
+        },
+        "generation_interval_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "style_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avoid_generic": {
+          "type": "boolean"
         },
         "aspect_ratio": {
           "type": [

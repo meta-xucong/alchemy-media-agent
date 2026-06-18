@@ -10,6 +10,7 @@ import pytest
 from app.config import settings
 import app.main as main_module
 import app.services.image_service as image_service_module
+import app.services.alchemy_lab as alchemy_lab_module
 from app.main import app
 from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
@@ -169,6 +170,39 @@ def test_http_smoke_image_revision_video_and_providers():
     assert "job.status" in events.text
 
 
+def test_image_provider_errors_redact_api_keys(monkeypatch):
+    secret = "sk-liveSECRET1234567890abcdef"
+    masked_secret = "sk-liveS******************cdef"
+
+    class SecretFailingProvider(MockImageProvider):
+        async def generate(self, request):
+            raise ProviderRuntimeError(
+                f"Error code: 401 - Incorrect API key provided: {secret}. invalid_api_key",
+                provider=self.name,
+                detail={
+                    "message": f"AuthenticationError: Incorrect API key provided: {secret}",
+                    "nested": {"raw": f"provider said {secret}", "masked": f"provider said {masked_secret}"},
+                },
+            )
+
+    monkeypatch.setitem(image_service_module.registry.image_providers, "mock_image", SecretFailingProvider())
+    client = TestClient(app)
+    session = client.post("/v1/sessions", json={"project_id": "proj_test", "title": "Secret redaction"})
+    assert session.status_code == 200
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={"session_id": session.json()["id"], "prompt": "测试密钥脱敏", "count": 1},
+    )
+    body = _completed_image_job(client, image_job)
+    serialized = json.dumps(body, ensure_ascii=False)
+
+    assert body["status"] == "failed"
+    assert secret not in serialized
+    assert masked_secret not in serialized
+    assert "sk-***" in serialized
+
+
 def test_v1_image_job_rejects_blank_prompt():
     client = TestClient(app)
     session = client.post("/v1/sessions", json={"project_id": "proj_test", "title": "Blank Prompt"})
@@ -194,8 +228,13 @@ def test_alchemy_lab_lists_rare_style_presets():
     assert response.status_code == 200
     body = response.json()
     assert body["limits"]["maxTotalImages"] == 12
-    assert len(body["styles"]) >= 8
-    assert any(style["id"] == "folk_horror_poster_photo" for style in body["styles"])
+    assert body["limits"]["maxImagesPerStyle"] == 4
+    assert body["limits"]["maxGenerationIntervalSeconds"] == 60
+    assert body["limits"]["styleLibrarySize"] >= 620
+    assert len(body["styles"]) >= 620
+    assert any(style["id"] == "M001" for style in body["styles"])
+    assert {family["id"] for family in body["families"]} >= {"film", "fashion", "material"}
+    assert {mode["id"] for mode in body["modes"]} >= {"minimal", "product", "character", "poster"}
     assert all(style["prompt_directives"] for style in body["styles"])
 
 
@@ -226,6 +265,28 @@ def test_alchemy_lab_rejects_empty_idea_and_oversized_batch():
     )
     assert too_large.status_code == 400
     assert too_large.json()["detail"]["code"] == "invalid_exploration_request"
+
+    too_many_raw_styles = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "复古咖啡馆吉祥物",
+            "selected_style_ids": [
+                "folk_horror_poster_photo",
+                "chrome_y2k_fashion_editorial",
+                "pastel_ceramic_toy_photo",
+                "tropical_vhs_travelogue",
+                "risograph_botanical_catalog",
+                "brutalist_museum_product_plinth",
+                "crt_pixel_interface_still_life",
+                "hand_tinted_archive_portrait",
+                "folk_horror_poster_photo",
+            ],
+            "style_family": "product",
+            "images_per_style": 1,
+        },
+    )
+    assert too_many_raw_styles.status_code == 400
+    assert "no more than 8 styles" in too_many_raw_styles.json()["detail"]["message"]
 
 
 def test_alchemy_lab_creates_comparison_board_and_persists_favorites():
@@ -270,6 +331,136 @@ def test_alchemy_lab_creates_comparison_board_and_persists_favorites():
     assert reload_response.json()["board"]["favorites"] == [first_card["variant_id"]]
 
 
+def test_alchemy_lab_uses_beginner_default_styles_when_styles_omitted():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "甜品店开业海报",
+            "mode": "poster",
+            "images_per_style": 1,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["request"]["selected_style_ids"] == []
+    assert len(payload["board"]["groups"]) == 4
+    assert all(group["cards"] for group in payload["board"]["groups"])
+
+
+def test_alchemy_lab_auto_selects_by_family_and_seed():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "潮流饮料发布海报",
+            "mode": "poster",
+            "style_family": "graphic",
+            "freshness": "high",
+            "target_count": 6,
+            "seed": 2594,
+            "images_per_style": 1,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["request"]["target_count"] == 6
+    assert payload["session"]["request"]["style_family"] == "graphic"
+    assert len(payload["board"]["groups"]) == 6
+    assert {style["family"] for style in payload["session"]["style_presets"]} == {"graphic"}
+
+
+def test_alchemy_lab_auto_mode_target_count_is_exact_total():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "甜品店新品海报",
+            "target_count": 5,
+            "style_family": "graphic",
+            "images_per_style": 3,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["request"]["images_per_style"] == 1
+    assert len(payload["board"]["groups"]) == 5
+    assert sum(len(group["cards"]) for group in payload["board"]["groups"]) == 5
+
+
+def test_alchemy_lab_deduplicates_selected_styles():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "重复风格边界测试",
+            "selected_style_ids": ["M001", "M001", "folk_horror_poster_photo", "C002"],
+            "images_per_style": 2,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    board = response.json()["board"]
+    assert [group["style_preset_id"] for group in board["groups"]] == ["M001", "C002"]
+    assert sum(len(group["cards"]) for group in board["groups"]) == 4
+
+
+def test_alchemy_lab_manual_styles_are_not_filtered_by_family():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "手选风格不应被族筛选误删",
+            "selected_style_ids": ["M001", "C002"],
+            "style_family": "graphic",
+            "images_per_style": 1,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    board = response.json()["board"]
+    assert [group["style_preset_id"] for group in board["groups"]] == ["M001", "C002"]
+    assert sum(len(group["cards"]) for group in board["groups"]) == 2
+
+
+def test_alchemy_lab_generation_interval_is_applied(monkeypatch):
+    delays = []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "复古电子表广告海报",
+            "selected_style_ids": ["pastel_ceramic_toy_photo", "crt_pixel_interface_still_life"],
+            "mode": "poster",
+            "images_per_style": 1,
+            "generation_interval_seconds": 0.25,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    assert delays == [0.25]
+
+
 def test_alchemy_lab_schema_matches_real_api_responses():
     jsonschema = pytest.importorskip("jsonschema")
     client = TestClient(app)
@@ -284,7 +475,6 @@ def test_alchemy_lab_schema_matches_real_api_responses():
         "/api/lab/rare-style-explorer/sessions",
         json={
             "idea": "孔版印刷风格咖啡豆包装",
-            "selected_style_ids": ["risograph_botanical_catalog"],
             "mode": "product",
             "images_per_style": 1,
             "provider_preference": "mock_image",
@@ -322,14 +512,28 @@ def test_alchemy_lab_uses_existing_generation_without_v2_bridge_history():
 
     history = client.get(f"/v1/image/history?session_id={job.session_id}")
     assert history.status_code == 200
-    assert any(item["id"] == output_id for item in history.json()["items"])
+    assert all(item["id"] != output_id for item in history.json()["items"])
+
+    lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10")
+    assert lab_history.status_code == 200
+    lab_items = lab_history.json()["items"]
+    assert any(item["id"] == output_id for item in lab_items)
+    item = next(item for item in lab_items if item["id"] == output_id)
+    assert item["module"] == "rare-style-explorer"
+    assert item["module_label"] == "Rare Style Explorer"
+    assert item["title"].startswith("Rare Style Explorer")
+    assert item["style_name"]
+    assert item["mode"] == "poster"
+    assert item["mode_label"] == "海报封面"
+    assert item["keywords"]
+    assert item["idea"] == "AI 知识库应用图标"
 
 
 def test_alchemy_lab_preserves_partial_failures(monkeypatch):
     class PartiallyFailingProvider(MockImageProvider):
         async def generate(self, request):
             prompt_text = request.prompt_plan.variables.get("generation_prompt", "")
-            if "CRT 像素界面静物" in prompt_text:
+            if "CRT荧光屏拍摄" in prompt_text:
                 raise ProviderRuntimeError("Injected Lab style failure", provider=self.name)
             return await super().generate(request)
 
@@ -355,6 +559,44 @@ def test_alchemy_lab_preserves_partial_failures(monkeypatch):
     failed_cards = [card for group in board["groups"] for card in group["cards"] if card["status"] == "failed"]
     assert failed_cards[0]["error"]["code"] == "provider_error"
     assert "Injected Lab style failure" in failed_cards[0]["error"]["message"]
+
+
+def test_alchemy_lab_reports_invalid_provider_key_without_leaking_secret(monkeypatch):
+    secret = "sk-liveSECRET1234567890abcdef"
+    masked_secret = "sk-liveS******************cdef"
+
+    class InvalidKeyProvider(MockImageProvider):
+        async def generate(self, request):
+            raise ProviderRuntimeError(
+                f"Error code: 401 - Incorrect API key provided: {secret}. invalid_api_key",
+                provider="openai_gpt_image",
+                detail={
+                    "error_type": "AuthenticationError",
+                    "message": f"AuthenticationError: Incorrect API key provided: {masked_secret}; invalid_api_key",
+                },
+            )
+
+    monkeypatch.setitem(image_service_module.registry.image_providers, "mock_image", InvalidKeyProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "本地 key 诊断",
+            "target_count": 1,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    board = response.json()["board"]
+    failed_card = board["groups"][0]["cards"][0]
+    serialized = json.dumps(board, ensure_ascii=False)
+    assert board["status"] == "failed"
+    assert failed_card["error"]["message"] == "OpenAI 生图通道 API Key 无效，请到“模型与 API”更新后再试。"
+    assert secret not in serialized
+    assert masked_secret not in serialized
+    assert "sk-***" in serialized
 
 
 def test_asset_upload_rejects_non_image_materials():
@@ -827,6 +1069,18 @@ def test_frontend_static_app_is_served():
     assert "Rare Style Explorer" in index.text
     assert "labStyleGrid" in index.text
     assert "labComparisonGrid" in index.text
+    lab_section = index.text[index.text.find('id="labTab"') : index.text.find('id="videoTab"')]
+    assert "批次" not in lab_section
+    assert "Provider" not in lab_section
+    assert "data-lab-module-open=\"rare-style-explorer\"" in index.text
+    assert "labHomePanel" in index.text
+    assert "rareStyleExplorerPanel" in index.text
+    assert "labTargetCountInput" in index.text
+    assert "labIntervalInput" in index.text
+    assert "labModeInput" in index.text
+    assert "labFamilyInput" in index.text
+    assert "labStyleSearchInput" in index.text
+    assert "搜索 620 个风格名" in index.text
     assert "生视频（DEMO）" in index.text
     assert "<p class=\"video-state\">coming soon</p>" in index.text
     assert "手机 H5" in index.text
@@ -861,6 +1115,9 @@ def test_frontend_static_app_is_served():
     assert "lightboxPromptPanel" in index.text
     assert "lightboxPromptText" in index.text
     assert "aspect-segmented" in index.text
+    assert 'data-v2-ratio="" type="button" title="自动画幅' in index.text
+    assert "自动画幅不锁尺寸" in index.text
+    assert "探索模式也会保持该画幅" in index.text
     assert "v2-result-prompt" in index.text
     assert "v2-result-block" in index.text
     assert "Your Work" not in index.text
@@ -876,7 +1133,10 @@ def test_frontend_static_app_is_served():
     assert "确认拥有人物肖像授权" not in index.text
     assert "模型与 API" in index.text
     assert "高级调度" in index.text
-    assert "外接 Provider" in index.text
+    assert "外接 Provider" not in index.text
+    assert "05 / Model Status" in index.text
+    assert "模型状态" in index.text
+    assert "生图通道" in index.text
     assert "v2ImageActiveLabel" in index.text
     assert "v2OpenaiImageState" in index.text
     assert "v2BrainModelState" in index.text
@@ -886,7 +1146,6 @@ def test_frontend_static_app_is_served():
     assert "v2ModelApplyBtn" in index.text
     assert "v2SearchThinking" in index.text
     assert "大模型思考中" in index.text
-    assert index.text.find("生图 V2.0 AGENT", index.text.find('id="v2Tab"')) > index.text.find("外接 Provider")
     assert "保存配置" not in index.text
     assert "saveProviderBtn" not in index.text
     flow_labels = ["工作台", "调参、素材", "生成的结果板块", "继续修改", "历史图片", "模型与 API", "事件"]
@@ -917,6 +1176,10 @@ def test_frontend_static_app_is_served():
     assert "max-height: 560px" in styles.text
     assert "v2-model-control-grid" in styles.text
     assert "lab-style-grid" in styles.text
+    assert "lab-nav-dropdown" in styles.text
+    assert "lab-module-card" in styles.text
+    assert "lab-library-details" in styles.text
+    assert "lab-style-more-note" in styles.text
     assert "lab-comparison-grid" in styles.text
     assert ".lab-card-grid" in styles.text
     assert ".lab-favorite-btn.active" in styles.text
@@ -924,6 +1187,7 @@ def test_frontend_static_app_is_served():
     assert "spinThinking" in styles.text
     assert "segmented.quality" in styles.text
     assert "segmented.aspect-segmented" in styles.text
+    assert "v2-aspect-hint" in styles.text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles.text
     assert "grid-template-areas:" in styles.text
     assert "height: clamp(260px, 34vh, 430px)" in styles.text
@@ -938,8 +1202,20 @@ def test_frontend_static_app_is_served():
     script = client.get("/static/app.js")
     assert script.status_code == 200
     assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in script.text
-    assert 'lab: "用稀有视觉亚风格快速对比同一个创意方向。"' in script.text
+    assert "hydrateV2AspectButtons" in script.text
+    assert "v2AspectDisplay" in script.text
+    assert "自动画幅" in script.text
+    assert 'lab: "探索各种创意玩法"' in script.text
+    assert "labHistoryGrid" in index.text
+    assert "Alchemy Lab History" in index.text
+    assert "function loadLabHistory" in script.text
+    assert "function renderLabHistory" in script.text
+    assert "/api/lab/rare-style-explorer/history" in script.text
     assert "function loadLabStyles" in script.text
+    assert "function openLabModule" in script.text
+    assert "function filteredLabStyles" in script.text
+    assert "target_count" in script.text
+    assert "generation_interval_seconds" in script.text
     assert "/api/lab/rare-style-explorer/styles" in script.text
     assert "/api/lab/rare-style-explorer/sessions" in script.text
     assert "function runLabExploration" in script.text
@@ -984,8 +1260,8 @@ def test_frontend_static_app_is_served():
     assert "/v1/image/history/" in script.text
     assert 'method: "DELETE"' in script.text
     assert "v2PromptTextFromHistory" in script.text
-    assert "function isLocalAlchemyHost()" in script.text
-    assert "(isLocalAlchemyHost() ? v2LocalApiBase" in script.text
+    assert 'const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;' in script.text
+    assert "v2LocalApiBase" not in script.text
     assert "Claude 思考后的最终提示词" in script.text
     assert "selectedQuality" in script.text
     assert "openaiLlmModelInput" in script.text
@@ -1075,6 +1351,18 @@ def test_mobile_h5_app_is_served_independently():
     assert "Rare Style Explorer" in h5.text
     assert "labStyleGrid" in h5.text
     assert "labComparisonGrid" in h5.text
+    assert "labHomePanel" in h5.text
+    assert "rareStyleExplorerPanel" in h5.text
+    assert "data-lab-module-open=\"rare-style-explorer\"" in h5.text
+    assert "labTargetCountInput" in h5.text
+    assert "labIntervalInput" in h5.text
+    assert "labModeInput" in h5.text
+    assert "labFamilyInput" in h5.text
+    assert "labStyleSearchInput" in h5.text
+    assert "搜索 620 个风格名" in h5.text
+    lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="videoTab"')]
+    assert "批次" not in lab_section
+    assert "Provider" not in lab_section
     assert "生视频（DEMO）" in h5.text
     assert "<p class=\"video-state\">coming soon</p>" in h5.text
     assert "coming soon" in h5.text
@@ -1089,7 +1377,10 @@ def test_mobile_h5_app_is_served_independently():
     assert "模型与 API" in h5.text
     assert "案例展示区" in h5.text
     assert "AI Agent 生图区" in h5.text
-    assert "外接 Provider" in h5.text
+    assert "外接 Provider" not in h5.text
+    assert "06 / Model Status" in h5.text
+    assert "模型状态" in h5.text
+    assert "生图通道" in h5.text
     assert "/static/app.js" not in h5.text
     assert "/static/showcase" not in h5.text
     assert "/mobile-static/showcase" in h5.text
@@ -1104,15 +1395,30 @@ def test_mobile_h5_app_is_served_independently():
     assert ".h5-advanced-panel" in mobile_styles.text
     assert ".h5-quick-guide" in mobile_styles.text
     assert "lab-style-grid" in mobile_styles.text
+    assert "lab-module-card" in mobile_styles.text
+    assert "lab-library-details" in mobile_styles.text
+    assert "lab-style-more-note" in mobile_styles.text
     assert "lab-comparison-grid" in mobile_styles.text
+    assert "lab-history-grid" in mobile_styles.text
     assert ".lab-card-grid" in mobile_styles.text
     assert ".lab-favorite-btn.active" in mobile_styles.text
+    assert "v2-template-actions" in mobile_styles.text
+    assert ".v2-template-card:focus-visible" in mobile_styles.text
 
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in mobile_script.text
-    assert 'lab: "用稀有视觉亚风格快速对比同一个创意方向。"' in mobile_script.text
+    assert 'lab: "探索各种创意玩法"' in mobile_script.text
+    assert "labHistoryGrid" in h5.text
+    assert "Alchemy Lab History" in h5.text
+    assert "function loadLabHistory" in mobile_script.text
+    assert "function renderLabHistory" in mobile_script.text
+    assert "/api/lab/rare-style-explorer/history" in mobile_script.text
     assert "function loadLabStyles" in mobile_script.text
+    assert "function openLabModule" in mobile_script.text
+    assert "function filteredLabStyles" in mobile_script.text
+    assert "target_count" in mobile_script.text
+    assert "generation_interval_seconds" in mobile_script.text
     assert "/api/lab/rare-style-explorer/styles" in mobile_script.text
     assert "/api/lab/rare-style-explorer/sessions" in mobile_script.text
     assert "function runLabExploration" in mobile_script.text
@@ -1126,7 +1432,19 @@ def test_mobile_h5_app_is_served_independently():
     assert "createH5AdvancedPanel" in mobile_script.text
     assert "参数、素材、修图、历史、模型/API 和事件" not in mobile_script.text
     assert "中枢输出、历史、Provider 和调度" not in mobile_script.text
+    assert "Provider & Kernel" not in mobile_script.text
+    assert "Provider Prompt Preview" not in mobile_script.text
+    assert "Provider Input" not in mobile_script.text
+    assert "最终提示词预览" in mobile_script.text
+    assert "生成输入" in mobile_script.text
     assert "runV2Creative" in mobile_script.text
+    assert "hydrateV2AspectButtons" in mobile_script.text
+    assert "v2AspectDisplay" in mobile_script.text
+    assert "自动画幅" in mobile_script.text
+    assert "card.dataset.v2TemplateId" in mobile_script.text
+    assert "selectTemplate();" in mobile_script.text
+    assert "data-v2-preview-action" in mobile_script.text
+    assert "选择模板" in mobile_script.text
     assert "function v2RequestedImageProvider" in mobile_script.text
     assert "const imageProvider = v2RequestedImageProvider(v2State.modelSettings || {})" in mobile_script.text
     assert "imageAssetPayload" in mobile_script.text
@@ -1138,8 +1456,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "mobileAccountSummary" in mobile_script.text
     assert "buildVeyraTemplateHistory" in mobile_script.text
     assert "v2HistoryTemplateCaseId" in mobile_script.text
-    assert "function isLocalAlchemyHost()" in mobile_script.text
-    assert "(isLocalAlchemyHost() ? v2LocalApiBase" in mobile_script.text
+    assert 'const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;' in mobile_script.text
+    assert "v2LocalApiBase" not in mobile_script.text
     assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in mobile_script.text
     assert 'video: "coming soon"' in mobile_script.text
     assert "document.body.dataset.activeModule" in mobile_script.text
@@ -1399,6 +1717,76 @@ def test_image_history_excludes_v2_bridge_outputs(tmp_path, monkeypatch):
     manifest_history = client.get("/v1/image/history")
     assert manifest_history.status_code == 200
     assert manifest_history.json()["total"] == 0
+
+
+def test_image_history_excludes_alchemy_lab_outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "alchemy_lab_rare_style_explorer"}).json()["id"]
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "Alchemy Lab image should stay out of V1 history.",
+            "count": 1,
+            "provider_preference": "mock_image",
+            "idempotency_key": "lab:session:variant:attempt:0",
+        },
+    )
+    assert image_job.status_code == 200
+
+    history = client.get("/v1/image/history")
+    assert history.status_code == 200
+    assert history.json()["total"] == 0
+
+    repository.reset()
+    output_path = media_store.output_path(job_id="job_lab_manifest", output_id="out_lab_manifest", output_format="png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": "out_lab_manifest",
+            "job_id": "job_lab_manifest",
+            "session_id": session_id,
+            "url": "/v1/outputs/out_lab_manifest/download",
+            "thumbnail_url": "/v1/outputs/out_lab_manifest/thumbnail",
+            "format": "png",
+            "provider": "mock_image",
+            "model": "mock-image-v1",
+            "source_app": "alchemy_lab_rare_style_explorer",
+            "idempotency_key": "lab:manifest:variant:attempt:0",
+            "prompt": "lab manifest",
+            "created_at": "2026-04-01T09:00:00+00:00",
+            "updated_at": "2026-04-01T09:00:00+00:00",
+            "alchemy_lab": {
+                "idea": "测试 Lab 历史",
+                "style_name": "CRT 像素界面静物",
+                "style_family": "digital",
+                "mode": "poster",
+                "mode_label": "海报封面",
+                "keywords": ["crt", "pixel"],
+            },
+        }
+    )
+
+    manifest_history = client.get("/v1/image/history")
+    assert manifest_history.status_code == 200
+    assert manifest_history.json()["total"] == 0
+
+    lab_history = client.get("/api/lab/rare-style-explorer/history")
+    assert lab_history.status_code == 200
+    body = lab_history.json()
+    assert body["total"] >= 1
+    item = next(item for item in body["items"] if item["id"] == "out_lab_manifest")
+    assert item["module_label"] == "Rare Style Explorer"
+    assert item["style_name"] == "CRT 像素界面静物"
+
+
+def test_v2_local_proxy_target_uses_same_origin_shell():
+    assert main_module._v2_proxy_target_url("health", "x=1").endswith("/api/v2/health?x=1")
+    assert main_module._v2_proxy_target_url("/templates/page").endswith("/api/v2/templates/page")
 
 
 def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatch):

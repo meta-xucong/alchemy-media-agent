@@ -80,7 +80,7 @@ Responsibilities:
 
 A style preset is not just a text suffix. It should be a structured object with fields such as style family, lighting, camera, mood, texture, and negative constraints.
 
-The upstream `rare-style-explorer` has a 620-entry library, `mode`, `style-family`, `freshness`, and anti-generic selection logic. Unless full copying is licensed or explicitly approved, Alchemy should implement a curated rewritten subset first and keep the schema ready for later authorized import.
+The upstream `rare-style-explorer` has a 620-entry library, `mode`, `style-family`, `freshness`, and anti-generic selection logic. Alchemy stores the current 620-entry library as `src_skeleton/app/data/rare_style_library.json` and converts each entry into the local `StylePreset` contract at runtime. A curated fallback subset remains available only if the data asset cannot be loaded.
 
 ### 4. Prompt Composer
 

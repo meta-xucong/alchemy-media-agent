@@ -4109,6 +4109,90 @@ def test_creative_run_preserves_manual_aspect_ratio_only() -> None:
     assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "1536x1024"
 
 
+def test_exploration_mode_preserves_manual_aspect_ratio_and_adds_prompt_fallback(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+
+    def claude_changes_aspect(*, request, fallback, candidate_cases, candidate_case_details):
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate_cases[0].case_id],
+            "final_prompt": "Claude final prompt: exploratory portrait direction with dramatic side light.",
+            "negative_prompt": "watermark",
+            "provider_parameters": {
+                "aspect_ratio": "1024x1536",
+                "count": 1,
+                "provider_hint": "mock_image",
+                "quality": "high",
+            },
+            "generation_directives": {"aspect_ratio": "1024x1536", "count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Claude explored a portrait crop, but user-selected output aspect is authoritative.",
+            "confidence": 0.9,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", claude_changes_aspect)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Create an exploratory cinematic food poster.",
+            "output": {
+                "count": 1,
+                "provider_hint": "mock_image",
+                "prompt_transform_mode": "exploration",
+                "aspect_ratio": "1536x1024",
+            },
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    plan = run["prompt_plan"]
+    assert run["orchestrator_decision"]["provider_parameters"]["aspect_ratio"] == "1536x1024"
+    assert run["orchestrator_decision"]["generation_directives"]["aspect_ratio"] == "1536x1024"
+    assert plan["provider_parameters"]["aspect_ratio"] == "1536x1024"
+    assert plan["user_variables"]["aspect_lock"]["locked"] is True
+    assert plan["user_variables"]["aspect_lock"]["aspect_ratio"] == "3:2"
+    assert "Required output aspect ratio: 3:2." in plan["prompt"]
+    job_plan = run["generation_jobs"][0]["prompt_plan"]
+    assert job_plan["provider_parameters"]["aspect_ratio"] == "1536x1024"
+    assert job_plan["user_variables"]["prompt_transform"]["transform_mode"] == "exploration"
+
+
+def test_exploration_auto_aspect_does_not_add_manual_aspect_lock(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+
+    def claude_auto_aspect(*, request, fallback, candidate_cases, candidate_case_details):
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate_cases[0].case_id],
+            "final_prompt": "Claude final prompt: exploratory square composition with layered props.",
+            "negative_prompt": "watermark",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image", "quality": "high"},
+            "generation_directives": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "No user aspect was selected; provider can use automatic output shape.",
+            "confidence": 0.88,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", claude_auto_aspect)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Create an exploratory cinematic food poster.",
+            "output": {"count": 1, "provider_hint": "mock_image", "prompt_transform_mode": "exploration"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    plan = run["prompt_plan"]
+    assert "aspect_ratio" not in plan["provider_parameters"]
+    assert "size" not in plan["provider_parameters"]
+    assert plan["user_variables"]["aspect_lock"]["locked"] is False
+    assert plan["user_variables"]["aspect_lock"]["mode"] == "auto"
+    assert "Required output aspect ratio:" not in plan["prompt"]
+
+
 def test_user_count_overrides_claude_provider_parameters(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)

@@ -15,8 +15,8 @@ Read the Alchemy Lab documents in `docs/alchemy_lab/` before writing product cod
 ## Work Items
 
 1. Add an Alchemy Lab entry point.
-2. Add a rare-style-explorer feature page.
-3. Add a curated rare style preset library.
+2. Add a Lab home and make rare-style-explorer the first submodule.
+3. Add the 620-entry rare style preset library with a small fallback subset.
 4. Add a Lab-owned rare-style prompt composer.
 5. Add a capped batch runner.
 6. Reuse the existing image generation path.
@@ -25,27 +25,23 @@ Read the Alchemy Lab documents in `docs/alchemy_lab/` before writing product cod
 9. Store final prompts.
 10. Store favorites.
 11. Render a comparison grid.
-12. Add validation and tests.
+12. Add desktop dropdown and mobile module-card navigation.
+13. Add validation and tests.
+14. Add Lab-owned quality enhancement for rare-style prompts.
+15. Add LLM-based Smart Text Hierarchy Planner for text-heavy image ideas.
+16. Store quality-enhancement metadata in sessions, variants, and history.
 
-## MVP Rare Style Presets
+## Rare Style Library
 
-- Sun-faded folk horror poster photography
-- Chrome Y2K fashion editorial
-- Pastel ceramic toy photography
-- Overexposed tropical VHS travelogue
-- Risograph botanical catalog
-- Brutalist museum product plinth
-- CRT pixel interface still life
-- Hand-tinted archival portrait
-
-These are rewritten MVP presets. Do not copy the upstream 620-entry library verbatim unless licensing or explicit permission is confirmed.
+Use the 620-entry rare-style library as the primary product library. Expose the library with search, family filters, and collapsible lists so the interface stays simple. Keep the rewritten 8-style subset only as a fallback if the data asset cannot be loaded.
 
 ## Recommended Limits
 
 - Maximum selected styles: 8
-- Maximum images per style: 2
+- Maximum images per style: 4
 - Maximum total images: 12
 - Maximum concurrent generations: 3
+- Maximum generation interval: 60 seconds
 
 ## Acceptance Checklist
 
@@ -59,4 +55,6 @@ These are rewritten MVP presets. Do not copy the upstream 620-entry library verb
 - Favorites can be saved.
 - Partial failures remain visible.
 - Lab prompt composition does not default to V2 prompt transform or V2 template lock.
+- Quality enhancement is optional and Lab-owned, not a hidden V2 template-lock dependency.
+- Text hierarchy for posters, packaging, menus, covers, invitations, signs, and similar text-heavy ideas is decided by LLM judgment, not fixed title/time/location formulas.
 - Tests cover main behavior.
