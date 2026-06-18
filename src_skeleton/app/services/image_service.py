@@ -100,6 +100,7 @@ async def submit_image_job(
         asset_error = AssetPlanError("asset_mode_conflict", "基础版请求不能携带高级版素材用途。")
 
     work_intensity = work_intensity or settings.image_work_intensity
+    prompt_planning_passthrough = work_intensity in {"passthrough", "lab_quality"}
     prompt_plan = build_prompt_plan(
         prompt=prompt,
         count=count,
@@ -108,14 +109,30 @@ async def submit_image_job(
         output_format=output_format,
         asset_ids=asset_ids,
     )
-    prompt_plan = prompt_plan.model_copy(
-        update={
-            "variables": {
-                **prompt_plan.variables,
-                "original_prompt": prompt,
+    variables = {
+        **prompt_plan.variables,
+        "original_prompt": prompt,
+        "generation_prompt": prompt,
+    }
+    if prompt_planning_passthrough:
+        variables.update(
+            {
+                "work_intensity": "lab_quality",
+                "work_intensity_label": "Lab增强",
+                "planner": "alchemy_lab_quality",
+                "prompt_planning_pending": False,
+            }
+        )
+    else:
+        variables.update(
+            {
                 "pending_work_intensity": work_intensity,
                 "prompt_planning_pending": True,
             }
+        )
+    prompt_plan = prompt_plan.model_copy(
+        update={
+            "variables": variables,
         }
     )
     trace_id = make_id("trace")
@@ -168,7 +185,11 @@ async def submit_image_job(
         "original_prompt": prompt,
     }
     job.raw_response_summary = {
-        "prompt_planning": {"status": "pending", "work_intensity": work_intensity},
+        "prompt_planning": (
+            {"status": "skipped", "work_intensity": "lab_quality", "planner": "alchemy_lab_quality"}
+            if prompt_planning_passthrough
+            else {"status": "pending", "work_intensity": work_intensity}
+        ),
         "asset_mode": asset_mode,
         "asset_plan": advanced_asset_plan,
         "provider_input_plan": advanced_asset_plan.get("provider_input_plan") if advanced_asset_plan else None,
@@ -489,9 +510,11 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
     billing_rule = None
     billing_required = False
     try:
-        billing_rule = await load_billing_rule(settings.veyra_billing_rule_key_v1)
-        billing_required = _should_bill_veyra(request, billing_rule)
+        billing_required = _should_check_veyra_billing(request)
         if billing_required:
+            billing_rule = await load_billing_rule(settings.veyra_billing_rule_key_v1)
+            billing_required = _should_bill_veyra(request, billing_rule)
+        if billing_required and billing_rule:
             await ensure_sufficient_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
     except (VeyraInsufficientBalance, VeyraAuthError) as exc:
         job.status = JobStatus.failed
@@ -818,6 +841,10 @@ def _requested_image_model(provider: str | None) -> str | None:
 
 def _should_bill_veyra(request: ImageGenerationRequest, billing_rule) -> bool:
     return bool(settings.veyra_auth_enabled and billing_rule.enabled and request.veyra_user_id and billing_rule.charge_amount > 0)
+
+
+def _should_check_veyra_billing(request: ImageGenerationRequest) -> bool:
+    return bool(settings.veyra_auth_enabled and request.veyra_user_id)
 
 
 def _billing_metadata(result) -> dict | None:

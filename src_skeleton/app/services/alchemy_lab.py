@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.repositories import repository
 from app.schemas import GenerationJob, JobStatus
+from app.services.alchemy_lab_quality import (
+    QUALITY_ENHANCEMENT_OPTIONS,
+    enhance_lab_prompt,
+    local_quality_prompt,
+    quality_summary,
+)
 from app.services.image_service import run_submitted_image_job, submit_image_job
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
@@ -115,6 +121,7 @@ class ExplorationRequest(BaseModel):
     avoid_generic: bool = True
     aspect_ratio: str | None = None
     provider_preference: str | None = None
+    quality_enhancement: str = "auto"
 
     @field_validator("idea")
     @classmethod
@@ -178,6 +185,7 @@ class ComparisonCard(BaseModel):
     image_url: str | None = None
     thumbnail_url: str | None = None
     prompt: str
+    quality: dict[str, Any] = Field(default_factory=dict)
     error: ExplorationError | None = None
     is_favorite: bool = False
 
@@ -222,6 +230,12 @@ class LabHistoryItem(BaseModel):
     generation_interval_seconds: float | None = None
     target_count: int | None = None
     images_per_style: int | None = None
+    quality_enhancement_mode: str | None = None
+    quality_enhancement_strategy: str | None = None
+    quality_enhancement_applied: bool = False
+    text_hierarchy_applied: bool = False
+    text_hierarchy_summary: str | None = None
+    art_direction_summary: str | None = None
     url: str
     thumbnail_url: str | None = None
     format: str = "png"
@@ -399,7 +413,16 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
     media_session = repository.save_session(
         _lab_media_session(session.id, title=f"Alchemy Lab: {request.idea[:48]}")
     )
-    prompts = [_compose_prompt(session.id, request, style) for style in selected]
+    prompts = [
+        await enhance_lab_prompt(
+            request=request,
+            style=style,
+            prompt=_compose_prompt(session.id, request, style),
+            selected_styles=selected,
+            composer_factory=local_quality_prompt,
+        )
+        for style in selected
+    ]
     session.prompts = prompts
     session.variants = [
         GenerationVariant(
@@ -446,6 +469,7 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
                         size=_size_from_aspect_ratio(request.aspect_ratio),
                         quality="high",
                         output_format="png",
+                        work_intensity="lab_quality",
                         provider_preference=request.provider_preference,
                         idempotency_key=f"lab:{session.id}:{variant.id}:attempt:{attempt}",
                         veyra_user_id=veyra_user_id,
@@ -523,6 +547,7 @@ def comparison_board(session: ExplorationSession) -> ComparisonBoard:
                     image_url=variant.asset.get("url") if variant.asset else None,
                     thumbnail_url=variant.asset.get("thumbnail_url") if variant.asset else None,
                     prompt=prompt.final_prompt if prompt else "",
+                    quality=quality_summary(prompt.prompt_metadata) if prompt else {},
                     error=variant.error,
                     is_favorite=variant.id in session.favorites,
                 )
@@ -612,6 +637,7 @@ def _compose_prompt(session_id: str, request: ExplorationRequest, style: StylePr
             "target_count": request.target_count,
             "generation_interval_seconds": request.generation_interval_seconds,
             "avoid_generic": request.avoid_generic,
+            "quality_enhancement_mode": request.quality_enhancement,
             "source": "alchemy_lab_behavior_compatible_rare_style_explorer",
         },
     )
@@ -621,13 +647,21 @@ def _normalize_request(request: ExplorationRequest) -> ExplorationRequest:
     mode = str(request.mode or "minimal").strip()
     freshness = str(request.freshness or "high").strip()
     family = str(request.style_family or "").strip() or None
+    quality_enhancement = str(request.quality_enhancement or "auto").strip().lower()
     if mode not in MODE_OPTIONS:
         mode = "minimal"
     if freshness not in FRESHNESS_OPTIONS:
         freshness = "high"
     if family not in STYLE_FAMILIES:
         family = None
-    update: dict[str, Any] = {"mode": mode, "freshness": freshness, "style_family": family}
+    if quality_enhancement not in QUALITY_ENHANCEMENT_OPTIONS:
+        quality_enhancement = "auto"
+    update: dict[str, Any] = {
+        "mode": mode,
+        "freshness": freshness,
+        "style_family": family,
+        "quality_enhancement": quality_enhancement,
+    }
     if not _has_manual_style_selection(request):
         update["images_per_style"] = 1
     return request.model_copy(update=update)
@@ -899,6 +933,7 @@ def _attach_lab_history_metadata(
     style = next((item for item in session.style_presets if item.id == variant.style_preset_id), None)
     if not style:
         return
+    quality = quality_summary(prompt.prompt_metadata)
     metadata = {
         "source_app": LAB_PROJECT_ID,
         "module": RARE_STYLE_FEATURE_ID,
@@ -918,6 +953,7 @@ def _attach_lab_history_metadata(
         "generation_interval_seconds": session.request.generation_interval_seconds,
         "variant_id": variant.id,
         "prompt_id": prompt.id,
+        **quality,
     }
     for output in job.outputs:
         output.metadata = {**output.metadata, "alchemy_lab": metadata}
@@ -1014,6 +1050,12 @@ def _lab_history_item_from_record(record: dict[str, Any]) -> LabHistoryItem | No
         generation_interval_seconds=_float_or_none(data.get("generation_interval_seconds")),
         target_count=_int_or_none(data.get("target_count")),
         images_per_style=_int_or_none(data.get("images_per_style")),
+        quality_enhancement_mode=_clean_lab_text(data.get("quality_enhancement_mode")),
+        quality_enhancement_strategy=_clean_lab_text(data.get("quality_enhancement_strategy")),
+        quality_enhancement_applied=bool(data.get("quality_enhancement_applied")),
+        text_hierarchy_applied=bool(data.get("text_hierarchy_applied")),
+        text_hierarchy_summary=_clean_lab_text(data.get("text_hierarchy_summary")),
+        art_direction_summary=_clean_lab_text(data.get("art_direction_summary")),
         url=str(record.get("url") or ""),
         thumbnail_url=record.get("thumbnail_url") or record.get("url"),
         format=str(record.get("format") or "png"),

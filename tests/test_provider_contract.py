@@ -357,6 +357,7 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
     original_key = settings.openai_api_key
     original_base_url = settings.openai_base_url
     original_model = settings.default_llm_model
+    original_provider = settings.default_llm_provider
     original_openai_llm_model = settings.openai_llm_model
     original_enabled = settings.llm_prompt_planning_enabled
 
@@ -386,6 +387,7 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
     try:
         settings.openai_api_key = "sk-test-planner"
         settings.openai_base_url = "https://example.test/v1"
+        settings.default_llm_provider = "openai"
         settings.default_llm_model = "gpt-5.5-test"
         settings.openai_llm_model = "gpt-5.5-test"
         settings.llm_prompt_planning_enabled = True
@@ -407,6 +409,7 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
         settings.openai_api_key = original_key
         settings.openai_base_url = original_base_url
         settings.default_llm_model = original_model
+        settings.default_llm_provider = original_provider
         settings.openai_llm_model = original_openai_llm_model
         settings.llm_prompt_planning_enabled = original_enabled
 

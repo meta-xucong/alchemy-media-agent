@@ -236,6 +236,119 @@ async def _ask_provider_for_prompt_plan(
     )
 
 
+async def ask_llm_json_plan(
+    *,
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    reasoning_effort: str = "low",
+    max_tokens: int = 1200,
+    temperature: float = 0.2,
+    timeout_seconds: float = 30.0,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not settings.llm_prompt_planning_enabled:
+        raise RuntimeError("LLM prompt planning is disabled")
+    errors: dict[str, str] = {}
+    for index, candidate in enumerate(_planner_candidates()):
+        provider = candidate["provider"]
+        model = candidate["model"]
+        if not _planner_configured(provider):
+            continue
+        try:
+            if provider == "anthropic":
+                result = await _ask_anthropic_for_json_plan(
+                    system_prompt=system_prompt,
+                    user_payload=user_payload,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                result = await _ask_openai_for_json_plan(
+                    system_prompt=system_prompt,
+                    user_payload=user_payload,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    temperature=temperature,
+                    timeout_seconds=timeout_seconds,
+                )
+            return result, {
+                "llm_provider": provider,
+                "llm_model": model,
+                "fallback_used": index > 0 and bool(errors),
+                **errors,
+            }
+        except Exception as exc:
+            errors["selected_llm_error" if index == 0 else "fallback_llm_error"] = type(exc).__name__
+    detail = "; ".join(f"{key}={value}" for key, value in errors.items())
+    raise RuntimeError(f"No configured LLM planner could return JSON{': ' + detail if detail else ''}")
+
+
+async def _ask_openai_for_json_plan(
+    *,
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    model: str,
+    reasoning_effort: str,
+    temperature: float,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    try:
+        from openai import AsyncOpenAI
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("openai package is not installed") from exc
+
+    client_kwargs = {"api_key": settings.openai_api_key, "timeout": timeout_seconds, "max_retries": 0}
+    if settings.openai_base_url:
+        client_kwargs["base_url"] = settings.openai_base_url
+    client = AsyncOpenAI(**client_kwargs)
+
+    response = await client.responses.create(
+        model=model,
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        reasoning={"effort": reasoning_effort},
+        text={"format": {"type": "json_object"}},
+        temperature=temperature,
+        store=False,
+    )
+    return _loads_json_object(_response_text(response))
+
+
+async def _ask_anthropic_for_json_plan(
+    *,
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    token = _anthropic_token()
+    if not token:
+        raise RuntimeError("Kimi LLM token is not configured")
+
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
+    }
+    headers = {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "authorization": f"Bearer {token}",
+        "x-api-key": token,
+    }
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(_anthropic_messages_url(settings.anthropic_base_url), headers=headers, json=payload)
+        response.raise_for_status()
+    return _loads_json_object(_anthropic_response_text(response.json()))
+
+
 async def _ask_openai_for_prompt_plan(
     plan: ImagePromptPlan,
     *,

@@ -11,6 +11,7 @@ from app.config import settings
 import app.main as main_module
 import app.services.image_service as image_service_module
 import app.services.alchemy_lab as alchemy_lab_module
+import app.services.alchemy_lab_quality as alchemy_lab_quality_module
 from app.main import app
 from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
@@ -316,6 +317,8 @@ def test_alchemy_lab_creates_comparison_board_and_persists_favorites():
     assert first_card["thumbnail_url"]
     assert "稀有风格方向" in first_card["prompt"]
     assert "避免泛化的现代极简风" in first_card["prompt"]
+    assert first_card["quality"]["quality_enhancement_mode"] == "auto"
+    assert first_card["quality"]["quality_enhancement_applied"] is True
 
     favorite = client.post(
         f"/api/lab/rare-style-explorer/sessions/{session['id']}/favorites",
@@ -329,6 +332,167 @@ def test_alchemy_lab_creates_comparison_board_and_persists_favorites():
     reload_response = client.get(f"/api/lab/rare-style-explorer/sessions/{session['id']}")
     assert reload_response.status_code == 200
     assert reload_response.json()["board"]["favorites"] == [first_card["variant_id"]]
+
+
+def test_alchemy_lab_quality_off_preserves_base_prompt():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "万圣节南瓜海报，本周五18:30大学生活动中心",
+            "selected_style_ids": ["C002"],
+            "mode": "poster",
+            "quality_enhancement": "off",
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    prompt = session["prompts"][0]
+    quality = prompt["prompt_metadata"]["quality_enhancement"]
+    assert quality["mode"] == "off"
+    assert quality["applied"] is False
+    assert prompt["final_prompt"].startswith("万圣节南瓜海报")
+    assert "用户创意与主体" not in prompt["final_prompt"]
+
+
+def test_alchemy_lab_quality_balanced_uses_llm_text_hierarchy(monkeypatch):
+    captured_kwargs = {}
+
+    async def fake_json_plan(**kwargs):
+        captured_kwargs.update(kwargs)
+        return (
+            {
+                "subject_and_intent": "万圣节南瓜派对视觉主海报，南瓜灯为主视觉",
+                "style_boundary": "民俗恐怖海报质感只作用于色彩、纸张和边框，不压住南瓜轮廓",
+                "art_direction_summary": "让南瓜灯成为唯一视觉中心，背景留出呼吸感，画面像完成度高的活动主视觉。",
+                "composition_guidance": "竖版居中构图，暖橙南瓜光和冷紫背景对比，底部保留干净信息区。",
+                "finish_quality": "高级印刷海报质感，高细节、低噪声、清楚边界。",
+                "text_hierarchy": {
+                    "has_text_intent": True,
+                    "text_strategy_summary": "活动信息只保留为短促邀请信息，避免长句占满画面。",
+                    "text_roles": [
+                        {
+                            "role_name": "活动核心信息",
+                            "content": "本周五18:30 大学生活动中心",
+                            "importance": "secondary",
+                            "rendering_policy": "exact",
+                            "placement_intent": "放在画面下方安全信息区，与南瓜主视觉保持距离",
+                            "reason": "用户需要观众知道时间和地点，但视觉中心仍应是南瓜",
+                        }
+                    ],
+                    "avoid_text": ["邀请来参加晚会这种长句不要直接画成完整段落"],
+                    "postprocess_recommendation": "如文字不够稳定，可保留信息区后期排版。",
+                },
+                "negative_guidance": ["避免随机文字", "避免固定信息槽模板感"],
+            },
+            {"llm_provider": "test_llm", "llm_model": "test-model", "fallback_used": False},
+        )
+
+    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fake_json_plan)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "帮我生成一个万圣节南瓜的海报，本周五18:30分，邀请来大学生活动中心参加晚会",
+            "selected_style_ids": ["C002"],
+            "mode": "poster",
+            "quality_enhancement": "balanced",
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    prompt = session["prompts"][0]
+    quality = prompt["prompt_metadata"]["quality_enhancement"]
+    assert quality["mode"] == "balanced"
+    assert quality["applied"] is True
+    assert quality["llm_provider"] == "test_llm"
+    assert quality["text_hierarchy"]["text_roles"][0]["role_name"] == "活动核心信息"
+    assert captured_kwargs["timeout_seconds"] == 90.0
+    assert "用户创意与主体" in prompt["final_prompt"]
+    assert "活动核心信息" in prompt["final_prompt"]
+    assert "Title:" not in prompt["final_prompt"]
+    assert "Time:" not in prompt["final_prompt"]
+    assert "Location:" not in prompt["final_prompt"]
+
+
+def test_alchemy_lab_quality_curated_allows_longer_llm_timeout(monkeypatch):
+    captured_kwargs = {}
+
+    async def fake_json_plan(**kwargs):
+        captured_kwargs.update(kwargs)
+        return (
+            {
+                "subject_and_intent": "高完成度南瓜派对海报",
+                "style_boundary": "复古恐怖质感只服务南瓜灯和校园活动氛围",
+                "art_direction_summary": "精致主视觉，明确前景南瓜灯，背景保留活动空间。",
+                "composition_guidance": "竖版海报层级，橙色主光和深紫阴影形成节日对比。",
+                "finish_quality": "商业级印刷质感，干净边缘和稳定图文区域。",
+                "text_hierarchy": {
+                    "has_text_intent": True,
+                    "text_strategy_summary": "只保留短信息，避免文字喧宾夺主。",
+                    "text_roles": [],
+                    "avoid_text": [],
+                    "postprocess_recommendation": "必要时后期排版精确活动信息。",
+                },
+                "negative_guidance": ["避免随机乱码"],
+            },
+            {"llm_provider": "test_llm", "llm_model": "test-model", "fallback_used": False},
+        )
+
+    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fake_json_plan)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "万圣节南瓜海报，本周五18:30大学生活动中心",
+            "selected_style_ids": ["C015"],
+            "mode": "poster",
+            "quality_enhancement": "curated",
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured_kwargs["reasoning_effort"] == "medium"
+    assert captured_kwargs["timeout_seconds"] == 150.0
+    quality = response.json()["session"]["prompts"][0]["prompt_metadata"]["quality_enhancement"]
+    assert quality["source"] == "llm_quality_enhancement"
+
+
+def test_alchemy_lab_quality_llm_failure_falls_back_without_formula(monkeypatch):
+    async def fail_json_plan(**kwargs):
+        raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fail_json_plan)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "青柠薄荷气泡水包装设计，适合夏季便利店货架",
+            "selected_style_ids": ["M001"],
+            "mode": "product",
+            "quality_enhancement": "balanced",
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    prompt = response.json()["session"]["prompts"][0]
+    quality = prompt["prompt_metadata"]["quality_enhancement"]
+    assert quality["applied"] is True
+    assert quality["source"] == "local_quality_enhancement"
+    assert quality["text_hierarchy"]["applied"] is False
+    assert "Title:" not in prompt["final_prompt"]
+    assert "Time:" not in prompt["final_prompt"]
+    assert "Location:" not in prompt["final_prompt"]
 
 
 def test_alchemy_lab_uses_beginner_default_styles_when_styles_omitted():
@@ -1181,6 +1345,7 @@ def test_frontend_static_app_is_served():
     assert "lab-library-details" in styles.text
     assert "lab-style-more-note" in styles.text
     assert "lab-comparison-grid" in styles.text
+    assert "lab-card-quality" in styles.text
     assert ".lab-card-grid" in styles.text
     assert ".lab-favorite-btn.active" in styles.text
     assert "thinking-spinner" in styles.text
@@ -1216,6 +1381,11 @@ def test_frontend_static_app_is_served():
     assert "function filteredLabStyles" in script.text
     assert "target_count" in script.text
     assert "generation_interval_seconds" in script.text
+    assert "quality_enhancement" in script.text
+    assert "labQualityEnhancementInput" in index.text
+    assert "labQualityEnhancementInput" in script.text
+    assert "function labQualityMetaText" in script.text
+    assert "智能文案层级已规划" in script.text
     assert "/api/lab/rare-style-explorer/styles" in script.text
     assert "/api/lab/rare-style-explorer/sessions" in script.text
     assert "function runLabExploration" in script.text
@@ -1358,6 +1528,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "labIntervalInput" in h5.text
     assert "labModeInput" in h5.text
     assert "labFamilyInput" in h5.text
+    assert "labQualityEnhancementInput" in h5.text
     assert "labStyleSearchInput" in h5.text
     assert "搜索 620 个风格名" in h5.text
     lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="videoTab"')]
@@ -1400,6 +1571,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "lab-style-more-note" in mobile_styles.text
     assert "lab-comparison-grid" in mobile_styles.text
     assert "lab-history-grid" in mobile_styles.text
+    assert "lab-card-quality" in mobile_styles.text
     assert ".lab-card-grid" in mobile_styles.text
     assert ".lab-favorite-btn.active" in mobile_styles.text
     assert "v2-template-actions" in mobile_styles.text
@@ -1419,6 +1591,10 @@ def test_mobile_h5_app_is_served_independently():
     assert "function filteredLabStyles" in mobile_script.text
     assert "target_count" in mobile_script.text
     assert "generation_interval_seconds" in mobile_script.text
+    assert "quality_enhancement" in mobile_script.text
+    assert "labQualityEnhancementInput" in mobile_script.text
+    assert "function labQualityMetaText" in mobile_script.text
+    assert "智能文案层级已规划" in mobile_script.text
     assert "/api/lab/rare-style-explorer/styles" in mobile_script.text
     assert "/api/lab/rare-style-explorer/sessions" in mobile_script.text
     assert "function runLabExploration" in mobile_script.text
@@ -2127,6 +2303,36 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_internal_token = original_internal_token
         settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_local_generation_skips_remote_billing_when_veyra_disabled(monkeypatch):
+    original_auth_enabled = settings.veyra_auth_enabled
+    settings.veyra_auth_enabled = False
+
+    async def fail_if_billing_rule_loaded(rule_key: str | None = None):
+        raise AssertionError("local generation must not call remote billing settings when Veyra auth is disabled")
+
+    monkeypatch.setattr(image_service_module, "load_billing_rule", fail_if_billing_rule_loaded)
+
+    try:
+        client = TestClient(app)
+        session = client.post("/v1/sessions", json={"project_id": "proj_local_no_billing"})
+        assert session.status_code == 200
+        response = client.post(
+            "/v1/image/jobs",
+            json={
+                "session_id": session.json()["id"],
+                "prompt": "生成一张本地免计费测试图。",
+                "count": 1,
+                "provider_preference": "mock_image",
+            },
+        )
+
+        job = _completed_image_job(client, response)
+        assert job["status"] == "ready"
+        assert job["outputs"]
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
 
 
 def _issue_test_veyra_session_token(user_id: int) -> str:

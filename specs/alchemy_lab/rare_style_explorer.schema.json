@@ -357,6 +357,15 @@
             "string",
             "null"
           ]
+        },
+        "quality_enhancement": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off",
+            "balanced",
+            "curated"
+          ]
         }
       }
     },
@@ -468,7 +477,208 @@
         },
         "prompt_metadata": {
           "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "quality_enhancement": {
+              "$ref": "#/$defs/qualityEnhancementMetadata"
+            }
+          }
+        }
+      }
+    },
+    "qualityEnhancementMetadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "mode",
+        "applied",
+        "strategy",
+        "text_hierarchy",
+        "prompt_hygiene",
+        "source"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off",
+            "balanced",
+            "curated"
+          ]
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "off",
+            "balanced",
+            "curated"
+          ]
+        },
+        "llm_provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "llm_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "llm_fallback_used": {
+          "type": "boolean"
+        },
+        "text_hierarchy": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "applied",
+            "has_text_intent",
+            "text_roles"
+          ],
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            },
+            "has_text_intent": {
+              "type": "boolean"
+            },
+            "text_strategy_summary": {
+              "type": "string"
+            },
+            "text_roles": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "role_name",
+                  "content",
+                  "importance",
+                  "rendering_policy",
+                  "placement_intent"
+                ],
+                "properties": {
+                  "role_name": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "importance": {
+                    "type": "string",
+                    "enum": [
+                      "primary",
+                      "secondary",
+                      "tertiary",
+                      "decorative"
+                    ]
+                  },
+                  "rendering_policy": {
+                    "type": "string",
+                    "enum": [
+                      "exact",
+                      "semantic",
+                      "decorative",
+                      "avoid_rendering"
+                    ]
+                  },
+                  "placement_intent": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "avoid_text": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "postprocess_recommendation": {
+              "type": "string"
+            }
+          }
+        },
+        "art_direction_summary": {
+          "type": "string"
+        },
+        "prompt_hygiene": {
+          "type": "object",
           "additionalProperties": true
+        },
+        "source": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "qualityEnhancementSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quality_enhancement_mode",
+        "quality_enhancement_strategy",
+        "quality_enhancement_applied",
+        "text_hierarchy_applied",
+        "text_hierarchy_summary",
+        "art_direction_summary"
+      ],
+      "properties": {
+        "quality_enhancement_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "auto",
+            "off",
+            "balanced",
+            "curated",
+            null
+          ]
+        },
+        "quality_enhancement_strategy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "off",
+            "balanced",
+            "curated",
+            null
+          ]
+        },
+        "quality_enhancement_applied": {
+          "type": "boolean"
+        },
+        "text_hierarchy_applied": {
+          "type": "boolean"
+        },
+        "text_hierarchy_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "art_direction_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -621,6 +831,7 @@
         "style_name",
         "status",
         "prompt",
+        "quality",
         "is_favorite"
       ],
       "properties": {
@@ -650,6 +861,9 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "quality": {
+          "$ref": "#/$defs/qualityEnhancementSummary"
         },
         "error": {
           "oneOf": [

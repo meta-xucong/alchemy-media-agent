@@ -186,6 +186,7 @@ const labState = {
   mode: "minimal",
   styleFamily: "",
   freshness: "high",
+  qualityEnhancement: "auto",
   seed: "",
   search: "",
   aspectRatio: "square",
@@ -314,6 +315,7 @@ const els = {
   labModeInput: document.querySelector("#labModeInput"),
   labFamilyInput: document.querySelector("#labFamilyInput"),
   labFreshnessInput: document.querySelector("#labFreshnessInput"),
+  labQualityEnhancementInput: document.querySelector("#labQualityEnhancementInput"),
   labSeedInput: document.querySelector("#labSeedInput"),
   labStyleSearchInput: document.querySelector("#labStyleSearchInput"),
   labClearStylesBtn: document.querySelector("#labClearStylesBtn"),
@@ -598,6 +600,11 @@ function bindControls() {
     });
   }
   if (els.labFreshnessInput) els.labFreshnessInput.addEventListener("change", () => { labState.freshness = els.labFreshnessInput.value || "high"; });
+  if (els.labQualityEnhancementInput) {
+    els.labQualityEnhancementInput.addEventListener("change", () => {
+      labState.qualityEnhancement = els.labQualityEnhancementInput.value || "auto";
+    });
+  }
   if (els.labSeedInput) els.labSeedInput.addEventListener("input", () => { labState.seed = els.labSeedInput.value || ""; });
   if (els.labStyleSearchInput) {
     els.labStyleSearchInput.addEventListener("input", () => {
@@ -758,6 +765,7 @@ function renderLabHistory(items) {
     const article = document.createElement("article");
     article.className = "lab-history-card";
     const metaText = labHistoryMetaText(item);
+    const qualityText = labHistoryQualityText(item);
     article.innerHTML = `
       <button class="lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}">
         <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(item.title || `Alchemy Lab 历史 ${index + 1}`)}" loading="lazy" decoding="async" />
@@ -767,6 +775,7 @@ function renderLabHistory(items) {
         <strong>${escapeHtml(item.title || "Rare Style Explorer")}</strong>
         <p>${escapeHtml(item.idea || "未记录画面方向")}</p>
         <small>${escapeHtml(metaText)}</small>
+        ${qualityText ? `<small>${escapeHtml(qualityText)}</small>` : ""}
       </div>
       <div class="lab-history-tags">
         ${labHistoryTags(item).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}
@@ -832,6 +841,19 @@ function labHistoryTags(item) {
     item.style_family,
     ...(Array.isArray(item.keywords) ? item.keywords : []),
   ].filter(Boolean).slice(0, 6);
+}
+
+function labHistoryQualityText(item) {
+  if (!item) return "";
+  const quality = {
+    quality_enhancement_mode: item.quality_enhancement_mode,
+    quality_enhancement_strategy: item.quality_enhancement_strategy,
+    quality_enhancement_applied: item.quality_enhancement_applied,
+    text_hierarchy_applied: item.text_hierarchy_applied,
+    text_hierarchy_summary: item.text_hierarchy_summary,
+    art_direction_summary: item.art_direction_summary,
+  };
+  return [labQualityMetaText(quality), labQualityDetailsText(quality)].filter(Boolean).join(" · ");
 }
 
 function openLabModule(moduleId = "rare-style-explorer") {
@@ -983,6 +1005,7 @@ async function runLabExploration() {
         mode: labState.mode || inferLabMode(idea),
         style_family: labState.styleFamily || null,
         freshness: labState.freshness || "high",
+        quality_enhancement: labState.qualityEnhancement || "auto",
         images_per_style: hasManualStyles ? Math.max(1, Number(labState.imagesPerStyle || 1)) : 1,
         generation_interval_seconds: Math.max(0, Number(labState.generationIntervalSeconds || 0)),
         seed: labState.seed === "" ? null : Number(labState.seed),
@@ -1055,12 +1078,16 @@ function renderLabBoard(board) {
       const imageActions = card.image_url
         ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
         : "";
+      const qualityText = labQualityMetaText(card.quality);
+      const qualityDetails = labQualityDetailsText(card.quality);
       article.innerHTML = `
         ${imageHtml}
         <div class="lab-card-meta">
           <span>${escapeHtml(group.style_name || group.style_preset_id)} · ${escapeHtml(labCardStatusLabel(card.status))}</span>
           <button class="lab-favorite-btn${card.is_favorite ? " active" : ""}" data-lab-favorite="${escapeHtml(card.variant_id)}" type="button" aria-pressed="${String(Boolean(card.is_favorite))}">收藏</button>
         </div>
+        ${qualityText ? `<p class="lab-card-quality">${escapeHtml(qualityText)}</p>` : ""}
+        ${qualityDetails ? `<small class="lab-card-quality-detail">${escapeHtml(qualityDetails)}</small>` : ""}
         <div class="lab-card-actions">
           <button class="lab-card-action" data-lab-copy-prompt="${escapeHtml(card.variant_id || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}" type="button">复制提示词</button>
           ${imageActions}
@@ -1156,6 +1183,7 @@ function resetLabExplorer() {
   labState.mode = "minimal";
   labState.styleFamily = "";
   labState.freshness = "high";
+  labState.qualityEnhancement = "auto";
   labState.seed = "";
   labState.search = "";
   if (els.labTargetCountInput) els.labTargetCountInput.value = "4";
@@ -1164,6 +1192,7 @@ function resetLabExplorer() {
   if (els.labModeInput) els.labModeInput.value = "minimal";
   if (els.labFamilyInput) els.labFamilyInput.value = "";
   if (els.labFreshnessInput) els.labFreshnessInput.value = "high";
+  if (els.labQualityEnhancementInput) els.labQualityEnhancementInput.value = "auto";
   if (els.labSeedInput) els.labSeedInput.value = "";
   if (els.labStyleSearchInput) els.labStyleSearchInput.value = "";
   labState.selectedStyleIds = [];
@@ -1219,6 +1248,42 @@ function labCardStatusLabel(status) {
     queued: "排队中",
   };
   return labels[status] || status || "-";
+}
+
+function labQualityModeLabel(mode) {
+  const labels = {
+    auto: "自动",
+    off: "关闭",
+    balanced: "精修",
+    curated: "策展",
+  };
+  return labels[mode] || mode || "";
+}
+
+function labQualityStrategyLabel(strategy) {
+  const labels = {
+    off: "未增强",
+    balanced: "平衡增强",
+    curated: "策展增强",
+  };
+  return labels[strategy] || strategy || "";
+}
+
+function labQualityMetaText(quality) {
+  if (!quality) return "";
+  const mode = labQualityModeLabel(quality.quality_enhancement_mode);
+  const strategy = labQualityStrategyLabel(quality.quality_enhancement_strategy);
+  const applied = quality.quality_enhancement_applied ? "已精修" : "未改写";
+  return [mode ? `质量增强 ${mode}` : "", strategy, applied].filter(Boolean).join(" · ");
+}
+
+function labQualityDetailsText(quality) {
+  if (!quality) return "";
+  const parts = [];
+  if (quality.text_hierarchy_applied) parts.push("智能文案层级已规划");
+  if (quality.text_hierarchy_summary) parts.push(quality.text_hierarchy_summary);
+  if (quality.art_direction_summary) parts.push(quality.art_direction_summary);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function hydratePortalHomeLink() {
