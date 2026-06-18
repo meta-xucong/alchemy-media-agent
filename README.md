@@ -40,6 +40,8 @@
 - `docs/32_V2案例库二阶段速度优化开发文档.md`：V2 案例库首屏减重、接口 ETag 缓存和同步后缩略图预热方案。
 - `docs/33_多图上传与素材融合改造开发文档.md`：V2 多图上传、素材融合意图和模板锁优先级改造方案。
 - `docs/34_V2提示词转换前端闭环开发文档.md`：V2 Prompt Transform 前端控制、结果可见性和桌面/H5 验收方案。
+- `docs/35_V2尺寸锁定与探索模式画幅控制开发文档.md`：V2 自动画幅、手动画幅锁、探索模式尺寸保持和 provider 比例兜底方案。
+- `docs/36_AlchemyLab质量增强与智能文案层级开发文档.md`：Alchemy Lab rare-style-explorer 质感增强、LLM 视觉精修和通用智能文案层级方案。
 - `specs/openapi.yaml`：第一版后端 API 草案。
 - `diagrams/*.mmd`：Mermaid 架构图。
 - `src_skeleton/`：最小代码骨架，方便研发快速起项目。

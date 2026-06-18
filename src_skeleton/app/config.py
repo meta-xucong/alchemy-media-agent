@@ -118,6 +118,8 @@ class Settings(BaseModel):
     veyra_billing_settings_url: str = os.getenv("VEYRA_BILLING_SETTINGS_URL", "http://127.0.0.1:8020/api/v2/veyra/billing/settings/public")
     veyra_billing_rule_key_v1: str = os.getenv("VEYRA_BILLING_RULE_KEY_V1", "alchemy:v1")
     veyra_usage_path: Path = Field(default_factory=lambda: Path(os.getenv("VEYRA_USAGE_PATH", ".media_storage/veyra_usage.jsonl")))
+    v2_api_proxy_base_url: str = os.getenv("V2_API_PROXY_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
+    v2_api_proxy_timeout_seconds: float = _float_env("V2_API_PROXY_TIMEOUT_SECONDS", 120.0)
 
     @property
     def live_mode(self) -> bool:

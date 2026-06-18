@@ -33,6 +33,7 @@ def compose_prompt_plan(
     user_prompt: str,
     cases: list[PromptCase],
     output: dict,
+    requested_output: dict | None = None,
     orchestrator_decision: CreativeOrchestratorDecision | None = None,
     asset_context: dict | None = None,
 ) -> ImagePromptPlan:
@@ -89,6 +90,10 @@ def compose_prompt_plan(
         orchestrator_decision,
         visual_grammar_contract=visual_grammar_contract,
     )
+    aspect_lock = _aspect_lock_from_requested_output(requested_output or {})
+    prompt_transform_request = _prompt_transform_request_from_output(requested_output or {})
+    provider_parameters = _apply_aspect_lock(provider_parameters, aspect_lock)
+    prompt = _append_aspect_lock_instruction(prompt, aspect_lock)
     count = int(provider_parameters.get("count", 1))
     count = max(1, min(count, 8))
     provider_parameters["count"] = count
@@ -138,6 +143,9 @@ def compose_prompt_plan(
             "visual_grammar_contract": visual_grammar_contract,
             "information_integrity_lock_enabled": bool(information_integrity.get("active")),
             "information_integrity_contract": information_integrity,
+            "aspect_lock": aspect_lock,
+            "prompt_transform_mode": prompt_transform_request.get("transform_mode"),
+            "prompt_transform_profile": prompt_transform_request,
             "asset_binding_plan": (asset_context or {}).get("asset_binding_plan"),
             "provider_input_plan": (asset_context or {}).get("provider_input_plan"),
             "uploaded_assets": (asset_context or {}).get("uploaded_assets", []),
@@ -268,6 +276,113 @@ def _build_provider_parameters(
     params["count"] = max(1, min(count, 8))
     params["quality"] = params.get("quality", "high")
     return params
+
+
+def _aspect_lock_from_requested_output(requested_output: dict) -> dict[str, object]:
+    raw_size = requested_output.get("size")
+    raw_aspect = requested_output.get("aspect_ratio")
+    size = _clean_dimension_value(raw_size)
+    aspect = _clean_dimension_value(raw_aspect)
+    locked_value = size or aspect
+    if not locked_value:
+        return {
+            "mode": "auto",
+            "locked": False,
+            "source": "auto",
+            "value": "",
+            "aspect_ratio": "",
+            "prompt_instruction": "",
+        }
+    ratio = _ratio_from_dimension_or_ratio(locked_value)
+    return {
+        "mode": "manual",
+        "locked": True,
+        "source": "output.size" if size else "output.aspect_ratio",
+        "value": locked_value,
+        "aspect_ratio": ratio,
+        "prompt_instruction": f"Required output aspect ratio: {ratio}." if ratio else "",
+    }
+
+
+def _prompt_transform_request_from_output(requested_output: dict) -> dict[str, str]:
+    requested = str(requested_output.get("prompt_transform_mode") or "").strip().lower()
+    alias_map = {
+        "original": "stable",
+        "strict": "enhanced",
+        "off": "exploration",
+    }
+    transform_mode = alias_map.get(requested, requested)
+    if transform_mode not in {"stable", "enhanced", "exploration"}:
+        transform_mode = ""
+    fidelity_mode = {
+        "stable": "original",
+        "enhanced": "strict",
+        "exploration": "off",
+    }.get(transform_mode, "")
+    return {
+        "source": "output.prompt_transform_mode" if transform_mode else "v2_mode_fallback",
+        "requested_mode": requested,
+        "transform_mode": transform_mode,
+        "fidelity_mode": fidelity_mode,
+    }
+
+
+def _apply_aspect_lock(params: dict, aspect_lock: dict[str, object]) -> dict:
+    if not aspect_lock.get("locked"):
+        return params
+    next_params = dict(params)
+    value = str(aspect_lock.get("value") or "").strip()
+    source = str(aspect_lock.get("source") or "")
+    if value:
+        if source == "output.size":
+            next_params["size"] = value
+        else:
+            next_params["aspect_ratio"] = value
+    return next_params
+
+
+def _append_aspect_lock_instruction(prompt: str, aspect_lock: dict[str, object]) -> str:
+    instruction = str(aspect_lock.get("prompt_instruction") or "").strip()
+    if not instruction:
+        return prompt
+    prompt_text = str(prompt or "").rstrip()
+    if instruction in prompt_text:
+        return prompt_text
+    return f"{prompt_text}\n\n{instruction}" if prompt_text else instruction
+
+
+def _clean_dimension_value(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"auto", "default", "none", "null"}:
+        return ""
+    return text
+
+
+def _ratio_from_dimension_or_ratio(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if ":" in text:
+        parts = text.split(":", 1)
+    elif "x" in text:
+        parts = text.split("x", 1)
+    else:
+        return ""
+    try:
+        width = int(parts[0].strip())
+        height = int(parts[1].strip())
+    except (ValueError, IndexError):
+        return ""
+    if width <= 0 or height <= 0:
+        return ""
+    divisor = _gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def _gcd(left: int, right: int) -> int:
+    a = abs(left)
+    b = abs(right)
+    while b:
+        a, b = b, a % b
+    return a or 1
 
 
 def _build_prompt(

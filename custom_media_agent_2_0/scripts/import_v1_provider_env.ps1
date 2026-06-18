@@ -101,6 +101,27 @@ Set-MappedValue -Target "V2_OPENAI_IMAGE_MODEL" -Sources @("OPENAI_IMAGE_MODEL",
 Set-MappedValue -Target "V2_GEMINI_API_KEY" -Sources @("GEMINI_IMAGE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
 Set-MappedValue -Target "V2_GEMINI_BASE_URL" -Sources @("GEMINI_IMAGE_BASE_URL", "GOOGLE_GEMINI_BASE_URL")
 Set-MappedValue -Target "V2_GEMINI_IMAGE_MODEL" -Sources @("GEMINI_IMAGE_MODEL", "GEMINI_MODEL")
+Set-MappedValue -Target "ANTHROPIC_BASE_URL" -Sources @("ANTHROPIC_BASE_URL")
+Set-MappedValue -Target "ANTHROPIC_AUTH_TOKEN" -Sources @("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+Set-MappedValue -Target "ANTHROPIC_API_KEY" -Sources @("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+Set-MappedValue -Target "V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL" -Sources @("ANTHROPIC_BASE_URL")
+Set-MappedValue -Target "V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN" -Sources @("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+if (-not $v2.ContainsKey("ANTHROPIC_AUTH_TOKEN") -or -not $v2["ANTHROPIC_AUTH_TOKEN"] -or $Force) {
+    if ($v2.ContainsKey("V2_OPENAI_API_KEY") -and $v2["V2_OPENAI_API_KEY"]) {
+        $v2["ANTHROPIC_AUTH_TOKEN"] = $v2["V2_OPENAI_API_KEY"]
+    }
+}
+if (-not $v2.ContainsKey("ANTHROPIC_API_KEY") -or -not $v2["ANTHROPIC_API_KEY"] -or $Force) {
+    if ($v2.ContainsKey("ANTHROPIC_AUTH_TOKEN") -and $v2["ANTHROPIC_AUTH_TOKEN"]) {
+        $v2["ANTHROPIC_API_KEY"] = $v2["ANTHROPIC_AUTH_TOKEN"]
+    }
+}
+if (-not $v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN") -or -not $v2["V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN"] -or $Force) {
+    if ($v2.ContainsKey("ANTHROPIC_AUTH_TOKEN") -and $v2["ANTHROPIC_AUTH_TOKEN"]) {
+        $v2["V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN"] = $v2["ANTHROPIC_AUTH_TOKEN"]
+    }
+}
 
 if (-not $v2.ContainsKey("V2_IMAGE_GENERATION_PROVIDER") -or -not $v2["V2_IMAGE_GENERATION_PROVIDER"] -or $Force) {
     if ($v2.ContainsKey("V2_OPENAI_API_KEY") -and $v2["V2_OPENAI_API_KEY"]) {
@@ -117,8 +138,10 @@ if (-not $v2.ContainsKey("V2_IMAGE_GENERATION_PROVIDER") -or -not $v2["V2_IMAGE_
 if (-not $v2.ContainsKey("V2_ALLOW_MOCK_FALLBACK")) {
     $v2["V2_ALLOW_MOCK_FALLBACK"] = "true"
 }
-if (-not $v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_ENABLED")) {
-    $v2["V2_CLAUDE_ORCHESTRATOR_ENABLED"] = "true"
+if (-not $v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_ENABLED") -or -not $v2["V2_CLAUDE_ORCHESTRATOR_ENABLED"] -or $Force) {
+    $hasClaudeBase = ($v2.ContainsKey("ANTHROPIC_BASE_URL") -and $v2["ANTHROPIC_BASE_URL"]) -or ($v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") -and $v2["V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL"])
+    $hasClaudeToken = ($v2.ContainsKey("ANTHROPIC_AUTH_TOKEN") -and $v2["ANTHROPIC_AUTH_TOKEN"]) -or ($v2.ContainsKey("ANTHROPIC_API_KEY") -and $v2["ANTHROPIC_API_KEY"]) -or ($v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN") -and $v2["V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN"])
+    $v2["V2_CLAUDE_ORCHESTRATOR_ENABLED"] = if ($hasClaudeBase -and $hasClaudeToken) { "true" } else { "false" }
 }
 
 Write-EnvFile -Path $V2EnvPath -Values $v2

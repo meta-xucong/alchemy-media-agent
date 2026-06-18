@@ -42,6 +42,15 @@
         <nav class="module-tabs" aria-label="生成模块" role="tablist">
           <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图 V1.0 基础版</button>
           <button class="tab" data-tab="v2" type="button" role="tab" aria-selected="false">生图 V2.0 AGENT</button>
+          <div class="lab-nav-menu">
+            <button class="tab" data-tab="lab" type="button" role="tab" aria-selected="false" aria-haspopup="true" aria-expanded="false">Alchemy Lab</button>
+            <div class="lab-nav-dropdown" role="menu" aria-label="Alchemy Lab 子功能">
+              <button data-lab-module-open="rare-style-explorer" type="button" role="menuitem">
+                <span>Rare Style Explorer</span>
+                <small>620 稀有风格探索</small>
+              </button>
+            </div>
+          </div>
           <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频（DEMO）</button>
         </nav>
 
@@ -553,11 +562,12 @@
                   <div class="control-block">
                     <span>画幅</span>
                     <div class="segmented aspect-segmented" role="radiogroup" aria-label="2.0 画幅">
-                      <button class="segment active" data-v2-ratio="" type="button">默认</button>
-                      <button class="segment" data-v2-ratio="1024x1536" type="button">竖版</button>
-                      <button class="segment" data-v2-ratio="1024x1024" type="button">方图</button>
-                      <button class="segment" data-v2-ratio="1536x1024" type="button">横版</button>
+                      <button class="segment active" data-v2-ratio="" type="button" title="自动画幅：不锁定尺寸，可能随模板、生图引擎或探索模式变化。">自动</button>
+                      <button class="segment" data-v2-ratio="1024x1536" type="button" title="锁定竖版输出：1024x1536。">竖版</button>
+                      <button class="segment" data-v2-ratio="1024x1024" type="button" title="锁定方图输出：1024x1024。">方图</button>
+                      <button class="segment" data-v2-ratio="1536x1024" type="button" title="锁定横版输出：1536x1024。">横版</button>
                     </div>
+                    <small class="v2-aspect-hint">自动画幅不锁尺寸；选择竖版、方图或横版后，探索模式也会保持该画幅。</small>
                   </div>
                   <div class="control-block v2-transform-control">
                     <div class="v2-transform-row">
@@ -695,17 +705,17 @@
             <section class="panel flow-section v2-provider-area">
               <div class="panel-head section-title">
                 <div>
-                  <p class="eyebrow">05 / Providers</p>
-                  <h3>外接 Provider</h3>
+                  <p class="eyebrow">05 / Model Status</p>
+                  <h3>模型状态</h3>
                 </div>
                 <span id="v2InheritedProviderState" class="state-pill">读取中</span>
               </div>
 
               <div class="v2-status-grid" aria-live="polite">
                 <div class="v2-status-tile">
-                  <span class="metric-label">Provider</span>
+                  <span class="metric-label">生图通道</span>
                   <strong id="v2ProviderState">未同步</strong>
-                  <small id="v2ProviderMeta">EvoLinkAI</small>
+                  <small id="v2ProviderMeta">V2 独立配置</small>
                 </div>
                 <div class="v2-status-tile">
                   <span class="metric-label">案例索引</span>
@@ -783,7 +793,7 @@
             <section class="studio-panel flow-section">
               <div class="panel-head section-title">
                 <div>
-                  <p class="eyebrow">06 / Model & Kernel</p>
+                  <p class="eyebrow">06 / Agent Models</p>
                   <h3>生图 V2.0 AGENT</h3>
                 </div>
                 <div class="v2-status-actions">
@@ -908,6 +918,163 @@
               </div>
               <div id="veyraUsageList" class="account-usage-list" aria-live="polite"></div>
             </section>
+          </div>
+        </section>
+
+        <section id="labTab" class="module-panel" data-panel="lab" role="tabpanel" hidden>
+          <div class="module-stack lab-workbench">
+            <section id="labHomePanel" class="panel flow-section lab-home-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Alchemy Lab</p>
+                  <h3>实验室</h3>
+                </div>
+                <span class="state-pill">1 个模块</span>
+              </div>
+              <div class="lab-module-grid">
+                <button class="lab-module-card" data-lab-module-open="rare-style-explorer" type="button">
+                  <span>Rare Style Explorer</span>
+                  <strong>稀有风格探索器</strong>
+                  <small>从 620 个低频视觉亚风格里抽样、筛选并批量生成对比图。</small>
+                </button>
+              </div>
+            </section>
+
+            <section class="panel flow-section lab-history-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Alchemy Lab History</p>
+                  <h3>实验室历史</h3>
+                </div>
+                <div class="lab-module-actions">
+                  <span id="labHistoryCount" class="state-pill">0</span>
+                  <button id="labRefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                </div>
+              </div>
+              <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
+            </section>
+
+            <div id="rareStyleExplorerPanel" class="lab-module-detail" hidden>
+            <section class="panel flow-section lab-setup-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Alchemy Lab / Rare Style Explorer</p>
+                  <h3>Rare Style Explorer</h3>
+                </div>
+                <div class="lab-module-actions">
+                  <button class="button compact ghost" data-lab-home-open type="button">实验室</button>
+                  <span id="labStyleCount" class="state-pill">0</span>
+                </div>
+              </div>
+
+              <div class="lab-layout">
+                <div class="lab-composer">
+                  <label class="field lab-idea-field">
+                    <span>画面想法</span>
+                    <textarea id="labIdeaInput" rows="6" placeholder="例如：一张甜品店新品海报，主角是草莓千层蛋糕，氛围清爽、有记忆点。"></textarea>
+                  </label>
+                  <div id="labNoticeBar" class="notice-bar" role="status" aria-live="polite">输入想法后可自动抽样，也可手选风格生成对比图。</div>
+
+                  <div class="lab-control-row">
+                    <label class="control-block lab-count-control">
+                      <span>总张数 <strong id="labTargetCountValue">4</strong></span>
+                      <input id="labTargetCountInput" type="range" min="1" max="12" step="1" value="4" />
+                    </label>
+                    <label class="control-block lab-count-control">
+                      <span>每种风格 <strong id="labImagesPerStyleValue">1</strong></span>
+                      <input id="labImagesPerStyleInput" type="range" min="1" max="4" step="1" value="1" />
+                    </label>
+                    <label class="control-block lab-count-control">
+                      <span>间隔秒数 <strong id="labIntervalValue">0</strong></span>
+                      <input id="labIntervalInput" type="range" min="0" max="60" step="5" value="0" />
+                    </label>
+                    <div class="control-block">
+                      <span>画幅</span>
+                      <div class="segmented lab-aspect-segmented" role="radiogroup" aria-label="Lab 画幅">
+                        <button class="segment active" data-lab-aspect="square" type="button">方图</button>
+                        <button class="segment" data-lab-aspect="portrait" type="button">竖版</button>
+                        <button class="segment" data-lab-aspect="landscape" type="button">横版</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="lab-control-row">
+                    <label class="field">
+                      <span>探索模式</span>
+                      <select id="labModeInput">
+                        <option value="minimal">快速探索</option>
+                        <option value="product">产品图</option>
+                        <option value="character">人物角色</option>
+                        <option value="poster">海报封面</option>
+                        <option value="scene">叙事场景</option>
+                        <option value="material-series">材质系列</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>风格族</span>
+                      <select id="labFamilyInput">
+                        <option value="">全部风格</option>
+                        <option value="film">电影/影像</option>
+                        <option value="fashion">时装/人物</option>
+                        <option value="product">产品/材质</option>
+                        <option value="photography">摄影/缺陷</option>
+                        <option value="illustration">插画/动画</option>
+                        <option value="graphic">平面/海报</option>
+                        <option value="craft">工艺/地域</option>
+                        <option value="digital">数字/UI</option>
+                        <option value="space">建筑/空间</option>
+                        <option value="material">表面材质</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>新鲜度</span>
+                      <select id="labFreshnessInput">
+                        <option value="high">高新鲜度</option>
+                        <option value="normal">常规</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Seed</span>
+                      <input id="labSeedInput" type="number" min="0" step="1" placeholder="随机" />
+                    </label>
+                  </div>
+
+                  <div class="composer-actions">
+                    <button id="labGenerateBtn" class="button primary" type="button">生成对比</button>
+                    <button id="labResetBtn" class="button ghost" type="button">重置</button>
+                    <span id="labImageCountLabel" class="micro-copy">预计 0 张</span>
+                  </div>
+                </div>
+
+                <div class="lab-style-panel">
+                  <div class="mini-head">
+                    <h4>风格库</h4>
+                    <span id="labLimitsLabel" class="state-pill">最多 8 种</span>
+                  </div>
+                  <div class="lab-library-tools">
+                    <input id="labStyleSearchInput" type="search" placeholder="搜索 620 个风格名 / ID / 关键词" />
+                    <button id="labClearStylesBtn" class="button compact ghost" type="button">清空选择</button>
+                  </div>
+                  <details class="lab-library-details" open>
+                    <summary>展开完整风格库</summary>
+                    <div id="labStyleGrid" class="lab-style-grid empty-v2-list" aria-live="polite"></div>
+                  </details>
+                </div>
+              </div>
+            </section>
+
+            <section class="gallery-wrap flow-section lab-results-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Comparison Board</p>
+                  <h3>对比结果</h3>
+                </div>
+                <span id="labSessionState" class="state-pill">待生成</span>
+              </div>
+              <div id="labProgress" class="lab-progress" role="status" aria-live="polite">等待生成风格变化。</div>
+              <div id="labComparisonGrid" class="lab-comparison-grid empty-v2-list"></div>
+            </section>
+            </div>
           </div>
         </section>
 

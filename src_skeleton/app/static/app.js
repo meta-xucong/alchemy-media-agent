@@ -18,6 +18,7 @@ const geminiImageUnavailableShortLabel = "暂不可用";
 const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
+  lab: "探索各种创意玩法",
   video: "coming soon",
   account: "账户资金、生成历史与消耗记录集中查看。",
 };
@@ -31,12 +32,9 @@ const v2TemplatePageSize = 16;
 const v2TemplateEagerImageCount = 6;
 const v2HistoryPageSize = 24;
 const v2RunLongWaitAttempt = 120;
-const v2LocalApiBase = "http://127.0.0.1:8020/api/v2";
 const localPortalHomeUrl = "http://127.0.0.1:18080/";
 const productionPortalHomeUrl = "https://aiself.vip/";
-const v2ApiBase =
-  window.ALCHEMY_V2_API_BASE ||
-  (isLocalAlchemyHost() ? v2LocalApiBase : `${window.location.origin}/api/v2`);
+const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
@@ -175,6 +173,29 @@ const v2State = {
   promptTransformMode: "auto",
 };
 
+const labState = {
+  loaded: false,
+  loading: false,
+  styles: [],
+  limits: { maxSelectedStyles: 8, maxImagesPerStyle: 2, maxTotalImages: 12, maxConcurrentGenerations: 3 },
+  selectedStyleIds: [],
+  activeModule: "",
+  targetCount: 4,
+  imagesPerStyle: 1,
+  generationIntervalSeconds: 0,
+  mode: "minimal",
+  styleFamily: "",
+  freshness: "high",
+  seed: "",
+  search: "",
+  aspectRatio: "square",
+  history: [],
+  historyLoaded: false,
+  historyLoading: false,
+  currentSession: null,
+  currentBoard: null,
+};
+
 const veyraState = {
   account: null,
   history: [],
@@ -278,6 +299,34 @@ const els = {
   v2HistoryCount: document.querySelector("#v2HistoryCount"),
   v2RefreshHistoryBtn: document.querySelector("#v2RefreshHistoryBtn"),
   v2HistoryGrid: document.querySelector("#v2HistoryGrid"),
+  labStyleCount: document.querySelector("#labStyleCount"),
+  labLimitsLabel: document.querySelector("#labLimitsLabel"),
+  labHomePanel: document.querySelector("#labHomePanel"),
+  rareStyleExplorerPanel: document.querySelector("#rareStyleExplorerPanel"),
+  labIdeaInput: document.querySelector("#labIdeaInput"),
+  labNoticeBar: document.querySelector("#labNoticeBar"),
+  labTargetCountInput: document.querySelector("#labTargetCountInput"),
+  labTargetCountValue: document.querySelector("#labTargetCountValue"),
+  labImagesPerStyleInput: document.querySelector("#labImagesPerStyleInput"),
+  labImagesPerStyleValue: document.querySelector("#labImagesPerStyleValue"),
+  labIntervalInput: document.querySelector("#labIntervalInput"),
+  labIntervalValue: document.querySelector("#labIntervalValue"),
+  labModeInput: document.querySelector("#labModeInput"),
+  labFamilyInput: document.querySelector("#labFamilyInput"),
+  labFreshnessInput: document.querySelector("#labFreshnessInput"),
+  labSeedInput: document.querySelector("#labSeedInput"),
+  labStyleSearchInput: document.querySelector("#labStyleSearchInput"),
+  labClearStylesBtn: document.querySelector("#labClearStylesBtn"),
+  labImageCountLabel: document.querySelector("#labImageCountLabel"),
+  labGenerateBtn: document.querySelector("#labGenerateBtn"),
+  labResetBtn: document.querySelector("#labResetBtn"),
+  labStyleGrid: document.querySelector("#labStyleGrid"),
+  labSessionState: document.querySelector("#labSessionState"),
+  labProgress: document.querySelector("#labProgress"),
+  labComparisonGrid: document.querySelector("#labComparisonGrid"),
+  labHistoryCount: document.querySelector("#labHistoryCount"),
+  labRefreshHistoryBtn: document.querySelector("#labRefreshHistoryBtn"),
+  labHistoryGrid: document.querySelector("#labHistoryGrid"),
   veyraAccountState: document.querySelector("#veyraAccountState"),
   veyraAccountEmail: document.querySelector("#veyraAccountEmail"),
   veyraAccountBalance: document.querySelector("#veyraAccountBalance"),
@@ -515,11 +564,76 @@ function bindControls() {
     button.addEventListener("click", () => setV2PromptTransformMode(button.dataset.v2PromptTransform || "auto"));
   });
   hydrateV2PromptTransformButtons();
+  hydrateV2AspectButtons();
   setV2PromptTransformMode(v2State.promptTransformMode);
   if (els.v2ClearTemplateBtn) els.v2ClearTemplateBtn.addEventListener("click", clearV2Template);
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.addEventListener("click", () => loadV2History({ silent: false }));
   if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
   if (els.v2RunBtn) els.v2RunBtn.addEventListener("click", runV2Creative);
+  if (els.labImagesPerStyleInput) {
+    els.labImagesPerStyleInput.addEventListener("input", () => {
+      labState.imagesPerStyle = Number(els.labImagesPerStyleInput.value || 1);
+      updateLabCountLabel();
+    });
+  }
+  if (els.labIdeaInput) els.labIdeaInput.addEventListener("input", updateLabCountLabel);
+  if (els.labTargetCountInput) {
+    els.labTargetCountInput.addEventListener("input", () => {
+      labState.targetCount = Number(els.labTargetCountInput.value || 4);
+      updateLabCountLabel();
+    });
+  }
+  if (els.labIntervalInput) {
+    els.labIntervalInput.addEventListener("input", () => {
+      labState.generationIntervalSeconds = Number(els.labIntervalInput.value || 0);
+      updateLabCountLabel();
+    });
+  }
+  if (els.labModeInput) els.labModeInput.addEventListener("change", () => { labState.mode = els.labModeInput.value || "minimal"; });
+  if (els.labFamilyInput) {
+    els.labFamilyInput.addEventListener("change", () => {
+      labState.styleFamily = els.labFamilyInput.value || "";
+      renderLabStyles();
+      updateLabCountLabel();
+    });
+  }
+  if (els.labFreshnessInput) els.labFreshnessInput.addEventListener("change", () => { labState.freshness = els.labFreshnessInput.value || "high"; });
+  if (els.labSeedInput) els.labSeedInput.addEventListener("input", () => { labState.seed = els.labSeedInput.value || ""; });
+  if (els.labStyleSearchInput) {
+    els.labStyleSearchInput.addEventListener("input", () => {
+      labState.search = els.labStyleSearchInput.value || "";
+      renderLabStyles();
+    });
+  }
+  if (els.labClearStylesBtn) {
+    els.labClearStylesBtn.addEventListener("click", () => {
+      labState.selectedStyleIds = [];
+      renderLabStyles();
+      updateLabCountLabel();
+    });
+  }
+  document.querySelectorAll("[data-lab-module-open]").forEach((button) => {
+    button.addEventListener("click", () => openLabModule(button.dataset.labModuleOpen || "rare-style-explorer"));
+  });
+  document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
+    button.addEventListener("click", openLabHome);
+  });
+  document.querySelectorAll("[data-lab-aspect]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setActive(button, "[data-lab-aspect]");
+      labState.aspectRatio = button.dataset.labAspect || "square";
+    });
+  });
+  if (els.labStyleGrid) {
+    els.labStyleGrid.addEventListener("click", handleLabStyleGridClick);
+  }
+  if (els.labComparisonGrid) {
+    els.labComparisonGrid.addEventListener("click", handleLabComparisonClick);
+  }
+  if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.addEventListener("click", () => loadLabHistory({ silent: false, force: true }));
+  if (els.labHistoryGrid) els.labHistoryGrid.addEventListener("click", handleLabHistoryClick);
+  if (els.labGenerateBtn) els.labGenerateBtn.addEventListener("click", runLabExploration);
+  if (els.labResetBtn) els.labResetBtn.addEventListener("click", resetLabExplorer);
   bindProviderAutosave();
   els.newSessionBtn.addEventListener("click", startNewSession);
   els.smokeBtn.addEventListener("click", openSampleGuide);
@@ -567,6 +681,10 @@ function switchTab(tabName) {
     });
   } else if (tabName === "v2") {
     renderHeroHistory(v2State.history, { source: "v2" });
+  } else if (tabName === "lab") {
+    renderLabModuleState();
+    renderHeroHistory(labState.history, { source: "lab" });
+    loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
   } else if (tabName === "account") {
     renderHeroHistory(v2State.history, { source: "v2" });
     loadVeyraAccountPanel({ silent: true }).catch((error) => {
@@ -581,6 +699,526 @@ function updateHeroCopy(tabName) {
   if (!els.heroLine) return;
   const moduleName = Object.prototype.hasOwnProperty.call(heroCopyByTab, tabName) ? tabName : "image";
   els.heroLine.textContent = heroCopyByTab[moduleName];
+}
+
+async function loadLabStyles({ force = false } = {}) {
+  if (labState.loading || (labState.loaded && !force)) return;
+  labState.loading = true;
+  updateLabNotice("正在载入稀有风格预设。", "info");
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/styles");
+    labState.styles = Array.isArray(payload.styles) ? payload.styles : [];
+    labState.limits = payload.limits || labState.limits;
+    hydrateLabControlLimits();
+    labState.loaded = true;
+    renderLabStyles();
+    updateLabCountLabel();
+    updateLabNotice(`已载入 ${labState.styles.length} 个稀有风格预设。`, "success");
+  } finally {
+    labState.loading = false;
+    updateLabCountLabel();
+  }
+}
+
+async function loadLabHistory({ silent = true, force = false } = {}) {
+  if (labState.historyLoading || (labState.historyLoaded && !force)) {
+    renderLabHistory(labState.history);
+    return;
+  }
+  labState.historyLoading = true;
+  if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/history?limit=1000");
+    labState.history = Array.isArray(payload.items) ? payload.items : [];
+    labState.historyLoaded = true;
+    renderLabHistory(labState.history);
+    if (activePanelName() === "lab") renderHeroHistory(labState.history, { source: "lab" });
+    if (!silent) {
+      updateLabNotice(`已加载 ${labState.history.length} 条 Lab 历史。`, "success");
+      showGlobalToast("Alchemy Lab 历史已刷新。");
+    }
+  } finally {
+    labState.historyLoading = false;
+    if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = false;
+  }
+}
+
+function renderLabHistory(items) {
+  if (!els.labHistoryGrid) return;
+  const sortedItems = [...(items || [])].sort(compareHistoryItems);
+  labState.history = sortedItems;
+  els.labHistoryGrid.innerHTML = "";
+  els.labHistoryGrid.classList.toggle("empty-v2-list", sortedItems.length === 0);
+  if (els.labHistoryCount) els.labHistoryCount.textContent = String(sortedItems.length);
+  if (!sortedItems.length) {
+    els.labHistoryGrid.textContent = "暂无 Alchemy Lab 历史。";
+    return;
+  }
+  sortedItems.slice(0, historyPageSize).forEach((item, index) => {
+    const article = document.createElement("article");
+    article.className = "lab-history-card";
+    const metaText = labHistoryMetaText(item);
+    article.innerHTML = `
+      <button class="lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}">
+        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(item.title || `Alchemy Lab 历史 ${index + 1}`)}" loading="lazy" decoding="async" />
+      </button>
+      <div class="lab-history-body">
+        <span>${escapeHtml(item.module_label || "Rare Style Explorer")}</span>
+        <strong>${escapeHtml(item.title || "Rare Style Explorer")}</strong>
+        <p>${escapeHtml(item.idea || "未记录画面方向")}</p>
+        <small>${escapeHtml(metaText)}</small>
+      </div>
+      <div class="lab-history-tags">
+        ${labHistoryTags(item).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}
+      </div>
+      <div class="lab-card-actions">
+        <button class="lab-card-action" data-lab-history-prompt="${index}" type="button">查看提示词</button>
+        <a class="lab-card-action" href="${escapeHtml(item.url || "#")}" data-lab-download="${escapeHtml(item.url || "")}" data-lab-filename="${escapeHtml(`alchemy-lab-${item.id || index}.png`)}">下载</a>
+      </div>
+    `;
+    els.labHistoryGrid.appendChild(article);
+  });
+}
+
+function handleLabHistoryClick(event) {
+  const preview = event.target.closest("[data-lab-history-preview]");
+  if (preview) {
+    const item = labState.history[Number(preview.dataset.labHistoryIndex || 0)];
+    if (item) openLabHistoryPreview(item);
+    return;
+  }
+  const promptButton = event.target.closest("[data-lab-history-prompt]");
+  if (promptButton) {
+    const item = labState.history[Number(promptButton.dataset.labHistoryPrompt || 0)];
+    if (item) openLabHistoryPreview(item, { promptOnly: true });
+    return;
+  }
+  const downloadLink = event.target.closest("[data-lab-download]");
+  if (downloadLink) {
+    event.preventDefault();
+    downloadImageFile(downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png", downloadLink);
+  }
+}
+
+function openLabHistoryPreview(item, { promptOnly = false } = {}) {
+  if (!item?.url) return;
+  openImageLightbox({
+    id: item.id || "alchemy-lab-history",
+    title: item.title || "Rare Style Explorer",
+    url: item.url,
+    thumbnailUrl: item.thumbnail_url || item.url,
+    format: item.format || "png",
+    meta: labHistoryMetaText(item),
+    promptText: item.final_prompt || item.prompt || "",
+  });
+  if (promptOnly && els.lightboxPromptPanel?.hidden) toggleLightboxPrompt();
+}
+
+function labHistoryMetaText(item) {
+  const parts = [
+    item.mode_label || item.mode,
+    item.style_category || item.style_family,
+    item.aspect_ratio ? `画幅 ${item.aspect_ratio}` : "",
+    item.target_count ? `${item.target_count} 张` : "",
+    item.generation_interval_seconds ? `间隔 ${item.generation_interval_seconds}s` : "",
+    item.provider || item.model,
+  ].filter(Boolean);
+  return parts.join(" · ") || "Alchemy Lab";
+}
+
+function labHistoryTags(item) {
+  return [
+    item.style_name,
+    item.style_family,
+    ...(Array.isArray(item.keywords) ? item.keywords : []),
+  ].filter(Boolean).slice(0, 6);
+}
+
+function openLabModule(moduleId = "rare-style-explorer") {
+  if (moduleId !== "rare-style-explorer") return;
+  labState.activeModule = moduleId;
+  if (document.body.dataset.activeModule !== "lab") switchTab("lab");
+  renderLabModuleState();
+  if (!labState.loaded && !labState.loading) {
+    loadLabStyles().catch((error) => updateLabNotice(`风格加载失败：${friendlyError(error)}`, "error"));
+  }
+}
+
+function openLabHome() {
+  labState.activeModule = "";
+  if (document.body.dataset.activeModule !== "lab") switchTab("lab");
+  renderLabModuleState();
+}
+
+function renderLabModuleState() {
+  const active = labState.activeModule === "rare-style-explorer";
+  if (els.labHomePanel) els.labHomePanel.hidden = active;
+  if (els.rareStyleExplorerPanel) els.rareStyleExplorerPanel.hidden = !active;
+  document.querySelectorAll("[data-tab='lab']").forEach((button) => {
+    button.setAttribute("aria-expanded", String(active));
+  });
+}
+
+function hydrateLabControlLimits() {
+  if (els.labTargetCountInput) els.labTargetCountInput.max = String(labState.limits.maxTotalImages || 12);
+  if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.max = String(labState.limits.maxImagesPerStyle || 4);
+  if (els.labIntervalInput) els.labIntervalInput.max = String(labState.limits.maxGenerationIntervalSeconds || 60);
+}
+
+function renderLabStyles() {
+  if (!els.labStyleGrid) return;
+  const styles = filteredLabStyles();
+  els.labStyleGrid.innerHTML = "";
+  els.labStyleGrid.classList.toggle("empty-v2-list", styles.length === 0);
+  if (els.labStyleCount) els.labStyleCount.textContent = `${labState.styles.length || 0}`;
+  if (els.labLimitsLabel) els.labLimitsLabel.textContent = `${labState.selectedStyleIds.length}/${labState.limits.maxSelectedStyles || 8}`;
+  if (!styles.length) {
+    els.labStyleGrid.textContent = "暂无可用风格。";
+    return;
+  }
+  styles.slice(0, 80).forEach((style) => {
+    const selected = labState.selectedStyleIds.includes(style.id);
+    const button = document.createElement("button");
+    button.className = `lab-style-card${selected ? " active" : ""}`;
+    button.type = "button";
+    button.dataset.labStyleId = style.id;
+    button.setAttribute("aria-pressed", String(selected));
+    button.innerHTML = `
+      <span>${escapeHtml(style.category || style.family || "style")}</span>
+      <strong>${escapeHtml(style.display_name || style.id)}</strong>
+      <small>${escapeHtml(style.short_description || "")}</small>
+      <em>${escapeHtml(style.id || "")}</em>
+    `;
+    els.labStyleGrid.appendChild(button);
+  });
+  if (styles.length > 80) {
+    const note = document.createElement("div");
+    note.className = "lab-style-more-note";
+    note.textContent = `已显示前 80 个匹配风格，共 ${styles.length} 个。可继续搜索或选择风格族缩小范围。`;
+    els.labStyleGrid.appendChild(note);
+  }
+}
+
+function filteredLabStyles() {
+  const query = String(labState.search || "").trim().toLowerCase();
+  const selected = new Set(labState.selectedStyleIds || []);
+  return (labState.styles || []).filter((style) => {
+    if (!selected.has(style.id) && labState.styleFamily && style.family !== labState.styleFamily) return false;
+    if (!query) return true;
+    const blob = [style.id, style.display_name, style.short_description, style.category, style.family, ...(style.tags || [])].join(" ").toLowerCase();
+    return selected.has(style.id) || blob.includes(query);
+  }).sort((a, b) => {
+    const selectedDelta = Number(selected.has(b.id)) - Number(selected.has(a.id));
+    if (selectedDelta) return selectedDelta;
+    const beginnerDelta = Number(Boolean(b.is_beginner_default)) - Number(Boolean(a.is_beginner_default));
+    if (beginnerDelta) return beginnerDelta;
+    return String(a.display_name || a.id).localeCompare(String(b.display_name || b.id), "zh-CN");
+  });
+}
+
+function handleLabStyleGridClick(event) {
+  const button = event.target.closest("[data-lab-style-id]");
+  if (!button) return;
+  const styleId = button.dataset.labStyleId;
+  if (labState.selectedStyleIds.includes(styleId)) {
+    labState.selectedStyleIds = labState.selectedStyleIds.filter((id) => id !== styleId);
+  } else if (labState.selectedStyleIds.length < (labState.limits.maxSelectedStyles || 8)) {
+    labState.selectedStyleIds = [...labState.selectedStyleIds, styleId];
+  } else {
+    updateLabNotice(`一次最多选择 ${labState.limits.maxSelectedStyles || 8} 种风格。`, "warning");
+  }
+  renderLabStyles();
+  updateLabCountLabel();
+}
+
+function updateLabCountLabel() {
+  const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
+  const selectedCount = labState.selectedStyleIds.length;
+  const autoCount = Math.max(1, Number(labState.targetCount || 4));
+  const total = labState.selectedStyleIds.length ? labState.selectedStyleIds.length * imagesPerStyle : Math.max(1, Number(labState.targetCount || 4));
+  const hasIdea = Boolean((els.labIdeaInput?.value || "").trim());
+  if (els.labTargetCountValue) els.labTargetCountValue.textContent = String(Math.max(1, Number(labState.targetCount || 4)));
+  if (els.labImagesPerStyleValue) els.labImagesPerStyleValue.textContent = String(imagesPerStyle);
+  if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.disabled = selectedCount === 0;
+  if (els.labIntervalValue) els.labIntervalValue.textContent = String(Math.max(0, Number(labState.generationIntervalSeconds || 0)));
+  if (els.labImageCountLabel) {
+    els.labImageCountLabel.textContent = selectedCount
+      ? `预计 ${total} 张 · 已选 ${selectedCount} 个风格`
+      : `预计 ${total} 张 · 自动抽样 ${autoCount} 个风格`;
+  }
+  if (els.labGenerateBtn) {
+    els.labGenerateBtn.disabled = labState.loading || !hasIdea || total <= 0 || total > (labState.limits.maxTotalImages || 12);
+  }
+}
+
+async function runLabExploration() {
+  if (labState.loading) return;
+  if (!labState.loaded) await loadLabStyles();
+  const idea = (els.labIdeaInput?.value || "").trim();
+  if (!idea) {
+    updateLabNotice("请先填写画面想法。", "warning");
+    els.labIdeaInput?.focus();
+    return;
+  }
+  const hasManualStyles = labState.selectedStyleIds.length > 0;
+  const total = hasManualStyles
+    ? labState.selectedStyleIds.length * Math.max(1, Number(labState.imagesPerStyle || 1))
+    : Math.max(1, Number(labState.targetCount || 4));
+  if (total > (labState.limits.maxTotalImages || 12)) {
+    updateLabNotice(`本次共 ${total} 张，超过单次上限 ${labState.limits.maxTotalImages || 12} 张。`, "warning");
+    return;
+  }
+  labState.loading = true;
+  setLabBusy(true);
+  updateLabNotice(`正在生成 ${total} 张对比图。`, "info");
+  updateLabSessionState("生成中");
+  if (els.labProgress) els.labProgress.textContent = "已开始生成，正在逐张返回对比图。";
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/sessions", {
+      method: "POST",
+      body: {
+        idea,
+        selected_style_ids: labState.selectedStyleIds,
+        target_count: Math.max(1, Number(labState.targetCount || 4)),
+        mode: labState.mode || inferLabMode(idea),
+        style_family: labState.styleFamily || null,
+        freshness: labState.freshness || "high",
+        images_per_style: hasManualStyles ? Math.max(1, Number(labState.imagesPerStyle || 1)) : 1,
+        generation_interval_seconds: Math.max(0, Number(labState.generationIntervalSeconds || 0)),
+        seed: labState.seed === "" ? null : Number(labState.seed),
+        avoid_generic: true,
+        aspect_ratio: labState.aspectRatio,
+        provider_preference: labProviderPreference(),
+      },
+    });
+    labState.currentSession = payload.session;
+    labState.currentBoard = payload.board;
+    renderLabBoard(payload.board);
+    const okCount = countLabCards(payload.board, "succeeded");
+    const failedCount = countLabCards(payload.board, "failed");
+    updateLabSessionState(labStatusLabel(payload.board?.status));
+    const firstError = firstLabErrorMessage(payload.board);
+    updateLabNotice(
+      firstError
+        ? `已完成 ${okCount} 张，失败 ${failedCount} 张。${firstError}`
+        : `已完成 ${okCount} 张，失败 ${failedCount} 张。`,
+      failedCount ? "warning" : "success",
+    );
+    loadLabHistory({ silent: true, force: true }).catch(() => {});
+  } catch (error) {
+    updateLabNotice(`生成失败：${friendlyError(error)}`, "error");
+    updateLabSessionState("失败");
+  } finally {
+    labState.loading = false;
+    setLabBusy(false);
+  }
+}
+
+function inferLabMode(idea) {
+  const text = idea.toLowerCase();
+  if (/人像|肖像|portrait|角色|模特|美女|男士/.test(text)) return "character";
+  if (/海报|poster|标题|封面|banner/.test(text)) return "poster";
+  if (/产品|商品|包装|瓶|杯|鞋|包|香水|食物|甜品|咖啡/.test(text)) return "product";
+  return "minimal";
+}
+
+function labProviderPreference() {
+  const provider = safeImageProviderPreference(state.selectedProvider, "");
+  return provider || null;
+}
+
+function renderLabBoard(board) {
+  if (!els.labComparisonGrid) return;
+  const groups = Array.isArray(board?.groups) ? board.groups : [];
+  els.labComparisonGrid.innerHTML = "";
+  els.labComparisonGrid.classList.toggle("empty-v2-list", groups.length === 0);
+  if (!groups.length) {
+    els.labComparisonGrid.textContent = "暂无对比结果。";
+    if (els.labProgress) els.labProgress.textContent = "等待生成风格变化。";
+    return;
+  }
+  if (els.labProgress) {
+    els.labProgress.textContent = `${groups.length} 组风格 · ${countLabCards(board)} 张结果 · ${labStatusLabel(board.status)}`;
+  }
+  groups.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "lab-style-result";
+    section.innerHTML = `<h4>${escapeHtml(group.style_name || group.style_preset_id)}</h4>`;
+    const grid = document.createElement("div");
+    grid.className = "lab-card-grid";
+    (group.cards || []).forEach((card) => {
+      const article = document.createElement("article");
+      article.className = `lab-result-card ${card.status === "succeeded" ? "is-ready" : "is-failed"}`;
+      const imageHtml = card.image_url
+        ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(group.style_name || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(group.style_name || "Lab result")}" /></button>`
+        : `<div class="lab-error-tile">${escapeHtml(card.error?.message || "生成失败")}</div>`;
+      const imageActions = card.image_url
+        ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
+        : "";
+      article.innerHTML = `
+        ${imageHtml}
+        <div class="lab-card-meta">
+          <span>${escapeHtml(group.style_name || group.style_preset_id)} · ${escapeHtml(labCardStatusLabel(card.status))}</span>
+          <button class="lab-favorite-btn${card.is_favorite ? " active" : ""}" data-lab-favorite="${escapeHtml(card.variant_id)}" type="button" aria-pressed="${String(Boolean(card.is_favorite))}">收藏</button>
+        </div>
+        <div class="lab-card-actions">
+          <button class="lab-card-action" data-lab-copy-prompt="${escapeHtml(card.variant_id || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}" type="button">复制提示词</button>
+          ${imageActions}
+        </div>
+        <details class="lab-prompt-detail">
+          <summary>查看本图使用的提示词</summary>
+          <pre>${escapeHtml(card.prompt || "")}</pre>
+        </details>
+      `;
+      grid.appendChild(article);
+    });
+    section.appendChild(grid);
+    els.labComparisonGrid.appendChild(section);
+  });
+}
+
+function firstLabErrorMessage(board) {
+  for (const group of board?.groups || []) {
+    for (const card of group.cards || []) {
+      const message = card.error?.message || "";
+      if (message) return message;
+    }
+  }
+  return "";
+}
+
+async function handleLabComparisonClick(event) {
+  const previewButton = event.target.closest("[data-lab-preview]");
+  if (previewButton) {
+    openLabPreview(previewButton.dataset.labPreview, previewButton.dataset.labTitle || "Alchemy Lab", previewButton.dataset.labPrompt || "");
+    return;
+  }
+  const copyPromptButton = event.target.closest("[data-lab-copy-prompt]");
+  if (copyPromptButton) {
+    await copyLabPrompt(copyPromptButton.dataset.labPrompt || "");
+    return;
+  }
+  const downloadLink = event.target.closest("[data-lab-download]");
+  if (downloadLink) {
+    event.preventDefault();
+    await downloadImageFile(downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png", downloadLink);
+    return;
+  }
+  const favoriteButton = event.target.closest("[data-lab-favorite]");
+  if (!favoriteButton || !labState.currentSession) return;
+  const variantId = favoriteButton.dataset.labFavorite;
+  const favorites = new Set(labState.currentBoard?.favorites || []);
+  if (favorites.has(variantId)) favorites.delete(variantId);
+  else favorites.add(variantId);
+  try {
+    const payload = await request(`/api/lab/rare-style-explorer/sessions/${labState.currentSession.id}/favorites`, {
+      method: "POST",
+      body: { variant_ids: Array.from(favorites) },
+    });
+    labState.currentSession = payload.session;
+    labState.currentBoard = payload.board;
+    renderLabBoard(payload.board);
+    updateLabNotice(`已收藏 ${payload.board?.favorites?.length || 0} 张。`, "success");
+  } catch (error) {
+    updateLabNotice(`收藏失败：${friendlyError(error)}`, "error");
+  }
+}
+
+async function copyLabPrompt(prompt) {
+  if (!prompt) return;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(prompt);
+    else copyTextFallback(prompt);
+  } catch (error) {
+    copyTextFallback(prompt);
+  }
+  updateLabNotice("已复制这张图使用的提示词。", "success");
+}
+
+function openLabPreview(url, title, prompt) {
+  if (!url || !els.imageLightbox) return;
+  openImageLightbox({
+    id: "alchemy-lab",
+    title: title || "Alchemy Lab",
+    url,
+    thumbnailUrl: url,
+    format: "png",
+    meta: "Alchemy Lab",
+    promptText: prompt || "",
+  });
+}
+
+function resetLabExplorer() {
+  if (els.labIdeaInput) els.labIdeaInput.value = "";
+  labState.targetCount = 4;
+  labState.imagesPerStyle = 1;
+  labState.generationIntervalSeconds = 0;
+  labState.mode = "minimal";
+  labState.styleFamily = "";
+  labState.freshness = "high";
+  labState.seed = "";
+  labState.search = "";
+  if (els.labTargetCountInput) els.labTargetCountInput.value = "4";
+  if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.value = "1";
+  if (els.labIntervalInput) els.labIntervalInput.value = "0";
+  if (els.labModeInput) els.labModeInput.value = "minimal";
+  if (els.labFamilyInput) els.labFamilyInput.value = "";
+  if (els.labFreshnessInput) els.labFreshnessInput.value = "high";
+  if (els.labSeedInput) els.labSeedInput.value = "";
+  if (els.labStyleSearchInput) els.labStyleSearchInput.value = "";
+  labState.selectedStyleIds = [];
+  labState.currentSession = null;
+  labState.currentBoard = null;
+  renderLabStyles();
+  renderLabBoard(null);
+  updateLabCountLabel();
+  updateLabSessionState("待生成");
+  updateLabNotice("输入想法后可自动抽样，也可手选风格生成对比图。", "info");
+}
+
+function setLabBusy(isBusy) {
+  if (els.labGenerateBtn) {
+    els.labGenerateBtn.disabled = isBusy;
+    els.labGenerateBtn.textContent = isBusy ? "生成中..." : "生成对比";
+  }
+  if (els.labResetBtn) els.labResetBtn.disabled = isBusy;
+}
+
+function updateLabNotice(message, type = "info") {
+  if (!els.labNoticeBar) return;
+  els.labNoticeBar.textContent = message;
+  els.labNoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
+}
+
+function updateLabSessionState(label) {
+  if (els.labSessionState) els.labSessionState.textContent = label || "待生成";
+}
+
+function countLabCards(board, status = "") {
+  return (board?.groups || []).reduce((total, group) => {
+    return total + (group.cards || []).filter((card) => !status || card.status === status).length;
+  }, 0);
+}
+
+function labStatusLabel(status) {
+  const labels = {
+    queued: "排队中",
+    running: "生成中",
+    completed: "已完成",
+    partial_success: "部分完成",
+    failed: "失败",
+  };
+  return labels[status] || "待生成";
+}
+
+function labCardStatusLabel(status) {
+  const labels = {
+    succeeded: "已生成",
+    failed: "失败",
+    running: "生成中",
+    queued: "排队中",
+  };
+  return labels[status] || status || "-";
 }
 
 function hydratePortalHomeLink() {
@@ -2456,6 +3094,31 @@ function hydrateV2PromptTransformButtons() {
   });
 }
 
+function v2SizeLabel(value) {
+  const labels = {
+    "": "自动画幅",
+    "1024x1536": "竖版",
+    "1024x1024": "方图",
+    "1536x1024": "横版",
+  };
+  return labels[value || ""] || value || "自动画幅";
+}
+
+function hydrateV2AspectButtons() {
+  document.querySelectorAll("[data-v2-ratio]").forEach((button) => {
+    const value = button.dataset.v2Ratio || "";
+    const hints = {
+      "": "不锁定尺寸，可能随模板、生图引擎或探索模式变化。",
+      "1024x1536": "锁定竖版输出：1024x1536。探索模式只改变创意路径，不改变画幅。",
+      "1024x1024": "锁定方图输出：1024x1024。探索模式只改变创意路径，不改变画幅。",
+      "1536x1024": "锁定横版输出：1536x1024。探索模式只改变创意路径，不改变画幅。",
+    };
+    button.textContent = v2SizeLabel(value).replace("画幅", "");
+    button.title = hints[value] || value;
+    button.setAttribute("aria-label", `${v2SizeLabel(value)}：${hints[value] || "手动画幅锁定。"}`);
+  });
+}
+
 function updateV2PromptTransformHint() {
   if (!els.v2PromptTransformHint) return;
   const mode = v2PromptTransformMode();
@@ -2681,7 +3344,7 @@ function v2PromptTransformPlanLines(transform, plan, run) {
   const generationPrompt = v2GenerationPromptFromPlan(plan, run);
   const originalPrompt = v2CleanPromptText(plan?.prompt || "");
   if (generationPrompt && generationPrompt !== originalPrompt) {
-    lines.push("Provider Prompt Preview:");
+    lines.push("最终提示词预览:");
     lines.push(v2PromptPreviewText(generationPrompt));
   }
   return lines;
@@ -2743,7 +3406,7 @@ function renderV2PromptPlan(plan, run = v2State.currentRun) {
     });
   }
   if (providerPlan?.reference_image_count) {
-    assetLines.push(`Provider Input: ${providerInputOperationLabel(providerPlan.operation)} · 参考图 ${providerPlan.reference_image_count} 张`);
+    assetLines.push(`生成输入: ${providerInputOperationLabel(providerPlan.operation)} · 参考图 ${providerPlan.reference_image_count} 张`);
   }
   if (Array.isArray(providerPlan?.placement_targets) && providerPlan.placement_targets.length) {
     assetLines.push("融合意图:");
@@ -2771,13 +3434,24 @@ function renderV2PromptPlan(plan, run = v2State.currentRun) {
     `Negative: ${plan.negative_prompt || "-"}`,
     "",
     `Mode: ${plan.mode}`,
-    `Aspect: ${plan.provider_parameters?.aspect_ratio || "-"}`,
+    `Aspect: ${v2AspectDisplay(plan)}`,
     `Count: ${plan.provider_parameters?.count || "-"}`,
     ...(assetLines.length ? ["", assetLines.join("\n")] : []),
     "",
     plan.explanation || "",
   ].filter((line, index, list) => line || list[index - 1]);
   els.v2PromptPlan.textContent = lines.join("\n");
+}
+
+function v2AspectDisplay(plan) {
+  const lock = plan?.user_variables?.aspect_lock || {};
+  const provider = plan?.provider_parameters || {};
+  if (lock.locked) {
+    const value = lock.value || provider.size || provider.aspect_ratio || "-";
+    const ratio = lock.aspect_ratio ? ` · ${lock.aspect_ratio}` : "";
+    return `${value}${ratio} (locked)`;
+  }
+  return provider.aspect_ratio || provider.size || "auto";
 }
 
 function renderV2Outputs(outputs, job) {
@@ -4570,6 +5244,18 @@ function normalizeHeroHistoryItem(item, source, index) {
       meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
       promptText: v2PromptTextFromHistory(item),
       source: "v2",
+    };
+  }
+  if (source === "lab") {
+    return {
+      id: item.id || `lab-history-${index}`,
+      title: item.title || `Alchemy Lab 历史图片 ${index + 1}`,
+      url: item.url,
+      thumbnailUrl: item.thumbnail_url || item.url,
+      format: item.format || "png",
+      meta: labHistoryMetaText(item),
+      promptText: item.final_prompt || item.prompt || "",
+      source: "lab",
     };
   }
   return {

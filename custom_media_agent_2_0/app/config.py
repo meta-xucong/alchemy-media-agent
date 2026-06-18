@@ -180,6 +180,8 @@ class Settings:
     cors_allow_origins: tuple[str, ...] = (
         "http://127.0.0.1:8017",
         "http://localhost:8017",
+        "http://127.0.0.1:8027",
+        "http://localhost:8027",
         "http://127.0.0.1:8020",
         "http://localhost:8020",
         "http://127.0.0.1:8094",
@@ -429,6 +431,8 @@ def load_settings() -> Settings:
             (
                 "http://127.0.0.1:8017",
                 "http://localhost:8017",
+                "http://127.0.0.1:8027",
+                "http://localhost:8027",
                 "http://127.0.0.1:8020",
                 "http://localhost:8020",
                 "http://127.0.0.1:8094",

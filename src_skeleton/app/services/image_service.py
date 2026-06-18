@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 
 from app.providers.base import ProviderRuntimeError
@@ -514,10 +515,10 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
             job.status = JobStatus.provider_not_configured if fallback_error.code == "provider_not_configured" else JobStatus.failed
             job.error = ProviderError(
                 code=fallback_error.code,
-                message=str(fallback_error),
+                message=_redact_provider_error_text(str(fallback_error)),
                 provider=fallback_error.provider,
                 retryable=fallback_error.retryable,
-                detail=fallback_error.detail,
+                detail=_redact_provider_error_detail(fallback_error.detail),
             )
             if not job.cost_estimate:
                 job.cost_estimate = CostEstimate(provider=fallback_error.provider or "unknown", model="unknown")
@@ -667,6 +668,26 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
             stored[-1].visual_review = review
             stored[-1].metadata["visual_review"] = review.model_dump()
     return stored
+
+
+def _redact_provider_error_detail(detail: dict | None) -> dict:
+    if not detail:
+        return {}
+    return {str(key): _redact_provider_error_value(value) for key, value in detail.items()}
+
+
+def _redact_provider_error_value(value):
+    if isinstance(value, str):
+        return _redact_provider_error_text(value)
+    if isinstance(value, dict):
+        return {str(key): _redact_provider_error_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_provider_error_value(item) for item in value]
+    return value
+
+
+def _redact_provider_error_text(text: str) -> str:
+    return re.sub(r"sk-[A-Za-z0-9_\-*]{8,}", "sk-***", str(text or ""))
 
 
 def _persist_history_records(job: GenerationJob) -> None:
