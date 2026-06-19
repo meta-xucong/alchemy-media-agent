@@ -7,6 +7,7 @@ APP_PORT="${APP_PORT:-8017}"
 LOCAL_MODE=0
 SKIP_ENV=0
 INSTALL_DOCKER=1
+V2_DIR=""
 
 usage() {
   cat <<'USAGE'
@@ -207,6 +208,47 @@ start_stack() {
     alchemy-media-agent:latest
 }
 
+ensure_v2_runtime() {
+  V2_DIR="${DEPLOY_DIR}/custom_media_agent_2_0"
+  if [[ ! -d "${V2_DIR}" ]]; then
+    return
+  fi
+
+  if ! ensure_command python3; then
+    if ! ensure_command apt-get; then
+      echo "python3 is required to prepare the V2 runtime." >&2
+      exit 1
+    fi
+    run_as_root apt-get update
+    run_as_root apt-get install -y python3 python3-venv python3-pip
+  fi
+
+  if [[ ! -x "${V2_DIR}/.venv/bin/python" ]]; then
+    python3 -m venv "${V2_DIR}/.venv"
+  fi
+  "${V2_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  "${V2_DIR}/.venv/bin/python" -m pip install -r "${V2_DIR}/requirements.txt"
+
+  if id alchemy >/dev/null 2>&1; then
+    run_as_root chown -R alchemy:alchemy "${V2_DIR}/.venv"
+  fi
+}
+
+restart_v2_services_if_present() {
+  local units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
+  local present=()
+  for unit in "${units[@]}"; do
+    if systemctl list-unit-files "${unit}" --no-legend 2>/dev/null | grep -q "${unit}"; then
+      present+=("${unit}")
+    fi
+  done
+  if [[ "${#present[@]}" -eq 0 ]]; then
+    return
+  fi
+  run_as_root systemctl daemon-reload
+  run_as_root systemctl restart "${present[@]}"
+}
+
 health_check() {
   local url="http://127.0.0.1:${APP_PORT}/healthz"
   for _ in $(seq 1 30); do
@@ -229,5 +271,7 @@ install_docker_if_needed
 ensure_deploy_tools
 sync_repo
 write_env_file
+ensure_v2_runtime
 start_stack
+restart_v2_services_if_present
 health_check

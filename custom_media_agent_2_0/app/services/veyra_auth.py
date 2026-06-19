@@ -104,7 +104,7 @@ class VeyraSub2APIClient:
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.get(self.base_url + path, headers=self._headers())
-        except httpx.HTTPError as exc:
+        except (OSError, httpx.HTTPError) as exc:
             raise VeyraAuthError(str(exc)) from exc
         return _checked_json(response)
 
@@ -112,7 +112,7 @@ class VeyraSub2APIClient:
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(self.base_url + path, headers=self._headers(), json=payload)
-        except httpx.HTTPError as exc:
+        except (OSError, httpx.HTTPError) as exc:
             raise VeyraAuthError(str(exc)) from exc
         return _checked_json(response)
 

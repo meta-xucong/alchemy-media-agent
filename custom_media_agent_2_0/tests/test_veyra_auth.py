@@ -73,6 +73,25 @@ def test_veyra_login_route_disabled() -> None:
     assert response.json()["detail"]["error_code"] == "veyra_auth_disabled"
 
 
+def test_veyra_login_wraps_http_client_os_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "veyra_sub2api_base_url", "https://sub2api.test")
+
+    class BrokenAsyncClient:
+        def __init__(self, *args, **kwargs):
+            raise FileNotFoundError("missing CA bundle")
+
+    monkeypatch.setattr(veyra_auth_module.httpx, "AsyncClient", BrokenAsyncClient)
+    client = TestClient(app)
+
+    response = client.post("/api/v2/veyra/login", json={"ticket": "ticket-1"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["error_code"] == "veyra_auth_error"
+
+
 def test_veyra_optional_routes_degrade_when_auth_disabled(tmp_path) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", False)
     object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
