@@ -76,12 +76,12 @@ Optional fields:
 
 `seed` enables repeatable automatic style sampling. `style_id` runs a single explicit style. `avoid_generic` keeps the upstream anti-generic de-duplication behavior enabled by default.
 
-When no style is manually selected, `target_count` is the exact output count and the service normalizes `images_per_style` to `1`. When styles are manually selected, total output count is `selected_style_count * images_per_style`.
+`target_count` is the exact requested output count. `images_per_style` is the maximum number of images assigned to one style, not a multiplier that must divide evenly. The server distributes variants in selected or sampled style order, assigning up to `images_per_style` images per style; if the final style has fewer remaining images, it receives the remainder.
 
 Validation rules:
 
 - `idea` is required after trimming.
-- If `selected_style_ids` is omitted or empty, the server automatically samples `target_count` enabled styles, optionally filtered by `style_family`.
+- If `selected_style_ids` is omitted or empty, the server automatically samples enough enabled styles to satisfy `target_count` under the `images_per_style` cap, optionally filtered by `style_family`.
 - If style ids are supplied, at least one enabled style must resolve after optional family filtering.
 - The total requested images must not exceed the server batch cap.
 - The selected provider preference must be allowed by the existing generation service.

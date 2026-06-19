@@ -424,6 +424,7 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
         for style in selected
     ]
     session.prompts = prompts
+    variant_counts = _variant_counts_by_style(request, selected)
     session.variants = [
         GenerationVariant(
             id=make_id("variant"),
@@ -435,7 +436,7 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
             created_at=now_iso(),
         )
         for prompt in prompts
-        for index in range(request.images_per_style)
+        for index in range(variant_counts.get(prompt.style_preset_id, 0))
     ]
     session.status = "running"
     session.updated_at = now_iso()
@@ -603,7 +604,10 @@ def _validate_batch(request: ExplorationRequest, selected: list[StylePreset]) ->
         raise ValueError(f"Choose no more than {MAX_SELECTED_STYLES} styles.")
     if len(selected) > MAX_SELECTED_STYLES:
         raise ValueError(f"Choose no more than {MAX_SELECTED_STYLES} styles.")
-    total = len(selected) * _images_per_style_for_request(request)
+    total = _target_total_for_request(request, selected)
+    capacity = len(selected) * _images_per_style_for_request(request)
+    if total > capacity:
+        raise ValueError("Choose more styles or lower the total image count.")
     if total > MAX_TOTAL_IMAGES:
         raise ValueError(f"That is too many images for one run. Maximum is {MAX_TOTAL_IMAGES}.")
 
@@ -662,8 +666,6 @@ def _normalize_request(request: ExplorationRequest) -> ExplorationRequest:
         "style_family": family,
         "quality_enhancement": quality_enhancement,
     }
-    if not _has_manual_style_selection(request):
-        update["images_per_style"] = 1
     return request.model_copy(update=update)
 
 
@@ -672,14 +674,38 @@ def _has_manual_style_selection(request: ExplorationRequest) -> bool:
 
 
 def _images_per_style_for_request(request: ExplorationRequest) -> int:
-    return request.images_per_style if _has_manual_style_selection(request) else 1
+    return max(1, min(int(request.images_per_style or 1), MAX_IMAGES_PER_STYLE))
+
+
+def _target_total_for_request(request: ExplorationRequest, selected: list[StylePreset] | None = None) -> int:
+    if selected and _has_manual_style_selection(request) and "target_count" not in getattr(request, "model_fields_set", set()):
+        return max(1, len(selected) * _images_per_style_for_request(request))
+    return max(1, min(int(request.target_count or 1), MAX_TOTAL_IMAGES))
+
+
+def _variant_counts_by_style(request: ExplorationRequest, selected: list[StylePreset]) -> dict[str, int]:
+    if not selected:
+        return {}
+    max_per_style = max(1, min(int(request.images_per_style or 1), MAX_IMAGES_PER_STYLE))
+    target_total = min(_target_total_for_request(request, selected), len(selected) * max_per_style)
+    counts: dict[str, int] = {style.id: 0 for style in selected}
+    remaining = target_total
+    for style in selected:
+        if remaining <= 0:
+            break
+        count = min(max_per_style, remaining)
+        counts[style.id] = count
+        remaining -= count
+    return counts
 
 
 def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset]) -> list[StylePreset]:
     pool = [style for style in enabled if not request.style_family or style.family == request.style_family]
     if not pool:
         pool = enabled
-    count = max(1, min(int(request.target_count or 4), MAX_SELECTED_STYLES, MAX_TOTAL_IMAGES))
+    per_style = _images_per_style_for_request(request)
+    target_total = max(1, min(int(request.target_count or 4), MAX_TOTAL_IMAGES))
+    count = max(1, min((target_total + per_style - 1) // per_style, MAX_SELECTED_STYLES, len(pool)))
     rng = random.Random(request.seed)
     selected: list[StylePreset] = []
     used_categories: set[str] = set()

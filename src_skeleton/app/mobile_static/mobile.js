@@ -621,10 +621,23 @@ function bindControls() {
     });
   }
   document.querySelectorAll("[data-lab-module-open]").forEach((button) => {
-    button.addEventListener("click", () => openLabModule(button.dataset.labModuleOpen || "rare-style-explorer"));
+    button.addEventListener("click", () => {
+      const moduleId = button.dataset.labModuleOpen || "rare-style-explorer";
+      if (moduleId === "rare-style-explorer" && document.querySelector('[data-mobile-view="lab-rare-style-explorer"]')) {
+        openLabModuleSurface(button);
+        return;
+      }
+      openLabModule(moduleId);
+    });
   });
   document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
-    button.addEventListener("click", openLabHome);
+    button.addEventListener("click", () => {
+      if (document.body.dataset.mobileActiveSurface === "lab-rare-style-explorer") {
+        closeMobileSurface();
+        return;
+      }
+      openLabHome();
+    });
   });
   document.querySelectorAll("[data-lab-aspect]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -886,6 +899,19 @@ function openLabModule(moduleId = "rare-style-explorer") {
   }
 }
 
+function openLabModuleSurface(opener = null) {
+  labState.activeModule = "rare-style-explorer";
+  if (document.body.dataset.activeModule !== "lab") switchTab("lab");
+  renderLabModuleState();
+  if (!labState.loaded && !labState.loading) {
+    loadLabStyles().catch((error) => updateLabNotice(`风格加载失败：${friendlyError(error)}`, "error"));
+  }
+  if (!labState.historyLoaded && !labState.historyLoading) {
+    loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
+  }
+  openMobileSurface("lab-rare-style-explorer", opener);
+}
+
 function openLabHome() {
   labState.activeModule = "";
   if (document.body.dataset.activeModule !== "lab") switchTab("lab");
@@ -987,20 +1013,26 @@ function handleLabStyleGridClick(event) {
 function updateLabCountLabel() {
   const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
   const selectedCount = labState.selectedStyleIds.length;
-  const autoCount = Math.max(1, Number(labState.targetCount || 4));
-  const total = labState.selectedStyleIds.length ? labState.selectedStyleIds.length * imagesPerStyle : Math.max(1, Number(labState.targetCount || 4));
+  const targetTotal = Math.max(1, Number(labState.targetCount || 4));
+  const total = targetTotal;
+  const autoCount = Math.max(1, Math.min(labState.limits.maxSelectedStyles || 8, Math.ceil(total / imagesPerStyle)));
+  const manualStyleCapacity = Math.max(1, selectedCount) * imagesPerStyle;
   const hasIdea = Boolean((els.labIdeaInput?.value || "").trim());
   if (els.labTargetCountValue) els.labTargetCountValue.textContent = String(Math.max(1, Number(labState.targetCount || 4)));
   if (els.labImagesPerStyleValue) els.labImagesPerStyleValue.textContent = String(imagesPerStyle);
-  if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.disabled = selectedCount === 0;
   if (els.labIntervalValue) els.labIntervalValue.textContent = String(Math.max(0, Number(labState.generationIntervalSeconds || 0)));
   if (els.labImageCountLabel) {
     els.labImageCountLabel.textContent = selectedCount
-      ? `预计 ${total} 张 · 已选 ${selectedCount} 个风格`
-      : `预计 ${total} 张 · 自动抽样 ${autoCount} 个风格`;
+      ? `预计 ${total} 张 · 已选 ${selectedCount} 个风格 · 最后一种承接余数`
+      : `预计 ${total} 张 · 自动抽样约 ${autoCount} 个风格`;
   }
   if (els.labGenerateBtn) {
-    els.labGenerateBtn.disabled = labState.loading || !hasIdea || total <= 0 || total > (labState.limits.maxTotalImages || 12);
+    els.labGenerateBtn.disabled =
+      labState.loading ||
+      !hasIdea ||
+      total <= 0 ||
+      total > (labState.limits.maxTotalImages || 12) ||
+      (selectedCount > 0 && total > manualStyleCapacity);
   }
 }
 
@@ -1014,11 +1046,15 @@ async function runLabExploration() {
     return;
   }
   const hasManualStyles = labState.selectedStyleIds.length > 0;
-  const total = hasManualStyles
-    ? labState.selectedStyleIds.length * Math.max(1, Number(labState.imagesPerStyle || 1))
-    : Math.max(1, Number(labState.targetCount || 4));
+  const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
+  const total = Math.max(1, Number(labState.targetCount || 4));
+  const manualStyleCapacity = Math.max(1, labState.selectedStyleIds.length) * imagesPerStyle;
   if (total > (labState.limits.maxTotalImages || 12)) {
     updateLabNotice(`本次共 ${total} 张，超过单次上限 ${labState.limits.maxTotalImages || 12} 张。`, "warning");
+    return;
+  }
+  if (hasManualStyles && total > manualStyleCapacity) {
+    updateLabNotice(`已选风格最多可生成 ${manualStyleCapacity} 张，请增加风格或降低总张数。`, "warning");
     return;
   }
   labState.loading = true;
@@ -1037,7 +1073,7 @@ async function runLabExploration() {
         style_family: labState.styleFamily || null,
         freshness: labState.freshness || "high",
         quality_enhancement: labState.qualityEnhancement || "auto",
-        images_per_style: hasManualStyles ? Math.max(1, Number(labState.imagesPerStyle || 1)) : 1,
+        images_per_style: imagesPerStyle,
         generation_interval_seconds: Math.max(0, Number(labState.generationIntervalSeconds || 0)),
         seed: labState.seed === "" ? null : Number(labState.seed),
         avoid_generic: true,
@@ -1326,6 +1362,8 @@ function setupH5AdvancedPanels() {
 
   const v2Stack = document.querySelector("#v2Tab .module-stack");
   createMobileV2Architecture(v2Stack);
+  const labStack = document.querySelector("#labTab .module-stack");
+  createMobileLabArchitecture(labStack);
   createMobileVideoArchitecture();
   createMobileAccountArchitecture();
   bindMobileEntryButtons(document);
@@ -1585,6 +1623,31 @@ function createMobileV2Architecture(stack) {
   }
 }
 
+function createMobileLabArchitecture(stack) {
+  if (!stack || document.querySelector(".mobile-lab-main-actions")) return;
+  const labHome = document.querySelector("#labHomePanel");
+  const rareExplorer = document.querySelector("#rareStyleExplorerPanel");
+  labHome?.querySelector(".lab-module-grid")?.remove();
+
+  createMobileView({
+    id: "lab-rare-style-explorer",
+    title: "Rare Style Explorer",
+    eyebrow: "Alchemy Lab",
+    footerLabel: "返回实验室",
+    targets: [rareExplorer].filter(Boolean),
+  });
+
+  const actions = document.createElement("section");
+  actions.className = "mobile-action-panel mobile-lab-main-actions";
+  actions.innerHTML = `
+    <div class="mobile-summary-grid">
+      ${mobileEntryMarkup("lab-rare-style-explorer", "Rare Style Explorer", "稀有风格探索器", "mobileLabRareStyleSummary")}
+    </div>
+  `;
+  bindMobileEntryButtons(actions);
+  labHome?.insertAdjacentElement("afterend", actions);
+}
+
 function createMobileAccountArchitecture() {
   const accountModule = document.querySelector("#accountModule");
   if (!accountModule || document.querySelector('[data-mobile-view="account"]')) return;
@@ -1700,7 +1763,13 @@ function bindMobileEntryButtons(root = document) {
   root.querySelectorAll("[data-mobile-open]").forEach((button) => {
     if (button.dataset.mobileBound === "true") return;
     button.dataset.mobileBound = "true";
-    button.addEventListener("click", () => openMobileSurface(button.dataset.mobileOpen, button));
+    button.addEventListener("click", () => {
+      if (button.dataset.mobileOpen === "lab-rare-style-explorer") {
+        openLabModuleSurface(button);
+        return;
+      }
+      openMobileSurface(button.dataset.mobileOpen, button);
+    });
   });
 }
 
@@ -1813,6 +1882,10 @@ function closeMobileSurface(options = {}) {
   const openerId = document.body.dataset.mobileSurfaceOpener;
   document.body.dataset.mobileActiveSurface = "";
   document.body.dataset.mobileSurfaceOpener = "";
+  if (activeId === "lab-rare-style-explorer") {
+    labState.activeModule = "";
+    renderLabModuleState();
+  }
   updateMobileSummaries();
   if (!silent && openerId) document.getElementById(openerId)?.focus({ preventScroll: true });
   if (!silent && !fromHistory && activeId && window.history.state?.mobileSurface === activeId) {
@@ -1858,6 +1931,9 @@ function updateMobileSummaries() {
   setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2State.history.filter(isRenderableV2HistoryImage).length} 张历史` : "暂无历史");
   const v2Provider = v2EffectiveImageProvider(v2State.modelSettings || {});
   setSummaryText("mobileV2SettingsSummary", `${v2ImageChannelLabel(v2Provider)} · Claude Code`);
+  const labStyleCount = labState.styles.length ? `${labState.styles.length} 风格` : "风格库待加载";
+  const labHistoryCount = labState.history.length ? `${labState.history.length} 张历史` : "暂无历史";
+  setSummaryText("mobileLabRareStyleSummary", `${labStyleCount} · ${labHistoryCount}`);
   updateMobileAccountSummary();
   updateV2HomeContextSummary(template);
 }

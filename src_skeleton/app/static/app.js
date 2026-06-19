@@ -1017,20 +1017,26 @@ function handleLabStyleGridClick(event) {
 function updateLabCountLabel() {
   const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
   const selectedCount = labState.selectedStyleIds.length;
-  const autoCount = Math.max(1, Number(labState.targetCount || 4));
-  const total = labState.selectedStyleIds.length ? labState.selectedStyleIds.length * imagesPerStyle : Math.max(1, Number(labState.targetCount || 4));
+  const targetTotal = Math.max(1, Number(labState.targetCount || 4));
+  const total = targetTotal;
+  const autoCount = Math.max(1, Math.min(labState.limits.maxSelectedStyles || 8, Math.ceil(total / imagesPerStyle)));
+  const manualStyleCapacity = Math.max(1, selectedCount) * imagesPerStyle;
   const hasIdea = Boolean((els.labIdeaInput?.value || "").trim());
   if (els.labTargetCountValue) els.labTargetCountValue.textContent = String(Math.max(1, Number(labState.targetCount || 4)));
   if (els.labImagesPerStyleValue) els.labImagesPerStyleValue.textContent = String(imagesPerStyle);
-  if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.disabled = selectedCount === 0;
   if (els.labIntervalValue) els.labIntervalValue.textContent = String(Math.max(0, Number(labState.generationIntervalSeconds || 0)));
   if (els.labImageCountLabel) {
     els.labImageCountLabel.textContent = selectedCount
-      ? `预计 ${total} 张 · 已选 ${selectedCount} 个风格`
-      : `预计 ${total} 张 · 自动抽样 ${autoCount} 个风格`;
+      ? `预计 ${total} 张 · 已选 ${selectedCount} 个风格 · 最后一种承接余数`
+      : `预计 ${total} 张 · 自动抽样约 ${autoCount} 个风格`;
   }
   if (els.labGenerateBtn) {
-    els.labGenerateBtn.disabled = labState.loading || !hasIdea || total <= 0 || total > (labState.limits.maxTotalImages || 12);
+    els.labGenerateBtn.disabled =
+      labState.loading ||
+      !hasIdea ||
+      total <= 0 ||
+      total > (labState.limits.maxTotalImages || 12) ||
+      (selectedCount > 0 && total > manualStyleCapacity);
   }
 }
 
@@ -1044,11 +1050,15 @@ async function runLabExploration() {
     return;
   }
   const hasManualStyles = labState.selectedStyleIds.length > 0;
-  const total = hasManualStyles
-    ? labState.selectedStyleIds.length * Math.max(1, Number(labState.imagesPerStyle || 1))
-    : Math.max(1, Number(labState.targetCount || 4));
+  const imagesPerStyle = Math.max(1, Number(labState.imagesPerStyle || 1));
+  const total = Math.max(1, Number(labState.targetCount || 4));
+  const manualStyleCapacity = Math.max(1, labState.selectedStyleIds.length) * imagesPerStyle;
   if (total > (labState.limits.maxTotalImages || 12)) {
     updateLabNotice(`本次共 ${total} 张，超过单次上限 ${labState.limits.maxTotalImages || 12} 张。`, "warning");
+    return;
+  }
+  if (hasManualStyles && total > manualStyleCapacity) {
+    updateLabNotice(`已选风格最多可生成 ${manualStyleCapacity} 张，请增加风格或降低总张数。`, "warning");
     return;
   }
   labState.loading = true;
@@ -1067,7 +1077,7 @@ async function runLabExploration() {
         style_family: labState.styleFamily || null,
         freshness: labState.freshness || "high",
         quality_enhancement: labState.qualityEnhancement || "auto",
-        images_per_style: hasManualStyles ? Math.max(1, Number(labState.imagesPerStyle || 1)) : 1,
+        images_per_style: imagesPerStyle,
         generation_interval_seconds: Math.max(0, Number(labState.generationIntervalSeconds || 0)),
         seed: labState.seed === "" ? null : Number(labState.seed),
         avoid_generic: true,

@@ -156,7 +156,7 @@ The UI must keep this large library clean by using search, family filters, and c
 
 ### R-005: Batch Generation
 
-The user can generate one or more images for each selected style.
+The user can choose an exact total image count and a maximum number of images per style. If the total is not evenly divisible by the style count, the final used style receives the remainder.
 
 The backend must enforce max batch size.
 

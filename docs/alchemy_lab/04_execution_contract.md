@@ -69,7 +69,7 @@ For each selected style:
 
 ### 4. Create Variant Jobs
 
-For each composed prompt, create `images_per_style` generation variants.
+For each composed prompt, create up to `images_per_style` generation variants until `target_count` total variants have been allocated. If the remaining count is smaller than `images_per_style`, the final used style receives that remainder.
 
 Each variant starts as:
 

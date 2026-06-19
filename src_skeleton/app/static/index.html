@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260619-lab-style-loadmore" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260619-lab-mobile-count" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -941,20 +941,6 @@
               </div>
             </section>
 
-            <section class="panel flow-section lab-history-panel">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Alchemy Lab History</p>
-                  <h3>实验室历史</h3>
-                </div>
-                <div class="lab-module-actions">
-                  <span id="labHistoryCount" class="state-pill">0</span>
-                  <button id="labRefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
-                </div>
-              </div>
-              <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
-            </section>
-
             <div id="rareStyleExplorerPanel" class="lab-module-detail" hidden>
             <section class="panel flow-section lab-setup-panel">
               <div class="panel-head section-title">
@@ -982,7 +968,7 @@
                       <input id="labTargetCountInput" type="range" min="1" max="12" step="1" value="4" />
                     </label>
                     <label class="control-block lab-count-control">
-                      <span>每种风格 <strong id="labImagesPerStyleValue">1</strong></span>
+                      <span>每种风格最多 <strong id="labImagesPerStyleValue">1</strong></span>
                       <input id="labImagesPerStyleInput" type="range" min="1" max="4" step="1" value="1" />
                     </label>
                     <label class="control-block lab-count-control">
@@ -1083,6 +1069,20 @@
               </div>
               <div id="labProgress" class="lab-progress" role="status" aria-live="polite">等待生成风格变化。</div>
               <div id="labComparisonGrid" class="lab-comparison-grid empty-v2-list"></div>
+            </section>
+
+            <section class="panel flow-section lab-history-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Rare Style Explorer History</p>
+                  <h3>实验室历史</h3>
+                </div>
+                <div class="lab-module-actions">
+                  <span id="labHistoryCount" class="state-pill">0</span>
+                  <button id="labRefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                </div>
+              </div>
+              <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
             </section>
             </div>
           </div>
@@ -1202,6 +1202,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260619-lab-style-loadmore" defer></script>
+    <script src="/static/app.js?v=20260619-lab-mobile-count" defer></script>
   </body>
 </html>

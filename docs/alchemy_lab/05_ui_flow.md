@@ -109,8 +109,8 @@ Beginner default:
 
 - do not require any style to be selected on first entry
 - if no style is selected, let the server automatically sample by `target_count`, `style_family`, `freshness`, and `seed`
-- if the user manually selects styles, calculate total output as selected styles times images per style
-- disable the images-per-style control until at least one style is manually selected
+- keep `target_count` as the exact total output count
+- treat `images_per_style` as the maximum assigned to one style; the final style can receive the remainder when the count does not divide evenly
 
 #### Basic Options
 

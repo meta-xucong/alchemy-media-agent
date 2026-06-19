@@ -556,9 +556,48 @@ def test_alchemy_lab_auto_mode_target_count_is_exact_total():
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["session"]["request"]["images_per_style"] == 1
-    assert len(payload["board"]["groups"]) == 5
+    assert payload["session"]["request"]["images_per_style"] == 3
+    assert len(payload["board"]["groups"]) == 2
     assert sum(len(group["cards"]) for group in payload["board"]["groups"]) == 5
+
+
+def test_alchemy_lab_distributes_target_count_remainder_to_last_style():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "甜品店新品海报",
+            "target_count": 5,
+            "style_family": "graphic",
+            "images_per_style": 2,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    groups = response.json()["board"]["groups"]
+    assert len(groups) == 3
+    assert [len(group["cards"]) for group in groups] == [2, 2, 1]
+    assert sum(len(group["cards"]) for group in groups) == 5
+
+
+def test_alchemy_lab_rejects_manual_styles_when_target_exceeds_capacity():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "手选两个风格但要求太多图",
+            "selected_style_ids": ["M001", "C002"],
+            "target_count": 9,
+            "images_per_style": 4,
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Choose more styles" in response.json()["detail"]["message"]
 
 
 def test_alchemy_lab_deduplicates_selected_styles():
@@ -1225,7 +1264,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260619-lab-style-loadmore" in index.text
+    assert "20260619-lab-mobile-count" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1245,6 +1284,7 @@ def test_frontend_static_app_is_served():
     assert "labFamilyInput" in index.text
     assert "labStyleSearchInput" in index.text
     assert "搜索 620 个风格名" in index.text
+    assert "每种风格最多" in index.text
     assert "生视频（DEMO）" in index.text
     assert "<p class=\"video-state\">coming soon</p>" in index.text
     assert "手机 H5" in index.text
@@ -1372,7 +1412,7 @@ def test_frontend_static_app_is_served():
     assert "自动画幅" in script.text
     assert 'lab: "探索各种创意玩法"' in script.text
     assert "labHistoryGrid" in index.text
-    assert "Alchemy Lab History" in index.text
+    assert "Rare Style Explorer History" in index.text
     assert "探索各种创意玩法" in index.text
     assert "稀有风格探索器" in index.text
     assert "返回实验室" in index.text
@@ -1387,6 +1427,7 @@ def test_frontend_static_app_is_served():
     assert "data-lab-load-more-styles" in script.text
     assert "点击加载更多" in script.text
     assert "target_count" in script.text
+    assert "最后一种承接余数" in script.text
     assert "generation_interval_seconds" in script.text
     assert "quality_enhancement" in script.text
     assert "labQualityEnhancementInput" in index.text
@@ -1519,7 +1560,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260619-lab-style-loadmore" in h5.text
+    assert "20260619-lab-mobile-count" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -1541,6 +1582,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "labQualityEnhancementInput" in h5.text
     assert "labStyleSearchInput" in h5.text
     assert "搜索 620 个风格名" in h5.text
+    assert "每种风格最多" in h5.text
     lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="videoTab"')]
     assert "批次" not in lab_section
     assert "Provider" not in lab_section
@@ -1586,13 +1628,14 @@ def test_mobile_h5_app_is_served_independently():
     assert ".lab-favorite-btn.active" in mobile_styles.text
     assert "v2-template-actions" in mobile_styles.text
     assert ".v2-template-card:focus-visible" in mobile_styles.text
+    assert ".mobile-entry-card" in mobile_styles.text
 
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in mobile_script.text
     assert 'lab: "探索各种创意玩法"' in mobile_script.text
     assert "labHistoryGrid" in h5.text
-    assert "Alchemy Lab History" in h5.text
+    assert "Rare Style Explorer History" in h5.text
     assert "function loadLabHistory" in mobile_script.text
     assert "function renderLabHistory" in mobile_script.text
     assert "/api/lab/rare-style-explorer/history" in mobile_script.text
@@ -1602,6 +1645,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "data-lab-load-more-styles" in mobile_script.text
     assert "点击加载更多" in mobile_script.text
     assert "target_count" in mobile_script.text
+    assert "lab-rare-style-explorer" in mobile_script.text
+    assert "mobileLabRareStyleSummary" in mobile_script.text
+    assert "最后一种承接余数" in mobile_script.text
     assert "generation_interval_seconds" in mobile_script.text
     assert "quality_enhancement" in mobile_script.text
     assert "labQualityEnhancementInput" in mobile_script.text
