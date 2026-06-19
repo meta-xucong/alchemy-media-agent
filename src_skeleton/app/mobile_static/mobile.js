@@ -756,7 +756,7 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
   renderLabHistoryLoading();
   try {
-    const payload = await request("/api/lab/rare-style-explorer/history?limit=1000");
+    const payload = await request("/api/lab/history?limit=1000");
     labState.history = Array.isArray(payload.items) ? payload.items : [];
     labState.historyLoaded = true;
     renderLabHistory(labState.history);

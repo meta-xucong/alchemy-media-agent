@@ -36,6 +36,7 @@ DEFAULT_GENERATION_INTERVAL_SECONDS = 8
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 180
 TERMINAL_SESSION_STATUSES = {"completed", "partial_success", "failed"}
 LAB_PROJECT_ID = "alchemy_lab_rare_style_explorer"
+LAB_SOURCE_PREFIX = "alchemy_lab"
 RARE_STYLE_FEATURE_ID = "rare-style-explorer"
 
 STYLE_FAMILIES: dict[str, set[str]] = {
@@ -1271,10 +1272,14 @@ def _attach_lab_history_metadata(
         output.metadata = {**output.metadata, "alchemy_lab": metadata}
     job.raw_response_summary = {**(job.raw_response_summary or {}), "alchemy_lab": metadata}
     repository.save_job(job)
-    _append_lab_history_records(job, metadata)
+    _append_lab_history_records(job, metadata, prompt=prompt)
 
 
-def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any]) -> None:
+def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any], *, prompt: ComposedPrompt) -> None:
+    original_prompt = job.provenance.get("original_prompt") if job.provenance else None
+    final_prompt = job.provenance.get("final_prompt") if job.provenance else None
+    original_prompt = original_prompt or prompt.idea
+    final_prompt = final_prompt or prompt.final_prompt
     for output in job.outputs:
         if output.format not in {"png", "jpeg", "webp"}:
             continue
@@ -1298,13 +1303,13 @@ def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any]) ->
                 "asset_vision_profiles": [],
                 "visual_review": output.visual_review.model_dump() if output.visual_review else None,
                 "prompt_plan": job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
-                "original_prompt": job.provenance.get("original_prompt") if job.provenance else None,
-                "final_prompt": job.provenance.get("final_prompt") if job.provenance else None,
+                "original_prompt": original_prompt,
+                "final_prompt": final_prompt,
                 "source_app": LAB_PROJECT_ID,
                 "idempotency_key": job.idempotency_key,
                 "work_intensity": job.prompt_plan.variables.get("work_intensity") if job.prompt_plan and job.prompt_plan.variables else None,
                 "work_intensity_label": job.prompt_plan.variables.get("work_intensity_label") if job.prompt_plan and job.prompt_plan.variables else None,
-                "prompt": job.provenance.get("final_prompt") if job.provenance else None,
+                "prompt": final_prompt,
                 "size": job.prompt_plan.size if job.prompt_plan else None,
                 "version_parent_id": output.version_parent_id,
                 "veyra_user_id": output.metadata.get("veyra_user_id"),
@@ -1316,7 +1321,10 @@ def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any]) ->
 
 
 def is_lab_history_record(record: dict[str, Any]) -> bool:
-    if record.get("source_app") == LAB_PROJECT_ID:
+    source_app = str(record.get("source_app") or "")
+    if source_app == LAB_PROJECT_ID:
+        return True
+    if source_app.startswith(f"{LAB_SOURCE_PREFIX}_") or source_app.startswith(f"{LAB_SOURCE_PREFIX}:"):
         return True
     if str(record.get("idempotency_key") or "").startswith("lab:"):
         return True
@@ -1337,17 +1345,21 @@ def _lab_history_item_from_record(record: dict[str, Any]) -> LabHistoryItem | No
     )
     inferred = _infer_lab_metadata_from_prompt(source_prompt)
     data = {**inferred, **metadata}
+    module = _lab_module_from_record(data, record)
+    module_label = _lab_module_label(module, data)
     style_name = _clean_lab_text(data.get("style_name")) or _clean_lab_text(inferred.get("style_name"))
     idea = (
         _clean_lab_text(data.get("idea"))
         or _infer_lab_idea(record.get("original_prompt"))
         or _infer_lab_idea(prompt)
     )
-    title = f"Rare Style Explorer · {style_name}" if style_name else "Rare Style Explorer"
+    title = f"{module_label} · {style_name}" if style_name else module_label
     return LabHistoryItem(
         id=str(record.get("id")),
         job_id=str(record.get("job_id") or ""),
         session_id=record.get("session_id"),
+        module=module,
+        module_label=module_label,
         title=title,
         style_preset_id=_clean_lab_text(data.get("style_preset_id")),
         style_name=style_name,
@@ -1381,6 +1393,32 @@ def _lab_history_item_from_record(record: dict[str, Any]) -> LabHistoryItem | No
         updated_at=record.get("updated_at"),
         source=record.get("source"),
     )
+
+
+def _lab_module_from_record(data: dict[str, Any], record: dict[str, Any]) -> str:
+    module = _clean_lab_text(data.get("module")) or _clean_lab_text(record.get("module"))
+    if module:
+        return module
+    source_app = _clean_lab_text(record.get("source_app")) or ""
+    if source_app == LAB_PROJECT_ID:
+        return RARE_STYLE_FEATURE_ID
+    if source_app.startswith(f"{LAB_SOURCE_PREFIX}_"):
+        return source_app.removeprefix(f"{LAB_SOURCE_PREFIX}_").replace("_", "-")
+    if source_app.startswith(f"{LAB_SOURCE_PREFIX}:"):
+        return source_app.removeprefix(f"{LAB_SOURCE_PREFIX}:").replace("_", "-")
+    return RARE_STYLE_FEATURE_ID
+
+
+def _lab_module_label(module: str, data: dict[str, Any]) -> str:
+    label = _clean_lab_text(data.get("module_label")) or _clean_lab_text(data.get("feature_label"))
+    if label:
+        return label
+    if module in {RARE_STYLE_FEATURE_ID, LAB_PROJECT_ID}:
+        return "Rare Style Explorer"
+    words = [part for part in re.split(r"[-_\s]+", module) if part]
+    if not words:
+        return "Alchemy Lab"
+    return " ".join(word[:1].upper() + word[1:] for word in words)
 
 
 def _infer_lab_metadata_from_prompt(prompt: str) -> dict[str, Any]:

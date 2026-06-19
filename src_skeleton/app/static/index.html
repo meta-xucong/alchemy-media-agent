@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260619-lab-serial" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260619-lab-home-history" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -939,6 +939,20 @@
                   <small>从 620 个低频视觉亚风格里抽样、筛选并批量生成对比图。</small>
                 </button>
               </div>
+              <section class="panel flow-section lab-history-panel lab-home-history-panel">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">Alchemy Lab History</p>
+                    <h3>实验室历史</h3>
+                    <p class="section-subcopy">所有实验室模块生成的图片都会汇总在这里，并标记来源模块。</p>
+                  </div>
+                  <div class="lab-module-actions">
+                    <span id="labHistoryCount" class="state-pill">0</span>
+                    <button id="labRefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                  </div>
+                </div>
+                <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
+              </section>
             </section>
 
             <div id="rareStyleExplorerPanel" class="lab-module-detail" hidden>
@@ -1071,19 +1085,6 @@
               <div id="labComparisonGrid" class="lab-comparison-grid empty-v2-list"></div>
             </section>
 
-            <section class="panel flow-section lab-history-panel">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Rare Style Explorer History</p>
-                  <h3>实验室历史</h3>
-                </div>
-                <div class="lab-module-actions">
-                  <span id="labHistoryCount" class="state-pill">0</span>
-                  <button id="labRefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
-                </div>
-              </div>
-              <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
-            </section>
             </div>
           </div>
         </section>
@@ -1202,6 +1203,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260619-lab-serial" defer></script>
+    <script src="/static/app.js?v=20260619-lab-home-history" defer></script>
   </body>
 </html>

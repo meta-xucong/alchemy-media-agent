@@ -792,10 +792,13 @@ def test_alchemy_lab_uses_existing_generation_without_v2_bridge_history():
     assert history.status_code == 200
     assert all(item["id"] != output_id for item in history.json()["items"])
 
-    lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10")
+    lab_history = client.get("/api/lab/history?limit=10")
     assert lab_history.status_code == 200
     lab_items = lab_history.json()["items"]
     assert any(item["id"] == output_id for item in lab_items)
+    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10")
+    assert legacy_lab_history.status_code == 200
+    assert any(item["id"] == output_id for item in legacy_lab_history.json()["items"])
     item = next(item for item in lab_items if item["id"] == output_id)
     assert item["module"] == "rare-style-explorer"
     assert item["module_label"] == "Rare Style Explorer"
@@ -805,6 +808,9 @@ def test_alchemy_lab_uses_existing_generation_without_v2_bridge_history():
     assert item["mode_label"] == "海报封面"
     assert item["keywords"]
     assert item["idea"] == "AI 知识库应用图标"
+    assert item["final_prompt"]
+    assert "AI 知识库应用图标" in item["final_prompt"]
+    assert "稀有风格方向：" in item["final_prompt"]
 
 
 def test_alchemy_lab_preserves_partial_failures(monkeypatch):
@@ -1339,7 +1345,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260619-lab-serial" in index.text
+    assert "20260619-lab-home-history" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1487,7 +1493,7 @@ def test_frontend_static_app_is_served():
     assert "自动画幅" in script.text
     assert 'lab: "探索各种创意玩法"' in script.text
     assert "labHistoryGrid" in index.text
-    assert "Rare Style Explorer History" in index.text
+    assert "Alchemy Lab History" in index.text
     assert "探索各种创意玩法" in index.text
     assert "稀有风格探索器" in index.text
     assert "返回实验室" in index.text
@@ -1495,7 +1501,7 @@ def test_frontend_static_app_is_served():
     assert "function renderLabHistory" in script.text
     assert 'className = "v2-history-card lab-history-card"' in script.text
     assert "data-lab-history-card" in script.text
-    assert "/api/lab/rare-style-explorer/history" in script.text
+    assert "/api/lab/history" in script.text
     assert "function loadLabStyles" in script.text
     assert "function openLabModule" in script.text
     assert "function filteredLabStyles" in script.text
@@ -1639,7 +1645,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260619-lab-serial" in h5.text
+    assert "20260619-lab-home-history" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -1714,10 +1720,10 @@ def test_mobile_h5_app_is_served_independently():
     assert "const ticketAccepted = await handleVeyraTicketFromUrl();" in mobile_script.text
     assert 'lab: "探索各种创意玩法"' in mobile_script.text
     assert "labHistoryGrid" in h5.text
-    assert "Rare Style Explorer History" in h5.text
+    assert "Alchemy Lab History" in h5.text
     assert "function loadLabHistory" in mobile_script.text
     assert "function renderLabHistory" in mobile_script.text
-    assert "/api/lab/rare-style-explorer/history" in mobile_script.text
+    assert "/api/lab/history" in mobile_script.text
     assert "function loadLabStyles" in mobile_script.text
     assert "function openLabModule" in mobile_script.text
     assert "function filteredLabStyles" in mobile_script.text
@@ -2092,13 +2098,16 @@ def test_image_history_excludes_alchemy_lab_outputs(tmp_path, monkeypatch):
     assert manifest_history.status_code == 200
     assert manifest_history.json()["total"] == 0
 
-    lab_history = client.get("/api/lab/rare-style-explorer/history")
+    lab_history = client.get("/api/lab/history")
     assert lab_history.status_code == 200
     body = lab_history.json()
     assert body["total"] >= 1
     item = next(item for item in body["items"] if item["id"] == "out_lab_manifest")
     assert item["module_label"] == "Rare Style Explorer"
     assert item["style_name"] == "CRT 像素界面静物"
+    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history")
+    assert legacy_lab_history.status_code == 200
+    assert "out_lab_manifest" in {item["id"] for item in legacy_lab_history.json()["items"]}
 
 
 def test_v2_local_proxy_target_uses_same_origin_shell():
@@ -2317,7 +2326,8 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
             }
         )
 
-        lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        lab_history = client.get("/api/lab/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
         v1_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
         lab_download = client.get(f"/v1/outputs/{lab_id}/download", headers={"Authorization": f"Bearer {other_token}"})
         v1_download = client.get(f"/v1/outputs/{v1_id}/download", headers={"Authorization": f"Bearer {other_token}"})
@@ -2326,6 +2336,8 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
 
         assert lab_history.status_code == 200
         assert lab_id in {item["id"] for item in lab_history.json()["items"]}
+        assert legacy_lab_history.status_code == 200
+        assert lab_id in {item["id"] for item in legacy_lab_history.json()["items"]}
         assert v1_history.status_code == 200
         assert v1_id not in {item["id"] for item in v1_history.json()["items"]}
         assert lab_download.status_code == 200

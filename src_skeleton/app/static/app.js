@@ -768,7 +768,7 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
   renderLabHistoryLoading();
   try {
-    const payload = await request("/api/lab/rare-style-explorer/history?limit=1000");
+    const payload = await request("/api/lab/history?limit=1000");
     labState.history = Array.isArray(payload.items) ? payload.items : [];
     labState.historyLoaded = true;
     renderLabHistory(labState.history);
@@ -933,7 +933,14 @@ function setLabNavOpen(open) {
   labState.navOpen = nextOpen;
   if (els.labNavMenu) els.labNavMenu.classList.toggle("is-open", nextOpen);
   if (els.labNavTab) els.labNavTab.setAttribute("aria-expanded", String(nextOpen));
-  if (els.labNavDropdown) els.labNavDropdown.hidden = !nextOpen;
+  if (els.labNavDropdown) {
+    if (nextOpen && els.labNavTab) {
+      const rect = els.labNavTab.getBoundingClientRect();
+      els.labNavDropdown.style.setProperty("--lab-menu-left", `${rect.left + rect.width / 2}px`);
+      els.labNavDropdown.style.setProperty("--lab-menu-top", `${rect.bottom + 8}px`);
+    }
+    els.labNavDropdown.hidden = !nextOpen;
+  }
 }
 
 function hydrateLabControlLimits() {

@@ -3485,3 +3485,52 @@ select:focus {
     font-size: 12px;
   }
 }
+
+/* Final mobile navigation pass: fixed visual band with horizontal scrolling tabs. */
+.module-tabs {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.module-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.module-tabs .tab {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+  scroll-snap-align: center;
+}
+
+.header-status {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.header-status > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab-home-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.lab-home-history-panel {
+  margin-top: 0;
+}

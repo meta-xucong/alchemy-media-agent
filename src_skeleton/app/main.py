@@ -189,14 +189,23 @@ def list_rare_style_explorer_styles(request: Request, authorization: str = Heade
     return list_style_presets()
 
 
-@app.get("/api/lab/rare-style-explorer/history")
-def list_rare_style_explorer_history(
+@app.get("/api/lab/history")
+def list_alchemy_lab_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=1000),
     authorization: str = Header(default=""),
 ):
     _require_veyra_user_if_enabled(request, authorization)
     return list_lab_history(limit=limit)
+
+
+@app.get("/api/lab/rare-style-explorer/history")
+def list_rare_style_explorer_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=1000),
+    authorization: str = Header(default=""),
+):
+    return list_alchemy_lab_history(request=request, limit=limit, authorization=authorization)
 
 
 @app.post("/api/lab/rare-style-explorer/sessions")
