@@ -1373,8 +1373,13 @@ def test_frontend_static_app_is_served():
     assert 'lab: "探索各种创意玩法"' in script.text
     assert "labHistoryGrid" in index.text
     assert "Alchemy Lab History" in index.text
+    assert "探索各种创意玩法" in index.text
+    assert "稀有风格探索器" in index.text
+    assert "返回实验室" in index.text
     assert "function loadLabHistory" in script.text
     assert "function renderLabHistory" in script.text
+    assert 'className = "v2-history-card lab-history-card"' in script.text
+    assert "data-lab-history-card" in script.text
     assert "/api/lab/rare-style-explorer/history" in script.text
     assert "function loadLabStyles" in script.text
     assert "function openLabModule" in script.text
@@ -1524,6 +1529,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "labHomePanel" in h5.text
     assert "rareStyleExplorerPanel" in h5.text
     assert "data-lab-module-open=\"rare-style-explorer\"" in h5.text
+    assert "探索各种创意玩法" in h5.text
+    assert "稀有风格探索器" in h5.text
+    assert "返回实验室" in h5.text
     assert "labTargetCountInput" in h5.text
     assert "labIntervalInput" in h5.text
     assert "labModeInput" in h5.text

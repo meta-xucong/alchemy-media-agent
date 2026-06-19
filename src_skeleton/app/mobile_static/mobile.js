@@ -455,7 +455,12 @@ window.addEventListener("error", (event) => {
 
 function bindControls() {
   els.tabs.forEach((button) => {
-    button.addEventListener("click", () => switchTab(button.dataset.tab));
+    button.addEventListener("click", () => {
+      if (button.dataset.tab === "lab") {
+        labState.activeModule = "";
+      }
+      switchTab(button.dataset.tab);
+    });
   });
 
   els.countInput.addEventListener("input", () => {
@@ -764,24 +769,27 @@ function renderLabHistory(items) {
   }
   sortedItems.slice(0, historyPageSize).forEach((item, index) => {
     const article = document.createElement("article");
-    article.className = "lab-history-card";
+    article.className = "v2-history-card lab-history-card";
+    article.dataset.labHistoryCard = String(index);
+    article.title = `点击展开 ${item.title || item.style_name || "Alchemy Lab 历史"}`;
     const metaText = labHistoryMetaText(item);
+    const title = item.title || item.style_name || "Rare Style Explorer";
+    const detailText = historyDetailText(item.idea || "未记录画面方向", metaText);
+    const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
     article.innerHTML = `
-      <button class="lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}">
-        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(item.title || `Alchemy Lab 历史 ${index + 1}`)}" loading="lazy" decoding="async" />
+      <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
+        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
       </button>
-      <div class="lab-history-body">
-        <span>${escapeHtml(item.module_label || "Rare Style Explorer")}</span>
-        <strong>${escapeHtml(item.title || "Rare Style Explorer")}</strong>
-        <p>${escapeHtml(item.idea || "未记录画面方向")}</p>
-        <small>${escapeHtml(metaText)}</small>
+      <div class="v2-history-meta lab-history-meta">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(detailText)}</span>
       </div>
-      <div class="lab-history-tags">
-        ${labHistoryTags(item).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}
-      </div>
-      <div class="lab-card-actions">
-        <button class="lab-card-action" data-lab-history-prompt="${index}" type="button">查看提示词</button>
-        <a class="lab-card-action" href="${escapeHtml(item.url || "#")}" data-lab-download="${escapeHtml(item.url || "")}" data-lab-filename="${escapeHtml(`alchemy-lab-${item.id || index}.png`)}">下载</a>
+      <div class="output-meta v2-history-footer lab-history-footer">
+        <span class="output-id">${escapeHtml(footerText || `#${index + 1}`)}</span>
+        <div class="history-card-actions">
+          <button class="download-link lab-text-link" data-lab-history-prompt="${index}" type="button">提示词</button>
+          <a class="download-link" href="${escapeHtml(item.url || "#")}" data-lab-download="${escapeHtml(item.url || "")}" data-lab-filename="${escapeHtml(`alchemy-lab-${item.id || index}.png`)}">下载</a>
+        </div>
       </div>
     `;
     els.labHistoryGrid.appendChild(article);
@@ -805,6 +813,12 @@ function handleLabHistoryClick(event) {
   if (downloadLink) {
     event.preventDefault();
     downloadImageFile(downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png", downloadLink);
+    return;
+  }
+  const card = event.target.closest("[data-lab-history-card]");
+  if (card) {
+    const item = labState.history[Number(card.dataset.labHistoryCard || 0)];
+    if (item) openLabHistoryPreview(item);
   }
 }
 
