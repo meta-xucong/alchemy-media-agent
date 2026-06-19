@@ -792,11 +792,11 @@ def test_alchemy_lab_uses_existing_generation_without_v2_bridge_history():
     assert history.status_code == 200
     assert all(item["id"] != output_id for item in history.json()["items"])
 
-    lab_history = client.get("/api/lab/history?limit=10")
+    lab_history = client.get("/api/lab/history?limit=10&include_mock=true")
     assert lab_history.status_code == 200
     lab_items = lab_history.json()["items"]
     assert any(item["id"] == output_id for item in lab_items)
-    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10")
+    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10&include_mock=true")
     assert legacy_lab_history.status_code == 200
     assert any(item["id"] == output_id for item in legacy_lab_history.json()["items"])
     item = next(item for item in lab_items if item["id"] == output_id)
@@ -1345,7 +1345,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260619-lab-home-history" in index.text
+    assert "20260619-lab-order-fix" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1353,6 +1353,13 @@ def test_frontend_static_app_is_served():
     assert "Rare Style Explorer" in index.text
     assert "labStyleGrid" in index.text
     assert "labComparisonGrid" in index.text
+    lab_home_pos = index.text.find('id="labHomePanel"')
+    lab_detail_pos = index.text.find('id="rareStyleExplorerPanel"')
+    lab_history_pos = index.text.find('id="labHistoryGrid"')
+    assert lab_home_pos != -1
+    assert lab_detail_pos != -1
+    assert lab_history_pos != -1
+    assert lab_home_pos < lab_detail_pos < lab_history_pos
     lab_section = index.text[index.text.find('id="labTab"') : index.text.find('id="videoTab"')]
     assert "批次" not in lab_section
     assert "Provider" not in lab_section
@@ -1645,7 +1652,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260619-lab-home-history" in h5.text
+    assert "20260619-lab-order-fix" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -1654,6 +1661,13 @@ def test_mobile_h5_app_is_served_independently():
     assert "Rare Style Explorer" in h5.text
     assert "labStyleGrid" in h5.text
     assert "labComparisonGrid" in h5.text
+    lab_home_pos = h5.text.find('id="labHomePanel"')
+    lab_detail_pos = h5.text.find('id="rareStyleExplorerPanel"')
+    lab_history_pos = h5.text.find('id="labHistoryGrid"')
+    assert lab_home_pos != -1
+    assert lab_detail_pos != -1
+    assert lab_history_pos != -1
+    assert lab_home_pos < lab_detail_pos < lab_history_pos
     assert "labHomePanel" in h5.text
     assert "rareStyleExplorerPanel" in h5.text
     assert "data-lab-module-open=\"rare-style-explorer\"" in h5.text
@@ -1703,6 +1717,7 @@ def test_mobile_h5_app_is_served_independently():
     assert ".h5-advanced-panel" in mobile_styles.text
     assert ".h5-quick-guide" in mobile_styles.text
     assert "lab-style-grid" in mobile_styles.text
+    assert ".lab-home-panel[hidden]" in mobile_styles.text
     assert "lab-module-card" in mobile_styles.text
     assert "lab-library-details" in mobile_styles.text
     assert "lab-style-more-note" in mobile_styles.text
@@ -1730,8 +1745,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "data-lab-load-more-styles" in mobile_script.text
     assert "点击加载更多" in mobile_script.text
     assert "target_count" in mobile_script.text
-    assert "lab-rare-style-explorer" in mobile_script.text
-    assert "mobileLabRareStyleSummary" in mobile_script.text
+    assert "lab-rare-style-explorer" not in mobile_script.text
+    assert "openLabModuleSurface" not in mobile_script.text
     assert "最后一种承接余数" in mobile_script.text
     assert "generation_interval_seconds" in mobile_script.text
     assert "labDefaultGenerationIntervalSeconds = 8" in mobile_script.text
@@ -2098,16 +2113,51 @@ def test_image_history_excludes_alchemy_lab_outputs(tmp_path, monkeypatch):
     assert manifest_history.status_code == 200
     assert manifest_history.json()["total"] == 0
 
-    lab_history = client.get("/api/lab/history")
+    lab_history = client.get("/api/lab/history?include_mock=true")
     assert lab_history.status_code == 200
     body = lab_history.json()
     assert body["total"] >= 1
     item = next(item for item in body["items"] if item["id"] == "out_lab_manifest")
     assert item["module_label"] == "Rare Style Explorer"
     assert item["style_name"] == "CRT 像素界面静物"
-    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history")
+    legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?include_mock=true")
     assert legacy_lab_history.status_code == 200
     assert "out_lab_manifest" in {item["id"] for item in legacy_lab_history.json()["items"]}
+
+
+def test_alchemy_lab_history_hides_mock_outputs_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    client = TestClient(app)
+    output_path = media_store.output_path(job_id="job_lab_mock", output_id="out_lab_mock", output_format="png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": "out_lab_mock",
+            "job_id": "job_lab_mock",
+            "session_id": "ses_lab_mock",
+            "url": "/v1/outputs/out_lab_mock/download",
+            "thumbnail_url": "/v1/outputs/out_lab_mock/thumbnail",
+            "format": "png",
+            "provider": "mock_image",
+            "model": "mock-image-v1",
+            "source_app": "alchemy_lab_rare_style_explorer",
+            "idempotency_key": "lab:mock:variant:attempt:0",
+            "prompt": "mock lab image",
+            "created_at": "2026-04-01T09:00:00+00:00",
+            "updated_at": "2026-04-01T09:00:00+00:00",
+            "alchemy_lab": {"idea": "mock", "style_name": "Mock Style"},
+        }
+    )
+
+    public_history = client.get("/api/lab/history")
+    assert public_history.status_code == 200
+    assert public_history.json()["total"] == 0
+
+    debug_history = client.get("/api/lab/history?include_mock=true")
+    assert debug_history.status_code == 200
+    assert "out_lab_mock" in {item["id"] for item in debug_history.json()["items"]}
 
 
 def test_v2_local_proxy_target_uses_same_origin_shell():
@@ -2326,8 +2376,8 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
             }
         )
 
-        lab_history = client.get("/api/lab/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
-        legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        lab_history = client.get("/api/lab/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {other_token}"})
+        legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {other_token}"})
         v1_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
         lab_download = client.get(f"/v1/outputs/{lab_id}/download", headers={"Authorization": f"Bearer {other_token}"})
         v1_download = client.get(f"/v1/outputs/{v1_id}/download", headers={"Authorization": f"Bearer {other_token}"})

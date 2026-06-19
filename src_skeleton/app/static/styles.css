@@ -4588,6 +4588,10 @@ input[type="range"] {
   min-height: 240px;
 }
 
+.lab-home-panel[hidden] {
+  display: none;
+}
+
 .lab-module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 360px));

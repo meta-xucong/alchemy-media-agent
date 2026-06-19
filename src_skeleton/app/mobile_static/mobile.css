@@ -2970,6 +2970,10 @@ select:focus {
   min-height: 180px;
 }
 
+.lab-home-panel[hidden] {
+  display: none;
+}
+
 .lab-module-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

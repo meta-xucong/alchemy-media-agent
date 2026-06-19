@@ -594,15 +594,23 @@ def update_favorites(session_id: str, selection: FavoriteSelection) -> Explorati
     return lab_store.save(session)
 
 
-def list_lab_history(*, limit: int = 50) -> dict[str, Any]:
+def list_lab_history(*, limit: int = 50, include_mock: bool = False) -> dict[str, Any]:
     records = media_store.list_history_records(limit=10000)
     items = [
         item
         for item in (_lab_history_item_from_record(record) for record in records)
         if item is not None
     ]
+    if not include_mock:
+        items = [item for item in items if not _is_mock_lab_history_item(item)]
     items.sort(key=lambda item: item.created_at or item.updated_at or "", reverse=True)
     return {"items": [item.model_dump() for item in items[:limit]], "total": len(items)}
+
+
+def _is_mock_lab_history_item(item: LabHistoryItem) -> bool:
+    provider = str(item.provider or "").strip().lower()
+    model = str(item.model or "").strip().lower()
+    return provider in {"mock", "mock_image"} or model.startswith("mock-")
 
 
 def comparison_board(session: ExplorationSession) -> ComparisonBoard:

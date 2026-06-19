@@ -627,20 +627,11 @@ function bindControls() {
   }
   document.querySelectorAll("[data-lab-module-open]").forEach((button) => {
     button.addEventListener("click", () => {
-      const moduleId = button.dataset.labModuleOpen || "rare-style-explorer";
-      if (moduleId === "rare-style-explorer" && document.querySelector('[data-mobile-view="lab-rare-style-explorer"]')) {
-        openLabModuleSurface(button);
-        return;
-      }
-      openLabModule(moduleId);
+      openLabModule(button.dataset.labModuleOpen || "rare-style-explorer");
     });
   });
   document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
     button.addEventListener("click", () => {
-      if (document.body.dataset.mobileActiveSurface === "lab-rare-style-explorer") {
-        closeMobileSurface();
-        return;
-      }
       openLabHome();
     });
   });
@@ -765,6 +756,10 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
       updateLabNotice(`已加载 ${labState.history.length} 条 Lab 历史。`, "success");
       showGlobalToast("Alchemy Lab 历史已刷新。");
     }
+  } catch (error) {
+    renderLabHistoryError(error);
+    updateLabNotice("Alchemy Lab 历史加载失败，请刷新重试。", "error");
+    if (!silent) showGlobalToast("Alchemy Lab 历史加载失败。", "error");
   } finally {
     labState.historyLoading = false;
     if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = false;
@@ -774,6 +769,14 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
 function renderLabHistoryLoading() {
   if (!els.labHistoryGrid || labState.historyLoaded || labState.history.length) return;
   els.labHistoryGrid.innerHTML = "正在加载 Alchemy Lab 历史。";
+  els.labHistoryGrid.classList.add("empty-v2-list");
+  if (els.labHistoryCount) els.labHistoryCount.textContent = "0";
+}
+
+function renderLabHistoryError(error) {
+  if (!els.labHistoryGrid) return;
+  console.warn("Failed to load Alchemy Lab history", error);
+  els.labHistoryGrid.innerHTML = "Alchemy Lab 历史加载失败，请刷新重试。";
   els.labHistoryGrid.classList.add("empty-v2-list");
   if (els.labHistoryCount) els.labHistoryCount.textContent = "0";
 }
@@ -800,7 +803,7 @@ function renderLabHistory(items) {
     const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
-        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
+        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="eager" decoding="async" />
       </button>
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
@@ -902,19 +905,6 @@ function openLabModule(moduleId = "rare-style-explorer") {
   if (!labState.historyLoaded && !labState.historyLoading) {
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
   }
-}
-
-function openLabModuleSurface(opener = null) {
-  labState.activeModule = "rare-style-explorer";
-  if (document.body.dataset.activeModule !== "lab") switchTab("lab");
-  renderLabModuleState();
-  if (!labState.loaded && !labState.loading) {
-    loadLabStyles().catch((error) => updateLabNotice(`风格加载失败：${friendlyError(error)}`, "error"));
-  }
-  if (!labState.historyLoaded && !labState.historyLoading) {
-    loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
-  }
-  openMobileSurface("lab-rare-style-explorer", opener);
 }
 
 function openLabHome() {
@@ -1466,8 +1456,6 @@ function setupH5AdvancedPanels() {
 
   const v2Stack = document.querySelector("#v2Tab .module-stack");
   createMobileV2Architecture(v2Stack);
-  const labStack = document.querySelector("#labTab .module-stack");
-  createMobileLabArchitecture(labStack);
   createMobileVideoArchitecture();
   createMobileAccountArchitecture();
   bindMobileEntryButtons(document);
@@ -1727,31 +1715,6 @@ function createMobileV2Architecture(stack) {
   }
 }
 
-function createMobileLabArchitecture(stack) {
-  if (!stack || document.querySelector(".mobile-lab-main-actions")) return;
-  const labHome = document.querySelector("#labHomePanel");
-  const rareExplorer = document.querySelector("#rareStyleExplorerPanel");
-  labHome?.querySelector(".lab-module-grid")?.remove();
-
-  createMobileView({
-    id: "lab-rare-style-explorer",
-    title: "Rare Style Explorer",
-    eyebrow: "Alchemy Lab",
-    footerLabel: "返回实验室",
-    targets: [rareExplorer].filter(Boolean),
-  });
-
-  const actions = document.createElement("section");
-  actions.className = "mobile-action-panel mobile-lab-main-actions";
-  actions.innerHTML = `
-    <div class="mobile-summary-grid">
-      ${mobileEntryMarkup("lab-rare-style-explorer", "Rare Style Explorer", "稀有风格探索器", "mobileLabRareStyleSummary")}
-    </div>
-  `;
-  bindMobileEntryButtons(actions);
-  labHome?.insertAdjacentElement("afterend", actions);
-}
-
 function createMobileAccountArchitecture() {
   const accountModule = document.querySelector("#accountModule");
   if (!accountModule || document.querySelector('[data-mobile-view="account"]')) return;
@@ -1868,10 +1831,6 @@ function bindMobileEntryButtons(root = document) {
     if (button.dataset.mobileBound === "true") return;
     button.dataset.mobileBound = "true";
     button.addEventListener("click", () => {
-      if (button.dataset.mobileOpen === "lab-rare-style-explorer") {
-        openLabModuleSurface(button);
-        return;
-      }
       openMobileSurface(button.dataset.mobileOpen, button);
     });
   });
@@ -1986,10 +1945,6 @@ function closeMobileSurface(options = {}) {
   const openerId = document.body.dataset.mobileSurfaceOpener;
   document.body.dataset.mobileActiveSurface = "";
   document.body.dataset.mobileSurfaceOpener = "";
-  if (activeId === "lab-rare-style-explorer") {
-    labState.activeModule = "";
-    renderLabModuleState();
-  }
   updateMobileSummaries();
   if (!silent && openerId) document.getElementById(openerId)?.focus({ preventScroll: true });
   if (!silent && !fromHistory && activeId && window.history.state?.mobileSurface === activeId) {
@@ -2035,9 +1990,6 @@ function updateMobileSummaries() {
   setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2State.history.filter(isRenderableV2HistoryImage).length} 张历史` : "暂无历史");
   const v2Provider = v2EffectiveImageProvider(v2State.modelSettings || {});
   setSummaryText("mobileV2SettingsSummary", `${v2ImageChannelLabel(v2Provider)} · Claude Code`);
-  const labStyleCount = labState.styles.length ? `${labState.styles.length} 风格` : "风格库待加载";
-  const labHistoryCount = labState.history.length ? `${labState.history.length} 张历史` : "暂无历史";
-  setSummaryText("mobileLabRareStyleSummary", `${labStyleCount} · ${labHistoryCount}`);
   updateMobileAccountSummary();
   updateV2HomeContextSummary(template);
 }
@@ -6913,7 +6865,7 @@ function jobErrorMessage(job) {
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => {
     const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
     return map[char];
   });

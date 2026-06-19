@@ -777,6 +777,10 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
       updateLabNotice(`已加载 ${labState.history.length} 条 Lab 历史。`, "success");
       showGlobalToast("Alchemy Lab 历史已刷新。");
     }
+  } catch (error) {
+    renderLabHistoryError(error);
+    updateLabNotice("Alchemy Lab 历史加载失败，请刷新重试。", "error");
+    if (!silent) showGlobalToast("Alchemy Lab 历史加载失败。", "error");
   } finally {
     labState.historyLoading = false;
     if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = false;
@@ -786,6 +790,14 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
 function renderLabHistoryLoading() {
   if (!els.labHistoryGrid || labState.historyLoaded || labState.history.length) return;
   els.labHistoryGrid.innerHTML = "正在加载 Alchemy Lab 历史。";
+  els.labHistoryGrid.classList.add("empty-v2-list");
+  if (els.labHistoryCount) els.labHistoryCount.textContent = "0";
+}
+
+function renderLabHistoryError(error) {
+  if (!els.labHistoryGrid) return;
+  console.warn("Failed to load Alchemy Lab history", error);
+  els.labHistoryGrid.innerHTML = "Alchemy Lab 历史加载失败，请刷新重试。";
   els.labHistoryGrid.classList.add("empty-v2-list");
   if (els.labHistoryCount) els.labHistoryCount.textContent = "0";
 }
@@ -812,7 +824,7 @@ function renderLabHistory(items) {
     const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
-        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
+        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="eager" decoding="async" />
       </button>
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
@@ -6304,7 +6316,7 @@ function jobErrorMessage(job) {
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => {
     const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
     return map[char];
   });
