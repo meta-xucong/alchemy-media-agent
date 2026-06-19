@@ -32,6 +32,9 @@ const v2TemplatePageSize = 16;
 const v2TemplateEagerImageCount = 6;
 const v2HistoryPageSize = 24;
 const labStylePageSize = 80;
+const labPollIntervalMs = 3000;
+const labPollMaxAttempts = 360;
+const labDefaultGenerationIntervalSeconds = 8;
 const v2RunLongWaitAttempt = 120;
 const localPortalHomeUrl = "http://127.0.0.1:18080/";
 const productionPortalHomeUrl = "https://aiself.vip/";
@@ -178,12 +181,12 @@ const labState = {
   loaded: false,
   loading: false,
   styles: [],
-  limits: { maxSelectedStyles: 8, maxImagesPerStyle: 2, maxTotalImages: 12, maxConcurrentGenerations: 3 },
+  limits: { maxSelectedStyles: 8, maxImagesPerStyle: 2, maxTotalImages: 12, maxConcurrentGenerations: 1, defaultGenerationIntervalSeconds: 8 },
   selectedStyleIds: [],
   activeModule: "",
   targetCount: 4,
   imagesPerStyle: 1,
-  generationIntervalSeconds: 0,
+  generationIntervalSeconds: labDefaultGenerationIntervalSeconds,
   mode: "minimal",
   styleFamily: "",
   freshness: "high",
@@ -197,6 +200,8 @@ const labState = {
   historyLoading: false,
   currentSession: null,
   currentBoard: null,
+  pollTimer: null,
+  pollAttempt: 0,
   navOpen: false,
 };
 
@@ -1063,9 +1068,10 @@ async function runLabExploration() {
   }
   labState.loading = true;
   setLabBusy(true);
-  updateLabNotice(`正在生成 ${total} 张对比图。`, "info");
-  updateLabSessionState("生成中");
-  if (els.labProgress) els.labProgress.textContent = "已开始生成，正在逐张返回对比图。";
+  stopLabPolling();
+  updateLabNotice(`已提交 ${total} 张串行生成任务。`, "info");
+  updateLabSessionState("排队中");
+  if (els.labProgress) els.labProgress.textContent = "已提交任务，将逐张生成并刷新结果。";
   try {
     const payload = await request("/api/lab/rare-style-explorer/sessions", {
       method: "POST",
@@ -1088,24 +1094,106 @@ async function runLabExploration() {
     labState.currentSession = payload.session;
     labState.currentBoard = payload.board;
     renderLabBoard(payload.board);
-    const okCount = countLabCards(payload.board, "succeeded");
-    const failedCount = countLabCards(payload.board, "failed");
-    updateLabSessionState(labStatusLabel(payload.board?.status));
-    const firstError = firstLabErrorMessage(payload.board);
-    updateLabNotice(
-      firstError
-        ? `已完成 ${okCount} 张，失败 ${failedCount} 张。${firstError}`
-        : `已完成 ${okCount} 张，失败 ${failedCount} 张。`,
-      failedCount ? "warning" : "success",
-    );
-    loadLabHistory({ silent: true, force: true }).catch(() => {});
+    updateLabSessionFromPayload(payload, { submittedTotal: total });
+    if (isLabTerminalStatus(payload.board?.status)) {
+      await finishLabPolling(payload.board);
+    } else {
+      scheduleLabPolling();
+    }
   } catch (error) {
     updateLabNotice(`生成失败：${friendlyError(error)}`, "error");
     updateLabSessionState("失败");
-  } finally {
     labState.loading = false;
     setLabBusy(false);
   }
+}
+
+function scheduleLabPolling() {
+  stopLabPolling();
+  labState.pollAttempt = 0;
+  const tick = async () => {
+    if (!labState.currentSession?.id) {
+      stopLabPolling();
+      labState.loading = false;
+      setLabBusy(false);
+      return;
+    }
+    labState.pollAttempt += 1;
+    try {
+      const payload = await request(`/api/lab/rare-style-explorer/sessions/${encodeURIComponent(labState.currentSession.id)}`);
+      labState.currentSession = payload.session;
+      labState.currentBoard = payload.board;
+      renderLabBoard(payload.board);
+      updateLabSessionFromPayload(payload);
+      if (isLabTerminalStatus(payload.board?.status)) {
+        await finishLabPolling(payload.board);
+        return;
+      }
+      if (labState.pollAttempt >= labPollMaxAttempts) {
+        stopLabPolling();
+        updateLabNotice("任务仍在后台串行生成，请稍后刷新历史查看结果。", "warning");
+        labState.loading = false;
+        setLabBusy(false);
+        return;
+      }
+    } catch (error) {
+      stopLabPolling();
+      updateLabNotice(`状态刷新失败：${friendlyError(error)}。任务可能仍在后台继续。`, "warning");
+      labState.loading = false;
+      setLabBusy(false);
+      return;
+    }
+    labState.pollTimer = window.setTimeout(tick, labPollIntervalMs);
+  };
+  labState.pollTimer = window.setTimeout(tick, labPollIntervalMs);
+}
+
+function stopLabPolling() {
+  if (labState.pollTimer) {
+    window.clearTimeout(labState.pollTimer);
+    labState.pollTimer = null;
+  }
+}
+
+async function finishLabPolling(board) {
+  stopLabPolling();
+  const okCount = countLabCards(board, "succeeded");
+  const failedCount = countLabCards(board, "failed");
+  updateLabSessionState(labStatusLabel(board?.status));
+  const firstError = firstLabErrorMessage(board);
+  updateLabNotice(
+    firstError
+      ? `已完成 ${okCount} 张，失败 ${failedCount} 张。${firstError}`
+      : `已完成 ${okCount} 张，失败 ${failedCount} 张。`,
+    failedCount ? "warning" : "success",
+  );
+  labState.loading = false;
+  setLabBusy(false);
+  await loadLabHistory({ silent: true, force: true }).catch(() => {});
+}
+
+function updateLabSessionFromPayload(payload, options = {}) {
+  const board = payload?.board || {};
+  const session = payload?.session || {};
+  const progress = session.progress || {};
+  const okCount = countLabCards(board, "succeeded");
+  const failedCount = countLabCards(board, "failed");
+  const total = Number(progress.total || options.submittedTotal || countLabCards(board) || labState.targetCount || 0);
+  const pending = Math.max(0, total - okCount - failedCount);
+  updateLabSessionState(labStatusLabel(board.status || progress.status));
+  if (els.labProgress) {
+    const wait = Number(progress.next_wait_seconds || 0);
+    const waitText = wait > 0 ? ` · 冷却 ${Math.ceil(wait)} 秒后继续` : "";
+    els.labProgress.textContent = `${okCount}/${total} 已生成 · ${failedCount} 失败 · ${pending} 等待${waitText}`;
+  }
+  if (!isLabTerminalStatus(board.status)) {
+    const message = progress.message || `串行生成中，已完成 ${okCount}/${total} 张。`;
+    updateLabNotice(message, "info");
+  }
+}
+
+function isLabTerminalStatus(status) {
+  return ["completed", "partial_success", "failed"].includes(status);
 }
 
 function inferLabMode(idea) {
@@ -1139,11 +1227,11 @@ function renderLabBoard(board) {
   }
   cards.forEach(({ group, card }) => {
     const article = document.createElement("article");
-    article.className = `lab-result-card ${card.status === "succeeded" ? "is-ready" : "is-failed"}`;
+    article.className = `lab-result-card ${labResultCardClass(card.status)}`;
     const styleName = group.style_name || group.style_preset_id || "Rare Style";
     const imageHtml = card.image_url
       ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
-      : `<div class="lab-error-tile">${escapeHtml(card.error?.message || "生成失败")}</div>`;
+      : `<div class="lab-error-tile">${escapeHtml(labPlaceholderText(card))}</div>`;
     const imageActions = card.image_url
       ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
       : "";
@@ -1243,10 +1331,11 @@ function openLabPreview(url, title, prompt) {
 }
 
 function resetLabExplorer() {
+  stopLabPolling();
   if (els.labIdeaInput) els.labIdeaInput.value = "";
   labState.targetCount = 4;
   labState.imagesPerStyle = 1;
-  labState.generationIntervalSeconds = 0;
+  labState.generationIntervalSeconds = labDefaultGenerationIntervalSeconds;
   labState.mode = "minimal";
   labState.styleFamily = "";
   labState.freshness = "high";
@@ -1255,7 +1344,7 @@ function resetLabExplorer() {
   labState.search = "";
   if (els.labTargetCountInput) els.labTargetCountInput.value = "4";
   if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.value = "1";
-  if (els.labIntervalInput) els.labIntervalInput.value = "0";
+  if (els.labIntervalInput) els.labIntervalInput.value = String(labDefaultGenerationIntervalSeconds);
   if (els.labModeInput) els.labModeInput.value = "minimal";
   if (els.labFamilyInput) els.labFamilyInput.value = "";
   if (els.labFreshnessInput) els.labFreshnessInput.value = "high";
@@ -1265,6 +1354,8 @@ function resetLabExplorer() {
   labState.selectedStyleIds = [];
   labState.currentSession = null;
   labState.currentBoard = null;
+  labState.loading = false;
+  setLabBusy(false);
   renderLabStyles();
   renderLabBoard(null);
   updateLabCountLabel();
@@ -1315,6 +1406,19 @@ function labCardStatusLabel(status) {
     queued: "排队中",
   };
   return labels[status] || status || "-";
+}
+
+function labResultCardClass(status) {
+  if (status === "succeeded") return "is-ready";
+  if (status === "failed") return "is-failed";
+  if (status === "running") return "is-running";
+  return "is-queued";
+}
+
+function labPlaceholderText(card) {
+  if (card.status === "running") return "生成中";
+  if (card.status === "queued") return "等待串行生成";
+  return card.error?.message || "生成失败";
 }
 
 function labQualityModeLabel(mode) {

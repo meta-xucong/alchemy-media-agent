@@ -3257,6 +3257,12 @@ select:focus {
   background: rgba(255, 255, 255, 0.74);
 }
 
+.lab-result-card.is-running,
+.lab-result-card.is-queued {
+  border-color: rgba(79, 107, 82, 0.22);
+  background: rgba(255, 255, 255, 0.6);
+}
+
 .lab-image-button,
 .lab-error-tile {
   width: 100%;
@@ -3288,6 +3294,12 @@ select:focus {
   font-size: 12px;
   line-height: 1.45;
   background: rgba(184, 51, 51, 0.06);
+}
+
+.lab-result-card.is-running .lab-error-tile,
+.lab-result-card.is-queued .lab-error-tile {
+  color: var(--muted);
+  background: rgba(79, 107, 82, 0.07);
 }
 
 .lab-card-meta {

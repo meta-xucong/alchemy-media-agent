@@ -83,6 +83,16 @@ Run each variant through the existing generation service.
 
 The Lab module should not create a separate generation backend when the existing application already has one.
 
+Production execution must be serial by default:
+
+- create the session quickly
+- run one variant at a time
+- wait `generation_interval_seconds` only after the previous variant reaches a terminal state
+- extend the wait with exponential backoff and small jitter after provider throttling or temporary service errors
+- expose progress through the session polling endpoint
+
+This avoids upstream account-source pressure and prevents reverse-proxy timeouts on larger batches.
+
 ### 6. Persist Results
 
 For each successful variant, store the generated image using the existing asset system.
@@ -108,9 +118,11 @@ Recommended MVP defaults:
 maxSelectedStyles = 8
 maxImagesPerStyle = 4
 maxTotalImages = 12
-maxConcurrentGenerations = 3
+maxConcurrentGenerations = 1
 maxRetriesPerVariant = 1
 maxGenerationIntervalSeconds = 60
+defaultGenerationIntervalSeconds = 8
+maxRateLimitBackoffSeconds = 180
 ```
 
 The server must enforce these limits even if the UI validates them too.
@@ -124,6 +136,8 @@ Examples:
 - temporary timeout
 - temporary network interruption
 - safe delayed retry after provider throttling
+
+Retry and inter-variant waits should follow provider best practice for rate limits: exponential backoff with jitter. Failed retries still consume provider limits, so the Lab layer must avoid tight retry loops.
 
 Do not retry validation failures or unsupported request formats.
 
@@ -144,16 +158,9 @@ A session should only be `failed` when no variant succeeds.
 
 Minimum acceptable MVP:
 
-- The create request completes after the batch finishes.
-- The response includes all variants and final status.
-
-Preferred MVP:
-
 - The create request returns a session id quickly.
 - The UI polls session status.
 - Completed variants appear as soon as they are ready.
-
-Codex should choose the simplest option that matches the target codebase.
 
 ## Prompt Composition Format
 

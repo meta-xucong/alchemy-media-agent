@@ -20,6 +20,15 @@ from app.services.alchemy_lab import lab_store
 from app.storage import media_store
 
 
+def count_cards(board: dict, status: str = "") -> int:
+    return sum(
+        1
+        for group in board.get("groups", [])
+        for card in group.get("cards", [])
+        if not status or card.get("status") == status
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_provider = settings.default_image_provider
@@ -358,6 +367,25 @@ def test_alchemy_lab_quality_off_preserves_base_prompt():
     assert "用户创意与主体" not in prompt["final_prompt"]
 
 
+def test_alchemy_lab_accepts_legacy_quality_mode_field():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "万圣节南瓜海报，本周五18:30大学生活动中心",
+            "selected_style_ids": ["C002"],
+            "mode": "poster",
+            "quality_enhancement_mode": "off",
+            "provider_preference": "mock_image",
+        },
+    )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    assert session["prompts"][0]["prompt_metadata"]["quality_enhancement"]["mode"] == "off"
+
+
 def test_alchemy_lab_quality_balanced_uses_llm_text_hierarchy(monkeypatch):
     captured_kwargs = {}
 
@@ -662,6 +690,53 @@ def test_alchemy_lab_generation_interval_is_applied(monkeypatch):
 
     assert response.status_code == 200
     assert delays == [0.25]
+
+
+def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    class LiveLikeMockProvider(MockImageProvider):
+        name = "openai_gpt_image"
+
+    monkeypatch.setitem(image_service_module.registry.image_providers, "openai_gpt_image", LiveLikeMockProvider())
+    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "串行节奏测试海报",
+            "selected_style_ids": ["M001", "C002"],
+            "target_count": 3,
+            "images_per_style": 2,
+            "generation_interval_seconds": 0.5,
+            "provider_preference": "openai_gpt_image",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    session_id = payload["session"]["id"]
+    assert payload["async"] is True
+    assert payload["session"]["status"] == "queued"
+    assert count_cards(payload["board"]) == 3
+    assert all(card["status"] == "queued" for group in payload["board"]["groups"] for card in group["cards"])
+
+    for _ in range(10):
+        poll = client.get(f"/api/lab/rare-style-explorer/sessions/{session_id}")
+        assert poll.status_code == 200
+        board = poll.json()["board"]
+        if board["status"] == "completed":
+            break
+    else:
+        pytest.fail("Lab async session did not complete.")
+
+    assert board["status"] == "completed"
+    assert count_cards(board, "succeeded") == 3
+    assert sleeps == [0.5, 0.5]
 
 
 def test_alchemy_lab_schema_matches_real_api_responses():
@@ -1264,7 +1339,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260619-lab-mobile-count" in index.text
+    assert "20260619-lab-serial" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1429,6 +1504,10 @@ def test_frontend_static_app_is_served():
     assert "target_count" in script.text
     assert "最后一种承接余数" in script.text
     assert "generation_interval_seconds" in script.text
+    assert "labDefaultGenerationIntervalSeconds = 8" in script.text
+    assert "function scheduleLabPolling" in script.text
+    assert "等待串行生成" in script.text
+    assert 'value="8"' in index.text
     assert "quality_enhancement" in script.text
     assert "labQualityEnhancementInput" in index.text
     assert "labQualityEnhancementInput" in script.text
@@ -1560,7 +1639,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260619-lab-mobile-count" in h5.text
+    assert "20260619-lab-serial" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -1649,6 +1728,10 @@ def test_mobile_h5_app_is_served_independently():
     assert "mobileLabRareStyleSummary" in mobile_script.text
     assert "最后一种承接余数" in mobile_script.text
     assert "generation_interval_seconds" in mobile_script.text
+    assert "labDefaultGenerationIntervalSeconds = 8" in mobile_script.text
+    assert "function scheduleLabPolling" in mobile_script.text
+    assert "等待串行生成" in mobile_script.text
+    assert 'value="8"' in h5.text
     assert "quality_enhancement" in mobile_script.text
     assert "labQualityEnhancementInput" in mobile_script.text
     assert "function labQualityMetaText" in mobile_script.text

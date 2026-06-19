@@ -78,6 +78,8 @@ Optional fields:
 
 `target_count` is the exact requested output count. `images_per_style` is the maximum number of images assigned to one style, not a multiplier that must divide evenly. The server distributes variants in selected or sampled style order, assigning up to `images_per_style` images per style; if the final style has fewer remaining images, it receives the remainder.
 
+`generation_interval_seconds` is a serial cooldown between completed variants, not a launch-time stagger. The timer starts only after one image has succeeded or failed. Default value is 8 seconds, capped at 60 seconds. Provider throttling can temporarily extend the next wait with exponential backoff and jitter.
+
 Validation rules:
 
 - `idea` is required after trimming.
@@ -103,6 +105,7 @@ Required fields:
 - `variants`
 - `favorites`
 - `errors`
+- `progress`
 
 Status values:
 
@@ -116,6 +119,8 @@ cancelled
 ```
 
 The session must snapshot selected style presets so old sessions stay explainable even after the style library changes.
+
+`progress` stores polling-friendly fields such as total, completed, failed, pending, current variant id, next wait seconds, percent, and a short status message.
 
 ## ComposedPrompt
 

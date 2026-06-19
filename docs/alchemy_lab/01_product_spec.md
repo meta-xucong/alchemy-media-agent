@@ -167,7 +167,7 @@ Recommended MVP defaults:
 - `maxImagesPerStyle`: 4
 - `maxTotalImages`: 12
 - `target_count`: 4 when no manual style is selected
-- `generation_interval_seconds`: 0 by default, capped at 60
+- `generation_interval_seconds`: 8 by default, capped at 60; starts after each image finishes
 
 ### R-006: Existing Backend Reuse
 
@@ -190,6 +190,8 @@ A batch can finish with partial failures.
 The UI must show successful images and failed cards separately.
 
 A single failed style must not fail the whole session unless no image succeeds.
+
+Production batches must run serially by default. The create action should return a session quickly, then the UI should poll progress and progressively show queued, running, successful, and failed cards. This protects limited upstream image account sources and avoids reverse-proxy request timeouts.
 
 ### R-009: Favorite Selection
 

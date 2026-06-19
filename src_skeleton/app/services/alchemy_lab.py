@@ -5,12 +5,13 @@ import json
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.repositories import repository
 from app.schemas import GenerationJob, JobStatus
@@ -28,9 +29,12 @@ from app.storage import media_store
 MAX_SELECTED_STYLES = 8
 MAX_IMAGES_PER_STYLE = 4
 MAX_TOTAL_IMAGES = 12
-MAX_CONCURRENT_GENERATIONS = 3
+MAX_CONCURRENT_GENERATIONS = 1
 MAX_RETRIES_PER_VARIANT = 1
 MAX_GENERATION_INTERVAL_SECONDS = 60
+DEFAULT_GENERATION_INTERVAL_SECONDS = 8
+MAX_RATE_LIMIT_BACKOFF_SECONDS = 180
+TERMINAL_SESSION_STATUSES = {"completed", "partial_success", "failed"}
 LAB_PROJECT_ID = "alchemy_lab_rare_style_explorer"
 RARE_STYLE_FEATURE_ID = "rare-style-explorer"
 
@@ -115,13 +119,20 @@ class ExplorationRequest(BaseModel):
     freshness: str = "high"
     target_count: int = Field(default=4, ge=1, le=MAX_TOTAL_IMAGES)
     images_per_style: int = Field(default=1, ge=1, le=MAX_IMAGES_PER_STYLE)
-    generation_interval_seconds: float = Field(default=0, ge=0, le=MAX_GENERATION_INTERVAL_SECONDS)
+    generation_interval_seconds: float = Field(default=DEFAULT_GENERATION_INTERVAL_SECONDS, ge=0, le=MAX_GENERATION_INTERVAL_SECONDS)
     seed: int | None = None
     style_id: str | None = None
     avoid_generic: bool = True
     aspect_ratio: str | None = None
     provider_preference: str | None = None
     quality_enhancement: str = "auto"
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_quality_mode(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "quality_enhancement" not in data and "quality_enhancement_mode" in data:
+            return {**data, "quality_enhancement": data.get("quality_enhancement_mode")}
+        return data
 
     @field_validator("idea")
     @classmethod
@@ -175,6 +186,7 @@ class ExplorationSession(BaseModel):
     variants: list[GenerationVariant] = Field(default_factory=list)
     favorites: list[str] = Field(default_factory=list)
     errors: list[ExplorationError] = Field(default_factory=list)
+    progress: dict[str, Any] = Field(default_factory=dict)
 
 
 class ComparisonCard(BaseModel):
@@ -266,6 +278,7 @@ class AlchemyLabStore:
 
 
 lab_store = AlchemyLabStore(sessions={})
+_background_tasks: set[asyncio.Task] = set()
 
 
 FALLBACK_STYLE_PRESETS = [
@@ -390,16 +403,28 @@ def limits() -> dict[str, int]:
         "maxConcurrentGenerations": MAX_CONCURRENT_GENERATIONS,
         "maxRetriesPerVariant": MAX_RETRIES_PER_VARIANT,
         "maxGenerationIntervalSeconds": MAX_GENERATION_INTERVAL_SECONDS,
+        "defaultGenerationIntervalSeconds": DEFAULT_GENERATION_INTERVAL_SECONDS,
+        "maxRateLimitBackoffSeconds": MAX_RATE_LIMIT_BACKOFF_SECONDS,
         "styleLibrarySize": len(_style_presets()),
     }
 
 
 async def create_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
+    session = await prepare_exploration_session(request)
+    if _should_run_inline(session.request):
+        return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
+    _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+    return session
+
+
+async def prepare_exploration_session(request: ExplorationRequest) -> ExplorationSession:
     request = _normalize_request(request)
     _validate_requested_style_count(request)
     selected = _resolve_styles(request)
     _validate_batch(request, selected)
     timestamp = now_iso()
+    variant_counts = _variant_counts_by_style(request, selected)
+    total_variants = sum(variant_counts.values())
     session = ExplorationSession(
         id=make_id("lab"),
         status="queued",
@@ -407,24 +432,12 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
         updated_at=timestamp,
         request=request,
         style_presets=selected,
+        progress=_progress_payload(total=total_variants, status="queued", message="等待开始串行生成。"),
     )
     lab_store.save(session)
 
-    media_session = repository.save_session(
-        _lab_media_session(session.id, title=f"Alchemy Lab: {request.idea[:48]}")
-    )
-    prompts = [
-        await enhance_lab_prompt(
-            request=request,
-            style=style,
-            prompt=_compose_prompt(session.id, request, style),
-            selected_styles=selected,
-            composer_factory=local_quality_prompt,
-        )
-        for style in selected
-    ]
+    prompts = [_compose_prompt(session.id, request, style) for style in selected]
     session.prompts = prompts
-    variant_counts = _variant_counts_by_style(request, selected)
     session.variants = [
         GenerationVariant(
             id=make_id("variant"),
@@ -438,60 +451,112 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
         for prompt in prompts
         for index in range(variant_counts.get(prompt.style_preset_id, 0))
     ]
+    session.updated_at = now_iso()
+    session.progress = _progress_payload(total=len(session.variants), status="queued", message="已建立任务，将逐张生成。")
+    return lab_store.save(session)
+
+
+async def run_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> ExplorationSession:
+    session = lab_store.get(session_id)
+    if not session:
+        raise ValueError("Exploration session not found.")
+    if session.status in TERMINAL_SESSION_STATUSES:
+        return session
+
+    fatal_provider_error: ExplorationError | None = None
+    total = len(session.variants)
     session.status = "running"
+    session.progress = _progress_payload(
+        total=total,
+        completed=_completed_variant_count(session),
+        failed=_failed_variant_count(session),
+        current=0,
+        status="running",
+        message="正在准备提示词增强，然后逐张串行生成。",
+    )
     session.updated_at = now_iso()
     lab_store.save(session)
+    await _ensure_session_prompts_enhanced(session)
 
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
-    prompt_by_id = {prompt.id: prompt for prompt in prompts}
-    fatal_provider_error: ExplorationError | None = None
+    media_session = repository.save_session(
+        _lab_media_session(session.id, title=f"Alchemy Lab: {session.request.idea[:48]}")
+    )
+    prompt_by_id = {prompt.id: prompt for prompt in session.prompts}
 
     async def run_variant(variant: GenerationVariant) -> GenerationVariant:
         nonlocal fatal_provider_error
         if fatal_provider_error:
             return _skipped_variant(variant, fatal_provider_error)
-        delay = max(0.0, float(request.generation_interval_seconds or 0))
-        order = session.variants.index(variant) if variant in session.variants else 0
-        if delay and order:
-            await asyncio.sleep(delay * order)
-        async with semaphore:
-            if fatal_provider_error:
-                return _skipped_variant(variant, fatal_provider_error)
-            variant.status = "running"
-            lab_store.save(session.model_copy(update={"variants": session.variants, "updated_at": now_iso()}))
-            prompt = prompt_by_id[variant.prompt_id]
-            last_variant = variant
-            for attempt in range(MAX_RETRIES_PER_VARIANT + 1):
-                try:
-                    prepared = await submit_image_job(
-                        session_id=media_session.id,
-                        prompt=prompt.final_prompt,
-                        count=1,
-                        size=_size_from_aspect_ratio(request.aspect_ratio),
-                        quality="high",
-                        output_format="png",
-                        work_intensity="lab_quality",
-                        provider_preference=request.provider_preference,
-                        idempotency_key=f"lab:{session.id}:{variant.id}:attempt:{attempt}",
-                        veyra_user_id=veyra_user_id,
-                    )
-                    job = prepared.job
-                    if prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
-                        job = await run_submitted_image_job(job.id, prepared.request) or job
-                    _attach_lab_history_metadata(job, session=session, variant=variant, prompt=prompt)
-                    last_variant = _variant_from_job(variant, job, attempt=attempt)
-                    if last_variant.error and _is_fatal_provider_error(last_variant.error):
-                        fatal_provider_error = last_variant.error
-                    if last_variant.status == "succeeded" or not (last_variant.error and last_variant.error.retryable) or attempt >= MAX_RETRIES_PER_VARIANT:
-                        return last_variant
-                except Exception as exc:
-                    last_variant = _exception_variant(variant, exc, attempt=attempt)
-                    if not last_variant.error.retryable or attempt >= MAX_RETRIES_PER_VARIANT:
-                        return last_variant
-            return last_variant
+        variant.status = "running"
+        session.updated_at = now_iso()
+        lab_store.save(session)
+        prompt = prompt_by_id[variant.prompt_id]
+        last_variant = variant
+        for attempt in range(MAX_RETRIES_PER_VARIANT + 1):
+            try:
+                prepared = await submit_image_job(
+                    session_id=media_session.id,
+                    prompt=prompt.final_prompt,
+                    count=1,
+                    size=_size_from_aspect_ratio(session.request.aspect_ratio),
+                    quality="high",
+                    output_format="png",
+                    work_intensity="lab_quality",
+                    provider_preference=session.request.provider_preference,
+                    idempotency_key=f"lab:{session.id}:{variant.id}:attempt:{attempt}",
+                    veyra_user_id=veyra_user_id,
+                )
+                job = prepared.job
+                if prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
+                    job = await run_submitted_image_job(job.id, prepared.request) or job
+                _attach_lab_history_metadata(job, session=session, variant=variant, prompt=prompt)
+                last_variant = _variant_from_job(variant, job, attempt=attempt)
+                if last_variant.error and _is_fatal_provider_error(last_variant.error):
+                    fatal_provider_error = last_variant.error
+                if last_variant.status == "succeeded" or not (last_variant.error and last_variant.error.retryable) or attempt >= MAX_RETRIES_PER_VARIANT:
+                    return last_variant
+                await _sleep_before_retry(last_variant.error, attempt=attempt)
+            except Exception as exc:
+                last_variant = _exception_variant(variant, exc, attempt=attempt)
+                if not last_variant.error.retryable or attempt >= MAX_RETRIES_PER_VARIANT:
+                    return last_variant
+                await _sleep_before_retry(last_variant.error, attempt=attempt)
+        return last_variant
 
-    results = await asyncio.gather(*(run_variant(variant) for variant in session.variants))
-    session.variants = list(results)
+    for index, variant in enumerate(list(session.variants)):
+        if fatal_provider_error:
+            result = _skipped_variant(variant, fatal_provider_error)
+        else:
+            session.progress = _progress_payload(
+                total=total,
+                completed=_completed_variant_count(session),
+                failed=_failed_variant_count(session),
+                current=index + 1,
+                current_variant_id=variant.id,
+                status="running",
+                message=f"正在生成第 {index + 1}/{total} 张。",
+            )
+            session.updated_at = now_iso()
+            lab_store.save(session)
+            result = await run_variant(variant)
+        _replace_variant(session, result)
+        session.errors = [item.error for item in session.variants if item.error]
+        wait_seconds = _cooldown_after_variant(session.request, result, is_last=index >= total - 1)
+        session.progress = _progress_payload(
+            total=total,
+            completed=_completed_variant_count(session),
+            failed=_failed_variant_count(session),
+            current=index + 1,
+            current_variant_id=result.id,
+            status="running",
+            next_wait_seconds=wait_seconds,
+            message=_variant_progress_message(index=index, total=total, result=result),
+        )
+        session.updated_at = now_iso()
+        lab_store.save(session)
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+
     session.errors = [variant.error for variant in session.variants if variant.error]
     succeeded = [variant for variant in session.variants if variant.status == "succeeded"]
     failed = [variant for variant in session.variants if variant.status == "failed"]
@@ -502,6 +567,14 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
     else:
         session.status = "failed"
     session.updated_at = now_iso()
+    session.progress = _progress_payload(
+        total=total,
+        completed=len(succeeded),
+        failed=len(failed),
+        current=total,
+        status=session.status,
+        message=f"串行生成结束：成功 {len(succeeded)} 张，失败 {len(failed)} 张。",
+    )
     return lab_store.save(session)
 
 
@@ -563,6 +636,219 @@ def comparison_board(session: ExplorationSession) -> ComparisonBoard:
         errors=list(session.errors),
         limits=limits(),
     )
+
+
+def _should_run_inline(request: ExplorationRequest) -> bool:
+    return str(request.provider_preference or "").strip() == "mock_image"
+
+
+async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
+    if not session.prompts:
+        return
+    enhanced: list[ComposedPrompt] = []
+    for index, prompt in enumerate(session.prompts):
+        quality = (prompt.prompt_metadata or {}).get("quality_enhancement")
+        if isinstance(quality, dict):
+            enhanced.append(prompt)
+            continue
+        style = next((item for item in session.style_presets if item.id == prompt.style_preset_id), None)
+        if not style:
+            enhanced.append(prompt)
+            continue
+        session.progress = {
+            **(session.progress or {}),
+            "message": f"正在准备第 {index + 1}/{len(session.prompts)} 个风格的提示词增强。",
+            "updated_at": now_iso(),
+        }
+        session.updated_at = now_iso()
+        lab_store.save(session)
+        enhanced.append(
+            await enhance_lab_prompt(
+                request=session.request,
+                style=style,
+                prompt=prompt,
+                selected_styles=session.style_presets,
+                composer_factory=local_quality_prompt,
+            )
+        )
+    session.prompts = enhanced
+    session.updated_at = now_iso()
+    lab_store.save(session)
+
+
+def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
+    task = asyncio.create_task(_run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: int | None = None) -> None:
+    try:
+        await run_exploration_session(session_id, veyra_user_id=veyra_user_id)
+    except Exception as exc:
+        session = lab_store.get(session_id)
+        if not session:
+            return
+        error = ExplorationError(
+            code="session_background_failed",
+            message="批量生成后台任务失败。",
+            retryable=True,
+            detail={"error_type": type(exc).__name__, "message": str(exc)[:500]},
+        )
+        session.errors = [*session.errors, error]
+        for variant in session.variants:
+            if variant.status in {"queued", "running"}:
+                _replace_variant(session, _exception_variant(variant, exc, attempt=MAX_RETRIES_PER_VARIANT))
+        succeeded = _completed_variant_count(session)
+        failed = _failed_variant_count(session)
+        session.status = "partial_success" if succeeded else "failed"
+        session.progress = _progress_payload(
+            total=len(session.variants),
+            completed=succeeded,
+            failed=failed,
+            status=session.status,
+            message=f"后台任务异常停止：成功 {succeeded} 张，失败 {failed} 张。",
+        )
+        session.updated_at = now_iso()
+        lab_store.save(session)
+
+
+def _replace_variant(session: ExplorationSession, replacement: GenerationVariant) -> None:
+    session.variants = [replacement if item.id == replacement.id else item for item in session.variants]
+
+
+def _completed_variant_count(session: ExplorationSession) -> int:
+    return sum(1 for item in session.variants if item.status == "succeeded")
+
+
+def _failed_variant_count(session: ExplorationSession) -> int:
+    return sum(1 for item in session.variants if item.status == "failed")
+
+
+def _progress_payload(
+    *,
+    total: int,
+    completed: int = 0,
+    failed: int = 0,
+    current: int = 0,
+    current_variant_id: str | None = None,
+    status: str = "queued",
+    next_wait_seconds: float = 0.0,
+    message: str = "",
+) -> dict[str, Any]:
+    total = max(0, int(total or 0))
+    completed = max(0, int(completed or 0))
+    failed = max(0, int(failed or 0))
+    current = max(0, int(current or 0))
+    percent = 100 if total <= 0 else min(100, round(((completed + failed) / total) * 100))
+    return {
+        "status": status,
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "current": current,
+        "current_variant_id": current_variant_id,
+        "pending": max(0, total - completed - failed),
+        "percent": percent,
+        "next_wait_seconds": round(max(0.0, float(next_wait_seconds or 0)), 2),
+        "message": message,
+        "updated_at": now_iso(),
+    }
+
+
+async def _sleep_before_retry(error: ExplorationError | None, *, attempt: int) -> None:
+    delay = _retry_backoff_seconds(error, attempt=attempt)
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+def _cooldown_after_variant(request: ExplorationRequest, variant: GenerationVariant, *, is_last: bool) -> float:
+    if is_last:
+        return 0.0
+    if variant.error and _is_rate_or_service_pressure(variant.error):
+        retry_after = _retry_after_from_error(variant.error)
+        base = retry_after if retry_after is not None else max(30.0, float(request.generation_interval_seconds or 0) * 2)
+        return _jittered_delay(min(max(base, 30.0), MAX_RATE_LIMIT_BACKOFF_SECONDS), variant.id)
+    provider = str(request.provider_preference or "").strip().lower()
+    if provider in {"mock_image", "mock"} and "generation_interval_seconds" not in getattr(request, "model_fields_set", set()):
+        return 0.0
+    return max(0.0, float(request.generation_interval_seconds or 0))
+
+
+def _retry_backoff_seconds(error: ExplorationError | None, *, attempt: int) -> float:
+    if not error:
+        return 0.0
+    retry_after = _retry_after_from_error(error)
+    if retry_after is not None:
+        return min(max(retry_after, 1.0), MAX_RATE_LIMIT_BACKOFF_SECONDS)
+    base = 8.0 if _is_rate_or_service_pressure(error) else 2.0
+    delay = min(base * (2 ** max(0, attempt)), MAX_RATE_LIMIT_BACKOFF_SECONDS)
+    return _jittered_delay(delay, f"{error.code}:{attempt}")
+
+
+def _retry_after_from_error(error: ExplorationError) -> float | None:
+    for key in ["retry_after_seconds", "upstream_retry_after_seconds"]:
+        value = error.detail.get(key)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    local_guard = error.detail.get("local_rate_guard")
+    if isinstance(local_guard, dict):
+        try:
+            number = float(local_guard.get("retry_after_seconds"))
+        except (TypeError, ValueError):
+            number = 0.0
+        if number > 0:
+            return number
+    return None
+
+
+def _is_rate_or_service_pressure(error: ExplorationError) -> bool:
+    text = " ".join(
+        [
+            error.code,
+            error.message,
+            str(error.detail.get("error_type", "")),
+            str(error.detail.get("rate_limit_scope", "")),
+            str(error.detail.get("upstream_error_hint", "")),
+            str(error.detail.get("message", "")),
+        ]
+    ).lower()
+    markers = [
+        "rate_limit",
+        "rate limit",
+        "429",
+        "too many requests",
+        "temporarily unavailable",
+        "service unavailable",
+        "503",
+        "502",
+        "504",
+        "timeout",
+        "timed out",
+        "cooldown",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _jittered_delay(base_seconds: float, key: str) -> float:
+    base = max(0.0, float(base_seconds or 0))
+    if base <= 0:
+        return 0.0
+    rng = random.Random(f"{key}:{int(time.time() // 30)}")
+    return min(MAX_RATE_LIMIT_BACKOFF_SECONDS, base + rng.uniform(0.0, min(6.0, base * 0.25)))
+
+
+def _variant_progress_message(*, index: int, total: int, result: GenerationVariant) -> str:
+    current = index + 1
+    if result.status == "succeeded":
+        return f"第 {current}/{total} 张已完成，等待后继续下一张。"
+    if result.error and _is_rate_or_service_pressure(result.error):
+        return f"第 {current}/{total} 张遇到上游限流或服务繁忙，已进入冷却等待。"
+    return f"第 {current}/{total} 张失败，继续串行处理剩余任务。"
 
 
 def _resolve_styles(request: ExplorationRequest) -> list[StylePreset]:

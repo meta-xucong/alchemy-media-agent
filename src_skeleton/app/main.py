@@ -210,7 +210,7 @@ async def create_rare_style_explorer_session(
         session = await create_exploration_session(body, veyra_user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
-    return {"session": session, "board": comparison_board(session)}
+    return {"session": session, "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
 
 
 @app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
