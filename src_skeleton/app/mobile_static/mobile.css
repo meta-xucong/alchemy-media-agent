@@ -2923,11 +2923,17 @@ select:focus {
 .lab-module-detail,
 .lab-style-panel,
 .lab-results-panel,
-.lab-comparison-grid,
 .lab-style-result,
 .lab-card-grid {
   display: grid;
   gap: 12px;
+  min-width: 0;
+}
+
+.lab-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3125,15 +3131,18 @@ select:focus {
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
+  max-height: 560px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .lab-history-card {
   min-width: 0;
+  overflow: hidden;
   display: grid;
-  gap: 9px;
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 9px;
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -3141,8 +3150,9 @@ select:focus {
   width: 100%;
   aspect-ratio: 1 / 1;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
   padding: 0;
   background: var(--paper-deep);
 }
@@ -3157,6 +3167,7 @@ select:focus {
 .lab-history-body {
   display: grid;
   gap: 4px;
+  padding: 9px;
 }
 
 .lab-history-body span {
@@ -3167,32 +3178,41 @@ select:focus {
 }
 
 .lab-history-body strong {
+  min-height: 0;
   overflow: hidden;
   display: -webkit-box;
   color: var(--ink);
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.32;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .lab-history-body p,
 .lab-history-body small {
   margin: 0;
   overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
   color: var(--ink-soft);
-  font-size: 11px;
-  line-height: 1.42;
+  font-size: 10px;
+  line-height: 1.36;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .lab-history-body small {
   color: var(--muted);
+  -webkit-line-clamp: 1;
 }
 
 .lab-history-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  max-height: 27px;
+  overflow: hidden;
+  padding: 0 9px 7px;
 }
 
 .lab-history-tags em {
@@ -3209,12 +3229,18 @@ select:focus {
   font-weight: 650;
 }
 
+.lab-history-card .lab-card-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0 9px 9px;
+}
+
 .lab-result-card {
+  min-width: 0;
+  overflow: hidden;
   display: grid;
   gap: 9px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 9px;
   background: rgba(255, 255, 255, 0.74);
 }
 
@@ -3223,8 +3249,9 @@ select:focus {
   width: 100%;
   aspect-ratio: 1 / 1;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
   background: var(--paper-deep);
 }
 
@@ -3251,18 +3278,33 @@ select:focus {
 }
 
 .lab-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 8px;
+  padding: 0 9px;
+}
+
+.lab-card-meta strong {
+  min-height: 36px;
+  overflow: hidden;
+  display: -webkit-box;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .lab-card-quality,
 .lab-card-quality-detail {
   margin: 0;
+  padding: 0 9px;
+  overflow: hidden;
+  display: -webkit-box;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .lab-card-quality {
@@ -3272,8 +3314,9 @@ select:focus {
 
 .lab-card-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 7px;
+  padding: 0 9px 9px;
 }
 
 .lab-card-action {
@@ -3310,7 +3353,7 @@ select:focus {
 
 .lab-prompt-detail {
   border-top: 1px solid var(--line);
-  padding-top: 8px;
+  padding: 8px 9px 9px;
 }
 
 .lab-prompt-detail summary {

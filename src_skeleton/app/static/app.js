@@ -195,6 +195,7 @@ const labState = {
   historyLoading: false,
   currentSession: null,
   currentBoard: null,
+  navOpen: false,
 };
 
 const veyraState = {
@@ -229,6 +230,9 @@ const els = {
   sessionLabel: document.querySelector("#sessionLabel"),
   tabs: document.querySelectorAll("[data-tab]"),
   panels: document.querySelectorAll("[data-panel]"),
+  labNavMenu: document.querySelector(".lab-nav-menu"),
+  labNavTab: document.querySelector(".lab-nav-menu [data-tab='lab']"),
+  labNavDropdown: document.querySelector(".lab-nav-dropdown"),
   heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
   videoProviderList: document.querySelector("#videoProviderList"),
@@ -466,7 +470,14 @@ function bindControls() {
   }
 
   els.tabs.forEach((button) => {
-    button.addEventListener("click", () => switchTab(button.dataset.tab));
+    button.addEventListener("click", () => {
+      switchTab(button.dataset.tab);
+      if (button.dataset.tab === "lab") {
+        setLabNavOpen(!labState.navOpen);
+      } else {
+        setLabNavOpen(false);
+      }
+    });
   });
 
   els.countInput.addEventListener("input", () => {
@@ -620,7 +631,10 @@ function bindControls() {
     });
   }
   document.querySelectorAll("[data-lab-module-open]").forEach((button) => {
-    button.addEventListener("click", () => openLabModule(button.dataset.labModuleOpen || "rare-style-explorer"));
+    button.addEventListener("click", () => {
+      openLabModule(button.dataset.labModuleOpen || "rare-style-explorer");
+      setLabNavOpen(false);
+    });
   });
   document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
     button.addEventListener("click", openLabHome);
@@ -659,8 +673,14 @@ function bindControls() {
     if (event.target.hasAttribute("data-close-lightbox")) closeImageLightbox();
   });
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setLabNavOpen(false);
     if (event.key === "Escape" && !els.sampleGuideModal.hidden) closeSampleGuide();
     if (event.key === "Escape" && !els.imageLightbox.hidden) closeImageLightbox();
+  });
+  document.addEventListener("click", (event) => {
+    if (!labState.navOpen) return;
+    if (els.labNavMenu?.contains(event.target)) return;
+    setLabNavOpen(false);
   });
 }
 
@@ -728,12 +748,17 @@ async function loadLabStyles({ force = false } = {}) {
 }
 
 async function loadLabHistory({ silent = true, force = false } = {}) {
-  if (labState.historyLoading || (labState.historyLoaded && !force)) {
+  if (labState.historyLoading) {
+    renderLabHistoryLoading();
+    return;
+  }
+  if (labState.historyLoaded && !force) {
     renderLabHistory(labState.history);
     return;
   }
   labState.historyLoading = true;
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
+  renderLabHistoryLoading();
   try {
     const payload = await request("/api/lab/rare-style-explorer/history?limit=1000");
     labState.history = Array.isArray(payload.items) ? payload.items : [];
@@ -748,6 +773,13 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
     labState.historyLoading = false;
     if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = false;
   }
+}
+
+function renderLabHistoryLoading() {
+  if (!els.labHistoryGrid || labState.historyLoaded || labState.history.length) return;
+  els.labHistoryGrid.innerHTML = "正在加载 Alchemy Lab 历史。";
+  els.labHistoryGrid.classList.add("empty-v2-list");
+  if (els.labHistoryCount) els.labHistoryCount.textContent = "0";
 }
 
 function renderLabHistory(items) {
@@ -765,7 +797,6 @@ function renderLabHistory(items) {
     const article = document.createElement("article");
     article.className = "lab-history-card";
     const metaText = labHistoryMetaText(item);
-    const qualityText = labHistoryQualityText(item);
     article.innerHTML = `
       <button class="lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}">
         <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(item.title || `Alchemy Lab 历史 ${index + 1}`)}" loading="lazy" decoding="async" />
@@ -775,7 +806,6 @@ function renderLabHistory(items) {
         <strong>${escapeHtml(item.title || "Rare Style Explorer")}</strong>
         <p>${escapeHtml(item.idea || "未记录画面方向")}</p>
         <small>${escapeHtml(metaText)}</small>
-        ${qualityText ? `<small>${escapeHtml(qualityText)}</small>` : ""}
       </div>
       <div class="lab-history-tags">
         ${labHistoryTags(item).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}
@@ -864,6 +894,9 @@ function openLabModule(moduleId = "rare-style-explorer") {
   if (!labState.loaded && !labState.loading) {
     loadLabStyles().catch((error) => updateLabNotice(`风格加载失败：${friendlyError(error)}`, "error"));
   }
+  if (!labState.historyLoaded && !labState.historyLoading) {
+    loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
+  }
 }
 
 function openLabHome() {
@@ -876,9 +909,14 @@ function renderLabModuleState() {
   const active = labState.activeModule === "rare-style-explorer";
   if (els.labHomePanel) els.labHomePanel.hidden = active;
   if (els.rareStyleExplorerPanel) els.rareStyleExplorerPanel.hidden = !active;
-  document.querySelectorAll("[data-tab='lab']").forEach((button) => {
-    button.setAttribute("aria-expanded", String(active));
-  });
+}
+
+function setLabNavOpen(open) {
+  const nextOpen = Boolean(open && activePanelName() === "lab");
+  labState.navOpen = nextOpen;
+  if (els.labNavMenu) els.labNavMenu.classList.toggle("is-open", nextOpen);
+  if (els.labNavTab) els.labNavTab.setAttribute("aria-expanded", String(nextOpen));
+  if (els.labNavDropdown) els.labNavDropdown.hidden = !nextOpen;
 }
 
 function hydrateLabControlLimits() {
@@ -1053,9 +1091,12 @@ function labProviderPreference() {
 function renderLabBoard(board) {
   if (!els.labComparisonGrid) return;
   const groups = Array.isArray(board?.groups) ? board.groups : [];
+  const cards = groups.flatMap((group) =>
+    (Array.isArray(group.cards) ? group.cards : []).map((card) => ({ group, card })),
+  );
   els.labComparisonGrid.innerHTML = "";
-  els.labComparisonGrid.classList.toggle("empty-v2-list", groups.length === 0);
-  if (!groups.length) {
+  els.labComparisonGrid.classList.toggle("empty-v2-list", cards.length === 0);
+  if (!cards.length) {
     els.labComparisonGrid.textContent = "暂无对比结果。";
     if (els.labProgress) els.labProgress.textContent = "等待生成风格变化。";
     return;
@@ -1063,44 +1104,37 @@ function renderLabBoard(board) {
   if (els.labProgress) {
     els.labProgress.textContent = `${groups.length} 组风格 · ${countLabCards(board)} 张结果 · ${labStatusLabel(board.status)}`;
   }
-  groups.forEach((group) => {
-    const section = document.createElement("section");
-    section.className = "lab-style-result";
-    section.innerHTML = `<h4>${escapeHtml(group.style_name || group.style_preset_id)}</h4>`;
-    const grid = document.createElement("div");
-    grid.className = "lab-card-grid";
-    (group.cards || []).forEach((card) => {
-      const article = document.createElement("article");
-      article.className = `lab-result-card ${card.status === "succeeded" ? "is-ready" : "is-failed"}`;
-      const imageHtml = card.image_url
-        ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(group.style_name || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(group.style_name || "Lab result")}" /></button>`
-        : `<div class="lab-error-tile">${escapeHtml(card.error?.message || "生成失败")}</div>`;
-      const imageActions = card.image_url
-        ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
-        : "";
-      const qualityText = labQualityMetaText(card.quality);
-      const qualityDetails = labQualityDetailsText(card.quality);
-      article.innerHTML = `
-        ${imageHtml}
-        <div class="lab-card-meta">
-          <span>${escapeHtml(group.style_name || group.style_preset_id)} · ${escapeHtml(labCardStatusLabel(card.status))}</span>
-          <button class="lab-favorite-btn${card.is_favorite ? " active" : ""}" data-lab-favorite="${escapeHtml(card.variant_id)}" type="button" aria-pressed="${String(Boolean(card.is_favorite))}">收藏</button>
-        </div>
-        ${qualityText ? `<p class="lab-card-quality">${escapeHtml(qualityText)}</p>` : ""}
-        ${qualityDetails ? `<small class="lab-card-quality-detail">${escapeHtml(qualityDetails)}</small>` : ""}
-        <div class="lab-card-actions">
-          <button class="lab-card-action" data-lab-copy-prompt="${escapeHtml(card.variant_id || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}" type="button">复制提示词</button>
-          ${imageActions}
-        </div>
-        <details class="lab-prompt-detail">
-          <summary>查看本图使用的提示词</summary>
-          <pre>${escapeHtml(card.prompt || "")}</pre>
-        </details>
-      `;
-      grid.appendChild(article);
-    });
-    section.appendChild(grid);
-    els.labComparisonGrid.appendChild(section);
+  cards.forEach(({ group, card }) => {
+    const article = document.createElement("article");
+    article.className = `lab-result-card ${card.status === "succeeded" ? "is-ready" : "is-failed"}`;
+    const styleName = group.style_name || group.style_preset_id || "Rare Style";
+    const imageHtml = card.image_url
+      ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
+      : `<div class="lab-error-tile">${escapeHtml(card.error?.message || "生成失败")}</div>`;
+    const imageActions = card.image_url
+      ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
+      : "";
+    const qualityText = labQualityMetaText(card.quality);
+    const qualityDetails = labQualityDetailsText(card.quality);
+    article.innerHTML = `
+      ${imageHtml}
+      <div class="lab-card-meta">
+        <strong>${escapeHtml(styleName)}</strong>
+        <span>${escapeHtml(labCardStatusLabel(card.status))}</span>
+      </div>
+      ${qualityText ? `<p class="lab-card-quality">${escapeHtml(qualityText)}</p>` : ""}
+      ${qualityDetails ? `<small class="lab-card-quality-detail">${escapeHtml(qualityDetails)}</small>` : ""}
+      <div class="lab-card-actions">
+        <button class="lab-card-action" data-lab-copy-prompt="${escapeHtml(card.variant_id || "")}" data-lab-prompt="${escapeHtml(card.prompt || "")}" type="button">复制提示词</button>
+        ${imageActions}
+        <button class="lab-card-action lab-favorite-btn${card.is_favorite ? " active" : ""}" data-lab-favorite="${escapeHtml(card.variant_id)}" type="button" aria-pressed="${String(Boolean(card.is_favorite))}">收藏</button>
+      </div>
+      <details class="lab-prompt-detail">
+        <summary>查看本图使用的提示词</summary>
+        <pre>${escapeHtml(card.prompt || "")}</pre>
+      </details>
+    `;
+    els.labComparisonGrid.appendChild(article);
   });
 }
 

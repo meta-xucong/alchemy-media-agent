@@ -2109,6 +2109,94 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
         settings.veyra_session_secret = original_session_secret
 
 
+def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        return type("Account", (), {"user_id": user_id, "role": "user"})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+
+    try:
+        client = TestClient(app)
+        owner_token = _issue_test_veyra_session_token(42)
+        other_token = _issue_test_veyra_session_token(77)
+        lab_id = "out_lab_shared_account"
+        lab_path = media_store.output_path(job_id="job_lab_shared_account", output_id=lab_id, output_format="png")
+        lab_path.parent.mkdir(parents=True, exist_ok=True)
+        lab_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": lab_id,
+                "job_id": "job_lab_shared_account",
+                "session_id": "ses_lab_shared_account",
+                "url": f"/v1/outputs/{lab_id}/download",
+                "thumbnail_url": f"/v1/outputs/{lab_id}/download",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "shared lab image",
+                "source_app": "alchemy_lab_rare_style_explorer",
+                "veyra_user_id": 42,
+                "alchemy_lab": {
+                    "idea": "共享 Lab 历史",
+                    "style_name": "Cinematic",
+                    "mode": "poster",
+                    "keywords": ["shared", "lab"],
+                },
+                "created_at": "2026-06-11T00:03:00+00:00",
+                "updated_at": "2026-06-11T00:03:00+00:00",
+            }
+        )
+        v1_id = "out_v1_private_account"
+        v1_path = media_store.output_path(job_id="job_v1_private_account", output_id=v1_id, output_format="png")
+        v1_path.parent.mkdir(parents=True, exist_ok=True)
+        v1_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": v1_id,
+                "job_id": "job_v1_private_account",
+                "session_id": "ses_v1_private_account",
+                "url": f"/v1/outputs/{v1_id}/download",
+                "thumbnail_url": f"/v1/outputs/{v1_id}/download",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "private v1 image",
+                "veyra_user_id": 42,
+                "created_at": "2026-06-11T00:04:00+00:00",
+                "updated_at": "2026-06-11T00:04:00+00:00",
+            }
+        )
+
+        lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        v1_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        lab_download = client.get(f"/v1/outputs/{lab_id}/download", headers={"Authorization": f"Bearer {other_token}"})
+        v1_download = client.get(f"/v1/outputs/{v1_id}/download", headers={"Authorization": f"Bearer {other_token}"})
+        owner_download = client.get(f"/v1/outputs/{lab_id}/download", headers={"Authorization": f"Bearer {owner_token}"})
+        other_delete = client.delete(f"/v1/image/history/{lab_id}", headers={"Authorization": f"Bearer {other_token}"})
+
+        assert lab_history.status_code == 200
+        assert lab_id in {item["id"] for item in lab_history.json()["items"]}
+        assert v1_history.status_code == 200
+        assert v1_id not in {item["id"] for item in v1_history.json()["items"]}
+        assert lab_download.status_code == 200
+        assert owner_download.status_code == 200
+        assert v1_download.status_code == 403
+        assert other_delete.status_code == 403
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
 def test_v1_asset_uploads_are_bound_to_current_veyra_account(monkeypatch):
     original_auth_enabled = settings.veyra_auth_enabled
     original_internal_token = settings.veyra_internal_token

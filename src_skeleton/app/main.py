@@ -443,12 +443,19 @@ def _v1_output_owner_id(output_id: str) -> int | None:
     return None
 
 
+def _is_lab_output_id(output_id: str) -> bool:
+    for record in media_store.list_history_records(limit=10000):
+        if record.get("id") == output_id:
+            return is_lab_history_record(record)
+    return False
+
+
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
         return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
     context = await _veyra_history_context(request, authorization)
     owner_id = _v1_output_owner_id(output_id)
-    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
+    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and _is_lab_output_id(output_id)) or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
 
