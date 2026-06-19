@@ -3118,15 +3118,18 @@ select:focus {
 }
 
 .lab-style-more-note {
+  width: 100%;
   display: grid;
-  align-items: center;
+  place-items: center;
   min-height: 58px;
-  border: 1px dashed var(--line);
+  border: 1px solid rgba(116, 130, 105, 0.24);
   border-radius: 14px;
   padding: 11px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.54);
+  color: var(--sage-deep);
+  text-align: center;
+  background: rgba(255, 253, 247, 0.74);
   font-size: 12px;
+  font-weight: 720;
   line-height: 1.42;
 }
 

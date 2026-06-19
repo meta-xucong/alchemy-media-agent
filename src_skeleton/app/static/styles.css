@@ -4795,16 +4795,31 @@ input[type="range"] {
 }
 
 .lab-style-more-note {
+  width: 100%;
   display: grid;
-  align-items: center;
+  place-items: center;
   min-height: 64px;
-  border: 1px dashed var(--line);
+  border: 1px solid rgba(116, 130, 105, 0.24);
   border-radius: var(--radius-sm);
   padding: 12px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.5);
+  color: var(--sage-deep);
+  text-align: center;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(243, 239, 228, 0.72)),
+    rgba(255, 255, 255, 0.72);
   font-size: 12px;
+  font-weight: 760;
   line-height: 1.45;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.lab-style-more-note:hover,
+.lab-style-more-note:focus-visible {
+  border-color: rgba(116, 130, 105, 0.42);
+  box-shadow: 0 12px 28px rgba(24, 25, 21, 0.08);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .lab-progress {

@@ -31,6 +31,7 @@ const heroHistoryPageSize = 8;
 const v2TemplatePageSize = 10;
 const v2TemplateEagerImageCount = 4;
 const v2HistoryPageSize = 24;
+const labStylePageSize = 80;
 const v2RunLongWaitAttempt = 120;
 const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
@@ -187,6 +188,7 @@ const labState = {
   qualityEnhancement: "auto",
   seed: "",
   search: "",
+  styleRenderLimit: labStylePageSize,
   aspectRatio: "square",
   history: [],
   historyLoaded: false,
@@ -592,6 +594,7 @@ function bindControls() {
   if (els.labFamilyInput) {
     els.labFamilyInput.addEventListener("change", () => {
       labState.styleFamily = els.labFamilyInput.value || "";
+      labState.styleRenderLimit = labStylePageSize;
       renderLabStyles();
       updateLabCountLabel();
     });
@@ -606,6 +609,7 @@ function bindControls() {
   if (els.labStyleSearchInput) {
     els.labStyleSearchInput.addEventListener("input", () => {
       labState.search = els.labStyleSearchInput.value || "";
+      labState.styleRenderLimit = labStylePageSize;
       renderLabStyles();
     });
   }
@@ -906,6 +910,8 @@ function hydrateLabControlLimits() {
 function renderLabStyles() {
   if (!els.labStyleGrid) return;
   const styles = filteredLabStyles();
+  const renderLimit = Math.min(Number(labState.styleRenderLimit || labStylePageSize), styles.length);
+  const renderedStyles = styles.slice(0, renderLimit);
   els.labStyleGrid.innerHTML = "";
   els.labStyleGrid.classList.toggle("empty-v2-list", styles.length === 0);
   if (els.labStyleCount) els.labStyleCount.textContent = `${labState.styles.length || 0}`;
@@ -914,7 +920,7 @@ function renderLabStyles() {
     els.labStyleGrid.textContent = "暂无可用风格。";
     return;
   }
-  styles.slice(0, 80).forEach((style) => {
+  renderedStyles.forEach((style) => {
     const selected = labState.selectedStyleIds.includes(style.id);
     const button = document.createElement("button");
     button.className = `lab-style-card${selected ? " active" : ""}`;
@@ -929,10 +935,12 @@ function renderLabStyles() {
     `;
     els.labStyleGrid.appendChild(button);
   });
-  if (styles.length > 80) {
-    const note = document.createElement("div");
+  if (renderLimit < styles.length) {
+    const note = document.createElement("button");
     note.className = "lab-style-more-note";
-    note.textContent = `已显示前 80 个匹配风格，共 ${styles.length} 个。可继续搜索或选择风格族缩小范围。`;
+    note.type = "button";
+    note.dataset.labLoadMoreStyles = "true";
+    note.textContent = `已显示 ${renderLimit} / ${styles.length} 个匹配风格，点击加载更多。`;
     els.labStyleGrid.appendChild(note);
   }
 }
@@ -955,6 +963,13 @@ function filteredLabStyles() {
 }
 
 function handleLabStyleGridClick(event) {
+  const loadMore = event.target.closest("[data-lab-load-more-styles]");
+  if (loadMore) {
+    const total = filteredLabStyles().length;
+    labState.styleRenderLimit = Math.min(Number(labState.styleRenderLimit || labStylePageSize) + labStylePageSize, total);
+    renderLabStyles();
+    return;
+  }
   const button = event.target.closest("[data-lab-style-id]");
   if (!button) return;
   const styleId = button.dataset.labStyleId;

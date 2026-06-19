@@ -1225,7 +1225,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260614-billing-balance" in index.text
+    assert "20260619-lab-style-loadmore" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1384,6 +1384,8 @@ def test_frontend_static_app_is_served():
     assert "function loadLabStyles" in script.text
     assert "function openLabModule" in script.text
     assert "function filteredLabStyles" in script.text
+    assert "data-lab-load-more-styles" in script.text
+    assert "点击加载更多" in script.text
     assert "target_count" in script.text
     assert "generation_interval_seconds" in script.text
     assert "quality_enhancement" in script.text
@@ -1517,7 +1519,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260613-veyra-loopfix" in h5.text
+    assert "20260619-lab-style-loadmore" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "生图 V1.0 基础版" in h5.text
     assert "生图 V2.0 AGENT" in h5.text
@@ -1597,6 +1599,8 @@ def test_mobile_h5_app_is_served_independently():
     assert "function loadLabStyles" in mobile_script.text
     assert "function openLabModule" in mobile_script.text
     assert "function filteredLabStyles" in mobile_script.text
+    assert "data-lab-load-more-styles" in mobile_script.text
+    assert "点击加载更多" in mobile_script.text
     assert "target_count" in mobile_script.text
     assert "generation_interval_seconds" in mobile_script.text
     assert "quality_enhancement" in mobile_script.text
