@@ -702,6 +702,71 @@ def test_v2_uploaded_assets_are_bound_to_current_veyra_account(monkeypatch) -> N
     assert "Uploaded asset binding failed" in body["next_actions"][0]
 
 
+def test_v2_favorite_reference_asset_is_bound_to_current_account(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_session_secret", "session-secret")
+    object.__setattr__(settings, "persist_image_history", True)
+    object.__setattr__(settings, "veyra_billing_enabled", False)
+    reset_billing_settings_cache()
+
+    async def fake_account(user_id: int):
+        return SimpleNamespace(user_id=user_id, role="user", balance=100.0)
+
+    monkeypatch.setattr(main_module.VeyraSub2APIClient, "account", lambda self, user_id: fake_account(user_id))
+
+    owner_token = issue_test_veyra_session_token(42)
+    other_token = issue_test_veyra_session_token(77)
+    create_response = client.post(
+        "/api/v2/image/jobs",
+        json={
+            "run_id": "run_account_favorite_reference",
+            "prompt_plan": {
+                "plan_id": "plan_account_favorite_reference",
+                "mode": "smart_enhance",
+                "prompt": "owner image",
+                "user_variables": {"generation_prompt": "owner image", "user_prompt": "owner image"},
+            },
+            "provider_hint": "mock_image",
+        },
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert create_response.status_code == 202
+    output_id = create_response.json()["outputs"][0]["output_id"]
+
+    owner_favorite = client.put(
+        f"/api/v2/image/history/{output_id}/favorite",
+        json={"favorite": True},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert owner_favorite.status_code == 200
+    other_history = client.get("/api/v2/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+    assert other_history.status_code == 200
+    assert output_id not in {item["output_id"] for item in other_history.json()["items"]}
+
+    blocked_reference = client.post(
+        f"/api/v2/image/history/{output_id}/reference-asset",
+        json={"intended_use": "continue_modifying_selected_favorite_image"},
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert blocked_reference.status_code == 403
+
+    reference = client.post(
+        f"/api/v2/image/history/{output_id}/reference-asset",
+        json={"intended_use": "continue_modifying_selected_favorite_image"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert reference.status_code == 200
+    asset_id = reference.json()["asset_id"]
+    assert repository.get_uploaded_asset(asset_id).veyra_user_id == 42
+
+    owner_lookup = client.get(f"/api/v2/uploads/{asset_id}", headers={"Authorization": f"Bearer {owner_token}"})
+    other_lookup = client.get(f"/api/v2/uploads/{asset_id}", headers={"Authorization": f"Bearer {other_token}"})
+    assert owner_lookup.status_code == 200
+    assert other_lookup.status_code == 403
+
+
 def test_v2_creative_run_enforces_uploaded_asset_count_limit() -> None:
     client = fresh_client()
     original_limit = settings.max_uploaded_asset_count

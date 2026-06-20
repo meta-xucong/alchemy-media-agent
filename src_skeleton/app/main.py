@@ -837,6 +837,7 @@ async def revise_image_job_endpoint(
     background_tasks: BackgroundTasks,
     authorization: str = Header(default=""),
 ):
+    await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
     prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
     if not prepared:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})

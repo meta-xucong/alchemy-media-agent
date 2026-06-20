@@ -790,7 +790,11 @@ async def history_reference_asset(
             status_code=400,
             detail={"error_code": "history_output_not_favorite", "message": "Please star this V2 history output before using it as a continuation reference."},
         )
-    asset = create_reference_asset_from_history_output(output_id, body)
+    asset = create_reference_asset_from_history_output(
+        output_id,
+        body,
+        veyra_user_id=context.get("user_id"),
+    )
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "history_output_file_not_found", "message": "V2 history output file not found."})
     return asset

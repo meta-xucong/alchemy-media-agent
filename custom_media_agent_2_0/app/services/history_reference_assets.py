@@ -11,6 +11,8 @@ from app.services.uploaded_assets import create_uploaded_asset_from_bytes
 def create_reference_asset_from_history_output(
     output_id: str,
     request: FavoriteReferenceAssetRequest | None = None,
+    *,
+    veyra_user_id: int | None = None,
 ) -> UploadedAsset | None:
     clean_output_id = str(output_id or "").strip()
     if not clean_output_id:
@@ -30,6 +32,7 @@ def create_reference_asset_from_history_output(
         role=body.role,
         constraint_strength=body.constraint_strength,
         intended_use=body.intended_use or "continue_modifying_selected_favorite_image",
+        veyra_user_id=veyra_user_id,
     )
 
 

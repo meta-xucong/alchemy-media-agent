@@ -2964,6 +2964,70 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
         settings.veyra_session_secret = original_session_secret
 
 
+def test_v1_revise_rejects_other_account_history_output(monkeypatch):
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        return type("Account", (), {"user_id": user_id, "role": "user"})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+
+    try:
+        client = TestClient(app)
+        owner_token = _issue_test_veyra_session_token(42)
+        other_token = _issue_test_veyra_session_token(77)
+        session_id = client.post(
+            "/v1/sessions",
+            json={"project_id": "proj_revise_isolation"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        ).json()["id"]
+        output_id = "out_revise_account_owner"
+        job_id = "job_revise_account_owner"
+        output_path = media_store.output_path(job_id=job_id, output_id=output_id, output_format="png")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(base64.b64decode(tiny_png_b64()))
+        media_store.save_history_record(
+            {
+                "id": output_id,
+                "job_id": job_id,
+                "session_id": session_id,
+                "url": f"/v1/outputs/{output_id}/download",
+                "thumbnail_url": f"/v1/outputs/{output_id}/thumbnail",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "owner image",
+                "veyra_user_id": 42,
+                "created_at": "2026-06-11T00:05:00+00:00",
+                "updated_at": "2026-06-11T00:05:00+00:00",
+            }
+        )
+
+        blocked = client.post(
+            f"/v1/image/jobs/{job_id}/revise",
+            json={"output_id": output_id, "feedback": "换成咖啡"},
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        allowed = client.post(
+            f"/v1/image/jobs/{job_id}/revise",
+            json={"output_id": output_id, "feedback": "换成咖啡", "provider_preference": "mock_image"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+
+        assert blocked.status_code == 403
+        assert allowed.status_code == 200
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
 def test_v1_asset_uploads_are_bound_to_current_veyra_account(monkeypatch):
     original_auth_enabled = settings.veyra_auth_enabled
     original_internal_token = settings.veyra_internal_token

@@ -178,6 +178,7 @@ def create_uploaded_asset_from_bytes(
     role: AssetRole | None = None,
     constraint_strength: ConstraintStrength = "strong",
     intended_use: str | None = None,
+    veyra_user_id: int | None = None,
 ) -> UploadedAsset:
     now = utc_now()
     asset = UploadedAsset(
@@ -185,6 +186,7 @@ def create_uploaded_asset_from_bytes(
         filename=_safe_filename(filename),
         mime_type=mime_type,
         size_bytes=len(content),
+        veyra_user_id=veyra_user_id,
         status="stored",
         role=role,
         constraint_strength=constraint_strength,
