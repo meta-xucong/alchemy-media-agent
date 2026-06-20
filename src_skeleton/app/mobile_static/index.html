@@ -9,7 +9,7 @@
     <meta property="og:description" content="AI 自动优化创作表达，快速生成高质感视觉内容。" />
     <meta property="og:image" content="/mobile-static/showcase/city-poster.jpg" />
     <title>Verya Alchemy H5</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260619-lab-order-fix" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260620-lab-h5-history-fix" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -26,10 +26,10 @@
         </div>
 
         <nav class="module-tabs" aria-label="生成模块" role="tablist">
-          <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图 V1.0 基础版</button>
-          <button class="tab" data-tab="v2" type="button" role="tab" aria-selected="false">生图 V2.0 AGENT</button>
-          <button class="tab" data-tab="lab" type="button" role="tab" aria-selected="false">Alchemy Lab</button>
-          <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频（DEMO）</button>
+          <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">V1 基础</button>
+          <button class="tab" data-tab="v2" type="button" role="tab" aria-selected="false">V2 Agent</button>
+          <button class="tab lab-tab" data-tab="lab" type="button" role="tab" aria-selected="false">Alchemy Lab</button>
+          <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">视频</button>
         </nav>
 
         <div class="header-status">
@@ -883,6 +883,11 @@
                   <strong>稀有风格探索器</strong>
                   <small>从 620 个低频视觉亚风格里抽样、筛选并批量生成对比图。</small>
                 </button>
+                <button class="lab-module-card" data-mobile-open="lab-history" type="button">
+                  <span>Lab History</span>
+                  <strong>实验室历史</strong>
+                  <small>查看所有实验室模块生成的图片，按来源模块保留标记。</small>
+                </button>
               </div>
             </section>
 
@@ -906,6 +911,31 @@
                     <textarea id="labIdeaInput" rows="6" placeholder="例如：一张甜品店新品海报，主角是草莓千层蛋糕，氛围清爽、有记忆点。"></textarea>
                   </label>
                   <div id="labNoticeBar" class="notice-bar" role="status" aria-live="polite">输入想法后可自动抽样，也可手选风格生成对比图。</div>
+                  <div id="labIntentSummary" class="lab-intent-summary" role="status" aria-live="polite">
+                    <strong id="labIntentSummaryTitle">智能判断</strong>
+                    <span id="labIntentSummaryText">调用智能判断理解文字和参考图用途，优先推荐更匹配的风格族与约束；不会覆盖手动选择的风格。</span>
+                  </div>
+
+                  <section id="labMobileActionPanel" class="mobile-action-panel lab-mobile-action-panel">
+                    <div class="mobile-summary-grid">
+                      <button class="mobile-entry-card" data-mobile-open="lab-run-params" type="button">
+                        <span>生成参数</span>
+                        <strong id="mobileLabRunSummary">4 张 · 方图 · 间隔 8 秒</strong>
+                      </button>
+                      <button class="mobile-entry-card" data-mobile-open="lab-explore-settings" type="button">
+                        <span>探索设置</span>
+                        <strong id="mobileLabExploreSummary">快速探索 · 全部风格 · 自动约束</strong>
+                      </button>
+                      <button class="mobile-entry-card" data-mobile-open="lab-reference" type="button">
+                        <span>参考图</span>
+                        <strong id="mobileLabReferenceSummary">未添加参考图</strong>
+                      </button>
+                      <button class="mobile-entry-card" data-mobile-open="lab-style-library" type="button">
+                        <span>风格库</span>
+                        <strong id="mobileLabStyleSummary">自动抽样 · 620 个风格</strong>
+                      </button>
+                    </div>
+                  </section>
 
                   <div class="lab-control-row">
                     <label class="control-block lab-count-control">
@@ -966,6 +996,13 @@
                       </select>
                     </label>
                     <label class="field">
+                      <span>智能判断</span>
+                      <select id="labIntentDirectorInput">
+                        <option value="auto">自动约束</option>
+                        <option value="off">纯随机</option>
+                      </select>
+                    </label>
+                    <label class="field">
                       <span>质量增强</span>
                       <select id="labQualityEnhancementInput">
                         <option value="auto">自动判断</option>
@@ -978,6 +1015,47 @@
                       <span>Seed</span>
                       <input id="labSeedInput" type="number" min="0" step="1" placeholder="随机" />
                     </label>
+                  </div>
+
+                  <div class="lab-reference-box">
+                    <div class="lab-reference-head">
+                      <strong>上传参考图</strong>
+                      <em id="labReferenceCountLabel">未添加</em>
+                    </div>
+                    <div id="labReferencePanel" class="lab-reference-panel">
+                      <div class="lab-reference-controls">
+                        <label class="field">
+                          <span>参考用途</span>
+                          <select id="labReferenceRoleInput">
+                            <option value="subject_reference">主体参考</option>
+                            <option value="product_reference">产品参考</option>
+                            <option value="style_material_reference">风格/材质参考</option>
+                            <option value="composition_reference">构图/背景参考</option>
+                            <option value="logo_reference">Logo/标识</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>约束强度</span>
+                          <select id="labReferenceStrengthInput">
+                            <option value="strong">强约束</option>
+                            <option value="soft">轻参考</option>
+                            <option value="required">必须保留</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label class="field">
+                        <span>参考说明</span>
+                        <input id="labReferenceNotesInput" type="text" maxlength="220" placeholder="例如：保持蛋糕造型和品牌色，但套入所选稀有风格。" />
+                      </label>
+                      <div class="lab-reference-upload-row">
+                        <label class="lab-reference-file">
+                          <input id="labReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                          <span>选择参考图</span>
+                        </label>
+                      </div>
+                      <div id="labReferenceState" class="micro-copy">支持 PNG / JPEG / WebP，单张不超过 12MB。</div>
+                      <div id="labReferenceList" class="lab-reference-list" aria-live="polite"></div>
+                    </div>
                   </div>
 
                   <div class="composer-actions">
@@ -994,12 +1072,17 @@
                   </div>
                   <div class="lab-library-tools">
                     <input id="labStyleSearchInput" type="search" placeholder="搜索 620 个风格名 / ID / 关键词" />
+                    <button id="labStyleSearchBtn" class="button compact secondary" type="button">智能匹配</button>
                     <button id="labClearStylesBtn" class="button compact ghost" type="button">清空选择</button>
                   </div>
-                  <details class="lab-library-details" open>
-                    <summary>展开完整风格库</summary>
+                  <div id="labStyleSearchThinking" class="v2-search-thinking lab-search-thinking" role="status" aria-live="polite" hidden>
+                    <span class="thinking-spinner" aria-hidden="true"></span>
+                    <strong>正在匹配风格</strong>
+                    <small>正在理解你的主体、用途、风格和材质，再按相关度排序。</small>
+                  </div>
+                  <div id="labStyleLibraryPanel" class="lab-library-panel">
                     <div id="labStyleGrid" class="lab-style-grid empty-v2-list" aria-live="polite"></div>
-                  </details>
+                  </div>
                 </div>
               </div>
             </section>
@@ -1185,6 +1268,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260619-lab-order-fix" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260620-lab-h5-history-fix" defer></script>
   </body>
 </html>

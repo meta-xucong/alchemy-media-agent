@@ -224,7 +224,7 @@ class PromptPatch(BaseModel):
 class ImageGenerationRequest(BaseModel):
     prompt_plan: ImagePromptPlan
     asset_ids: list[str] = Field(default_factory=list)
-    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_mode: Literal["basic", "advanced", "lab_reference"] = "basic"
     asset_intents: list[AssetIntent] = Field(default_factory=list)
     asset_plan: dict[str, Any] | None = None
     provider_preference: str | None = None
@@ -290,7 +290,7 @@ class GenerationJob(BaseModel):
     status: JobStatus
     provider: str | None = None
     model: str | None = None
-    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_mode: Literal["basic", "advanced", "lab_reference"] = "basic"
     asset_plan: dict[str, Any] | None = None
     postprocess_steps: list[dict[str, Any]] = Field(default_factory=list)
     provenance: dict[str, Any] = Field(default_factory=dict)
@@ -321,7 +321,7 @@ class ImageHistoryItem(BaseModel):
     requested_provider: str | None = None
     requested_model: str | None = None
     provider_fallback: dict[str, Any] | None = None
-    asset_mode: Literal["basic", "advanced"] = "basic"
+    asset_mode: Literal["basic", "advanced", "lab_reference"] = "basic"
     asset_intents: list[dict[str, Any]] = Field(default_factory=list)
     asset_plan: dict[str, Any] | None = None
     asset_vision_profiles: list[dict[str, Any]] = Field(default_factory=list)
@@ -454,6 +454,15 @@ class RuntimeProviderSettingsRequest(BaseModel):
     anthropic_base_url: str | None = Field(default=None, max_length=512)
     gemini_image_api_key: str | None = Field(default=None, max_length=4096)
     gemini_image_base_url: str | None = Field(default=None, max_length=512)
+    lab_llm_provider: Literal["openai", "kimi", "doubao"] | None = None
+    lab_llm_model: str | None = Field(default=None, min_length=1, max_length=160)
+    lab_openai_api_key: str | None = Field(default=None, max_length=4096)
+    lab_openai_base_url: str | None = Field(default=None, max_length=512)
+    lab_kimi_api_key: str | None = Field(default=None, max_length=4096)
+    lab_kimi_base_url: str | None = Field(default=None, max_length=512)
+    lab_doubao_vision_api_key: str | None = Field(default=None, max_length=4096)
+    lab_doubao_vision_model: str | None = Field(default=None, min_length=1, max_length=160)
+    lab_doubao_vision_base_url: str | None = Field(default=None, max_length=512)
 
 
 class RuntimeProviderSettingsResponse(BaseModel):
@@ -477,6 +486,16 @@ class RuntimeProviderSettingsResponse(BaseModel):
     anthropic_api_key_configured: bool
     gemini_image_base_url: str | None = None
     gemini_image_api_key_configured: bool
+    lab_llm_provider: str
+    lab_llm_model: str
+    lab_openai_base_url: str | None = None
+    lab_openai_api_key_configured: bool
+    lab_kimi_base_url: str | None = None
+    lab_kimi_api_key_configured: bool
+    lab_vision_provider: str
+    lab_doubao_vision_model: str
+    lab_doubao_vision_base_url: str | None = None
+    lab_doubao_vision_api_key_configured: bool
     runtime_persistence_warning: str | None = None
     provider_notes: dict[str, str] = Field(default_factory=dict)
 

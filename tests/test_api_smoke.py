@@ -12,6 +12,7 @@ import app.main as main_module
 import app.services.image_service as image_service_module
 import app.services.alchemy_lab as alchemy_lab_module
 import app.services.alchemy_lab_quality as alchemy_lab_quality_module
+import app.services.alchemy_lab_intent_director as alchemy_lab_intent_module
 from app.main import app
 from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
@@ -29,6 +30,20 @@ def count_cards(board: dict, status: str = "") -> int:
     )
 
 
+def tiny_png_b64(color=(220, 60, 70)) -> str:
+    try:
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nG"
+            "P4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )
+
+
 @pytest.fixture(autouse=True)
 def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_provider = settings.default_image_provider
@@ -40,6 +55,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_gemini_enabled = settings.gemini_image_generation_enabled
     original_mock_enabled = settings.mock_image_provider_enabled
     original_veyra_usage_path = settings.veyra_usage_path
+    original_lab_llm_enabled = settings.lab_llm_enabled
     monkeypatch.setattr(media_store, "root", tmp_path)
     monkeypatch.setitem(image_service_module.registry.image_providers, "mock_image", MockImageProvider())
     settings.default_image_provider = "mock_image"
@@ -51,6 +67,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_base_url = None
     settings.gemini_image_generation_enabled = False
     settings.veyra_usage_path = tmp_path / "veyra_usage.jsonl"
+    settings.lab_llm_enabled = False
     repository.reset()
     lab_store.reset()
     yield
@@ -65,6 +82,7 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_generation_enabled = original_gemini_enabled
     settings.mock_image_provider_enabled = original_mock_enabled
     settings.veyra_usage_path = original_veyra_usage_path
+    settings.lab_llm_enabled = original_lab_llm_enabled
 
 
 def _completed_image_job(client: TestClient, response, *, headers: dict[str, str] | None = None, max_attempts: int = 30) -> dict:
@@ -248,6 +266,56 @@ def test_alchemy_lab_lists_rare_style_presets():
     assert all(style["prompt_directives"] for style in body["styles"])
 
 
+def test_alchemy_lab_semantic_style_search_ranks_and_scores():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/styles/search",
+        json={"query_text": "端午节祝贺海报，中式节日，绿色粽子，竖版", "limit": 12},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] in {"local_scorer", "llm_rerank"}
+    assert body["styles"]
+    assert len(body["styles"]) <= 12
+    assert all("score" in style for style in body["styles"])
+    assert all("why_selected" in style for style in body["styles"])
+    scores = [style["score"] for style in body["styles"]]
+    assert scores == sorted(scores, reverse=True)
+    assert body["styles"][0]["id"] == "G049"
+    assert "食物饮品" in body["styles"][0]["why_selected"]
+    combined = " ".join(" ".join([style["display_name"], style["short_description"], style["category"], style.get("why_selected", "")]) for style in body["styles"][:6])
+    assert any(marker in combined for marker in ["海报", "节日", "工艺", "平面", "绿色", "传统"])
+
+
+def test_alchemy_lab_semantic_style_search_handles_noise_and_long_queries():
+    client = TestClient(app)
+
+    nonsense = client.post(
+        "/api/lab/rare-style-explorer/styles/search",
+        json={"query_text": "!!!@@@ ### xyznotreal 𠀀𠮷", "limit": 12},
+    )
+
+    assert nonsense.status_code == 200
+    nonsense_body = nonsense.json()
+    assert nonsense_body["source"] == "local_scorer"
+    assert nonsense_body["styles"] == []
+    assert nonsense_body["query_features"] == []
+
+    long_query = "端午节祝贺海报 中式绿色粽子 竖版 " * 80
+    long_response = client.post(
+        "/api/lab/rare-style-explorer/styles/search",
+        json={"query_text": long_query, "limit": 12},
+    )
+
+    assert long_response.status_code == 200
+    long_body = long_response.json()
+    assert long_body["styles"]
+    assert long_body["styles"][0]["id"] == "G049"
+    assert len(long_body["ranking_explanation"]) < 700
+
+
 def test_alchemy_lab_rejects_empty_idea_and_oversized_batch():
     client = TestClient(app)
 
@@ -419,7 +487,7 @@ def test_alchemy_lab_quality_balanced_uses_llm_text_hierarchy(monkeypatch):
             {"llm_provider": "test_llm", "llm_model": "test-model", "fallback_used": False},
         )
 
-    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fake_json_plan)
+    monkeypatch.setattr(alchemy_lab_quality_module, "plan_lab_json", fake_json_plan)
     client = TestClient(app)
 
     response = client.post(
@@ -473,7 +541,7 @@ def test_alchemy_lab_quality_curated_allows_longer_llm_timeout(monkeypatch):
             {"llm_provider": "test_llm", "llm_model": "test-model", "fallback_used": False},
         )
 
-    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fake_json_plan)
+    monkeypatch.setattr(alchemy_lab_quality_module, "plan_lab_json", fake_json_plan)
     client = TestClient(app)
 
     response = client.post(
@@ -498,7 +566,7 @@ def test_alchemy_lab_quality_llm_failure_falls_back_without_formula(monkeypatch)
     async def fail_json_plan(**kwargs):
         raise RuntimeError("planner unavailable")
 
-    monkeypatch.setattr(alchemy_lab_quality_module, "ask_llm_json_plan", fail_json_plan)
+    monkeypatch.setattr(alchemy_lab_quality_module, "plan_lab_json", fail_json_plan)
     client = TestClient(app)
 
     response = client.post(
@@ -566,6 +634,48 @@ def test_alchemy_lab_auto_selects_by_family_and_seed():
     assert payload["session"]["request"]["style_family"] == "graphic"
     assert len(payload["board"]["groups"]) == 6
     assert {style["family"] for style in payload["session"]["style_presets"]} == {"graphic"}
+
+
+def test_alchemy_lab_reference_product_auto_uses_curated_showcase_sampling():
+    client = TestClient(app)
+    upload = client.post(
+        "/api/lab/uploads",
+        json={
+            "filename": "reference-bottle.png",
+            "mime_type": "image/png",
+            "size_bytes": 128,
+            "role": "product_reference",
+            "constraint_strength": "strong",
+            "intended_use": "保持产品主体，探索高端海报风格。",
+            "consent": {"user_confirmed_rights": True, "commercial_use_allowed": True},
+        },
+    )
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/api/lab/uploads/{asset_id}/content", json={"content_base64": tiny_png_b64(), "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/api/lab/uploads/{asset_id}/complete").status_code == 200
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "以参考图中的白色工业瓶为主体，生成高端产品海报。",
+            "mode": "product",
+            "target_count": 4,
+            "images_per_style": 1,
+            "seed": 20260619,
+            "provider_preference": "mock_image",
+            "reference_assets": [{"asset_id": asset_id, "role": "product_reference", "constraint_strength": "strong"}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    families = [style["family"] for style in payload["session"]["style_presets"]]
+    assert len(set(families)) >= 3
+    assert set(families) - {"product", "material"}
+    first_quality = payload["session"]["prompts"][0]["prompt_metadata"]["quality_enhancement"]
+    assert first_quality["mode"] == "auto"
+    assert first_quality["strategy"] == "curated"
+    assert first_quality["applied"] is True
 
 
 def test_alchemy_lab_auto_mode_target_count_is_exact_total():
@@ -760,6 +870,311 @@ def test_alchemy_lab_schema_matches_real_api_responses():
     )
     assert session_response.status_code == 200
     validator.validate(session_response.json())
+
+
+def test_alchemy_lab_reference_upload_lifecycle_and_history_redaction():
+    client = TestClient(app)
+
+    upload = client.post(
+        "/api/lab/uploads",
+        json={
+            "filename": "secret-product.png",
+            "mime_type": "image/png",
+            "size_bytes": 128,
+            "role": "product_reference",
+            "constraint_strength": "strong",
+            "intended_use": "保持产品包装外观",
+            "consent": {
+                "user_confirmed_rights": True,
+                "logo_or_trademark_allowed": True,
+                "commercial_use_allowed": True,
+            },
+        },
+    )
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    assert upload.json()["upload_url"].startswith("/api/lab/uploads/")
+
+    stored = client.put(
+        f"/api/lab/uploads/{asset_id}/content",
+        json={"content_base64": tiny_png_b64(), "mime_type": "image/png"},
+    )
+    assert stored.status_code == 200
+    assert stored.json()["status"] == "stored"
+
+    completed = client.post(f"/api/lab/uploads/{asset_id}/complete")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "ready"
+    assert completed.json()["source_url"].startswith("/api/lab/uploads/")
+
+    session_response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "端午节礼盒海报",
+            "selected_style_ids": ["M001"],
+            "target_count": 1,
+            "images_per_style": 1,
+            "provider_preference": "mock_image",
+            "reference_assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "product_reference",
+                    "constraint_strength": "strong",
+                    "notes": "保持礼盒外形和主色",
+                }
+            ],
+        },
+    )
+    assert session_response.status_code == 200
+    payload = session_response.json()
+    prompt = payload["session"]["prompts"][0]["final_prompt"]
+    assert "参考图约束" in prompt
+    assert "稀有风格仍然是主要视觉变量" in prompt
+    assert payload["board"]["groups"][0]["cards"][0]["reference"]["summary"].startswith("参考图")
+
+    job_id = payload["session"]["variants"][0]["asset"]["job_id"]
+    job = repository.get_job(job_id)
+    assert job is not None
+    assert job.asset_mode == "lab_reference"
+    assert job.asset_plan["asset_mode"] == "lab_reference"
+    assert job.asset_plan["provider_input_plan"]["reference_image_count"] == 1
+
+    lab_history = client.get("/api/lab/history?limit=10&include_mock=true")
+    assert lab_history.status_code == 200
+    item = lab_history.json()["items"][0]
+    serialized = json.dumps(item, ensure_ascii=False)
+    assert item["reference_summary"].startswith("参考图")
+    assert "secret-product.png" not in serialized
+    assert asset_id not in serialized
+    assert "source_url" not in serialized
+    assert "storage_path" not in serialized
+
+
+def test_alchemy_lab_intent_director_guides_text_only_auto_styles(monkeypatch):
+    async def fake_intent_plan(**kwargs):
+        return (
+            {
+                "target_use": "product",
+                "subject_kind": "product",
+                "main_subject": "青柠薄荷气泡水",
+                "user_goal_summary": "判断为产品包装方向，优先产品和材质相关稀有风格。",
+                "confidence": "high",
+                "reference_directives": [],
+                "style_routing": {
+                    "auto_selection_scope": "compatible_families",
+                    "preferred_families": ["product", "material"],
+                    "avoid_families": [],
+                    "style_strength_guidance": "保留产品识别，让风格改变光线、材质和陈列方式。",
+                    "reason": "用户描述包含包装与货架语义。",
+                },
+                "prompt_constraints": {
+                    "must_keep": ["产品包装识别", "青柠薄荷清爽感"],
+                    "may_change": ["背景", "陈列材质"],
+                    "avoid": ["随机无关文字"],
+                    "director_summary": "产品识别优先，稀有风格只改变呈现语言。",
+                },
+            },
+            {"llm_provider": "lab_test", "llm_model": "test-vision", "fallback_used": False, "vision_used": False},
+        )
+
+    monkeypatch.setattr(alchemy_lab_intent_module, "plan_lab_json", fake_intent_plan)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "青柠薄荷气泡水包装设计，适合夏季便利店货架",
+            "target_count": 3,
+            "images_per_style": 1,
+            "provider_preference": "mock_image_live_intent",
+            "quality_enhancement": "off",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    families = {style["family"] for style in payload["session"]["style_presets"]}
+    assert families <= {"product", "material"}
+    prompt = payload["session"]["prompts"][0]
+    assert "智能意图约束" in prompt["final_prompt"]
+    assert prompt["prompt_metadata"]["intent_director"]["target_use"] == "product"
+    assert payload["board"]["groups"][0]["cards"][0]["intent"]["summary"].startswith("判断为产品包装方向")
+
+
+def test_alchemy_lab_intent_director_off_keeps_prompt_random(monkeypatch):
+    async def fail_if_called(**kwargs):
+        raise AssertionError("intent director LLM should not run when intent_director is off")
+
+    monkeypatch.setattr(alchemy_lab_intent_module, "plan_lab_json", fail_if_called)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "青柠薄荷气泡水产品包装设计，随机探索稀有视觉风格",
+            "target_count": 3,
+            "images_per_style": 1,
+            "provider_preference": "mock_image_live_intent",
+            "quality_enhancement": "off",
+            "intent_director": "off",
+            "seed": 20260620,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["request"]["intent_director"] == "off"
+    assert payload["session"]["intent_plan"]["source"] == "disabled"
+    prompt = payload["session"]["prompts"][0]
+    assert "智能意图约束" not in prompt["final_prompt"]
+    assert prompt["prompt_metadata"]["intent_director"]["summary"] is None
+    assert payload["board"]["groups"][0]["cards"][0]["intent"]["summary"] is None
+
+
+def test_alchemy_lab_intent_director_does_not_replace_manual_styles(monkeypatch):
+    async def fake_intent_plan(**kwargs):
+        return (
+            {
+                "target_use": "product",
+                "user_goal_summary": "产品方向",
+                "confidence": "high",
+                "reference_directives": [],
+                "style_routing": {"preferred_families": ["product"], "avoid_families": ["graphic"]},
+                "prompt_constraints": {"must_keep": ["主体"], "may_change": [], "avoid": [], "director_summary": "保持主体"},
+            },
+            {"llm_provider": "lab_test", "llm_model": "test", "fallback_used": False, "vision_used": False},
+        )
+
+    monkeypatch.setattr(alchemy_lab_intent_module, "plan_lab_json", fake_intent_plan)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "一张活动海报",
+            "selected_style_ids": ["C002", "G001"],
+            "target_count": 2,
+            "images_per_style": 1,
+            "provider_preference": "mock_image_live_intent",
+            "quality_enhancement": "off",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [style["id"] for style in response.json()["session"]["style_presets"]] == ["C002", "G001"]
+
+
+def test_alchemy_lab_intent_director_can_recommend_reference_role(monkeypatch):
+    async def fake_intent_plan(**kwargs):
+        assets = kwargs["user_payload"]["reference_assets"]
+        asset_id = assets[0]["asset_id"]
+        return (
+            {
+                "target_use": "product",
+                "subject_kind": "packaging",
+                "main_subject": "白色工业瓶",
+                "user_goal_summary": "参考图判断为产品瓶身，应固定瓶型和白色工业质感。",
+                "confidence": "high",
+                "reference_directives": [
+                    {
+                        "asset_id": asset_id,
+                        "recommended_role": "product_reference",
+                        "recommended_strength": "required",
+                        "lock_constraints": ["白色瓶身比例", "工业包装识别点"],
+                        "allow_transformations": ["背景", "布光", "稀有风格媒介"],
+                        "forbidden_changes": ["改成非瓶装产品"],
+                        "provider_input_requirement": "required",
+                        "compatibility_note": "产品图必须作为输入图保留。",
+                    }
+                ],
+                "style_routing": {"preferred_families": ["product"], "avoid_families": []},
+                "prompt_constraints": {
+                    "must_keep": ["白色瓶身比例"],
+                    "may_change": ["背景"],
+                    "avoid": ["主体漂移"],
+                    "director_summary": "保持产品，风格只改呈现方式。",
+                },
+            },
+            {"llm_provider": "lab_test", "llm_model": "test-vision", "fallback_used": False, "vision_used": True},
+        )
+
+    monkeypatch.setattr(alchemy_lab_intent_module, "plan_lab_json", fake_intent_plan)
+    client = TestClient(app)
+    upload = client.post(
+        "/api/lab/uploads",
+        json={
+            "filename": "white-bottle.png",
+            "mime_type": "image/png",
+            "size_bytes": 128,
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/api/lab/uploads/{asset_id}/content", json={"content_base64": tiny_png_b64(), "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/api/lab/uploads/{asset_id}/complete").status_code == 200
+
+    response = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "把参考图做成高端产品摄影",
+            "selected_style_ids": ["M001"],
+            "target_count": 1,
+            "images_per_style": 1,
+            "provider_preference": "mock_image_live_intent",
+            "quality_enhancement": "off",
+            "reference_assets": [{"asset_id": asset_id}],
+        },
+    )
+
+    assert response.status_code == 200
+    prompt = response.json()["session"]["prompts"][0]
+    role = prompt["prompt_metadata"]["reference_asset_roles"][0]
+    assert role["role"] == "product_reference"
+    assert role["constraint_strength"] == "required"
+    assert "智能判断需保留" in prompt["final_prompt"]
+    serialized = json.dumps(response.json(), ensure_ascii=False)
+    assert "white-bottle.png" not in serialized
+    assert "storage_path" not in serialized
+
+
+def test_alchemy_lab_upload_rejects_invalid_requests():
+    client = TestClient(app)
+
+    no_rights = client.post(
+        "/api/lab/uploads",
+        json={
+            "filename": "portrait.png",
+            "mime_type": "image/png",
+            "size_bytes": 128,
+            "consent": {"user_confirmed_rights": False},
+        },
+    )
+    assert no_rights.status_code == 200
+    assert no_rights.json()["upload_url"] == ""
+
+    wrong_type = client.post(
+        "/api/lab/uploads",
+        json={
+            "filename": "notes.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 12,
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    assert wrong_type.status_code == 200
+    assert wrong_type.json()["upload_url"] == ""
+
+    invalid_asset = client.post(
+        "/api/lab/rare-style-explorer/sessions",
+        json={
+            "idea": "参考图缺失测试",
+            "selected_style_ids": ["M001"],
+            "target_count": 1,
+            "provider_preference": "mock_image",
+            "reference_assets": [{"asset_id": "lab_asset_missing", "role": "subject_reference"}],
+        },
+    )
+    assert invalid_asset.status_code == 400
 
 
 def test_alchemy_lab_uses_existing_generation_without_v2_bridge_history():
@@ -1345,7 +1760,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260619-lab-order-fix" in index.text
+    assert "20260620-lab-h5-history-fix" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -1371,6 +1786,28 @@ def test_frontend_static_app_is_served():
     assert "labModeInput" in index.text
     assert "labFamilyInput" in index.text
     assert "labStyleSearchInput" in index.text
+    assert "labStyleSearchBtn" in index.text
+    assert "labStyleSearchThinking" in index.text
+    assert "智能匹配" in index.text
+    assert "labStyleLibraryPanel" in index.text
+    assert "labStyleLibraryToggleBtn" not in index.text
+    assert "labReferenceToggleBtn" not in index.text
+    assert "labReferenceInput" in index.text
+    assert "labReferenceConsentInput" not in index.text
+    assert "我确认有权使用这些图片" not in index.text
+    assert "labIntentSummary" in index.text
+    assert "智能判断" in index.text
+    assert "参考图" in index.text
+    assert "点开上传图片，用于锁定人物、产品、Logo、构图或配色。" not in index.text
+    lab_reference_section = index.text[index.text.find('id="labReferencePanel"') : index.text.find('id="labReferenceList"')]
+    assert 'value="style_material_reference"' in lab_reference_section
+    assert 'value="required"' in lab_reference_section
+    assert 'value="soft"' in lab_reference_section
+    assert 'value="style_reference"' not in lab_reference_section
+    assert 'value="medium"' not in lab_reference_section
+    assert 'value="light"' not in lab_reference_section
+    assert 'id="labReferencePanel" class="lab-reference-panel" hidden' not in index.text
+    assert 'id="labStyleLibraryPanel" class="lab-library-panel" hidden' not in index.text
     assert "搜索 620 个风格名" in index.text
     assert "每种风格最多" in index.text
     assert "生视频（DEMO）" in index.text
@@ -1470,10 +1907,23 @@ def test_frontend_static_app_is_served():
     assert "lab-style-grid" in styles.text
     assert "lab-nav-dropdown" in styles.text
     assert "lab-module-card" in styles.text
-    assert "lab-library-details" in styles.text
+    assert "lab-reference-head" in styles.text
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles.text
+    assert "height: clamp(900px, 84vh, 980px)" in styles.text
+    assert "max-height: none" in styles.text
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles.text
+    assert "grid-template-columns: repeat(6, minmax(0, 1fr))" in styles.text
+    assert "lab-library-toggle" not in styles.text
+    assert ".lab-library-panel[hidden]" in styles.text
+    assert "lab-library-details" not in styles.text
     assert "lab-style-more-note" in styles.text
+    assert "lab-search-thinking" in styles.text
+    assert "lab-style-score" in styles.text
     assert "lab-comparison-grid" in styles.text
     assert "lab-card-quality" in styles.text
+    assert "lab-reference-box" in styles.text
+    assert "lab-reference-toggle" not in styles.text
+    assert "lab-reference-list" in styles.text
     assert ".lab-card-grid" in styles.text
     assert ".lab-favorite-btn.active" in styles.text
     assert "thinking-spinner" in styles.text
@@ -1511,7 +1961,39 @@ def test_frontend_static_app_is_served():
     assert "/api/lab/history" in script.text
     assert "function loadLabStyles" in script.text
     assert "function openLabModule" in script.text
+    assert "function restoreInitialModuleRoute" in script.text
+    assert "function canUseLabDropdown" in script.text
+    assert "const shouldOpenLabMenu = !labState.navOpen" in script.text
+    assert "setLabNavOpen(canUseLabDropdown() && shouldOpenLabMenu)" in script.text
+    assert 'params.get("module") || params.get("tab") || window.location.hash' in script.text
+    assert 'if (route === "rare-style-explorer")' in script.text
+    assert 'openLabModule("rare-style-explorer");' in script.text
+    assert "openLabHome();" in script.text
+    assert "function handleLabReferenceFiles" in script.text
+    assert "function uploadLabReferenceFile" in script.text
+    assert "function labReferencePayload" in script.text
+    assert "/api/lab/uploads" in script.text
+    assert "/api/v2/uploads" not in script.text
+    assert "reference_assets: labReferencePayload()" in script.text
+    assert 'reference_mode: labState.referenceAssets.length ? "guided" : "off"' in script.text
+    assert "labIntentDirectorInput" in index.text
+    assert "labIntentDirectorInput" in script.text
+    assert 'value="off">纯随机' in index.text
+    assert 'intent_director: labState.intentDirector || "auto"' in script.text
+    assert "不调用智能判断收束风格族" in script.text
+    assert "调用智能判断理解文字和参考图用途" in script.text
+    assert "不会覆盖手动选择的风格" in script.text
+    assert "上传参考图" in index.text
+    assert "renderLabIntentSummary" in script.text
+    assert "function labIntentMetaText" in script.text
     assert "function filteredLabStyles" in script.text
+    assert "function searchLabStyles" in script.text
+    assert "function setLabStyleSearchThinking" in script.text
+    assert "function renderLabSearchEmptyNotice" in script.text
+    assert "function clearLabStyleSearchInput" in script.text
+    assert "已清空选择和搜索条件" in script.text
+    assert "/api/lab/rare-style-explorer/styles/search" in script.text
+    assert "相关度" in script.text
     assert "data-lab-load-more-styles" in script.text
     assert "点击加载更多" in script.text
     assert "target_count" in script.text
@@ -1652,11 +2134,12 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260619-lab-order-fix" in h5.text
+    assert "20260620-lab-h5-history-fix" in h5.text
     assert '<body data-active-module="image">' in h5.text
-    assert "生图 V1.0 基础版" in h5.text
-    assert "生图 V2.0 AGENT" in h5.text
+    assert "V1 基础" in h5.text
+    assert "V2 Agent" in h5.text
     assert "Alchemy Lab" in h5.text
+    assert "<small>实验室</small>" not in h5.text
     assert 'id="labTab"' in h5.text
     assert "Rare Style Explorer" in h5.text
     assert "labStyleGrid" in h5.text
@@ -1671,8 +2154,11 @@ def test_mobile_h5_app_is_served_independently():
     assert "labHomePanel" in h5.text
     assert "rareStyleExplorerPanel" in h5.text
     assert "data-lab-module-open=\"rare-style-explorer\"" in h5.text
+    assert "lab-tab" in h5.text
     assert "探索各种创意玩法" in h5.text
     assert "稀有风格探索器" in h5.text
+    assert 'data-mobile-open="lab-history"' in h5.text
+    assert "查看所有实验室模块生成的图片" in h5.text
     assert "返回实验室" in h5.text
     assert "labTargetCountInput" in h5.text
     assert "labIntervalInput" in h5.text
@@ -1680,6 +2166,32 @@ def test_mobile_h5_app_is_served_independently():
     assert "labFamilyInput" in h5.text
     assert "labQualityEnhancementInput" in h5.text
     assert "labStyleSearchInput" in h5.text
+    assert "labStyleSearchBtn" in h5.text
+    assert "labStyleSearchThinking" in h5.text
+    assert "智能匹配" in h5.text
+    assert "labStyleLibraryPanel" in h5.text
+    assert "labStyleLibraryToggleBtn" not in h5.text
+    assert "labReferenceToggleBtn" not in h5.text
+    assert "labReferenceInput" in h5.text
+    assert "labReferenceConsentInput" not in h5.text
+    assert "我确认有权使用这些图片" not in h5.text
+    assert "labIntentSummary" in h5.text
+    assert "智能判断" in h5.text
+    assert "点开上传图片，用于锁定人物、产品、Logo、构图或配色。" not in h5.text
+    assert "labMobileActionPanel" in h5.text
+    assert "mobileLabRunSummary" in h5.text
+    assert "mobileLabExploreSummary" in h5.text
+    assert "mobileLabReferenceSummary" in h5.text
+    assert "mobileLabStyleSummary" in h5.text
+    h5_lab_reference_section = h5.text[h5.text.find('id="labReferencePanel"') : h5.text.find('id="labReferenceList"')]
+    assert 'value="style_material_reference"' in h5_lab_reference_section
+    assert 'value="required"' in h5_lab_reference_section
+    assert 'value="soft"' in h5_lab_reference_section
+    assert 'value="style_reference"' not in h5_lab_reference_section
+    assert 'value="medium"' not in h5_lab_reference_section
+    assert 'value="light"' not in h5_lab_reference_section
+    assert 'id="labReferencePanel" class="lab-reference-panel" hidden' not in h5.text
+    assert 'id="labStyleLibraryPanel" class="lab-library-panel" hidden' not in h5.text
     assert "搜索 620 个风格名" in h5.text
     assert "每种风格最多" in h5.text
     lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="videoTab"')]
@@ -1719,16 +2231,27 @@ def test_mobile_h5_app_is_served_independently():
     assert "lab-style-grid" in mobile_styles.text
     assert ".lab-home-panel[hidden]" in mobile_styles.text
     assert "lab-module-card" in mobile_styles.text
-    assert "lab-library-details" in mobile_styles.text
+    assert "lab-mobile-action-panel" in mobile_styles.text
+    assert "lab-reference-head" in mobile_styles.text
+    assert "lab-library-toggle" not in mobile_styles.text
+    assert ".lab-library-panel[hidden]" in mobile_styles.text
+    assert "lab-library-details" not in mobile_styles.text
     assert "lab-style-more-note" in mobile_styles.text
+    assert "lab-search-thinking" in mobile_styles.text
+    assert "lab-style-score" in mobile_styles.text
     assert "lab-comparison-grid" in mobile_styles.text
     assert "lab-history-grid" in mobile_styles.text
     assert "lab-card-quality" in mobile_styles.text
+    assert "lab-reference-box" in mobile_styles.text
+    assert "lab-reference-toggle" not in mobile_styles.text
+    assert "lab-reference-list" in mobile_styles.text
     assert ".lab-card-grid" in mobile_styles.text
     assert ".lab-favorite-btn.active" in mobile_styles.text
     assert "v2-template-actions" in mobile_styles.text
     assert ".v2-template-card:focus-visible" in mobile_styles.text
     assert ".mobile-entry-card" in mobile_styles.text
+    assert "max-width: 108px" in mobile_styles.text
+    assert ".module-tabs .tab.lab-tab" in mobile_styles.text
 
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
@@ -1741,7 +2264,48 @@ def test_mobile_h5_app_is_served_independently():
     assert "/api/lab/history" in mobile_script.text
     assert "function loadLabStyles" in mobile_script.text
     assert "function openLabModule" in mobile_script.text
+    assert "function restoreInitialModuleRoute" in mobile_script.text
+    assert 'params.get("module") || params.get("tab") || window.location.hash' in mobile_script.text
+    assert 'if (route === "rare-style-explorer")' in mobile_script.text
+    assert 'openLabModule("rare-style-explorer");' in mobile_script.text
+    assert "openLabHome();" in mobile_script.text
+    assert "function setLabStyleLibraryOpen" in mobile_script.text
+    assert "function renderLabStyleLibraryState" in mobile_script.text
+    assert "function createMobileLabArchitecture" in mobile_script.text
+    assert "function updateMobileLabSummaries" in mobile_script.text
+    assert "lab-run-params" in mobile_script.text
+    assert "lab-explore-settings" in mobile_script.text
+    assert "lab-reference" in mobile_script.text
+    assert "lab-style-library" in mobile_script.text
+    assert "lab-history" in mobile_script.text
+    assert 'openMobileSurface("lab-history", historyCard);' in mobile_script.text
+    assert 'state.heroHistorySource === "lab" || activePanel === "lab"' in mobile_script.text
+    assert 'button.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })' in mobile_script.text
+    assert "function handleLabReferenceFiles" in mobile_script.text
+    assert "function uploadLabReferenceFile" in mobile_script.text
+    assert "function labReferencePayload" in mobile_script.text
+    assert "/api/lab/uploads" in mobile_script.text
+    assert "/api/v2/uploads" not in mobile_script.text
+    assert "reference_assets: labReferencePayload()" in mobile_script.text
+    assert 'reference_mode: labState.referenceAssets.length ? "guided" : "off"' in mobile_script.text
+    assert "labIntentDirectorInput" in h5.text
+    assert "labIntentDirectorInput" in mobile_script.text
+    assert 'value="off">纯随机' in h5.text
+    assert 'intent_director: labState.intentDirector || "auto"' in mobile_script.text
+    assert "不调用智能判断收束风格族" in mobile_script.text
+    assert "调用智能判断理解文字和参考图用途" in mobile_script.text
+    assert "不会覆盖手动选择的风格" in mobile_script.text
+    assert "上传参考图" in h5.text
+    assert "renderLabIntentSummary" in mobile_script.text
+    assert "function labIntentMetaText" in mobile_script.text
     assert "function filteredLabStyles" in mobile_script.text
+    assert "function searchLabStyles" in mobile_script.text
+    assert "function setLabStyleSearchThinking" in mobile_script.text
+    assert "function renderLabSearchEmptyNotice" in mobile_script.text
+    assert "function clearLabStyleSearchInput" in mobile_script.text
+    assert "已清空选择和搜索条件" in mobile_script.text
+    assert "/api/lab/rare-style-explorer/styles/search" in mobile_script.text
+    assert "相关度" in mobile_script.text
     assert "data-lab-load-more-styles" in mobile_script.text
     assert "点击加载更多" in mobile_script.text
     assert "target_count" in mobile_script.text

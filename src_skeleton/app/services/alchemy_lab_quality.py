@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.work_intensity import ask_llm_json_plan
+from app.services.alchemy_lab_llm import plan_lab_json
+from app.services.image_service import registry as image_registry
 
 
 QUALITY_ENHANCEMENT_OPTIONS = {"auto", "off", "balanced", "curated"}
@@ -49,6 +50,32 @@ async def enhance_lab_prompt(
             },
             art_direction_summary="",
             source="base_rare_style_prompt",
+        )
+    if _should_use_local_quality_directly(request=request, requested_mode=requested_mode, strategy=strategy) and composer_factory is not None:
+        local_prompt = composer_factory(
+            request=request,
+            style=style,
+            base_prompt=hygiene_prompt,
+            strategy=strategy,
+        )
+        local_prompt, final_hygiene = prompt_hygiene(local_prompt)
+        merged_hygiene = _merge_hygiene_metadata(hygiene_metadata, final_hygiene)
+        return _with_quality_metadata(
+            prompt.model_copy(update={"final_prompt": local_prompt}),
+            requested_mode=requested_mode,
+            strategy=strategy,
+            applied=True,
+            hygiene_metadata=merged_hygiene,
+            text_hierarchy={
+                "applied": False,
+                "has_text_intent": False,
+                "text_strategy_summary": "",
+                "text_roles": [],
+                "avoid_text": [],
+                "postprocess_recommendation": "",
+            },
+            art_direction_summary="",
+            source="local_quality_enhancement",
         )
 
     try:
@@ -136,7 +163,7 @@ async def plan_lab_quality(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     reasoning_effort = "medium" if strategy == "curated" else "low"
     timeout_seconds = 150.0 if strategy == "curated" else 90.0
-    return await ask_llm_json_plan(
+    return await plan_lab_json(
         system_prompt=_planner_instruction(strategy),
         user_payload=_planner_payload(request=request, style=style, base_prompt=base_prompt, strategy=strategy, selected_styles=selected_styles),
         reasoning_effort=reasoning_effort,
@@ -245,11 +272,28 @@ def _resolve_strategy(mode: str, *, request: Any, style: Any, selected_styles: l
         return mode
     idea = str(getattr(request, "idea", "") or "")
     style_count = len(selected_styles or [])
+    if _should_auto_curate_reference_product(request=request, style_count=style_count):
+        return "curated"
     if style_count >= 6 or _looks_text_heavy(idea) or getattr(request, "mode", "") in {"poster", "product"}:
         return "balanced"
     if getattr(style, "family", "") in {"graphic", "product", "material"}:
         return "balanced"
     return "off"
+
+
+def _should_auto_curate_reference_product(*, request: Any, style_count: int) -> bool:
+    if str(getattr(request, "intent_director", "auto") or "auto").strip().lower() == "off":
+        return False
+    if style_count < 3:
+        return False
+    if not getattr(request, "reference_assets", None):
+        return False
+    mode = str(getattr(request, "mode", "") or "").strip().lower()
+    target = _target_use_hint(request)
+    if mode in {"product", "material-series"} or target in {"product", "packaging"}:
+        return True
+    idea = str(getattr(request, "idea", "") or "").lower()
+    return any(marker in idea for marker in ["产品", "商品", "包装", "瓶", "罐", "product", "packaging", "bottle"])
 
 
 def _looks_text_heavy(value: str) -> bool:
@@ -272,6 +316,18 @@ def _looks_text_heavy(value: str) -> bool:
         "event",
     ]
     return any(marker in text for marker in markers) or bool(re.search(r"\d{1,2}[:：]\d{2}", text))
+
+
+def _should_use_local_quality_directly(*, request: Any, requested_mode: str, strategy: str) -> bool:
+    if requested_mode != "auto" or strategy == "off":
+        return False
+    provider_name = str(getattr(request, "provider_preference", "") or "").strip().lower()
+    if provider_name == "mock_image":
+        return True
+    provider = image_registry.image_providers.get(provider_name) if provider_name else None
+    if provider is None:
+        return False
+    return "mockimageprovider" in {cls.__name__.lower() for cls in provider.__class__.mro()}
 
 
 def _planner_instruction(strategy: str) -> str:

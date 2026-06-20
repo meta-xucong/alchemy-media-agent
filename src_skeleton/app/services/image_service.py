@@ -78,6 +78,7 @@ async def submit_image_job(
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
     veyra_user_id: int | None = None,
+    external_asset_plan: dict | None = None,
 ) -> PreparedImageJob:
     prompt = str(prompt or "").strip()
     if not prompt:
@@ -96,8 +97,13 @@ async def submit_image_job(
                 asset_ids = [str(item["asset_id"]) for item in advanced_asset_plan.get("assets", [])]
             except AssetPlanError as exc:
                 asset_error = exc
+    elif asset_mode == "lab_reference":
+        advanced_asset_plan = external_asset_plan
+        asset_ids = [str(item.get("asset_id")) for item in (advanced_asset_plan or {}).get("assets", []) if item.get("asset_id")]
     elif asset_intents:
         asset_error = AssetPlanError("asset_mode_conflict", "基础版请求不能携带高级版素材用途。")
+    elif external_asset_plan:
+        asset_error = AssetPlanError("asset_mode_conflict", "参考图计划只能用于 Alchemy Lab 传图模式。")
 
     work_intensity = work_intensity or settings.image_work_intensity
     prompt_planning_passthrough = work_intensity in {"passthrough", "lab_quality"}
@@ -227,6 +233,7 @@ async def create_image_job(
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
     veyra_user_id: int | None = None,
+    external_asset_plan: dict | None = None,
 ) -> GenerationJob:
     prompt = str(prompt or "").strip()
     if not prompt:
@@ -245,8 +252,13 @@ async def create_image_job(
                 asset_ids = [str(item["asset_id"]) for item in advanced_asset_plan.get("assets", [])]
             except AssetPlanError as exc:
                 asset_error = exc
+    elif asset_mode == "lab_reference":
+        advanced_asset_plan = external_asset_plan
+        asset_ids = [str(item.get("asset_id")) for item in (advanced_asset_plan or {}).get("assets", []) if item.get("asset_id")]
     elif asset_intents:
         asset_error = AssetPlanError("asset_mode_conflict", "基础版请求不能携带高级版素材用途。")
+    elif external_asset_plan:
+        asset_error = AssetPlanError("asset_mode_conflict", "参考图计划只能用于 Alchemy Lab 传图模式。")
 
     work_intensity = work_intensity or settings.image_work_intensity
     prompt_plan = build_prompt_plan(

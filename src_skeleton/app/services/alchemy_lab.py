@@ -21,6 +21,20 @@ from app.services.alchemy_lab_quality import (
     local_quality_prompt,
     quality_summary,
 )
+from app.services.alchemy_lab_intent_director import (
+    intent_prompt_block,
+    plan_lab_intent,
+    public_intent_metadata,
+    style_family_hints,
+)
+from app.services.alchemy_lab_reference_policy import (
+    LabReferencePolicyError,
+    build_lab_reference_plan,
+    lab_reference_metadata,
+    public_reference_history_metadata,
+)
+from app.services.alchemy_lab_reference_prompt import append_lab_reference_prompt
+from app.services.alchemy_lab_uploads_models import LabReferenceAssetInput
 from app.services.image_service import run_submitted_image_job, submit_image_job
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
@@ -76,6 +90,8 @@ GENERIC_WORDS = {
     "vintage",
     "with",
 }
+PRODUCT_REFERENCE_SHOWCASE_FAMILIES = {"film", "graphic", "illustration", "photography", "product", "space", "material", "digital"}
+PRODUCT_REFERENCE_AVOID_FAMILIES = {"fashion"}
 LEGACY_STYLE_ALIASES = {
     "folk_horror_poster_photo": "C002",
     "chrome_y2k_fashion_editorial": "G008",
@@ -127,6 +143,9 @@ class ExplorationRequest(BaseModel):
     aspect_ratio: str | None = None
     provider_preference: str | None = None
     quality_enhancement: str = "auto"
+    reference_assets: list[LabReferenceAssetInput] = Field(default_factory=list)
+    reference_mode: str = "guided"
+    intent_director: str = "auto"
 
     @model_validator(mode="before")
     @classmethod
@@ -188,6 +207,8 @@ class ExplorationSession(BaseModel):
     favorites: list[str] = Field(default_factory=list)
     errors: list[ExplorationError] = Field(default_factory=list)
     progress: dict[str, Any] = Field(default_factory=dict)
+    reference_plan: dict[str, Any] | None = None
+    intent_plan: dict[str, Any] | None = None
 
 
 class ComparisonCard(BaseModel):
@@ -199,6 +220,8 @@ class ComparisonCard(BaseModel):
     thumbnail_url: str | None = None
     prompt: str
     quality: dict[str, Any] = Field(default_factory=dict)
+    reference: dict[str, Any] = Field(default_factory=dict)
+    intent: dict[str, Any] = Field(default_factory=dict)
     error: ExplorationError | None = None
     is_favorite: bool = False
 
@@ -249,6 +272,12 @@ class LabHistoryItem(BaseModel):
     text_hierarchy_applied: bool = False
     text_hierarchy_summary: str | None = None
     art_direction_summary: str | None = None
+    intent_summary: str | None = None
+    intent_target_use: str | None = None
+    intent_confidence: str | None = None
+    reference_summary: str | None = None
+    reference_asset_roles: list[dict[str, Any]] = Field(default_factory=list)
+    reference_warnings: list[str] = Field(default_factory=list)
     url: str
     thumbnail_url: str | None = None
     format: str = "png"
@@ -411,17 +440,19 @@ def limits() -> dict[str, int]:
 
 
 async def create_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
-    session = await prepare_exploration_session(request)
+    session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
     if _should_run_inline(session.request):
         return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
     _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
     return session
 
 
-async def prepare_exploration_session(request: ExplorationRequest) -> ExplorationSession:
+async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
     request = _normalize_request(request)
     _validate_requested_style_count(request)
-    selected = _resolve_styles(request)
+    intent_plan = await plan_lab_intent(request=request, veyra_user_id=veyra_user_id)
+    reference_plan = _build_reference_plan_for_request(request, veyra_user_id=veyra_user_id, intent_plan=intent_plan)
+    selected = _resolve_styles(request, intent_plan=intent_plan)
     _validate_batch(request, selected)
     timestamp = now_iso()
     variant_counts = _variant_counts_by_style(request, selected)
@@ -434,10 +465,12 @@ async def prepare_exploration_session(request: ExplorationRequest) -> Exploratio
         request=request,
         style_presets=selected,
         progress=_progress_payload(total=total_variants, status="queued", message="等待开始串行生成。"),
+        reference_plan=reference_plan,
+        intent_plan=intent_plan,
     )
     lab_store.save(session)
 
-    prompts = [_compose_prompt(session.id, request, style) for style in selected]
+    prompts = [_compose_prompt(session.id, request, style, reference_plan=reference_plan, intent_plan=intent_plan) for style in selected]
     session.prompts = prompts
     session.variants = [
         GenerationVariant(
@@ -498,6 +531,8 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                 prepared = await submit_image_job(
                     session_id=media_session.id,
                     prompt=prompt.final_prompt,
+                    asset_mode="lab_reference" if session.reference_plan else "basic",
+                    external_asset_plan=session.reference_plan,
                     count=1,
                     size=_size_from_aspect_ratio(session.request.aspect_ratio),
                     quality="high",
@@ -583,6 +618,14 @@ def get_exploration_session(session_id: str) -> ExplorationSession | None:
     return lab_store.get(session_id)
 
 
+def public_exploration_session(session: ExplorationSession) -> dict[str, Any]:
+    payload = session.model_dump()
+    reference_plan = payload.get("reference_plan")
+    if isinstance(reference_plan, dict):
+        payload["reference_plan"] = _public_reference_plan(reference_plan)
+    return payload
+
+
 def update_favorites(session_id: str, selection: FavoriteSelection) -> ExplorationSession | None:
     session = lab_store.get(session_id)
     if not session:
@@ -592,6 +635,43 @@ def update_favorites(session_id: str, selection: FavoriteSelection) -> Explorati
     session.favorites = favorites
     session.updated_at = now_iso()
     return lab_store.save(session)
+
+
+def _public_reference_plan(reference_plan: dict[str, Any]) -> dict[str, Any]:
+    public_assets = []
+    for item in reference_plan.get("assets") or []:
+        if not isinstance(item, dict):
+            continue
+        public_assets.append(
+            {
+                "role": item.get("role"),
+                "role_label": item.get("role_label"),
+                "constraint_strength": item.get("constraint_strength"),
+                "priority": item.get("priority"),
+                "provider_input_mode": item.get("provider_input_mode"),
+                "mime_type": item.get("mime_type"),
+                "brief": item.get("brief"),
+                "visual_summary": item.get("visual_summary"),
+                "notes": item.get("notes"),
+                "requires_image_reference": bool(item.get("requires_image_reference")),
+                "director_directive": item.get("director_directive") or {},
+            }
+        )
+    provider_input_plan = reference_plan.get("provider_input_plan") if isinstance(reference_plan.get("provider_input_plan"), dict) else {}
+    return {
+        "asset_mode": reference_plan.get("asset_mode"),
+        "source": reference_plan.get("source"),
+        "summary": reference_plan.get("summary"),
+        "public_summary": reference_plan.get("public_summary"),
+        "assets": public_assets,
+        "warnings": reference_plan.get("warnings") or [],
+        "provider_input_plan": {
+            key: value
+            for key, value in provider_input_plan.items()
+            if key not in {"reference_asset_ids"}
+        },
+        "prompt_constraints": reference_plan.get("prompt_constraints") or [],
+    }
 
 
 def list_lab_history(*, limit: int = 50, include_mock: bool = False) -> dict[str, Any]:
@@ -631,6 +711,8 @@ def comparison_board(session: ExplorationSession) -> ComparisonBoard:
                     thumbnail_url=variant.asset.get("thumbnail_url") if variant.asset else None,
                     prompt=prompt.final_prompt if prompt else "",
                     quality=quality_summary(prompt.prompt_metadata) if prompt else {},
+                    reference=_reference_summary_for_prompt(prompt),
+                    intent=_intent_summary_for_prompt(prompt),
                     error=variant.error,
                     is_favorite=variant.id in session.favorites,
                 )
@@ -860,7 +942,7 @@ def _variant_progress_message(*, index: int, total: int, result: GenerationVaria
     return f"第 {current}/{total} 张失败，继续串行处理剩余任务。"
 
 
-def _resolve_styles(request: ExplorationRequest) -> list[StylePreset]:
+def _resolve_styles(request: ExplorationRequest, *, intent_plan: dict[str, Any] | None = None) -> list[StylePreset]:
     enabled = [style for style in _style_presets() if style.is_enabled]
     by_id = {style.id: style for style in enabled}
     for legacy_id, canonical_id in LEGACY_STYLE_ALIASES.items():
@@ -869,7 +951,7 @@ def _resolve_styles(request: ExplorationRequest) -> list[StylePreset]:
     explicit_id = (request.style_id or "").strip()
     style_ids = [explicit_id] if explicit_id else list(request.selected_style_ids or [])
     if not style_ids:
-        return _auto_select_styles(request, enabled)
+        return _auto_select_styles(request, enabled, intent_plan=intent_plan)
     selected = []
     selected_ids: set[str] = set()
     missing = []
@@ -907,7 +989,14 @@ def _validate_batch(request: ExplorationRequest, selected: list[StylePreset]) ->
         raise ValueError(f"That is too many images for one run. Maximum is {MAX_TOTAL_IMAGES}.")
 
 
-def _compose_prompt(session_id: str, request: ExplorationRequest, style: StylePreset) -> ComposedPrompt:
+def _compose_prompt(
+    session_id: str,
+    request: ExplorationRequest,
+    style: StylePreset,
+    *,
+    reference_plan: dict[str, Any] | None = None,
+    intent_plan: dict[str, Any] | None = None,
+) -> ComposedPrompt:
     prompt_lines = [
         f"{request.idea}",
         "稀有风格方向：" + "，".join(style.prompt_directives),
@@ -915,19 +1004,25 @@ def _compose_prompt(session_id: str, request: ExplorationRequest, style: StylePr
         "图像要求：主体轮廓清晰，视觉识别度强，高细节。",
         "避免：" + "，".join([*ANTI_DRIFT, *style.negative_directives]),
     ]
+    intent_block = intent_prompt_block(intent_plan)
+    if intent_block:
+        prompt_lines.append(intent_block)
     if request.mode == "product":
         prompt_lines.append("产品要求：造型可读，干净背景，无杂物，产品保持可识别。")
     elif request.mode == "character":
         prompt_lines.append("人物要求：面部清晰，姿态有表现力，只保留1-2个关键配饰。")
     elif request.mode == "poster":
         prompt_lines.append("海报要求：少量伪文字，明确标题区域，不要长段可读文字。")
+    final_prompt = append_lab_reference_prompt("\n".join(prompt_lines), reference_plan)
+    reference_metadata = lab_reference_metadata(reference_plan)
+    intent_metadata = public_intent_metadata(intent_plan)
     return ComposedPrompt(
         id=make_id("prompt"),
         session_id=session_id,
         style_preset_id=style.id,
         style_preset_version=style.version,
         idea=request.idea,
-        final_prompt="\n".join(prompt_lines),
+        final_prompt=final_prompt,
         prompt_metadata={
             "family": style.family,
             "mode": request.mode,
@@ -938,6 +1033,8 @@ def _compose_prompt(session_id: str, request: ExplorationRequest, style: StylePr
             "avoid_generic": request.avoid_generic,
             "quality_enhancement_mode": request.quality_enhancement,
             "source": "alchemy_lab_behavior_compatible_rare_style_explorer",
+            "intent_director": intent_metadata,
+            **reference_metadata,
         },
     )
 
@@ -947,6 +1044,8 @@ def _normalize_request(request: ExplorationRequest) -> ExplorationRequest:
     freshness = str(request.freshness or "high").strip()
     family = str(request.style_family or "").strip() or None
     quality_enhancement = str(request.quality_enhancement or "auto").strip().lower()
+    reference_mode = str(request.reference_mode or "guided").strip().lower()
+    intent_director = str(request.intent_director or "auto").strip().lower()
     if mode not in MODE_OPTIONS:
         mode = "minimal"
     if freshness not in FRESHNESS_OPTIONS:
@@ -955,13 +1054,58 @@ def _normalize_request(request: ExplorationRequest) -> ExplorationRequest:
         family = None
     if quality_enhancement not in QUALITY_ENHANCEMENT_OPTIONS:
         quality_enhancement = "auto"
+    if reference_mode not in {"off", "guided"}:
+        reference_mode = "guided"
+    if intent_director not in {"auto", "off"}:
+        intent_director = "auto"
     update: dict[str, Any] = {
         "mode": mode,
         "freshness": freshness,
         "style_family": family,
         "quality_enhancement": quality_enhancement,
+        "reference_mode": reference_mode,
+        "intent_director": intent_director,
     }
     return request.model_copy(update=update)
+
+
+def _build_reference_plan_for_request(
+    request: ExplorationRequest,
+    *,
+    veyra_user_id: int | None = None,
+    intent_plan: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if request.reference_mode == "off" or not request.reference_assets:
+        return None
+    try:
+        return build_lab_reference_plan(
+            request.reference_assets,
+            user_prompt=request.idea,
+            veyra_user_id=veyra_user_id,
+            intent_plan=intent_plan,
+        )
+    except LabReferencePolicyError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _reference_summary_for_prompt(prompt: ComposedPrompt | None) -> dict[str, Any]:
+    if not prompt:
+        return {}
+    metadata = prompt.prompt_metadata or {}
+    return {
+        "summary": metadata.get("reference_summary"),
+        "asset_roles": metadata.get("reference_asset_roles") or [],
+        "provider_input_plan": metadata.get("provider_input_plan"),
+        "warnings": metadata.get("reference_warnings") or [],
+    }
+
+
+def _intent_summary_for_prompt(prompt: ComposedPrompt | None) -> dict[str, Any]:
+    if not prompt:
+        return public_intent_metadata(None)
+    metadata = prompt.prompt_metadata or {}
+    intent = metadata.get("intent_director")
+    return intent if isinstance(intent, dict) else public_intent_metadata(None)
 
 
 def _has_manual_style_selection(request: ExplorationRequest) -> bool:
@@ -994,8 +1138,19 @@ def _variant_counts_by_style(request: ExplorationRequest, selected: list[StylePr
     return counts
 
 
-def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset]) -> list[StylePreset]:
+def _auto_select_styles(
+    request: ExplorationRequest,
+    enabled: list[StylePreset],
+    *,
+    intent_plan: dict[str, Any] | None = None,
+) -> list[StylePreset]:
     pool = [style for style in enabled if not request.style_family or style.family == request.style_family]
+    if not request.style_family:
+        hinted_families = _auto_style_families_for_request(request, intent_plan=intent_plan)
+        if hinted_families:
+            hinted_pool = [style for style in pool if style.family in hinted_families]
+            if hinted_pool:
+                pool = hinted_pool
     if not pool:
         pool = enabled
     per_style = _images_per_style_for_request(request)
@@ -1004,6 +1159,7 @@ def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset])
     rng = random.Random(request.seed)
     selected: list[StylePreset] = []
     used_categories: set[str] = set()
+    used_families: set[str] = set()
     used_terms: list[set[str]] = []
     while pool and len(selected) < count:
         selected_ids = {item.id for item in selected}
@@ -1011,6 +1167,7 @@ def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset])
             style
             for style in pool
             if style.id not in selected_ids
+            and (style.family not in used_families or len(used_families) >= 4)
             and (style.category not in used_categories or len(used_categories) >= 4)
             and (not request.avoid_generic or not _too_similar(style, used_terms))
         ]
@@ -1020,6 +1177,7 @@ def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset])
             break
         style = _weighted_style_choice(rng, candidates, freshness=request.freshness, avoid_generic=request.avoid_generic)
         selected.append(style)
+        used_families.add(style.family)
         used_categories.add(style.category)
         terms = _meaningful_terms(style)
         if terms:
@@ -1029,6 +1187,36 @@ def _auto_select_styles(request: ExplorationRequest, enabled: list[StylePreset])
     if not selected:
         raise ValueError("Please choose at least one available style.")
     return selected
+
+
+def _auto_style_families_for_request(request: ExplorationRequest, *, intent_plan: dict[str, Any] | None = None) -> set[str]:
+    if str(request.intent_director or "auto").strip().lower() == "off":
+        return set()
+    hinted = set(style_family_hints(intent_plan))
+    if _should_use_product_reference_showcase_sampling(request, intent_plan=intent_plan):
+        return set(PRODUCT_REFERENCE_SHOWCASE_FAMILIES) - set(PRODUCT_REFERENCE_AVOID_FAMILIES)
+    return hinted
+
+
+def _should_use_product_reference_showcase_sampling(
+    request: ExplorationRequest,
+    *,
+    intent_plan: dict[str, Any] | None = None,
+) -> bool:
+    if str(request.intent_director or "auto").strip().lower() == "off":
+        return False
+    if not request.reference_assets:
+        return False
+    if _has_manual_style_selection(request) or request.style_family:
+        return False
+    if _target_total_for_request(request) < 3:
+        return False
+    mode = str(request.mode or "").strip().lower()
+    target_use = str((intent_plan or {}).get("target_use") or "").strip().lower()
+    text = request.idea.lower()
+    if mode in {"product", "material-series"} or target_use in {"product", "packaging", "material"}:
+        return True
+    return any(marker in text for marker in ["产品", "商品", "包装", "瓶", "罐", "product", "packaging", "bottle"])
 
 
 def _weighted_style_choice(rng: random.Random, styles: list[StylePreset], *, freshness: str, avoid_generic: bool) -> StylePreset:
@@ -1255,6 +1443,8 @@ def _attach_lab_history_metadata(
     if not style:
         return
     quality = quality_summary(prompt.prompt_metadata)
+    reference = public_reference_history_metadata(session.reference_plan)
+    intent = public_intent_metadata(session.intent_plan)
     metadata = {
         "source_app": LAB_PROJECT_ID,
         "module": RARE_STYLE_FEATURE_ID,
@@ -1274,7 +1464,12 @@ def _attach_lab_history_metadata(
         "generation_interval_seconds": session.request.generation_interval_seconds,
         "variant_id": variant.id,
         "prompt_id": prompt.id,
+        "intent_summary": intent.get("summary"),
+        "intent_target_use": intent.get("target_use"),
+        "intent_confidence": intent.get("confidence"),
+        "intent_director": intent,
         **quality,
+        **reference,
     }
     for output in job.outputs:
         output.metadata = {**output.metadata, "alchemy_lab": metadata}
@@ -1307,8 +1502,9 @@ def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any], *,
                 "requested_model": job.raw_response_summary.get("requested_image_model") if job.raw_response_summary else None,
                 "provider_fallback": job.raw_response_summary.get("image_provider_fallback") if job.raw_response_summary else None,
                 "asset_mode": job.asset_mode,
-                "asset_intents": [],
+                "asset_intents": metadata.get("reference_asset_roles") or [],
                 "asset_vision_profiles": [],
+                "provider_input_plan": metadata.get("provider_input_plan"),
                 "visual_review": output.visual_review.model_dump() if output.visual_review else None,
                 "prompt_plan": job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
                 "original_prompt": original_prompt,
@@ -1388,6 +1584,20 @@ def _lab_history_item_from_record(record: dict[str, Any]) -> LabHistoryItem | No
         text_hierarchy_applied=bool(data.get("text_hierarchy_applied")),
         text_hierarchy_summary=_clean_lab_text(data.get("text_hierarchy_summary")),
         art_direction_summary=_clean_lab_text(data.get("art_direction_summary")),
+        intent_summary=_clean_lab_text(data.get("intent_summary")),
+        intent_target_use=_clean_lab_text(data.get("intent_target_use")),
+        intent_confidence=_clean_lab_text(data.get("intent_confidence")),
+        reference_summary=_clean_lab_text(data.get("reference_summary")),
+        reference_asset_roles=[
+            {
+                "role": str(item.get("role") or ""),
+                "role_label": str(item.get("role_label") or ""),
+                "constraint_strength": str(item.get("constraint_strength") or ""),
+            }
+            for item in (data.get("reference_asset_roles") or [])
+            if isinstance(item, dict)
+        ],
+        reference_warnings=[str(item) for item in (data.get("reference_warnings") or []) if str(item).strip()],
         url=str(record.get("url") or ""),
         thumbnail_url=record.get("thumbnail_url") or record.get("url"),
         format=str(record.get("format") or "png"),

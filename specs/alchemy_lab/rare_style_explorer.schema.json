@@ -381,6 +381,72 @@
             "balanced",
             "curated"
           ]
+        },
+        "reference_assets": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/referenceAssetInput"
+          }
+        },
+        "reference_mode": {
+          "type": "string",
+          "enum": [
+            "guided",
+            "off"
+          ]
+        },
+        "intent_director": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ]
+        }
+      }
+    },
+    "referenceAssetInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "subject_reference",
+            "product_reference",
+            "logo_reference",
+            "style_material_reference",
+            "composition_reference",
+            "negative_reference",
+            null
+          ]
+        },
+        "constraint_strength": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "required",
+            "strong",
+            "soft",
+            null
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -494,6 +560,26 @@
               "type": "string"
             }
           }
+        },
+        "reference_plan": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/referencePlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "intent_plan": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/intentPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -534,8 +620,299 @@
           "properties": {
             "quality_enhancement": {
               "$ref": "#/$defs/qualityEnhancementMetadata"
+            },
+            "intent_director": {
+              "$ref": "#/$defs/publicIntentMetadata"
+            },
+            "reference_summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reference_asset_roles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/referenceRoleSummary"
+              }
+            },
+            "reference_policy": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider_input_plan": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/publicProviderInputPlan"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reference_warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
+        }
+      }
+    },
+    "referencePlan": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "asset_mode",
+        "source",
+        "summary",
+        "public_summary",
+        "assets",
+        "warnings",
+        "provider_input_plan"
+      ],
+      "properties": {
+        "asset_mode": {
+          "const": "lab_reference"
+        },
+        "source": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "public_summary": {
+          "type": "string"
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "provider_input_plan": {
+          "$ref": "#/$defs/providerInputPlan"
+        }
+      }
+    },
+    "intentPlan": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "input_mode": {
+          "type": "string"
+        },
+        "vision_source": {
+          "type": "string"
+        },
+        "target_use": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string"
+        },
+        "user_goal_summary": {
+          "type": "string"
+        },
+        "reference_directives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "style_routing": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "prompt_constraints": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "publicIntentMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "target_use",
+        "confidence",
+        "must_keep",
+        "may_change",
+        "avoid",
+        "style_routing",
+        "warnings"
+      ],
+      "properties": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_use": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "must_keep": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "may_change": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "avoid": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "style_routing": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "referenceRoleSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "role_label",
+        "constraint_strength"
+      ],
+      "properties": {
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "constraint_strength": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "director_directive": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "providerInputPlan": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "requires_image_reference": {
+          "type": "boolean"
+        },
+        "reference_image_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unsupported_provider_policy": {
+          "type": "string"
+        }
+      }
+    },
+    "publicProviderInputPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "requires_image_reference",
+        "reference_image_count",
+        "roles",
+        "unsupported_provider_policy"
+      ],
+      "properties": {
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires_image_reference": {
+          "type": "boolean"
+        },
+        "reference_image_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unsupported_provider_policy": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -885,6 +1262,8 @@
         "status",
         "prompt",
         "quality",
+        "reference",
+        "intent",
         "is_favorite"
       ],
       "properties": {
@@ -917,6 +1296,49 @@
         },
         "quality": {
           "$ref": "#/$defs/qualityEnhancementSummary"
+        },
+        "reference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary",
+            "asset_roles",
+            "provider_input_plan",
+            "warnings"
+          ],
+          "properties": {
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "asset_roles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/referenceRoleSummary"
+              }
+            },
+            "provider_input_plan": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/publicProviderInputPlan"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "intent": {
+          "$ref": "#/$defs/publicIntentMetadata"
         },
         "error": {
           "oneOf": [

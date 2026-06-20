@@ -238,12 +238,26 @@ def reference_image_paths(asset_plan: dict[str, Any] | None, *, max_images: int 
     for item in candidates:
         if item.get("provider_input_mode") != "reference_image":
             continue
-        path = media_store.find_asset_file(str(item.get("asset_id")))
+        path = _reference_path_for_asset_item(item)
         if path:
             paths.append(path)
         if len(paths) >= max_images:
             break
     return paths
+
+
+def _reference_path_for_asset_item(item: dict[str, Any]):
+    storage_path = item.get("storage_path")
+    if storage_path:
+        try:
+            from pathlib import Path
+
+            path = Path(str(storage_path))
+            if path.exists() and path.is_file():
+                return path
+        except OSError:
+            return None
+    return media_store.find_asset_file(str(item.get("asset_id")))
 
 
 def logo_overlay_specs(asset_plan: dict[str, Any] | None) -> list[dict[str, Any]]:

@@ -35,6 +35,20 @@ const labStylePageSize = 80;
 const labPollIntervalMs = 3000;
 const labPollMaxAttempts = 360;
 const labDefaultGenerationIntervalSeconds = 8;
+const labReferenceMaxBytes = 12 * 1024 * 1024;
+const labReferenceMimeTypes = ["image/png", "image/jpeg", "image/webp"];
+const labReferenceRoleLabels = {
+  subject_reference: "主体参考",
+  product_reference: "产品参考",
+  style_material_reference: "风格/材质参考",
+  composition_reference: "构图参考",
+  logo_reference: "Logo/标识",
+};
+const labReferenceStrengthLabels = {
+  required: "必须保留",
+  strong: "强约束",
+  soft: "轻参考",
+};
 const v2RunLongWaitAttempt = 120;
 const localPortalHomeUrl = "http://127.0.0.1:18080/";
 const productionPortalHomeUrl = "https://aiself.vip/";
@@ -190,10 +204,22 @@ const labState = {
   mode: "minimal",
   styleFamily: "",
   freshness: "high",
+  intentDirector: "auto",
   qualityEnhancement: "auto",
   seed: "",
   search: "",
+  semanticSearchQuery: "",
+  semanticSearchResults: [],
+  semanticSearchSource: "",
+  semanticSearchLoading: false,
   styleRenderLimit: labStylePageSize,
+  styleLibraryOpen: true,
+  referenceOpen: true,
+  referenceAssets: [],
+  referenceRole: "subject_reference",
+  referenceStrength: "strong",
+  referenceNotes: "",
+  referenceUploading: false,
   aspectRatio: "square",
   history: [],
   historyLoaded: false,
@@ -317,6 +343,9 @@ const els = {
   rareStyleExplorerPanel: document.querySelector("#rareStyleExplorerPanel"),
   labIdeaInput: document.querySelector("#labIdeaInput"),
   labNoticeBar: document.querySelector("#labNoticeBar"),
+  labIntentSummary: document.querySelector("#labIntentSummary"),
+  labIntentSummaryTitle: document.querySelector("#labIntentSummaryTitle"),
+  labIntentSummaryText: document.querySelector("#labIntentSummaryText"),
   labTargetCountInput: document.querySelector("#labTargetCountInput"),
   labTargetCountValue: document.querySelector("#labTargetCountValue"),
   labImagesPerStyleInput: document.querySelector("#labImagesPerStyleInput"),
@@ -326,10 +355,24 @@ const els = {
   labModeInput: document.querySelector("#labModeInput"),
   labFamilyInput: document.querySelector("#labFamilyInput"),
   labFreshnessInput: document.querySelector("#labFreshnessInput"),
+  labIntentDirectorInput: document.querySelector("#labIntentDirectorInput"),
   labQualityEnhancementInput: document.querySelector("#labQualityEnhancementInput"),
   labSeedInput: document.querySelector("#labSeedInput"),
   labStyleSearchInput: document.querySelector("#labStyleSearchInput"),
+  labStyleSearchBtn: document.querySelector("#labStyleSearchBtn"),
+  labStyleSearchThinking: document.querySelector("#labStyleSearchThinking"),
   labClearStylesBtn: document.querySelector("#labClearStylesBtn"),
+  labStyleLibraryToggleBtn: document.querySelector("#labStyleLibraryToggleBtn"),
+  labStyleLibraryPanel: document.querySelector("#labStyleLibraryPanel"),
+  labReferenceToggleBtn: document.querySelector("#labReferenceToggleBtn"),
+  labReferencePanel: document.querySelector("#labReferencePanel"),
+  labReferenceCountLabel: document.querySelector("#labReferenceCountLabel"),
+  labReferenceInput: document.querySelector("#labReferenceInput"),
+  labReferenceRoleInput: document.querySelector("#labReferenceRoleInput"),
+  labReferenceStrengthInput: document.querySelector("#labReferenceStrengthInput"),
+  labReferenceNotesInput: document.querySelector("#labReferenceNotesInput"),
+  labReferenceState: document.querySelector("#labReferenceState"),
+  labReferenceList: document.querySelector("#labReferenceList"),
   labImageCountLabel: document.querySelector("#labImageCountLabel"),
   labGenerateBtn: document.querySelector("#labGenerateBtn"),
   labResetBtn: document.querySelector("#labResetBtn"),
@@ -437,6 +480,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   hydratePortalHomeLink();
   hydrateCachedVeyraAccount();
   bindControls();
+  restoreInitialModuleRoute();
   const hadVeyraTicket = new URLSearchParams(window.location.search).has("ticket");
   try {
     const ticketAccepted = await handleVeyraTicketFromUrl();
@@ -477,11 +521,17 @@ function bindControls() {
   }
 
   els.tabs.forEach((button) => {
-    button.addEventListener("click", () => {
-      if (button.dataset.tab === "lab") {
+    button.addEventListener("click", (event) => {
+      const tabName = button.dataset.tab;
+      if (tabName === "lab") {
+        event.preventDefault();
+        const shouldOpenLabMenu = !labState.navOpen;
         labState.activeModule = "";
+        switchTab("lab");
+        setLabNavOpen(canUseLabDropdown() && shouldOpenLabMenu);
+        return;
       }
-      switchTab(button.dataset.tab);
+      switchTab(tabName);
       setLabNavOpen(false);
     });
   });
@@ -612,12 +662,19 @@ function bindControls() {
   if (els.labFamilyInput) {
     els.labFamilyInput.addEventListener("change", () => {
       labState.styleFamily = els.labFamilyInput.value || "";
+      clearLabSemanticStyleSearch({ keepQuery: true });
       labState.styleRenderLimit = labStylePageSize;
       renderLabStyles();
       updateLabCountLabel();
     });
   }
   if (els.labFreshnessInput) els.labFreshnessInput.addEventListener("change", () => { labState.freshness = els.labFreshnessInput.value || "high"; });
+  if (els.labIntentDirectorInput) {
+    els.labIntentDirectorInput.addEventListener("change", () => {
+      labState.intentDirector = els.labIntentDirectorInput.value || "auto";
+      renderLabIntentSummary(null);
+    });
+  }
   if (els.labQualityEnhancementInput) {
     els.labQualityEnhancementInput.addEventListener("change", () => {
       labState.qualityEnhancement = els.labQualityEnhancementInput.value || "auto";
@@ -627,17 +684,54 @@ function bindControls() {
   if (els.labStyleSearchInput) {
     els.labStyleSearchInput.addEventListener("input", () => {
       labState.search = els.labStyleSearchInput.value || "";
+      if (!labState.search.trim()) {
+        clearLabSemanticStyleSearch();
+      }
       labState.styleRenderLimit = labStylePageSize;
       renderLabStyles();
+      renderLabSearchEmptyNotice();
+    });
+    els.labStyleSearchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") searchLabStyles();
     });
   }
+  if (els.labStyleSearchBtn) els.labStyleSearchBtn.addEventListener("click", searchLabStyles);
   if (els.labClearStylesBtn) {
     els.labClearStylesBtn.addEventListener("click", () => {
       labState.selectedStyleIds = [];
+      clearLabStyleSearchInput();
       renderLabStyles();
       updateLabCountLabel();
+      updateLabNotice("已清空选择和搜索条件。", "success");
     });
   }
+  if (els.labStyleLibraryToggleBtn) {
+    els.labStyleLibraryToggleBtn.addEventListener("click", () => {
+      setLabStyleLibraryOpen(!labState.styleLibraryOpen);
+    });
+  }
+  if (els.labReferenceToggleBtn) {
+    els.labReferenceToggleBtn.addEventListener("click", () => {
+      setLabReferenceOpen(!labState.referenceOpen);
+    });
+  }
+  if (els.labReferenceInput) els.labReferenceInput.addEventListener("change", handleLabReferenceFiles);
+  if (els.labReferenceRoleInput) {
+    els.labReferenceRoleInput.addEventListener("change", () => {
+      labState.referenceRole = els.labReferenceRoleInput.value || "subject_reference";
+    });
+  }
+  if (els.labReferenceStrengthInput) {
+    els.labReferenceStrengthInput.addEventListener("change", () => {
+      labState.referenceStrength = els.labReferenceStrengthInput.value || "strong";
+    });
+  }
+  if (els.labReferenceNotesInput) {
+    els.labReferenceNotesInput.addEventListener("input", () => {
+      labState.referenceNotes = els.labReferenceNotesInput.value || "";
+    });
+  }
+  if (els.labReferenceList) els.labReferenceList.addEventListener("click", handleLabReferenceListClick);
   document.querySelectorAll("[data-lab-module-open]").forEach((button) => {
     button.addEventListener("click", () => {
       openLabModule(button.dataset.labModuleOpen || "rare-style-explorer");
@@ -819,6 +913,7 @@ function renderLabHistory(items) {
     article.dataset.labHistoryCard = String(index);
     article.title = `点击展开 ${item.title || item.style_name || "Alchemy Lab 历史"}`;
     const metaText = labHistoryMetaText(item);
+    const referenceText = labReferenceSummaryText(item.reference_summary ? { summary: item.reference_summary } : null);
     const title = item.title || item.style_name || "Rare Style Explorer";
     const detailText = historyDetailText(item.idea || "未记录画面方向", metaText);
     const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
@@ -829,6 +924,7 @@ function renderLabHistory(items) {
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(detailText)}</span>
+        ${referenceText ? `<span>${escapeHtml(referenceText)}</span>` : ""}
       </div>
       <div class="output-meta v2-history-footer lab-history-footer">
         <span class="output-id">${escapeHtml(footerText || `#${index + 1}`)}</span>
@@ -940,6 +1036,206 @@ function renderLabModuleState() {
   if (els.rareStyleExplorerPanel) els.rareStyleExplorerPanel.hidden = !active;
 }
 
+function canUseLabDropdown() {
+  return Boolean(els.labNavMenu && els.labNavDropdown && window.matchMedia("(min-width: 761px)").matches);
+}
+
+function normalizeModuleRouteToken(value) {
+  const token = decodeURIComponent(String(value || ""))
+    .replace(/^#/, "")
+    .replace(/^\/+/, "")
+    .trim()
+    .toLowerCase();
+  if (["rare-style-explorer", "rare_style_explorer"].includes(token)) return "rare-style-explorer";
+  if (["lab", "alchemy-lab", "alchemy_lab"].includes(token)) return "lab";
+  if (["image", "v1", "v2", "video", "account"].includes(token)) return token === "v1" ? "image" : token;
+  return "";
+}
+
+function initialModuleRoute() {
+  const params = new URLSearchParams(window.location.search);
+  return normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+}
+
+function panelExists(tabName) {
+  return Array.from(els.panels).some((panel) => panel.dataset.panel === tabName);
+}
+
+function restoreInitialModuleRoute() {
+  const route = initialModuleRoute();
+  if (route === "rare-style-explorer") {
+    openLabModule("rare-style-explorer");
+    setLabNavOpen(false);
+    return;
+  }
+  if (route === "lab") {
+    openLabHome();
+    setLabNavOpen(false);
+    return;
+  }
+  if (route && panelExists(route)) {
+    switchTab(route);
+  }
+}
+
+function setLabStyleLibraryOpen(open) {
+  labState.styleLibraryOpen = Boolean(open);
+  renderLabStyleLibraryState();
+}
+
+function renderLabStyleLibraryState() {
+  const open = els.labStyleLibraryToggleBtn ? Boolean(labState.styleLibraryOpen) : true;
+  if (els.labStyleLibraryPanel) els.labStyleLibraryPanel.hidden = !open;
+  if (els.labStyleLibraryToggleBtn) {
+    els.labStyleLibraryToggleBtn.setAttribute("aria-expanded", String(open));
+    els.labStyleLibraryToggleBtn.textContent = open ? "收起完整风格库" : "展开完整风格库";
+  }
+}
+
+function setLabReferenceOpen(open) {
+  labState.referenceOpen = Boolean(open);
+  renderLabReferenceState();
+}
+
+function renderLabReferenceState(message = "") {
+  const open = els.labReferenceToggleBtn ? Boolean(labState.referenceOpen) : true;
+  const count = labState.referenceAssets.length;
+  if (els.labReferencePanel) els.labReferencePanel.hidden = !open;
+  if (els.labReferenceToggleBtn) els.labReferenceToggleBtn.setAttribute("aria-expanded", String(open));
+  if (els.labReferenceCountLabel) {
+    els.labReferenceCountLabel.textContent = count ? `${count} 张已添加` : "未添加";
+  }
+  if (els.labReferenceState) {
+    els.labReferenceState.textContent = message || (count ? "参考图会作为约束输入，不会覆盖已选稀有风格。" : "支持 PNG / JPEG / WebP，单张不超过 12MB。");
+  }
+  if (!els.labReferenceList) return;
+  els.labReferenceList.innerHTML = "";
+  if (!count) return;
+  labState.referenceAssets.forEach((asset) => {
+    const row = document.createElement("div");
+    row.className = "lab-reference-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(asset.display_name || asset.filename || "参考图")}</strong>
+        <small>${escapeHtml(labReferenceAssetText(asset))}</small>
+      </div>
+      <button class="lab-reference-remove" type="button" data-lab-reference-remove="${escapeHtml(asset.asset_id)}">移除</button>
+    `;
+    els.labReferenceList.appendChild(row);
+  });
+}
+
+async function handleLabReferenceFiles(event) {
+  const files = Array.from(event.target?.files || []);
+  if (event.target) event.target.value = "";
+  if (!files.length) return;
+  labState.referenceUploading = true;
+  setLabBusy(labState.loading || true);
+  setLabReferenceOpen(true);
+  renderLabReferenceState(`正在上传 ${files.length} 张参考图...`);
+  let successCount = 0;
+  try {
+    for (const file of files) {
+      const uploaded = await uploadLabReferenceFile(file);
+      labState.referenceAssets = [...labState.referenceAssets, uploaded];
+      successCount += 1;
+      renderLabReferenceState(`已上传 ${successCount}/${files.length} 张参考图。`);
+    }
+    updateLabNotice(`已添加 ${successCount} 张参考图，会在所选稀有风格上做约束增强。`, "success");
+  } catch (error) {
+    updateLabNotice(`参考图上传失败：${friendlyError(error)}`, "error");
+    renderLabReferenceState(`上传失败：${friendlyError(error)}`);
+  } finally {
+    labState.referenceUploading = false;
+    setLabBusy(labState.loading);
+    renderLabReferenceState();
+    updateLabCountLabel();
+  }
+}
+
+async function uploadLabReferenceFile(file) {
+  validateLabReferenceFile(file);
+  const role = labState.referenceRole || "subject_reference";
+  const strength = labState.referenceStrength || "strong";
+  const notes = (labState.referenceNotes || "").trim();
+  const created = await request("/api/lab/uploads", {
+    method: "POST",
+    body: {
+      filename: file.name || "lab-reference-image",
+      mime_type: file.type,
+      size_bytes: file.size,
+      role,
+      constraint_strength: strength,
+      intended_use: notes,
+      consent: {
+        user_confirmed_rights: true,
+        generated_or_owned: true,
+      },
+    },
+  });
+  if (!created?.asset_id) throw new Error("上传初始化失败。");
+  await request(`/api/lab/uploads/${encodeURIComponent(created.asset_id)}/content`, {
+    method: "PUT",
+    body: {
+      content_base64: await fileToBase64(file),
+      mime_type: file.type,
+    },
+  });
+  const completed = await request(`/api/lab/uploads/${encodeURIComponent(created.asset_id)}/complete`, { method: "POST" });
+  return {
+    asset_id: completed.asset?.asset_id || created.asset_id,
+    display_name: completed.asset?.display_name || file.name || "参考图",
+    filename: file.name || "参考图",
+    role,
+    constraint_strength: strength,
+    notes,
+    visual_summary: completed.asset?.visual_summary || "",
+  };
+}
+
+function validateLabReferenceFile(file) {
+  if (!labReferenceMimeTypes.includes(file.type)) {
+    throw new Error("仅支持 PNG、JPEG、WebP 图片。");
+  }
+  if (file.size > labReferenceMaxBytes) {
+    throw new Error("单张参考图不能超过 12MB。");
+  }
+}
+
+function handleLabReferenceListClick(event) {
+  const button = event.target.closest("[data-lab-reference-remove]");
+  if (!button) return;
+  const assetId = button.dataset.labReferenceRemove;
+  labState.referenceAssets = labState.referenceAssets.filter((asset) => asset.asset_id !== assetId);
+  renderLabReferenceState();
+  updateLabCountLabel();
+}
+
+function labReferencePayload() {
+  return labState.referenceAssets.map((asset) => ({
+    asset_id: asset.asset_id,
+    role: asset.role || labState.referenceRole || "subject_reference",
+    constraint_strength: asset.constraint_strength || labState.referenceStrength || "strong",
+    notes: asset.notes || labState.referenceNotes || "",
+  }));
+}
+
+function labReferenceAssetText(asset) {
+  return [
+    labReferenceRoleLabels[asset.role] || asset.role,
+    labReferenceStrengthLabels[asset.constraint_strength] || asset.constraint_strength,
+    asset.visual_summary,
+  ].filter(Boolean).join(" · ");
+}
+
+function labReferenceSummaryText(reference) {
+  if (!reference) return "";
+  const roles = Array.isArray(reference.roles) ? reference.roles : [];
+  if (reference.summary) return reference.summary;
+  if (roles.length) return `参考图：${roles.map((item) => `${item.label || item.role || "参考"} ${item.count || 1}`).join("、")}`;
+  return "";
+}
+
 function setLabNavOpen(open) {
   const nextOpen = Boolean(open && activePanelName() === "lab");
   labState.navOpen = nextOpen;
@@ -971,7 +1267,8 @@ function renderLabStyles() {
   if (els.labStyleCount) els.labStyleCount.textContent = `${labState.styles.length || 0}`;
   if (els.labLimitsLabel) els.labLimitsLabel.textContent = `${labState.selectedStyleIds.length}/${labState.limits.maxSelectedStyles || 8}`;
   if (!styles.length) {
-    els.labStyleGrid.textContent = "暂无可用风格。";
+    const query = String(labState.search || "").trim();
+    els.labStyleGrid.textContent = query ? `没有匹配“${query}”的风格。` : "暂无可用风格。";
     return;
   }
   renderedStyles.forEach((style) => {
@@ -985,6 +1282,7 @@ function renderLabStyles() {
       <span>${escapeHtml(style.category || style.family || "style")}</span>
       <strong>${escapeHtml(style.display_name || style.id)}</strong>
       <small>${escapeHtml(style.short_description || "")}</small>
+      ${labState.semanticSearchQuery && typeof style.score === "number" ? `<small class="lab-style-score">相关度 ${Math.round(Number(style.score) * 100)}% · ${escapeHtml(style.why_selected || "语义匹配")}</small>` : ""}
       <em>${escapeHtml(style.id || "")}</em>
     `;
     els.labStyleGrid.appendChild(button);
@@ -1002,18 +1300,108 @@ function renderLabStyles() {
 function filteredLabStyles() {
   const query = String(labState.search || "").trim().toLowerCase();
   const selected = new Set(labState.selectedStyleIds || []);
-  return (labState.styles || []).filter((style) => {
+  const semanticActive = Boolean(labState.semanticSearchQuery && labState.semanticSearchResults.length);
+  const baseStyles = semanticActive ? labState.semanticSearchResults : labState.styles || [];
+  return baseStyles.filter((style) => {
     if (!selected.has(style.id) && labState.styleFamily && style.family !== labState.styleFamily) return false;
+    if (semanticActive) return true;
     if (!query) return true;
     const blob = [style.id, style.display_name, style.short_description, style.category, style.family, ...(style.tags || [])].join(" ").toLowerCase();
     return selected.has(style.id) || blob.includes(query);
   }).sort((a, b) => {
     const selectedDelta = Number(selected.has(b.id)) - Number(selected.has(a.id));
     if (selectedDelta) return selectedDelta;
+    if (semanticActive) {
+      const scoreDelta = Number(b.score || 0) - Number(a.score || 0);
+      if (scoreDelta) return scoreDelta;
+    }
     const beginnerDelta = Number(Boolean(b.is_beginner_default)) - Number(Boolean(a.is_beginner_default));
     if (beginnerDelta) return beginnerDelta;
     return String(a.display_name || a.id).localeCompare(String(b.display_name || b.id), "zh-CN");
   });
+}
+
+async function searchLabStyles() {
+  if (!els.labStyleSearchInput) return;
+  const query = els.labStyleSearchInput.value.trim();
+  labState.search = query;
+  labState.styleRenderLimit = labStylePageSize;
+  if (!query) {
+    clearLabSemanticStyleSearch();
+    renderLabStyles();
+    updateLabNotice("已恢复完整风格库。", "success");
+    return;
+  }
+  setLabStyleSearchThinking(true, query);
+  try {
+    const payload = await request("/api/lab/rare-style-explorer/styles/search", {
+      method: "POST",
+      body: {
+        query_text: query,
+        family_filter: labState.styleFamily || null,
+        limit: 620,
+        diversity_level: "medium",
+      },
+    });
+    labState.semanticSearchQuery = query;
+    labState.semanticSearchResults = Array.isArray(payload.styles) ? payload.styles : [];
+    labState.semanticSearchSource = payload.source || "";
+    renderLabStyles();
+    const sourceLabel = labState.semanticSearchSource === "llm_rerank" ? "智能语义重排" : "本地语义评分";
+    updateLabNotice(
+      labState.semanticSearchResults.length
+        ? `${sourceLabel}已找到 ${labState.semanticSearchResults.length} 个相关风格。`
+        : `没有匹配“${query}”的风格，可以换成主体、用途、材质或情绪描述。`,
+      labState.semanticSearchResults.length ? "success" : "warning",
+    );
+  } catch (error) {
+    clearLabSemanticStyleSearch({ keepQuery: true });
+    renderLabStyles();
+    updateLabNotice(`智能匹配失败，已保留本地关键词过滤：${friendlyError(error)}`, "warning");
+  } finally {
+    setLabStyleSearchThinking(false);
+  }
+}
+
+function clearLabSemanticStyleSearch({ keepQuery = false } = {}) {
+  labState.semanticSearchQuery = "";
+  labState.semanticSearchResults = [];
+  labState.semanticSearchSource = "";
+  labState.semanticSearchLoading = false;
+  if (!keepQuery) labState.search = "";
+}
+
+function clearLabStyleSearchInput() {
+  clearLabSemanticStyleSearch();
+  if (els.labStyleSearchInput) els.labStyleSearchInput.value = "";
+  labState.search = "";
+  labState.styleRenderLimit = labStylePageSize;
+}
+
+function renderLabSearchEmptyNotice() {
+  const query = String(labState.search || "").trim();
+  if (!query || labState.semanticSearchLoading || labState.semanticSearchQuery) return;
+  if (filteredLabStyles().length === 0) {
+    updateLabNotice(`没有匹配“${query}”的本地风格，可点击智能匹配做语义搜索，或换主体、用途、材质描述。`, "warning");
+  }
+}
+
+function setLabStyleSearchThinking(isLoading, query = "") {
+  labState.semanticSearchLoading = Boolean(isLoading);
+  if (els.labStyleSearchThinking) {
+    els.labStyleSearchThinking.hidden = !isLoading;
+    const label = els.labStyleSearchThinking.querySelector("small");
+    if (label && isLoading) {
+      label.textContent = query
+        ? `正在理解“${query}”的主体、用途、风格和材质，再按相关度排序。`
+        : "正在读取风格库画像并准备展示。";
+    }
+  }
+  if (els.labStyleSearchBtn) {
+    els.labStyleSearchBtn.disabled = Boolean(isLoading);
+    els.labStyleSearchBtn.classList.toggle("is-thinking", Boolean(isLoading));
+    els.labStyleSearchBtn.textContent = isLoading ? "匹配中..." : "智能匹配";
+  }
 }
 
 function handleLabStyleGridClick(event) {
@@ -1057,6 +1445,7 @@ function updateLabCountLabel() {
   if (els.labGenerateBtn) {
     els.labGenerateBtn.disabled =
       labState.loading ||
+      labState.referenceUploading ||
       !hasIdea ||
       total <= 0 ||
       total > (labState.limits.maxTotalImages || 12) ||
@@ -1071,6 +1460,10 @@ async function runLabExploration() {
   if (!idea) {
     updateLabNotice("请先填写画面想法。", "warning");
     els.labIdeaInput?.focus();
+    return;
+  }
+  if (labState.referenceUploading) {
+    updateLabNotice("参考图还在上传，请稍等。", "warning");
     return;
   }
   const hasManualStyles = labState.selectedStyleIds.length > 0;
@@ -1108,10 +1501,14 @@ async function runLabExploration() {
         avoid_generic: true,
         aspect_ratio: labState.aspectRatio,
         provider_preference: labProviderPreference(),
+        reference_assets: labReferencePayload(),
+        reference_mode: labState.referenceAssets.length ? "guided" : "off",
+        intent_director: labState.intentDirector || "auto",
       },
     });
     labState.currentSession = payload.session;
     labState.currentBoard = payload.board;
+    renderLabIntentSummary(payload.session?.intent_plan);
     renderLabBoard(payload.board);
     updateLabSessionFromPayload(payload, { submittedTotal: total });
     if (isLabTerminalStatus(payload.board?.status)) {
@@ -1142,6 +1539,7 @@ function scheduleLabPolling() {
       const payload = await request(`/api/lab/rare-style-explorer/sessions/${encodeURIComponent(labState.currentSession.id)}`);
       labState.currentSession = payload.session;
       labState.currentBoard = payload.board;
+      renderLabIntentSummary(payload.session?.intent_plan);
       renderLabBoard(payload.board);
       updateLabSessionFromPayload(payload);
       if (isLabTerminalStatus(payload.board?.status)) {
@@ -1256,12 +1654,16 @@ function renderLabBoard(board) {
       : "";
     const qualityText = labQualityMetaText(card.quality);
     const qualityDetails = labQualityDetailsText(card.quality);
+    const referenceText = labReferenceSummaryText(card.reference);
+    const intentText = labIntentMetaText(card.intent);
     article.innerHTML = `
       ${imageHtml}
       <div class="lab-card-meta">
         <strong>${escapeHtml(styleName)}</strong>
         <span>${escapeHtml(labCardStatusLabel(card.status))}</span>
       </div>
+      ${intentText ? `<p class="lab-card-intent">${escapeHtml(intentText)}</p>` : ""}
+      ${referenceText ? `<p class="lab-card-reference">${escapeHtml(referenceText)}</p>` : ""}
       ${qualityText ? `<p class="lab-card-quality">${escapeHtml(qualityText)}</p>` : ""}
       ${qualityDetails ? `<small class="lab-card-quality-detail">${escapeHtml(qualityDetails)}</small>` : ""}
       <div class="lab-card-actions">
@@ -1358,28 +1760,41 @@ function resetLabExplorer() {
   labState.mode = "minimal";
   labState.styleFamily = "";
   labState.freshness = "high";
+  labState.intentDirector = "auto";
   labState.qualityEnhancement = "auto";
   labState.seed = "";
   labState.search = "";
+  labState.referenceOpen = true;
+  labState.referenceAssets = [];
+  labState.referenceRole = "subject_reference";
+  labState.referenceStrength = "strong";
+  labState.referenceNotes = "";
+  labState.referenceUploading = false;
   if (els.labTargetCountInput) els.labTargetCountInput.value = "4";
   if (els.labImagesPerStyleInput) els.labImagesPerStyleInput.value = "1";
   if (els.labIntervalInput) els.labIntervalInput.value = String(labDefaultGenerationIntervalSeconds);
   if (els.labModeInput) els.labModeInput.value = "minimal";
   if (els.labFamilyInput) els.labFamilyInput.value = "";
   if (els.labFreshnessInput) els.labFreshnessInput.value = "high";
+  if (els.labIntentDirectorInput) els.labIntentDirectorInput.value = "auto";
   if (els.labQualityEnhancementInput) els.labQualityEnhancementInput.value = "auto";
   if (els.labSeedInput) els.labSeedInput.value = "";
   if (els.labStyleSearchInput) els.labStyleSearchInput.value = "";
+  if (els.labReferenceRoleInput) els.labReferenceRoleInput.value = "subject_reference";
+  if (els.labReferenceStrengthInput) els.labReferenceStrengthInput.value = "strong";
+  if (els.labReferenceNotesInput) els.labReferenceNotesInput.value = "";
   labState.selectedStyleIds = [];
   labState.currentSession = null;
   labState.currentBoard = null;
   labState.loading = false;
   setLabBusy(false);
+  renderLabReferenceState();
   renderLabStyles();
   renderLabBoard(null);
   updateLabCountLabel();
   updateLabSessionState("待生成");
   updateLabNotice("输入想法后可自动抽样，也可手选风格生成对比图。", "info");
+  renderLabIntentSummary(null);
 }
 
 function setLabBusy(isBusy) {
@@ -1394,6 +1809,18 @@ function updateLabNotice(message, type = "info") {
   if (!els.labNoticeBar) return;
   els.labNoticeBar.textContent = message;
   els.labNoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
+}
+
+function renderLabIntentSummary(intentPlan) {
+  if (!els.labIntentSummaryText) return;
+  const mode = labState.intentDirector || "auto";
+  if (els.labIntentSummaryTitle) els.labIntentSummaryTitle.textContent = mode === "off" ? "纯随机" : "智能判断";
+  if (mode === "off" && !intentPlan) {
+    els.labIntentSummaryText.textContent = "不调用智能判断收束风格族，按完整风格库随机探索；参考图仍可作为生成输入使用。";
+    return;
+  }
+  const text = labIntentMetaText(publicLabIntentFromPlan(intentPlan));
+  els.labIntentSummaryText.textContent = text || "调用智能判断理解文字和参考图用途，优先推荐更匹配的风格族与约束；不会覆盖手动选择的风格。";
 }
 
 function updateLabSessionState(label) {
@@ -1474,6 +1901,48 @@ function labQualityDetailsText(quality) {
   if (quality.text_hierarchy_summary) parts.push(quality.text_hierarchy_summary);
   if (quality.art_direction_summary) parts.push(quality.art_direction_summary);
   return parts.filter(Boolean).join(" · ");
+}
+
+function publicLabIntentFromPlan(plan) {
+  if (!plan || typeof plan !== "object") return {};
+  if (plan.source === "disabled" || plan.applied === false && plan.source === "disabled") return {};
+  const constraints = plan.prompt_constraints && typeof plan.prompt_constraints === "object" ? plan.prompt_constraints : {};
+  return {
+    summary: plan.user_goal_summary || constraints.director_summary || plan.director_summary || "",
+    target_use: plan.target_use || "",
+    confidence: plan.confidence || "",
+    must_keep: Array.isArray(constraints.must_keep) ? constraints.must_keep : [],
+  };
+}
+
+function labIntentMetaText(intent) {
+  if (!intent || typeof intent !== "object") return "";
+  const summary = intent.summary || "";
+  const target = labIntentTargetLabel(intent.target_use);
+  const confidence = labIntentConfidenceLabel(intent.confidence);
+  const mustKeep = Array.isArray(intent.must_keep) && intent.must_keep.length ? `保留 ${intent.must_keep.slice(0, 2).join("、")}` : "";
+  return [target ? `智能判断 ${target}` : "智能判断", summary, mustKeep, confidence].filter(Boolean).join(" · ");
+}
+
+function labIntentTargetLabel(target) {
+  const labels = {
+    product: "产品",
+    poster: "海报",
+    portrait: "人像",
+    food: "美食",
+    packaging: "包装",
+    logo: "标识",
+    scene: "场景",
+    material: "材质",
+    abstract: "抽象",
+    image_exploration: "创意探索",
+  };
+  return labels[target] || "";
+}
+
+function labIntentConfidenceLabel(confidence) {
+  const labels = { high: "高置信", medium: "中置信", low: "保守判断" };
+  return labels[confidence] || "";
 }
 
 function hydratePortalHomeLink() {
@@ -5337,7 +5806,7 @@ async function refreshHistory({ silent = false } = {}) {
     state.historyItems = history.items || [];
     state.historyRenderLimit = historyPageSize;
     renderHistory(state.historyItems);
-    if (activePanelName() !== "v2") renderHeroHistory(history.items || [], { source: "v1" });
+    if (activePanelName() === "image") renderHeroHistory(history.items || [], { source: "v1" });
     if (!silent) {
       showNotice(`已加载 ${history.items?.length || 0} 张历史图片。`, "success");
       showGlobalToast("历史图片已刷新。");

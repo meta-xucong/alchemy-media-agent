@@ -44,8 +44,18 @@ from app.services.alchemy_lab import (
     list_lab_history,
     list_lab_modules,
     list_style_presets,
+    public_exploration_session,
     update_favorites,
 )
+from app.services.alchemy_lab_style_search import SearchLabStylesRequest, search_lab_styles
+from app.services.alchemy_lab_uploads import (
+    complete_lab_upload,
+    create_lab_upload,
+    get_lab_upload,
+    read_lab_upload_content,
+    store_lab_upload_content,
+)
+from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabAssetContentUploadRequest
 from app.services.events import format_sse_events
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.session_service import create_session, handle_message
@@ -189,6 +199,13 @@ def list_rare_style_explorer_styles(request: Request, authorization: str = Heade
     return list_style_presets()
 
 
+@app.post("/api/lab/rare-style-explorer/styles/search")
+async def search_rare_style_explorer_styles(body: SearchLabStylesRequest, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    presets = list_style_presets()["styles"]
+    return await search_lab_styles(body, presets)
+
+
 @app.get("/api/lab/history")
 def list_alchemy_lab_history(
     request: Request,
@@ -198,6 +215,55 @@ def list_alchemy_lab_history(
 ):
     _require_veyra_user_if_enabled(request, authorization)
     return list_lab_history(limit=limit, include_mock=include_mock)
+
+
+@app.post("/api/lab/uploads")
+def create_lab_upload_endpoint(body: CreateLabUploadRequest, request: Request, authorization: str = Header(default="")):
+    user_id = _veyra_user_id_from_request(request, authorization)
+    return create_lab_upload(body, veyra_user_id=user_id)
+
+
+@app.put("/api/lab/uploads/{asset_id}/content")
+def put_lab_upload_content_endpoint(asset_id: str, body: LabAssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
+    _require_lab_upload_visible(request, asset_id, authorization)
+    asset = store_lab_upload_content(asset_id, body)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "lab_asset_not_found", "message": "Reference image not found."})
+    if asset.status == "failed":
+        error = asset.error or {}
+        raise HTTPException(
+            status_code=400,
+            detail={"code": error.get("code") or "invalid_lab_asset", "message": error.get("message") or "Reference image is invalid."},
+        )
+    return asset
+
+
+@app.post("/api/lab/uploads/{asset_id}/complete")
+def complete_lab_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_lab_upload_visible(request, asset_id, authorization)
+    asset = complete_lab_upload(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "lab_asset_not_found", "message": "Reference image not found."})
+    return asset
+
+
+@app.get("/api/lab/uploads/{asset_id}")
+def get_lab_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_lab_upload_visible(request, asset_id, authorization)
+    asset = get_lab_upload(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "lab_asset_not_found", "message": "Reference image not found."})
+    return asset
+
+
+@app.get("/api/lab/uploads/{asset_id}/content")
+def get_lab_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_lab_upload_visible(request, asset_id, authorization)
+    content = read_lab_upload_content(asset_id)
+    if not content:
+        raise HTTPException(status_code=404, detail={"code": "lab_asset_content_not_found", "message": "Reference image content not found."})
+    data, media_type = content
+    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/api/lab/rare-style-explorer/history")
@@ -221,7 +287,7 @@ async def create_rare_style_explorer_session(
         session = await create_exploration_session(body, veyra_user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
-    return {"session": session, "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
+    return {"session": public_exploration_session(session), "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
 
 
 @app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
@@ -230,7 +296,7 @@ def get_rare_style_explorer_session(session_id: str, request: Request, authoriza
     session = get_exploration_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
-    return {"session": session, "board": comparison_board(session)}
+    return {"session": public_exploration_session(session), "board": comparison_board(session)}
 
 
 @app.post("/api/lab/rare-style-explorer/sessions/{session_id}/favorites")
@@ -244,7 +310,7 @@ def update_rare_style_explorer_favorites(
     session = update_favorites(session_id, body)
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
-    return {"session": session, "board": comparison_board(session)}
+    return {"session": public_exploration_session(session), "board": comparison_board(session)}
 
 
 @app.api_route("/api/v2/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
@@ -409,6 +475,19 @@ def _require_asset_visible(request: Request, asset_id: str, authorization: str =
     if context.get("is_admin") or owner_id == context.get("user_id") or owner_id is None:
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_asset_forbidden", "message": "Asset is not visible to this account."})
+
+
+def _require_lab_upload_visible(request: Request, asset_id: str, authorization: str = "") -> dict:
+    asset = get_lab_upload(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "lab_asset_not_found", "message": "Reference image not found."})
+    owner_id = _positive_int_or_none(getattr(asset, "veyra_user_id", None))
+    if not settings.veyra_auth_enabled:
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": owner_id}
+    context = _veyra_asset_context(request, authorization)
+    if context.get("is_admin") or owner_id == context.get("user_id") or owner_id is None:
+        return {**context, "owner_id": owner_id}
+    raise HTTPException(status_code=403, detail={"error_code": "lab_asset_forbidden", "message": "Reference image is not visible to this account."})
 
 
 def _require_job_assets_visible(
@@ -796,6 +875,15 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Requ
         anthropic_base_url=body.anthropic_base_url,
         gemini_image_api_key=body.gemini_image_api_key,
         gemini_image_base_url=body.gemini_image_base_url,
+        lab_llm_provider=body.lab_llm_provider,
+        lab_llm_model=body.lab_llm_model,
+        lab_openai_api_key=body.lab_openai_api_key,
+        lab_openai_base_url=body.lab_openai_base_url,
+        lab_kimi_api_key=body.lab_kimi_api_key,
+        lab_kimi_base_url=body.lab_kimi_base_url,
+        lab_doubao_vision_api_key=body.lab_doubao_vision_api_key,
+        lab_doubao_vision_model=body.lab_doubao_vision_model,
+        lab_doubao_vision_base_url=body.lab_doubao_vision_base_url,
     )
     persistence_warning = None
     try:
@@ -1404,6 +1492,16 @@ def _runtime_provider_settings_response(runtime_persistence_warning: str | None 
         anthropic_api_key_configured=bool(settings.anthropic_api_key or settings.anthropic_auth_token),
         gemini_image_base_url=settings.gemini_image_base_url,
         gemini_image_api_key_configured=bool(settings.gemini_image_api_key),
+        lab_llm_provider=settings.lab_llm_provider,
+        lab_llm_model=settings.lab_llm_model,
+        lab_openai_base_url=settings.lab_openai_base_url,
+        lab_openai_api_key_configured=bool(settings.lab_openai_api_key),
+        lab_kimi_base_url=settings.lab_kimi_base_url,
+        lab_kimi_api_key_configured=bool(settings.lab_kimi_api_key),
+        lab_vision_provider=settings.lab_vision_provider,
+        lab_doubao_vision_model=settings.lab_doubao_vision_model,
+        lab_doubao_vision_base_url=settings.lab_doubao_vision_base_url,
+        lab_doubao_vision_api_key_configured=bool(settings.lab_doubao_vision_api_key),
         runtime_persistence_warning=runtime_persistence_warning,
         provider_notes={
         "openai_gpt_image": "OpenAI-compatible GPT Image provider is wired for live image generation.",
@@ -1411,5 +1509,6 @@ def _runtime_provider_settings_response(runtime_persistence_warning: str | None 
         "gemini_image": "Gemini image provider is wired for live generateContent image generation.",
             "seedance": "Seedance video provider is a documented async placeholder; live task API is not implemented yet.",
             "thinking_models": "Prompt planning uses the selected thinking model first and automatically tries the other model when the selected one fails.",
+            "alchemy_lab_brain": "Alchemy Lab uses its own LLM/Vision gateway for intent planning and does not call the V2 Claude orchestrator.",
         },
     )

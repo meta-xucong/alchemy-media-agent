@@ -84,6 +84,36 @@ class Settings(BaseModel):
     openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5"))
     kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding"))
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "kimi"))
+    lab_llm_model: str = os.getenv(
+        "LAB_LLM_MODEL",
+        os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding")),
+    )
+    lab_openai_api_key: str | None = os.getenv("LAB_OPENAI_API_KEY") or os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
+    lab_openai_base_url: str | None = _normalize_openai_base_url(os.getenv("LAB_OPENAI_BASE_URL") or os.getenv("V2_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
+    lab_kimi_api_key: str | None = os.getenv("LAB_KIMI_API_KEY") or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
+    lab_kimi_base_url: str | None = os.getenv("LAB_KIMI_BASE_URL") or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL")
+    lab_vision_enabled: bool = os.getenv("LAB_VISION_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    lab_vision_provider: str = os.getenv("LAB_VISION_PROVIDER", "doubao")
+    lab_doubao_vision_api_key: str | None = (
+        os.getenv("LAB_DOUBAO_VISION_API_KEY")
+        or os.getenv("V2_DOUBAO_VISION_API_KEY")
+        or os.getenv("V2_DOUBAO_IMAGE_API_KEY")
+        or os.getenv("DOUBAO_IMAGE_API_KEY")
+        or os.getenv("BYTEPLUS_API_KEY")
+    )
+    lab_doubao_vision_base_url: str | None = _normalize_openai_base_url(
+        os.getenv("LAB_DOUBAO_VISION_BASE_URL")
+        or os.getenv("V2_DOUBAO_VISION_BASE_URL")
+        or os.getenv("V2_DOUBAO_IMAGE_BASE_URL")
+        or os.getenv("DOUBAO_IMAGE_BASE_URL")
+        or "https://aiself.vip"
+    )
+    lab_doubao_vision_model: str = os.getenv(
+        "LAB_DOUBAO_VISION_MODEL",
+        os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL", "doubao-seed-2-0-lite-260428"),
+    )
     default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
     default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")
     openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2"))
@@ -143,6 +173,12 @@ def update_runtime_settings(
     backup_llm_model: str | None = None,
     openai_llm_model: str | None = None,
     kimi_llm_model: str | None = None,
+    lab_llm_provider: str | None = None,
+    lab_llm_model: str | None = None,
+    lab_openai_base_url: str | None = None,
+    lab_kimi_base_url: str | None = None,
+    lab_doubao_vision_model: str | None = None,
+    lab_doubao_vision_base_url: str | None = None,
     image_work_intensity: str | None = None,
     openai_api_key: str | None = None,
     openai_base_url: str | None = None,
@@ -150,6 +186,9 @@ def update_runtime_settings(
     anthropic_base_url: str | None = None,
     gemini_image_api_key: str | None = None,
     gemini_image_base_url: str | None = None,
+    lab_openai_api_key: str | None = None,
+    lab_kimi_api_key: str | None = None,
+    lab_doubao_vision_api_key: str | None = None,
 ) -> Settings:
     if default_image_provider:
         settings.default_image_provider = default_image_provider
@@ -173,6 +212,18 @@ def update_runtime_settings(
         settings.openai_llm_model = openai_llm_model.strip()
     if kimi_llm_model:
         settings.kimi_llm_model = kimi_llm_model.strip()
+    if lab_llm_provider:
+        settings.lab_llm_provider = lab_llm_provider.strip()
+    if lab_llm_model:
+        settings.lab_llm_model = lab_llm_model.strip()
+    if lab_openai_base_url is not None:
+        settings.lab_openai_base_url = _normalize_openai_base_url(lab_openai_base_url.strip()) if lab_openai_base_url.strip() else None
+    if lab_kimi_base_url is not None:
+        settings.lab_kimi_base_url = lab_kimi_base_url.strip() or None
+    if lab_doubao_vision_model:
+        settings.lab_doubao_vision_model = lab_doubao_vision_model.strip()
+    if lab_doubao_vision_base_url is not None:
+        settings.lab_doubao_vision_base_url = _normalize_openai_base_url(lab_doubao_vision_base_url.strip()) if lab_doubao_vision_base_url.strip() else None
     if default_llm_model:
         settings.default_llm_model = default_llm_model.strip()
         if settings.default_llm_provider in {"anthropic", "kimi"}:
@@ -216,6 +267,12 @@ def update_runtime_settings(
         settings.gemini_image_api_key = gemini_image_api_key.strip()
     if gemini_image_base_url is not None:
         settings.gemini_image_base_url = gemini_image_base_url.strip() or None
+    if lab_openai_api_key:
+        settings.lab_openai_api_key = lab_openai_api_key.strip()
+    if lab_kimi_api_key:
+        settings.lab_kimi_api_key = lab_kimi_api_key.strip()
+    if lab_doubao_vision_api_key:
+        settings.lab_doubao_vision_api_key = lab_doubao_vision_api_key.strip()
     return settings
 
 
@@ -237,6 +294,12 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         "BACKUP_LLM_MODEL": settings.backup_llm_model,
         "OPENAI_LLM_MODEL": settings.openai_llm_model,
         "KIMI_LLM_MODEL": settings.kimi_llm_model,
+        "LAB_LLM_PROVIDER": settings.lab_llm_provider,
+        "LAB_LLM_MODEL": settings.lab_llm_model,
+        "LAB_OPENAI_BASE_URL": settings.lab_openai_base_url or "",
+        "LAB_KIMI_BASE_URL": settings.lab_kimi_base_url or "",
+        "LAB_DOUBAO_VISION_MODEL": settings.lab_doubao_vision_model,
+        "LAB_DOUBAO_VISION_BASE_URL": settings.lab_doubao_vision_base_url or "",
         "IMAGE_WORK_INTENSITY": settings.image_work_intensity,
         "OPENAI_BASE_URL": settings.openai_base_url or "",
         "ANTHROPIC_BASE_URL": settings.anthropic_base_url or "",
