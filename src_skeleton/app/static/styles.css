@@ -5849,14 +5849,69 @@ input[type="range"] {
 
 .v2-favorite-reference-card {
   display: grid;
-  gap: 10px;
+  gap: 9px;
   min-width: 0;
+  position: relative;
+  padding: 10px;
+  border: 1px solid rgba(116, 130, 105, 0.22);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 252, 0.78), rgba(248, 245, 235, 0.56)),
+    rgba(255, 255, 252, 0.58);
 }
 
+.v2-favorite-reference-card.is-empty {
+  border-style: dashed;
+  background: rgba(255, 255, 252, 0.48);
+}
+
+.v2-favorite-reference-card.has-selection {
+  border-color: rgba(154, 117, 53, 0.46);
+  background:
+    linear-gradient(180deg, rgba(255, 251, 235, 0.86), rgba(248, 245, 235, 0.66)),
+    rgba(255, 255, 252, 0.7);
+}
+
+.v2-favorite-reference-copy,
 .v2-favorite-reference-card > span {
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 5px;
+}
+
+.v2-reference-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.v2-reference-title-row span {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.v2-reference-title-row em {
+  flex: 0 0 auto;
+  min-height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 1px 7px;
+  border: 1px solid rgba(116, 130, 105, 0.22);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.v2-favorite-reference-card.has-selection .v2-reference-title-row em {
+  border-color: rgba(154, 117, 53, 0.34);
+  color: #8a6423;
+  background: rgba(255, 244, 203, 0.86);
 }
 
 .v2-favorite-reference-card strong {
@@ -5866,6 +5921,13 @@ input[type="range"] {
   color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.v2-favorite-reference-card small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .v2-favorite-reference-actions {
@@ -6146,12 +6208,10 @@ button.favorite-picker-card {
   }
 
   .v2-favorite-reference-card {
-    padding: 12px;
-    border: 1px solid rgba(116, 130, 105, 0.22);
-    border-radius: var(--radius);
-    background: rgba(255, 255, 252, 0.62);
+    padding: 10px;
   }
 
+  .v2-favorite-reference-copy,
   .v2-favorite-reference-card > span {
     gap: 5px;
   }

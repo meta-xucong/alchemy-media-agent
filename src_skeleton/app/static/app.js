@@ -320,7 +320,10 @@ const els = {
   v2SelectedTemplateLabel: document.querySelector("#v2SelectedTemplateLabel"),
   v2PickFavoriteReferenceBtn: document.querySelector("#v2PickFavoriteReferenceBtn"),
   v2ClearFavoriteReferenceBtn: document.querySelector("#v2ClearFavoriteReferenceBtn"),
+  v2FavoriteReferenceCard: document.querySelector("#v2FavoriteReferenceCard"),
   v2FavoriteReferenceLabel: document.querySelector("#v2FavoriteReferenceLabel"),
+  v2FavoriteReferenceState: document.querySelector("#v2FavoriteReferenceState"),
+  v2FavoriteReferenceHint: document.querySelector("#v2FavoriteReferenceHint"),
   v2CountInput: document.querySelector("#v2CountInput"),
   v2CountValue: document.querySelector("#v2CountValue"),
   v2AssetInput: document.querySelector("#v2AssetInput"),
@@ -4432,7 +4435,7 @@ function renderV2FavoriteReferencePicker() {
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty-v2-message";
-    empty.textContent = "还没有可用于继续修改的 2.0 星标图片。请先在 2.0 历史缩略图上点亮星标。";
+    empty.textContent = "还没有可选参考图。需要沿用某张历史图时，先在 2.0 历史缩略图上点亮星标；不选择也可以直接生成。";
     els.v2FavoriteReferenceGrid.appendChild(empty);
     return;
   }
@@ -4456,7 +4459,7 @@ function renderV2FavoriteReferencePicker() {
     detail.textContent = historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at));
     const action = document.createElement("em");
     action.className = "favorite-picker-action";
-    action.textContent = v2State.favoriteReferenceItem?.output_id === item.output_id ? "已选择" : "选择此图继续修改";
+    action.textContent = v2State.favoriteReferenceItem?.output_id === item.output_id ? "已选择为参考" : "用作本次参考";
     meta.append(title, detail, action);
     card.append(preview, meta);
     card.addEventListener("click", () => selectV2FavoriteReference(item));
@@ -4470,7 +4473,7 @@ function selectV2FavoriteReference(item) {
   clearV2Template({ keepFavoriteReference: true, keepNotice: true });
   updateV2FavoriteReferenceLabel();
   closeV2FavoriteReferencePicker();
-  updateV2Notice("已选择星标图片作为继续修改参考；本次生成会放弃原模板，改用这张图作为画面参考。", "success");
+  updateV2Notice("已选择星标图作为可选参考；本次会放弃原模板，改用这张图作为画面参考。", "success");
   els.v2FavoriteReferenceLabel?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
@@ -4478,14 +4481,25 @@ function clearV2FavoriteReference(options = {}) {
   v2State.favoriteReferenceItem = null;
   v2State.favoriteReferenceAsset = null;
   updateV2FavoriteReferenceLabel();
-  if (!options.keepNotice) updateV2Notice("已清除 2.0 星标图继续修改参考。", "info");
+  if (!options.keepNotice) updateV2Notice("已清除星标参考；本次会继续使用当前模板或你的文字需求。", "info");
 }
 
 function updateV2FavoriteReferenceLabel() {
   const item = v2State.favoriteReferenceItem;
+  const selected = Boolean(item);
+  els.v2FavoriteReferenceCard?.classList.toggle("is-empty", !selected);
+  els.v2FavoriteReferenceCard?.classList.toggle("has-selection", selected);
   if (els.v2FavoriteReferenceLabel) {
     els.v2FavoriteReferenceLabel.textContent = item ? `已选择 ${shortOutputId(item.output_id)}` : "未选择";
     els.v2FavoriteReferenceLabel.title = item ? (v2HistoryCardPrompt(item) || item.output_id || "已选择") : "";
+  }
+  if (els.v2FavoriteReferenceState) {
+    els.v2FavoriteReferenceState.textContent = item ? "将替代模板" : "可选";
+  }
+  if (els.v2FavoriteReferenceHint) {
+    els.v2FavoriteReferenceHint.textContent = item
+      ? "本次会把这张星标图作为画面参考；如想继续用模板，请先清除。"
+      : "不选也能生成；选择后以星标图作画面参考，并放弃当前模板。";
   }
   if (els.v2ClearFavoriteReferenceBtn) {
     els.v2ClearFavoriteReferenceBtn.hidden = !item;

@@ -597,11 +597,14 @@
                     <h4>素材与续作</h4>
                     <span id="v2AssetState" class="state-pill">可选</span>
                   </div>
-                  <div class="v2-favorite-reference-card">
+                  <div id="v2FavoriteReferenceCard" class="v2-favorite-reference-card is-empty">
                     <div class="v2-favorite-reference-copy">
-                      <span>星标续作</span>
+                      <div class="v2-reference-title-row">
+                        <span>参考星标图</span>
+                        <em id="v2FavoriteReferenceState">可选</em>
+                      </div>
                       <strong id="v2FavoriteReferenceLabel">未选择</strong>
-                      <small>从星标历史续作，会替代模板。</small>
+                      <small id="v2FavoriteReferenceHint">不选也能生成；选择后会以星标图作为本次参考，并替代当前模板。</small>
                     </div>
                     <div class="v2-favorite-reference-actions">
                       <button id="v2PickFavoriteReferenceBtn" class="button compact ghost" type="button">选择</button>
@@ -1277,7 +1280,7 @@
         <div class="favorite-picker-head">
           <div>
             <p class="eyebrow">V2 Starred</p>
-            <h3 id="v2FavoriteReferenceTitle">选择星标续作</h3>
+            <h3 id="v2FavoriteReferenceTitle">选择可选参考图</h3>
           </div>
           <span id="v2FavoriteReferenceCount" class="state-pill">0</span>
         </div>

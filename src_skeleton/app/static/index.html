@@ -576,10 +576,17 @@
                 </div>
 
                 <div class="v2-side-controls">
-                  <div class="control-block v2-favorite-reference-card">
-                    <span>星标图继续修改 <strong id="v2FavoriteReferenceLabel">未选择</strong></span>
+                  <div id="v2FavoriteReferenceCard" class="control-block v2-favorite-reference-card is-empty">
+                    <div class="v2-favorite-reference-copy">
+                      <div class="v2-reference-title-row">
+                        <span>参考星标图</span>
+                        <em id="v2FavoriteReferenceState">可选</em>
+                      </div>
+                      <strong id="v2FavoriteReferenceLabel">未选择</strong>
+                      <small id="v2FavoriteReferenceHint">不选也能生成；选择后以星标图作画面参考，并放弃当前模板。</small>
+                    </div>
                     <div class="v2-favorite-reference-actions">
-                      <button id="v2PickFavoriteReferenceBtn" class="button compact ghost" type="button">选择星标图</button>
+                      <button id="v2PickFavoriteReferenceBtn" class="button compact ghost" type="button">选择</button>
                       <button id="v2ClearFavoriteReferenceBtn" class="button compact ghost" type="button" hidden>清除</button>
                     </div>
                   </div>
@@ -1269,7 +1276,7 @@
         <div class="favorite-picker-head">
           <div>
             <p class="eyebrow">V2 Starred</p>
-            <h3 id="v2FavoriteReferenceTitle">选择 2.0 星标图作为模板</h3>
+            <h3 id="v2FavoriteReferenceTitle">选择可选参考图</h3>
           </div>
           <span id="v2FavoriteReferenceCount" class="state-pill">0</span>
         </div>

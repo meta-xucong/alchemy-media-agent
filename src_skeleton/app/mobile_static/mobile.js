@@ -314,7 +314,10 @@ const els = {
   v2SelectedTemplateLabel: document.querySelector("#v2SelectedTemplateLabel"),
   v2PickFavoriteReferenceBtn: document.querySelector("#v2PickFavoriteReferenceBtn"),
   v2ClearFavoriteReferenceBtn: document.querySelector("#v2ClearFavoriteReferenceBtn"),
+  v2FavoriteReferenceCard: document.querySelector("#v2FavoriteReferenceCard"),
   v2FavoriteReferenceLabel: document.querySelector("#v2FavoriteReferenceLabel"),
+  v2FavoriteReferenceState: document.querySelector("#v2FavoriteReferenceState"),
+  v2FavoriteReferenceHint: document.querySelector("#v2FavoriteReferenceHint"),
   v2CountInput: document.querySelector("#v2CountInput"),
   v2CountValue: document.querySelector("#v2CountValue"),
   v2AssetUploadBtn: document.querySelector("#v2AssetUploadBtn"),
@@ -2599,7 +2602,7 @@ function updateMobileSummaries() {
   setSummaryText(
     "mobileV2AssetSummary",
     v2State.favoriteReferenceItem
-      ? `星标续作 · ${shortOutputId(v2State.favoriteReferenceItem.output_id)}`
+      ? `星标参考 · ${shortOutputId(v2State.favoriteReferenceItem.output_id)}`
       : v2State.uploadedAssets.length
         ? `${v2State.uploadedAssets.length} 张 · ${v2Roles || "素材约束"}`
         : "未选择"
@@ -6121,7 +6124,7 @@ function renderV2AssetPanel() {
   }
   if (els.v2AssetLockHint) {
     els.v2AssetLockHint.textContent = v2State.favoriteReferenceItem
-      ? "星标续作已启用，会替代模板。"
+      ? "星标参考已启用，会替代模板。"
       : v2State.selectedTemplateId
         ? "已选案例优先锁定画面；上传素材只填入主体、Logo、人脸等可替换位置。"
         : "未选案例时，中枢会自由结合素材与案例库。";
@@ -6748,7 +6751,7 @@ function renderV2FavoriteReferencePicker() {
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty-v2-message";
-    empty.textContent = "还没有星标图。先到 2.0 历史点亮收藏。";
+    empty.textContent = "还没有可选参考图。需要沿用历史图时，先到 2.0 历史点亮星标；不选也能生成。";
     els.v2FavoriteReferenceGrid.appendChild(empty);
     return;
   }
@@ -6772,7 +6775,7 @@ function renderV2FavoriteReferencePicker() {
     detail.textContent = historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at));
     const action = document.createElement("em");
     action.className = "favorite-picker-action";
-    action.textContent = v2State.favoriteReferenceItem?.output_id === item.output_id ? "已选" : "用这张";
+    action.textContent = v2State.favoriteReferenceItem?.output_id === item.output_id ? "已选为参考" : "用作参考";
     meta.append(title, detail, action);
     card.append(preview, meta);
     card.addEventListener("click", () => selectV2FavoriteReference(item));
@@ -6789,7 +6792,7 @@ function selectV2FavoriteReference(item) {
   closeV2FavoriteReferencePicker();
   closeMobileSurface({ silent: true });
   openMobileSurface("v2-assets", els.v2FavoriteReferenceLabel || null);
-  updateV2Notice("已选择星标续作图，本次会用它替代模板。", "success");
+  updateV2Notice("已选择星标图作为可选参考；本次会用它替代模板。", "success");
   scheduleMobileSummaryUpdate();
 }
 
@@ -6799,14 +6802,25 @@ function clearV2FavoriteReference(options = {}) {
   updateV2FavoriteReferenceLabel();
   renderV2AssetPanel();
   scheduleMobileSummaryUpdate();
-  if (!options.keepNotice) updateV2Notice("已清除星标续作图。", "info");
+  if (!options.keepNotice) updateV2Notice("已清除星标参考；本次会继续使用当前模板或文字需求。", "info");
 }
 
 function updateV2FavoriteReferenceLabel() {
   const item = v2State.favoriteReferenceItem;
+  const selected = Boolean(item);
+  els.v2FavoriteReferenceCard?.classList.toggle("is-empty", !selected);
+  els.v2FavoriteReferenceCard?.classList.toggle("has-selection", selected);
   if (els.v2FavoriteReferenceLabel) {
     els.v2FavoriteReferenceLabel.textContent = item ? `已选 ${shortOutputId(item.output_id)}` : "未选择";
     els.v2FavoriteReferenceLabel.title = item ? (v2HistoryCardPrompt(item) || item.output_id || "已选择") : "";
+  }
+  if (els.v2FavoriteReferenceState) {
+    els.v2FavoriteReferenceState.textContent = item ? "替代模板" : "可选";
+  }
+  if (els.v2FavoriteReferenceHint) {
+    els.v2FavoriteReferenceHint.textContent = item
+      ? "本次会以这张星标图作参考；想继续用模板请先清除。"
+      : "不选也能生成；选择后会以星标图作为本次参考，并替代当前模板。";
   }
   if (els.v2ClearFavoriteReferenceBtn) {
     els.v2ClearFavoriteReferenceBtn.hidden = !item;
