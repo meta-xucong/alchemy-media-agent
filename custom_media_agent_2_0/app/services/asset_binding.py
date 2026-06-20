@@ -130,11 +130,19 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         )
     frame_strategy = asset_context.get("asset_frame_strategy") if isinstance(asset_context.get("asset_frame_strategy"), dict) else {}
     if frame_strategy.get("mode") == "uploaded_frame_primary":
-        parts.append(
-            "UPLOADED FRAME INTENT: no hand-selected template is active, and the user asked the uploaded reference to drive layout or composition. "
-            "Preserve the uploaded frame's composition, layout rhythm, major spatial hierarchy, and camera/design structure. "
-            "Retrieved cases may add polish, lighting, materials, and commercial finish only; they must not replace the uploaded frame."
-        )
+        if frame_strategy.get("continuation_frame"):
+            parts.append(
+                "STARRED HISTORY CONTINUATION FRAME: use the selected starred history image as the primary continuation frame. "
+                "Preserve its composition, layout rhythm, major spatial hierarchy, lighting, palette, and visual rhythm. "
+                "Apply the current user request as the highest-priority local edit; if it conflicts with an object, prop, text, or surface in the reference image, replace the conflicting reference detail instead of preserving it. "
+                "Retrieved cases may add polish, lighting, materials, and commercial finish only; they must not replace the continuation frame."
+            )
+        else:
+            parts.append(
+                "UPLOADED FRAME INTENT: no hand-selected template is active, and the user asked the uploaded reference to drive layout or composition. "
+                "Preserve the uploaded frame's composition, layout rhythm, major spatial hierarchy, and camera/design structure. "
+                "Retrieved cases may add polish, lighting, materials, and commercial finish only; they must not replace the uploaded frame."
+            )
     elif (
         frame_strategy.get("content_extraction")
         and frame_strategy.get("mode") in {"template_frame_primary", "case_frame_primary"}
@@ -234,8 +242,12 @@ def _asset_frame_strategy(
 ) -> dict[str, Any]:
     bindings = [item.model_dump(mode="json") for item in binding_plan.bindings]
     text = _frame_strategy_text(user_prompt=user_prompt, uploaded_assets=uploaded_assets, bindings=bindings)
+    layout_rejected = _layout_rejection_requested(text)
     content_extraction = _content_extraction_requested(text, bindings)
-    uploaded_frame_requested = _uploaded_frame_requested(text, bindings) and not _layout_rejection_requested(text)
+    continuation_frame_requested = _continuation_frame_requested(text, bindings) and not layout_rejected
+    uploaded_frame_requested = (
+        _uploaded_frame_requested(text, bindings) or continuation_frame_requested
+    ) and not layout_rejected
     retrieval_hints = _asset_retrieval_hints(
         text=text,
         uploaded_assets=uploaded_assets,
@@ -263,7 +275,12 @@ def _asset_frame_strategy(
             "content_extraction": False,
             "asset_ids": _strategy_asset_ids(uploaded_assets),
             "retrieval_hints": retrieval_hints,
-            "reason": "The user explicitly asked to preserve or follow the uploaded layout/composition frame.",
+            "continuation_frame": continuation_frame_requested,
+            "reason": (
+                "The user selected a starred history image as the continuation frame."
+                if continuation_frame_requested
+                else "The user explicitly asked to preserve or follow the uploaded layout/composition frame."
+            ),
         }
     return {
         "mode": "case_frame_primary",
@@ -327,6 +344,33 @@ def _uploaded_frame_requested(text: str, bindings: list[dict[str, Any]]) -> bool
             flags=re.IGNORECASE,
         )
     )
+
+
+def _continuation_frame_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
+    if re.search(
+        r"(continue[_\s-]?modifying[_\s-]?selected[_\s-]?favorite[_\s-]?image|continuation\s+frame|"
+        r"selected\s+starred.*history\s+image|starred.*history\s+image.*continuation|"
+        r"星标.*(继续修改|继续编辑|延续|基底|底版|参考)|历史图.*(继续修改|继续编辑|延续|基底|底版))",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    for item in bindings:
+        if not isinstance(item, dict) or item.get("role") != "composition_reference":
+            continue
+        placement = item.get("placement_intent") if isinstance(item.get("placement_intent"), dict) else {}
+        joined = " ".join(
+            str(value or "")
+            for value in [
+                item.get("fusion_mode"),
+                item.get("binding_slot"),
+                item.get("prompt_instruction"),
+                placement.get("instruction"),
+            ]
+        )
+        if re.search(r"(continuation\s+frame|continue[_\s-]?modifying|继续修改|继续编辑)", joined, flags=re.IGNORECASE):
+            return True
+    return False
 
 
 def _layout_rejection_requested(text: str) -> bool:
@@ -627,7 +671,13 @@ def _prompt_instruction(
         "face_reference": "Preserve uploaded face identity cues while adapting pose, lighting, and scene to the selected template.",
         "background_reference": "Use background content only if compatible with the template lock or explicitly requested by the user.",
         "style_reference": "Use only compatible color, light, material, and mood cues; do not override the selected template style.",
-        "composition_reference": "Use only secondary camera-angle or spacing hints; do not override the selected template composition.",
+        "composition_reference": (
+            "Use this uploaded reference image as the selected continuation frame. "
+            "Preserve its composition, lighting, palette, spatial hierarchy, and visual rhythm; apply the current user request as the highest-priority local edit. "
+            "When the requested edit conflicts with a visible object, prop, text, or surface in the reference, replace that conflicting detail instead of preserving it."
+            if fusion_mode == "continuation_frame"
+            else "Use only secondary camera-angle or spacing hints; do not override the selected template composition."
+        ),
         "color_reference": "Use compatible palette/accent cues without replacing the selected template color rhythm.",
         "negative_reference": "Avoid the visual traits represented by this uploaded reference.",
     }.get(role, "Use the uploaded asset as compatible visual evidence.")
@@ -890,6 +940,16 @@ def _placement_intent(*, role: str, text: str, source: str, template_locked: boo
             "source": "role_default",
             "instruction": "Use background content only when compatible with the user request and template lock.",
         }
+    if role == "composition_reference" and _continuation_frame_requested(text, []):
+        return {
+            "mode": "continuation_frame",
+            "target_surface": "selected_history_frame",
+            "target_label": "星标历史图继续修改基底",
+            "source": source,
+            "instruction": (
+                "Use the uploaded starred history image as the continuation frame while applying the current user edits over conflicting reference details."
+            ),
+        }
     return {
         "mode": "reference",
         "target_surface": None,
@@ -920,6 +980,8 @@ def _fusion_mode(*, role: str, placement: dict[str, Any], text: str, template_lo
     if role == "style_reference":
         return "style_signal"
     if role == "composition_reference":
+        if mode == "continuation_frame":
+            return "continuation_frame"
         return "composition_signal"
     if role == "color_reference":
         return "color_signal"
@@ -1187,6 +1249,14 @@ def _review_expectations(*, role: str, fusion_mode: str, placement: dict[str, An
                 "uploaded_source_layout_not_copied",
                 "uploaded_information_complete",
                 "business_offer_policy_preserved",
+            ]
+        )
+    elif fusion_mode == "continuation_frame":
+        expectations.extend(
+            [
+                "selected_history_frame_preserved",
+                "current_user_edit_applied",
+                "conflicting_reference_details_replaced",
             ]
         )
     elif role == "subject_reference":

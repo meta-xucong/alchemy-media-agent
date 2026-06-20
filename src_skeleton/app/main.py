@@ -25,6 +25,7 @@ from app.schemas import (
     CreateImageJobRequest,
     CreateSessionRequest,
     CreateVideoJobRequest,
+    FavoriteImageRequest,
     ImageHistoryItem,
     ImageHistoryResponse,
     MessageRequest,
@@ -57,6 +58,7 @@ from app.services.alchemy_lab_uploads import (
 )
 from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabAssetContentUploadRequest
 from app.services.events import format_sse_events
+from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.session_service import create_session, handle_message
 from app.services.veyra_auth import (
@@ -533,6 +535,22 @@ def _v1_output_owner_id(output_id: str) -> int | None:
     return None
 
 
+def _v1_history_output_exists(output_id: str) -> bool:
+    output = repository.get_output(output_id)
+    if output:
+        job = repository.get_job(output.job_id)
+        if job and not _is_non_v1_history_job(job):
+            return True
+        return False
+    for record in media_store.list_history_records(limit=10000):
+        if record.get("id") == output_id and not _is_non_v1_history_record(record):
+            return True
+    for record in media_store.list_generated_output_records(limit=10000):
+        if record.get("id") == output_id and not _is_non_v1_history_record(record):
+            return True
+    return False
+
+
 def _is_lab_output_id(output_id: str) -> bool:
     for record in media_store.list_history_records(limit=10000):
         if record.get("id") == output_id:
@@ -677,6 +695,10 @@ async def list_image_history(
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
+    favorite_ids = list_favorite_ids(
+        veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
+        include_legacy_public=True,
+    )
     items: list[ImageHistoryItem] = []
     known_output_ids: set[str] = set()
     blocked_output_ids: set[str] = set()
@@ -718,6 +740,7 @@ async def list_image_history(
                     size=job.prompt_plan.size if job.prompt_plan else None,
                     version_parent_id=output.version_parent_id,
                     veyra_user_id=_history_output_veyra_user_id(output.metadata),
+                    favorite=output.id in favorite_ids,
                     created_at=job.created_at,
                     updated_at=job.updated_at,
                     source="repository",
@@ -731,7 +754,7 @@ async def list_image_history(
         if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
             continue
         known_output_ids.add(record["id"])
-        items.append(ImageHistoryItem(**record))
+        items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
 
     if not session_id:
         for record in media_store.list_generated_output_records(limit=limit):
@@ -741,7 +764,7 @@ async def list_image_history(
             if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
                 continue
             known_output_ids.add(record["id"])
-            items.append(ImageHistoryItem(**record))
+            items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
 
     items = [_with_veyra_history_access(item, veyra_context) for item in items if _history_visible_to_veyra(item, veyra_context)]
     items.sort(key=_history_sort_key, reverse=True)
@@ -768,6 +791,7 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     )
     deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
     removed_records = media_store.delete_history_record(output_id)
+    removed_favorites = delete_favorite(output_id)
     if not output and not deleted_file and not deleted_thumbnail and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     if output:
@@ -782,8 +806,18 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
         "deleted_file": deleted_file,
         "deleted_thumbnail": deleted_thumbnail,
         "removed_history_records": removed_records,
+        "removed_favorites": removed_favorites,
         "removed_repository_output": bool(output),
     }
+
+
+@app.put("/v1/image/history/{output_id}/favorite")
+async def favorite_image_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
+    if not _v1_history_output_exists(output_id):
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    await _require_output_visible(request, output_id, authorization, allow_legacy_public=True)
+    context = await _veyra_history_context(request, authorization)
+    return set_favorite(output_id, body.favorite, veyra_user_id=_positive_int_or_none(context.get("user_id")))
 
 
 @app.get("/v1/image/jobs/{job_id}")

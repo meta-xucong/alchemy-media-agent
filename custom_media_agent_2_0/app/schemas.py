@@ -541,6 +541,7 @@ class ImageHistoryItem(BaseModel):
     veyra_legacy_public: bool = False
     record_label: str | None = None
     can_delete: bool = False
+    favorite: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -548,6 +549,17 @@ class ImageHistoryItem(BaseModel):
 class ImageHistoryResponse(BaseModel):
     items: list[ImageHistoryItem]
     total: int
+
+
+class FavoriteImageRequest(BaseModel):
+    favorite: bool = True
+
+
+class FavoriteReferenceAssetRequest(BaseModel):
+    role: AssetRole = "composition_reference"
+    constraint_strength: ConstraintStrength = "required"
+    intended_use: str | None = "continue_modifying_selected_favorite_image"
+    notes: str | None = None
 
 
 class ImageJob(BaseModel):

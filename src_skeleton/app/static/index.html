@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260620-lab-h5-history-fix" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260620-desktop-bootstrap-star" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -220,7 +220,10 @@
                 <div class="tuning-card material-card">
                   <div class="mini-head">
                     <h4>高级版</h4>
-                    <span id="assetState" class="state-pill">空</span>
+                    <div class="material-head-actions">
+                      <span id="assetState" class="state-pill">空</span>
+                      <button id="clearAssetBtn" class="button compact ghost" type="button" hidden>清除</button>
+                    </div>
                   </div>
                   <div id="assetPreview" class="asset-preview empty-asset-preview">
                     <span id="assetPreviewLabel">未选择素材</span>
@@ -310,8 +313,22 @@
                 <span id="selectedOutputLabel" class="state-pill">未选</span>
               </div>
               <div class="revision-grid">
+                <div id="revisionSelectedCard" class="revision-selected-card is-empty" aria-live="polite">
+                  <div class="revision-selected-preview" aria-hidden="true">
+                    <span>未选</span>
+                  </div>
+                  <div class="revision-selected-copy">
+                    <span class="revision-selected-kicker">当前参考图</span>
+                    <strong id="revisionSelectedTitle">未选择图片</strong>
+                    <small id="revisionSelectedMeta">从生成结果、历史图片或星标图片中选择一张继续修改。</small>
+                  </div>
+                  <button id="clearRevisionSelectionBtn" class="button compact ghost" type="button" hidden>清除</button>
+                </div>
                 <textarea id="revisionInput" rows="4" placeholder="选择一张结果图后，描述要保留和要改变的部分。"></textarea>
-                <button id="reviseBtn" class="button secondary" type="button" disabled>生成修改版本</button>
+                <div class="revision-actions">
+                  <button id="pickFavoriteRevisionBtn" class="button ghost" type="button">从星标图片选择</button>
+                  <button id="reviseBtn" class="button secondary" type="button" disabled>生成修改版本</button>
+                </div>
               </div>
             </section>
 
@@ -322,6 +339,10 @@
                   <h3>历史图片</h3>
                 </div>
                 <div class="history-actions">
+                  <label class="favorite-filter">
+                    <input id="historyFavoritesOnly" type="checkbox" />
+                    <span>只看星标</span>
+                  </label>
                   <span id="historyCount" class="state-pill">0</span>
                   <button id="refreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
                 </div>
@@ -555,6 +576,13 @@
                 </div>
 
                 <div class="v2-side-controls">
+                  <div class="control-block v2-favorite-reference-card">
+                    <span>星标图继续修改 <strong id="v2FavoriteReferenceLabel">未选择</strong></span>
+                    <div class="v2-favorite-reference-actions">
+                      <button id="v2PickFavoriteReferenceBtn" class="button compact ghost" type="button">选择星标图</button>
+                      <button id="v2ClearFavoriteReferenceBtn" class="button compact ghost" type="button" hidden>清除</button>
+                    </div>
+                  </div>
                   <label class="control-block">
                     <span>生成数量 <strong id="v2CountValue">1</strong></span>
                     <input id="v2CountInput" type="range" min="1" max="4" step="1" value="1" />
@@ -695,6 +723,10 @@
                   <h3>2.0 历史</h3>
                 </div>
                 <div class="history-actions">
+                  <label class="favorite-filter">
+                    <input id="v2HistoryFavoritesOnly" type="checkbox" />
+                    <span>只看星标</span>
+                  </label>
                   <span id="v2HistoryCount" class="state-pill">0</span>
                   <button id="v2RefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
                 </div>
@@ -1215,6 +1247,36 @@
       </div>
     </section>
 
+    <section id="favoritePickerModal" class="favorite-picker-modal" role="dialog" aria-modal="true" aria-labelledby="favoritePickerTitle" hidden>
+      <div class="favorite-picker-backdrop" data-close-favorite-picker></div>
+      <div class="favorite-picker-panel">
+        <button id="closeFavoritePickerBtn" class="modal-close" type="button" aria-label="关闭星标选择" title="关闭">×</button>
+        <div class="favorite-picker-head">
+          <div>
+            <p class="eyebrow">Starred</p>
+            <h3 id="favoritePickerTitle">选择星标图片继续修改</h3>
+          </div>
+          <span id="favoritePickerCount" class="state-pill">0</span>
+        </div>
+        <div id="favoritePickerGrid" class="favorite-picker-grid empty-v2-list" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="v2FavoriteReferenceModal" class="favorite-picker-modal" role="dialog" aria-modal="true" aria-labelledby="v2FavoriteReferenceTitle" hidden>
+      <div class="favorite-picker-backdrop" data-close-v2-favorite-reference></div>
+      <div class="favorite-picker-panel">
+        <button id="closeV2FavoriteReferenceBtn" class="modal-close" type="button" aria-label="关闭星标参考选择" title="关闭">×</button>
+        <div class="favorite-picker-head">
+          <div>
+            <p class="eyebrow">V2 Starred</p>
+            <h3 id="v2FavoriteReferenceTitle">选择 2.0 星标图作为模板</h3>
+          </div>
+          <span id="v2FavoriteReferenceCount" class="state-pill">0</span>
+        </div>
+        <div id="v2FavoriteReferenceGrid" class="favorite-picker-grid empty-v2-list" aria-live="polite"></div>
+      </div>
+    </section>
+
     <section id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
       <div class="lightbox-backdrop" data-close-lightbox></div>
       <div class="lightbox-panel">
@@ -1261,6 +1323,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260620-lab-h5-history-fix" defer></script>
+    <script src="/static/app.js?v=20260620-desktop-asset-clear-star" defer></script>
   </body>
 </html>

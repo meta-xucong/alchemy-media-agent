@@ -10,6 +10,8 @@ from app.repositories import repository
 from app.repositories.memory import utc_now
 from app.schemas import (
     AssetContentUploadRequest,
+    AssetRole,
+    ConstraintStrength,
     CreateUploadedAssetRequest,
     CreateUploadedAssetResponse,
     UploadedAsset,
@@ -161,6 +163,51 @@ def complete_uploaded_asset(asset_id: str) -> UploadedAsset | None:
         update={
             "status": "ready",
             "role": asset.role or brief.role,
+            "brief": brief,
+            "updated_at": utc_now(),
+        }
+    )
+    return _save_uploaded_asset(ready)
+
+
+def create_uploaded_asset_from_bytes(
+    *,
+    filename: str,
+    mime_type: str,
+    content: bytes,
+    role: AssetRole | None = None,
+    constraint_strength: ConstraintStrength = "strong",
+    intended_use: str | None = None,
+) -> UploadedAsset:
+    now = utc_now()
+    asset = UploadedAsset(
+        asset_id=new_id("asset"),
+        filename=_safe_filename(filename),
+        mime_type=mime_type,
+        size_bytes=len(content),
+        status="stored",
+        role=role,
+        constraint_strength=constraint_strength,
+        intended_use=intended_use,
+        created_at=now,
+        updated_at=now,
+    )
+    path = _asset_content_path(asset)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    stored = asset.model_copy(
+        update={
+            "storage_path": str(path),
+            "source_url": f"/api/v2/uploads/{asset.asset_id}/content",
+            "thumbnail_url": f"/api/v2/uploads/{asset.asset_id}/content",
+            "updated_at": utc_now(),
+        }
+    )
+    brief = analyze_uploaded_asset(stored, path)
+    ready = stored.model_copy(
+        update={
+            "status": "ready",
+            "role": stored.role or brief.role,
             "brief": brief,
             "updated_at": utc_now(),
         }

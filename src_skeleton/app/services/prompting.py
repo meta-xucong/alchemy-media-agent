@@ -43,12 +43,36 @@ def build_revision_patch(*, output_id: str, feedback: str, preserve: list[str] |
 
 
 def apply_patch_to_plan(base_plan: ImagePromptPlan, patch: PromptPatch) -> ImagePromptPlan:
+    base_generation_prompt = str((base_plan.variables or {}).get("generation_prompt") or base_plan.main_subject or "").strip()
+    revision_prompt = _revision_generation_prompt(base_generation_prompt=base_generation_prompt, patch=patch)
     return base_plan.model_copy(
         update={
-            "main_subject": f"{base_plan.main_subject}\n修改要求：{patch.new_prompt_delta}",
+            "main_subject": revision_prompt,
             "count": 1,
-            "variables": {**base_plan.variables, "prompt_patch": patch.model_dump()},
+            "variables": {
+                **base_plan.variables,
+                "generation_prompt": revision_prompt,
+                "revision_feedback": patch.new_prompt_delta,
+                "revision_base_generation_prompt": base_generation_prompt,
+                "prompt_patch": patch.model_dump(),
+            },
         }
+    )
+
+
+def _revision_generation_prompt(*, base_generation_prompt: str, patch: PromptPatch) -> str:
+    feedback = patch.new_prompt_delta.strip()
+    preserve = "、".join(item for item in patch.preserve if item) or "主体、构图、光影、色彩和整体视觉节奏"
+    return "\n".join(
+        part
+        for part in [
+            "以输入图片作为唯一视觉参考继续修改。",
+            f"修改要求（最高优先级，必须执行）：{feedback}",
+            f"保持不变：{preserve}；尽量保留人物身份、姿态、构图、光影、色彩、背景密度和整体风格一致。",
+            "如果原始提示词或输入图片中的局部物体与修改要求冲突，必须以修改要求为准；被替换的原物体不要保留。",
+            f"原始提示词仅作低优先级风格/构图参考：{base_generation_prompt}",
+        ]
+        if part.strip()
     )
 
 

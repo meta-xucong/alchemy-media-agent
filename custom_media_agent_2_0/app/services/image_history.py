@@ -8,6 +8,7 @@ from urllib.parse import quote
 from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput
+from app.services.favorites import delete_favorite, list_favorite_ids
 from app.services.output_storage import delete_output_storage
 
 
@@ -49,6 +50,11 @@ def list_image_history(
 ) -> ImageHistoryResponse:
     if not settings.image_history_path.exists():
         return ImageHistoryResponse(items=[], total=0)
+    favorite_ids = list_favorite_ids(
+        veyra_user_id=veyra_user_id,
+        include_legacy_public=include_legacy_public,
+        include_all=include_all,
+    )
     records_by_output: dict[str, ImageHistoryItem] = {}
     for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -68,6 +74,7 @@ def list_image_history(
             veyra_user_id=veyra_user_id,
             include_all=include_all,
         )
+        item = item.model_copy(update={"favorite": item.output_id in favorite_ids})
         existing = records_by_output.get(item.output_id)
         if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
             records_by_output[item.output_id] = item
@@ -127,13 +134,16 @@ def delete_image_history_item(output_id: str) -> dict[str, Any]:
             "ok": False,
             "output_id": output_id,
             "removed_history_records": 0,
+            "removed_favorites": 0,
             "removed_repository_output": False,
             **storage_result,
         }
+    removed_favorites = delete_favorite(output_id)
     return {
         "ok": True,
         "output_id": output_id,
         "removed_history_records": removed_records,
+        "removed_favorites": removed_favorites,
         "removed_repository_output": removed_output,
         **storage_result,
     }

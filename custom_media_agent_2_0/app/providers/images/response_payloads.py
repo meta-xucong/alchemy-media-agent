@@ -23,6 +23,17 @@ _IMAGE_FIELD_KEYS = (
     "result",
 )
 _CONTAINER_KEYS = ("data", "output", "outputs", "images", "results", "items", "content", "parts")
+_KNOWN_OBJECT_KEYS = (
+    *_CONTAINER_KEYS,
+    *_IMAGE_FIELD_KEYS,
+    "mime_type",
+    "content_type",
+    "format",
+    "width",
+    "height",
+    "size",
+    "dimensions",
+)
 
 
 async def outputs_from_image_response(
@@ -240,9 +251,21 @@ def _to_plain(value: Any) -> Any:
                 except TypeError:
                     pass
     try:
-        return vars(value)
+        plain = vars(value)
     except TypeError:
-        return value
+        plain = {}
+    if plain:
+        return plain
+    object_fields: dict[str, Any] = {}
+    for key in _KNOWN_OBJECT_KEYS:
+        try:
+            attr_value = getattr(value, key)
+        except Exception:
+            continue
+        if callable(attr_value):
+            continue
+        object_fields[key] = attr_value
+    return object_fields or value
 
 
 def _dimensions_from_entry(entry: Any) -> tuple[int | None, int | None] | None:

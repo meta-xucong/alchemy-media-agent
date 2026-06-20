@@ -19,6 +19,8 @@ from app.schemas import (
     AssetContentUploadRequest,
     CreateCreativeRunRequest,
     CreateFeedbackRequest,
+    FavoriteImageRequest,
+    FavoriteReferenceAssetRequest,
     CreateImageJobRequest,
     CreateRevisionRunRequest,
     CreateUploadedAssetRequest,
@@ -45,6 +47,8 @@ from app.services.case_intelligence import (
 )
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
+from app.services.favorites import list_favorite_ids, set_favorite
+from app.services.history_reference_assets import create_reference_asset_from_history_output
 from app.services.image_history import delete_image_history_item, list_image_history
 from app.services.history_thumbnails import read_history_thumbnail
 from app.services.ids import new_id
@@ -755,6 +759,41 @@ async def delete_history_item(output_id: str, request: Request, authorization: s
             detail={"error_code": "history_output_not_found", "message": "V2 history output not found."},
         )
     return result
+
+
+@app.put("/api/v2/image/history/{output_id}/favorite")
+async def favorite_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
+    context = await _require_output_visible(request, output_id, authorization)
+    if not repository.get_output(output_id):
+        from app.services.image_history import get_image_history_item
+
+        if not get_image_history_item(output_id):
+            raise HTTPException(status_code=404, detail={"error_code": "history_output_not_found", "message": "V2 history output not found."})
+    return set_favorite(output_id, body.favorite, veyra_user_id=context.get("user_id"))
+
+
+@app.post("/api/v2/image/history/{output_id}/reference-asset")
+async def history_reference_asset(
+    output_id: str,
+    body: FavoriteReferenceAssetRequest,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    context = await _require_output_visible(request, output_id, authorization)
+    favorite_ids = list_favorite_ids(
+        veyra_user_id=context.get("user_id"),
+        include_legacy_public=True,
+        include_all=context.get("is_admin", False),
+    )
+    if output_id not in favorite_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "history_output_not_favorite", "message": "Please star this V2 history output before using it as a continuation reference."},
+        )
+    asset = create_reference_asset_from_history_output(output_id, body)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"error_code": "history_output_file_not_found", "message": "V2 history output file not found."})
+    return asset
 
 
 @app.get("/api/v2/image/jobs/{job_id}")

@@ -9,7 +9,7 @@
     <meta property="og:description" content="AI 自动优化创作表达，快速生成高质感视觉内容。" />
     <meta property="og:image" content="/mobile-static/showcase/city-poster.jpg" />
     <title>Verya Alchemy H5</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260620-lab-h5-history-fix" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260620-mobile-star-polish" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -285,8 +285,22 @@
                 <span id="selectedOutputLabel" class="state-pill">未选</span>
               </div>
               <div class="revision-grid">
+                <div id="revisionSelectedCard" class="revision-selected-card is-empty" aria-live="polite">
+                  <div class="revision-selected-preview" aria-hidden="true">
+                    <span>未选</span>
+                  </div>
+                  <div class="revision-selected-copy">
+                    <span class="revision-selected-kicker">当前参考图</span>
+                    <strong id="revisionSelectedTitle">未选择图片</strong>
+                    <small id="revisionSelectedMeta">从生成结果、历史图片或星标图片中选择一张继续修改。</small>
+                  </div>
+                  <button id="clearRevisionSelectionBtn" class="button compact ghost" type="button" hidden>清除</button>
+                </div>
                 <textarea id="revisionInput" rows="4" placeholder="选择一张结果图后，描述要保留和要改变的部分。"></textarea>
-                <button id="reviseBtn" class="button secondary" type="button" disabled>生成修改版本</button>
+                <div class="revision-actions">
+                  <button id="pickFavoriteRevisionBtn" class="button ghost" type="button">从星标图片选择</button>
+                  <button id="reviseBtn" class="button secondary" type="button" disabled>生成修改版本</button>
+                </div>
               </div>
             </section>
 
@@ -297,6 +311,10 @@
                   <h3>历史图片</h3>
                 </div>
                 <div class="history-actions">
+                  <label class="favorite-filter">
+                    <input id="historyFavoritesOnly" type="checkbox" />
+                    <span>只看星标</span>
+                  </label>
                   <span id="historyCount" class="state-pill">0</span>
                   <button id="refreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
                 </div>
@@ -576,8 +594,19 @@
                 </div>
                 <div class="v2-asset-panel">
                   <div class="mini-head">
-                    <h4>上传素材</h4>
+                    <h4>素材与续作</h4>
                     <span id="v2AssetState" class="state-pill">可选</span>
+                  </div>
+                  <div class="v2-favorite-reference-card">
+                    <div class="v2-favorite-reference-copy">
+                      <span>星标续作</span>
+                      <strong id="v2FavoriteReferenceLabel">未选择</strong>
+                      <small>从星标历史续作，会替代模板。</small>
+                    </div>
+                    <div class="v2-favorite-reference-actions">
+                      <button id="v2PickFavoriteReferenceBtn" class="button compact ghost" type="button">选择</button>
+                      <button id="v2ClearFavoriteReferenceBtn" class="button compact ghost" type="button" hidden>清除</button>
+                    </div>
                   </div>
                   <div id="v2AssetPreview" class="asset-preview v2-asset-preview empty-asset-preview">
                     <span id="v2AssetPreviewLabel">未选择素材</span>
@@ -585,7 +614,7 @@
                   <button id="v2AssetUploadBtn" class="button secondary full-width v2-upload-button" type="button">上传图片</button>
                   <label class="file-drop v2-file-drop" for="v2AssetInput">
                     <input id="v2AssetInput" type="file" accept="image/*" multiple />
-                    <span class="file-title">点此选择参考图片</span>
+                    <span class="file-title">上传参考图</span>
                     <span id="v2AssetName" class="file-meta">PNG / JPEG / WebP</span>
                   </label>
                   <div class="advanced-role-checks v2-asset-role-checks" aria-label="V2素材用途">
@@ -678,6 +707,10 @@
                   <h3>2.0 历史</h3>
                 </div>
                 <div class="history-actions">
+                  <label class="favorite-filter">
+                    <input id="v2HistoryFavoritesOnly" type="checkbox" />
+                    <span>只看星标</span>
+                  </label>
                   <span id="v2HistoryCount" class="state-pill">0</span>
                   <button id="v2RefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
                 </div>
@@ -1222,6 +1255,36 @@
       </div>
     </section>
 
+    <section id="favoritePickerModal" class="favorite-picker-modal" role="dialog" aria-modal="true" aria-labelledby="favoritePickerTitle" hidden>
+      <div class="favorite-picker-backdrop" data-close-favorite-picker></div>
+      <div class="favorite-picker-panel">
+        <button id="closeFavoritePickerBtn" class="modal-close" type="button" aria-label="关闭星标选择" title="关闭">×</button>
+        <div class="favorite-picker-head">
+          <div>
+            <p class="eyebrow">Starred</p>
+            <h3 id="favoritePickerTitle">选择星标图片继续修改</h3>
+          </div>
+          <span id="favoritePickerCount" class="state-pill">0</span>
+        </div>
+        <div id="favoritePickerGrid" class="favorite-picker-grid empty-v2-list" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="v2FavoriteReferenceModal" class="favorite-picker-modal" role="dialog" aria-modal="true" aria-labelledby="v2FavoriteReferenceTitle" hidden>
+      <div class="favorite-picker-backdrop" data-close-v2-favorite-reference></div>
+      <div class="favorite-picker-panel">
+        <button id="closeV2FavoriteReferenceBtn" class="modal-close" type="button" aria-label="关闭星标参考选择" title="关闭">×</button>
+        <div class="favorite-picker-head">
+          <div>
+            <p class="eyebrow">V2 Starred</p>
+            <h3 id="v2FavoriteReferenceTitle">选择星标续作</h3>
+          </div>
+          <span id="v2FavoriteReferenceCount" class="state-pill">0</span>
+        </div>
+        <div id="v2FavoriteReferenceGrid" class="favorite-picker-grid empty-v2-list" aria-live="polite"></div>
+      </div>
+    </section>
+
     <section id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
       <div class="lightbox-backdrop" data-close-lightbox></div>
       <div class="lightbox-panel">
@@ -1268,6 +1331,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260620-lab-h5-history-fix" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260620-mobile-star-polish" defer></script>
   </body>
 </html>

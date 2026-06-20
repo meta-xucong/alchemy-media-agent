@@ -339,6 +339,7 @@ class ImageHistoryItem(BaseModel):
     veyra_legacy_public: bool = False
     record_label: str | None = None
     can_delete: bool = False
+    favorite: bool = False
     created_at: str | None = None
     updated_at: str | None = None
     source: Literal["repository", "manifest", "filesystem"] = "repository"
@@ -347,6 +348,10 @@ class ImageHistoryItem(BaseModel):
 class ImageHistoryResponse(BaseModel):
     items: list[ImageHistoryItem] = Field(default_factory=list)
     total: int = 0
+
+
+class FavoriteImageRequest(BaseModel):
+    favorite: bool = True
 
 
 class CreateSessionRequest(BaseModel):

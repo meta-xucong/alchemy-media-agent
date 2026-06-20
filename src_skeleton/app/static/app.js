@@ -134,6 +134,7 @@ const state = {
   selectedAssetRoles: ["style_reference"],
   currentJob: null,
   selectedOutputId: null,
+  selectedRevisionSource: null,
   selectedSize: "",
   selectedFormat: "png",
   selectedQuality: "high",
@@ -146,6 +147,7 @@ const state = {
   heroHistoryItems: [],
   heroHistorySource: "v1",
   historyItems: [],
+  historyFavoritesOnly: false,
   historyRenderLimit: historyPageSize,
   imageProgressStartedAt: null,
   imageProgressTimer: null,
@@ -172,8 +174,11 @@ const v2State = {
   templates: [],
   visibleTemplates: [],
   history: [],
+  historyFavoritesOnly: false,
   selectedTemplateId: null,
   selectedTemplateDetail: null,
+  favoriteReferenceItem: null,
+  favoriteReferenceAsset: null,
   templateAutoFields: { subject: "", style: "", useCase: "" },
   activeCaseFacet: "all",
   caseSearchQuery: "",
@@ -313,6 +318,9 @@ const els = {
   v2ProgressDetail: document.querySelector("#v2ProgressDetail"),
   v2RunBtn: document.querySelector("#v2RunBtn"),
   v2SelectedTemplateLabel: document.querySelector("#v2SelectedTemplateLabel"),
+  v2PickFavoriteReferenceBtn: document.querySelector("#v2PickFavoriteReferenceBtn"),
+  v2ClearFavoriteReferenceBtn: document.querySelector("#v2ClearFavoriteReferenceBtn"),
+  v2FavoriteReferenceLabel: document.querySelector("#v2FavoriteReferenceLabel"),
   v2CountInput: document.querySelector("#v2CountInput"),
   v2CountValue: document.querySelector("#v2CountValue"),
   v2AssetInput: document.querySelector("#v2AssetInput"),
@@ -335,6 +343,7 @@ const els = {
   v2Outputs: document.querySelector("#v2Outputs"),
   v2TraceId: document.querySelector("#v2TraceId"),
   v2HistoryCount: document.querySelector("#v2HistoryCount"),
+  v2HistoryFavoritesOnly: document.querySelector("#v2HistoryFavoritesOnly"),
   v2RefreshHistoryBtn: document.querySelector("#v2RefreshHistoryBtn"),
   v2HistoryGrid: document.querySelector("#v2HistoryGrid"),
   labStyleCount: document.querySelector("#labStyleCount"),
@@ -423,6 +432,7 @@ const els = {
   assetPreview: document.querySelector("#assetPreview"),
   assetPreviewLabel: document.querySelector("#assetPreviewLabel"),
   assetState: document.querySelector("#assetState"),
+  clearAssetBtn: document.querySelector("#clearAssetBtn"),
   assetList: document.querySelector("#assetList"),
   advancedAssetPanel: document.querySelector("#advancedAssetPanel"),
   assetStrengthInput: document.querySelector("#assetStrengthInput"),
@@ -444,13 +454,19 @@ const els = {
   gallery: document.querySelector("#gallery"),
   historyGallery: document.querySelector("#historyGallery"),
   historyCount: document.querySelector("#historyCount"),
+  historyFavoritesOnly: document.querySelector("#historyFavoritesOnly"),
   refreshHistoryBtn: document.querySelector("#refreshHistoryBtn"),
   heroHistoryCarousel: document.querySelector("#heroHistoryCarousel"),
   caseReferenceCarousel: document.querySelector(".case-showcase .case-carousel"),
   outputTemplate: document.querySelector("#outputTemplate"),
   revisionInput: document.querySelector("#revisionInput"),
   reviseBtn: document.querySelector("#reviseBtn"),
+  pickFavoriteRevisionBtn: document.querySelector("#pickFavoriteRevisionBtn"),
+  clearRevisionSelectionBtn: document.querySelector("#clearRevisionSelectionBtn"),
   selectedOutputLabel: document.querySelector("#selectedOutputLabel"),
+  revisionSelectedCard: document.querySelector("#revisionSelectedCard"),
+  revisionSelectedTitle: document.querySelector("#revisionSelectedTitle"),
+  revisionSelectedMeta: document.querySelector("#revisionSelectedMeta"),
   eventList: document.querySelector("#eventList"),
   eventCount: document.querySelector("#eventCount"),
   noticeBar: document.querySelector("#noticeBar"),
@@ -461,6 +477,14 @@ const els = {
   applySampleBtn: document.querySelector("#applySampleBtn"),
   applyAndGenerateSampleBtn: document.querySelector("#applyAndGenerateSampleBtn"),
   samplePromptPreview: document.querySelector("#samplePromptPreview"),
+  favoritePickerModal: document.querySelector("#favoritePickerModal"),
+  favoritePickerGrid: document.querySelector("#favoritePickerGrid"),
+  favoritePickerCount: document.querySelector("#favoritePickerCount"),
+  closeFavoritePickerBtn: document.querySelector("#closeFavoritePickerBtn"),
+  v2FavoriteReferenceModal: document.querySelector("#v2FavoriteReferenceModal"),
+  v2FavoriteReferenceGrid: document.querySelector("#v2FavoriteReferenceGrid"),
+  v2FavoriteReferenceCount: document.querySelector("#v2FavoriteReferenceCount"),
+  closeV2FavoriteReferenceBtn: document.querySelector("#closeV2FavoriteReferenceBtn"),
   imageLightbox: document.querySelector("#imageLightbox"),
   lightboxStage: document.querySelector(".lightbox-stage"),
   lightboxImage: document.querySelector("#lightboxImage"),
@@ -594,9 +618,19 @@ function bindControls() {
   });
 
   els.assetInput.addEventListener("change", handleAsset);
+  if (els.clearAssetBtn) els.clearAssetBtn.addEventListener("click", clearV1Asset);
   els.generateBtn.addEventListener("click", generateImage);
   els.reviseBtn.addEventListener("click", reviseSelectedOutput);
+  if (els.pickFavoriteRevisionBtn) els.pickFavoriteRevisionBtn.addEventListener("click", openFavoritePicker);
+  if (els.clearRevisionSelectionBtn) els.clearRevisionSelectionBtn.addEventListener("click", clearRevisionSelection);
   els.refreshHistoryBtn.addEventListener("click", () => refreshHistory({ silent: false }));
+  if (els.historyFavoritesOnly) {
+    els.historyFavoritesOnly.addEventListener("change", () => {
+      state.historyFavoritesOnly = els.historyFavoritesOnly.checked;
+      state.historyRenderLimit = historyPageSize;
+      renderHistory(state.historyItems);
+    });
+  }
   els.heroHistoryCarousel.addEventListener("click", openActiveHeroHistorySlide);
   if (els.v2RefreshBtn) els.v2RefreshBtn.addEventListener("click", () => initV2({ silent: false, force: true }));
   if (els.v2ModelApplyBtn) els.v2ModelApplyBtn.addEventListener("click", applyV2ModelSettings);
@@ -636,7 +670,16 @@ function bindControls() {
   hydrateV2AspectButtons();
   setV2PromptTransformMode(v2State.promptTransformMode);
   if (els.v2ClearTemplateBtn) els.v2ClearTemplateBtn.addEventListener("click", clearV2Template);
+  if (els.v2PickFavoriteReferenceBtn) els.v2PickFavoriteReferenceBtn.addEventListener("click", openV2FavoriteReferencePicker);
+  if (els.v2ClearFavoriteReferenceBtn) els.v2ClearFavoriteReferenceBtn.addEventListener("click", () => clearV2FavoriteReference());
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.addEventListener("click", () => loadV2History({ silent: false }));
+  if (els.v2HistoryFavoritesOnly) {
+    els.v2HistoryFavoritesOnly.addEventListener("change", () => {
+      v2State.historyFavoritesOnly = els.v2HistoryFavoritesOnly.checked;
+      v2State.historyRenderLimit = v2HistoryPageSize;
+      renderV2History(v2State.history);
+    });
+  }
   if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
   if (els.v2RunBtn) els.v2RunBtn.addEventListener("click", runV2Creative);
   if (els.labImagesPerStyleInput) {
@@ -771,12 +814,26 @@ function bindControls() {
   els.sampleGuideModal.addEventListener("click", (event) => {
     if (event.target === els.sampleGuideModal) closeSampleGuide();
   });
+  if (els.closeFavoritePickerBtn) els.closeFavoritePickerBtn.addEventListener("click", closeFavoritePicker);
+  if (els.closeV2FavoriteReferenceBtn) els.closeV2FavoriteReferenceBtn.addEventListener("click", closeV2FavoriteReferencePicker);
+  if (els.favoritePickerModal) {
+    els.favoritePickerModal.addEventListener("click", (event) => {
+      if (event.target.hasAttribute("data-close-favorite-picker")) closeFavoritePicker();
+    });
+  }
+  if (els.v2FavoriteReferenceModal) {
+    els.v2FavoriteReferenceModal.addEventListener("click", (event) => {
+      if (event.target.hasAttribute("data-close-v2-favorite-reference")) closeV2FavoriteReferencePicker();
+    });
+  }
   els.imageLightbox.addEventListener("click", (event) => {
     if (event.target.hasAttribute("data-close-lightbox")) closeImageLightbox();
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") setLabNavOpen(false);
     if (event.key === "Escape" && !els.sampleGuideModal.hidden) closeSampleGuide();
+    if (event.key === "Escape" && els.favoritePickerModal && !els.favoritePickerModal.hidden) closeFavoritePicker();
+    if (event.key === "Escape" && els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) closeV2FavoriteReferencePicker();
     if (event.key === "Escape" && !els.imageLightbox.hidden) closeImageLightbox();
   });
   document.addEventListener("click", (event) => {
@@ -2154,6 +2211,7 @@ async function createSession({ announce = true } = {}) {
   state.assets = [];
   state.currentJob = null;
   state.selectedOutputId = null;
+  state.selectedRevisionSource = null;
   els.sessionLabel.textContent = session.id;
   els.gallery.innerHTML = "";
   els.gallery.classList.remove("loading");
@@ -2167,7 +2225,7 @@ async function createSession({ announce = true } = {}) {
   resetAssetPreview();
   renderAssetPanel();
   els.revisionInput.value = "";
-  els.selectedOutputLabel.textContent = "未选";
+  clearRevisionSelection({ keepNotice: true });
   setStatus("待命", 0, "-");
   showNotice("会话已准备好。", "success");
   if (announce) {
@@ -2214,6 +2272,7 @@ function resetV2Session() {
   v2State.templateAutoFields = { subject: "", style: "", useCase: "" };
   v2State.selectedRatio = "";
   v2State.uploadedAssets = [];
+  clearV2FavoriteReference({ keepNotice: true });
   v2State.currentRun = null;
   resetV2Progress();
   if (els.v2PromptInput) els.v2PromptInput.value = "";
@@ -3426,6 +3485,7 @@ function fallbackV2CaseImageToPreview(image, fullImageUrl, preview) {
 }
 
 async function selectV2Template(caseId) {
+  clearV2FavoriteReference({ keepNotice: true });
   v2State.selectedTemplateId = caseId;
   const template = v2State.templates.find((item) => item.case_id === caseId);
   els.v2SelectedTemplateLabel.textContent = template ? `模板：${template.title}` : `模板：${caseId}`;
@@ -3441,10 +3501,11 @@ async function selectV2Template(caseId) {
   }
 }
 
-function clearV2Template() {
+function clearV2Template(options = {}) {
   v2State.selectedTemplateId = null;
   v2State.selectedTemplateDetail = null;
   v2State.templateAutoFields = { subject: "", style: "", useCase: "" };
+  if (!options.keepFavoriteReference) clearV2FavoriteReference({ keepNotice: true });
   els.v2SelectedTemplateLabel.textContent = "未选择模板";
   renderV2Templates(v2State.visibleTemplates);
   renderV2AssetPanel();
@@ -3681,6 +3742,9 @@ async function runV2Creative() {
   startV2Progress("queued", "正在提交任务到 V2.0 Agent。");
   renderV2RunPlaceholder();
   try {
+    const favoriteReferenceAsset = await ensureV2FavoriteReferenceAsset();
+    const assetPayload = [...v2FavoriteReferencePayload(favoriteReferenceAsset), ...v2AssetPayload()];
+    const templateCaseId = favoriteReferenceAsset ? null : v2State.selectedTemplateId;
     const output = {
       count: Number(els.v2CountInput.value),
       quality: "high",
@@ -3698,9 +3762,9 @@ async function runV2Creative() {
       method: "POST",
       body: {
         user_prompt: prompt,
-        mode_hint: v2State.selectedTemplateId ? "template_customize" : "smart_enhance",
-        template_case_id: v2State.selectedTemplateId,
-        assets: v2AssetPayload(),
+        mode_hint: templateCaseId ? "template_customize" : "smart_enhance",
+        template_case_id: templateCaseId,
+        assets: assetPayload,
         output,
       },
     });
@@ -3784,7 +3848,7 @@ function buildV2UserPrompt() {
 }
 
 function v2HasGenerationInput(prompt = "") {
-  return Boolean(String(prompt || "").trim() || v2State.selectedTemplateId || v2State.uploadedAssets.length);
+  return Boolean(String(prompt || "").trim() || v2State.selectedTemplateId || v2State.favoriteReferenceItem || v2State.uploadedAssets.length);
 }
 
 function setV2PromptTransformMode(mode) {
@@ -4230,15 +4294,16 @@ function renderV2Outputs(outputs, job) {
 function renderV2History(items) {
   if (!els.v2HistoryGrid) return;
   els.v2HistoryGrid.innerHTML = "";
-  const visibleItems = items.filter(isRenderableV2HistoryImage);
-  const hiddenMockCount = items.length - visibleItems.length;
+  const renderableItems = items.filter((item) => isRenderableV2HistoryImage(item));
+  const visibleItems = renderableItems.filter((item) => !v2State.historyFavoritesOnly || item.favorite);
+  const hiddenMockCount = items.length - renderableItems.length;
   const renderLimit = Math.min(v2State.historyRenderLimit, visibleItems.length);
   const renderedItems = visibleItems.slice(0, renderLimit);
   els.v2HistoryCount.textContent = renderLimit < visibleItems.length ? `${renderLimit}/${visibleItems.length}` : String(visibleItems.length);
   els.v2HistoryGrid.classList.toggle("empty-v2-list", visibleItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
-    card.className = "v2-history-card";
+    card.className = `v2-history-card ${item.favorite ? "is-favorite" : ""}`.trim();
     const cardPrompt = v2HistoryCardPrompt(item);
 
     const preview = document.createElement(item.metadata?.mock ? "div" : "button");
@@ -4255,6 +4320,11 @@ function renderV2History(items) {
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2HistoryLightbox(item, index, card));
     }
+    const favoriteButton = createFavoriteButton({
+      favorite: item.favorite,
+      label: item.favorite ? "取消星标" : "星标收藏",
+      onToggle: (next) => toggleV2Favorite(item, next),
+    });
 
     const meta = document.createElement("div");
     meta.className = "v2-history-meta";
@@ -4293,7 +4363,7 @@ function renderV2History(items) {
     }
     footer.append(id, actions);
 
-    card.append(preview, meta, footer);
+    card.append(preview, favoriteButton, meta, footer);
     els.v2HistoryGrid.appendChild(card);
   });
   if (hiddenMockCount > 0) {
@@ -4318,6 +4388,127 @@ function renderV2History(items) {
     loadMore.append(text, button);
     els.v2HistoryGrid.appendChild(loadMore);
   }
+}
+
+async function toggleV2Favorite(item, favorite) {
+  await v2Request(`/image/history/${encodeURIComponent(item.output_id)}/favorite`, {
+    method: "PUT",
+    body: { favorite },
+  });
+  v2State.history = v2State.history.map((entry) => (entry.output_id === item.output_id ? { ...entry, favorite } : entry));
+  if (!favorite && v2State.favoriteReferenceItem?.output_id === item.output_id) {
+    clearV2FavoriteReference({ keepNotice: true });
+  }
+  renderV2History(v2State.history);
+  if (els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) renderV2FavoriteReferencePicker();
+  if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+  showGlobalToast(favorite ? "2.0 图片已加入星标。" : "2.0 图片已取消星标。");
+}
+
+function v2FavoriteReferenceItems() {
+  return (v2State.history || []).filter((item) => item.favorite && isRenderableV2HistoryImage(item));
+}
+
+function openV2FavoriteReferencePicker() {
+  if (!els.v2FavoriteReferenceModal) return;
+  renderV2FavoriteReferencePicker();
+  els.v2FavoriteReferenceModal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function closeV2FavoriteReferencePicker() {
+  if (!els.v2FavoriteReferenceModal) return;
+  els.v2FavoriteReferenceModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function renderV2FavoriteReferencePicker() {
+  if (!els.v2FavoriteReferenceGrid) return;
+  const items = v2FavoriteReferenceItems();
+  els.v2FavoriteReferenceGrid.innerHTML = "";
+  els.v2FavoriteReferenceGrid.classList.toggle("empty-v2-list", items.length === 0);
+  els.v2FavoriteReferenceGrid.classList.toggle("has-empty-message", items.length === 0);
+  if (els.v2FavoriteReferenceCount) els.v2FavoriteReferenceCount.textContent = String(items.length);
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-v2-message";
+    empty.textContent = "还没有可用于继续修改的 2.0 星标图片。请先在 2.0 历史缩略图上点亮星标。";
+    els.v2FavoriteReferenceGrid.appendChild(empty);
+    return;
+  }
+  items.forEach((item, index) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `favorite-picker-card ${v2State.favoriteReferenceItem?.output_id === item.output_id ? "selected" : ""}`.trim();
+    const preview = document.createElement("span");
+    preview.className = "favorite-picker-preview";
+    const image = document.createElement("img");
+    image.src = v2HistoryImageUrl(item);
+    image.alt = v2HistoryCardPrompt(item) || `2.0 星标图片 ${index + 1}`;
+    image.loading = "lazy";
+    image.decoding = "async";
+    preview.appendChild(image);
+    const meta = document.createElement("span");
+    meta.className = "favorite-picker-meta";
+    const title = document.createElement("strong");
+    title.textContent = v2HistoryCardPrompt(item) || item.output_id || `2.0 星标图片 ${index + 1}`;
+    const detail = document.createElement("span");
+    detail.textContent = historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at));
+    const action = document.createElement("em");
+    action.className = "favorite-picker-action";
+    action.textContent = v2State.favoriteReferenceItem?.output_id === item.output_id ? "已选择" : "选择此图继续修改";
+    meta.append(title, detail, action);
+    card.append(preview, meta);
+    card.addEventListener("click", () => selectV2FavoriteReference(item));
+    els.v2FavoriteReferenceGrid.appendChild(card);
+  });
+}
+
+function selectV2FavoriteReference(item) {
+  v2State.favoriteReferenceItem = item;
+  v2State.favoriteReferenceAsset = null;
+  clearV2Template({ keepFavoriteReference: true, keepNotice: true });
+  updateV2FavoriteReferenceLabel();
+  closeV2FavoriteReferencePicker();
+  updateV2Notice("已选择星标图片作为继续修改参考；本次生成会放弃原模板，改用这张图作为画面参考。", "success");
+  els.v2FavoriteReferenceLabel?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function clearV2FavoriteReference(options = {}) {
+  v2State.favoriteReferenceItem = null;
+  v2State.favoriteReferenceAsset = null;
+  updateV2FavoriteReferenceLabel();
+  if (!options.keepNotice) updateV2Notice("已清除 2.0 星标图继续修改参考。", "info");
+}
+
+function updateV2FavoriteReferenceLabel() {
+  const item = v2State.favoriteReferenceItem;
+  if (els.v2FavoriteReferenceLabel) {
+    els.v2FavoriteReferenceLabel.textContent = item ? `已选择 ${shortOutputId(item.output_id)}` : "未选择";
+    els.v2FavoriteReferenceLabel.title = item ? (v2HistoryCardPrompt(item) || item.output_id || "已选择") : "";
+  }
+  if (els.v2ClearFavoriteReferenceBtn) {
+    els.v2ClearFavoriteReferenceBtn.hidden = !item;
+  }
+}
+
+async function ensureV2FavoriteReferenceAsset() {
+  const item = v2State.favoriteReferenceItem;
+  if (!item?.output_id) return null;
+  if (v2State.favoriteReferenceAsset?.source_output_id === item.output_id) {
+    return v2State.favoriteReferenceAsset;
+  }
+  const asset = await v2Request(`/image/history/${encodeURIComponent(item.output_id)}/reference-asset`, {
+    method: "POST",
+    body: {
+      role: "composition_reference",
+      constraint_strength: "required",
+      intended_use: "continue_modifying_selected_favorite_image",
+      notes: "Use this starred V2 history image as the selected continuation frame reference. Current user changes take priority for local edits and replace conflicting visible details.",
+    },
+  });
+  v2State.favoriteReferenceAsset = { ...asset, source_output_id: item.output_id };
+  return v2State.favoriteReferenceAsset;
 }
 
 function isRenderableV2HistoryImage(item) {
@@ -5246,6 +5437,18 @@ function v2AssetPayload() {
   );
 }
 
+function v2FavoriteReferencePayload(asset) {
+  if (!asset?.asset_id) return [];
+  return [
+    {
+      asset_id: asset.asset_id,
+      role: "composition_reference",
+      constraint_strength: "required",
+      notes: "Use the selected starred V2 history image as the continuation frame: preserve its composition, lighting, palette, spatial hierarchy, and visual rhythm while applying the current user changes. If the current user change conflicts with an object, prop, text, or surface in the reference image, replace the conflicting reference detail instead of preserving it.",
+    },
+  ];
+}
+
 function v2RolesForCurrentPrompt() {
   const roles = v2SelectedAssetRoles();
   if (v2PromptRequestsUploadedContentSource() && !roles.includes("subject_reference")) {
@@ -5477,9 +5680,23 @@ function resetAssetPreview() {
   els.assetPreviewLabel.textContent = "未选择素材";
 }
 
+function clearV1Asset(options = {}) {
+  state.assetIds = [];
+  state.assets = [];
+  state.assetMode = "basic";
+  if (els.assetInput) els.assetInput.value = "";
+  resetAssetPreview();
+  renderAssetPanel();
+  if (!options.keepNotice) {
+    showNotice("已清除高级版参考素材。", "info");
+    showGlobalToast("高级版素材已清除。");
+  }
+}
+
 function renderAssetPanel() {
   const hasAssets = state.assets.length > 0;
   if (els.assetState) els.assetState.textContent = hasAssets ? "高级" : "空";
+  if (els.clearAssetBtn) els.clearAssetBtn.hidden = !hasAssets;
   if (els.assetName) {
     els.assetName.textContent = hasAssets ? `${state.assets.length} 张素材已就绪` : "支持多图，单次最多 6 张";
   }
@@ -5700,7 +5917,8 @@ async function reviseSelectedOutput() {
   toggleBusy(true);
   showNotice("V1.0 基础版正在生成修改版本。", "info");
   const sourceJobId = state.currentJob.id;
-  startImageProgress({ label: "修改中", count: 1, providerName: providerLabel(state.selectedProvider), traceId: state.currentJob.trace_id });
+  const revisionProvider = state.currentJob.forceProviderPreference || state.selectedProvider;
+  startImageProgress({ label: "修改中", count: 1, providerName: providerLabel(revisionProvider), traceId: state.currentJob.trace_id });
   let submittedJob = null;
   try {
     submittedJob = await request(`/v1/image/jobs/${sourceJobId}/revise`, {
@@ -5709,7 +5927,7 @@ async function reviseSelectedOutput() {
         output_id: state.selectedOutputId,
         feedback,
         preserve: ["composition", "main_subject"],
-        provider_preference: state.selectedProvider,
+        provider_preference: revisionProvider,
       },
     });
     const completedJob = await waitForV1ImageJob(submittedJob, { actionLabel: "修改" });
@@ -5748,9 +5966,7 @@ function renderGallery(outputs) {
   els.gallery.innerHTML = "";
   els.gallery.classList.remove("loading");
   els.gallery.classList.toggle("empty-gallery", outputs.length === 0);
-  state.selectedOutputId = null;
-  els.selectedOutputLabel.textContent = "未选";
-  updateRevisionState();
+  clearRevisionSelection({ keepNotice: true });
 
   outputs.forEach((output, index) => {
     const node = els.outputTemplate.content.cloneNode(true);
@@ -5770,9 +5986,14 @@ function renderGallery(outputs) {
     preview.addEventListener("click", () => {
       document.querySelectorAll(".output-card").forEach((item) => item.classList.remove("selected"));
       card.classList.add("selected");
-      state.selectedOutputId = output.id;
-      els.selectedOutputLabel.textContent = output.id.slice(0, 10);
-      updateRevisionState();
+      setRevisionSelection({
+        outputId: output.id,
+        job: state.currentJob,
+        imageUrl: output.thumbnail_url || output.url,
+        title: `生成结果 ${index + 1}`,
+        meta: `${shortOutputId(output.id)} · ${outputProviderResultText(output, state.currentJob)} · ${output.format.toUpperCase()}`,
+        prompt: promptTextFromJob(state.currentJob),
+      });
       openImageLightbox({
         id: output.id,
         title: `生成结果 ${index + 1}`,
@@ -5821,14 +6042,14 @@ async function refreshHistory({ silent = false } = {}) {
 
 function renderHistory(items) {
   els.historyGallery.innerHTML = "";
-  const sortedItems = [...items].sort(compareHistoryItems);
+  const sortedItems = [...items].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
   const renderLimit = Math.min(state.historyRenderLimit, sortedItems.length);
   const renderedItems = sortedItems.slice(0, renderLimit);
   els.historyCount.textContent = renderLimit < sortedItems.length ? `${renderLimit}/${sortedItems.length}` : String(sortedItems.length);
   els.historyGallery.classList.toggle("empty-history", sortedItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
-    card.className = `output-card history-card ${item.source === "repository" ? "" : "readonly"}`;
+    card.className = `output-card history-card ${item.source === "repository" ? "" : "readonly"} ${item.favorite ? "is-favorite" : ""}`.trim();
 
     const preview = document.createElement("button");
     preview.className = "output-preview";
@@ -5875,6 +6096,11 @@ function renderHistory(items) {
         deleteHistoryItem(item, card);
       });
     }
+    const favoriteButton = createFavoriteButton({
+      favorite: item.favorite,
+      label: item.favorite ? "取消星标" : "星标收藏",
+      onToggle: (next) => toggleV1Favorite(item, next),
+    });
 
     preview.addEventListener("click", () => selectHistoryItem(item, card));
     const actions = document.createElement("div");
@@ -5883,7 +6109,7 @@ function renderHistory(items) {
     if (deleteButton) actions.append(deleteButton);
     footer.append(id, actions);
     meta.append(prompt, details);
-    card.append(preview, meta, footer);
+    card.append(preview, favoriteButton, meta, footer);
     els.historyGallery.appendChild(card);
   });
   if (renderLimit < sortedItems.length) {
@@ -5902,6 +6128,197 @@ function renderHistory(items) {
     loadMore.append(text, button);
     els.historyGallery.appendChild(loadMore);
   }
+}
+
+function createFavoriteButton({ favorite = false, label = "星标收藏", onToggle }) {
+  const button = document.createElement("button");
+  button.className = `favorite-star-button ${favorite ? "active" : ""}`.trim();
+  button.type = "button";
+  button.setAttribute("aria-pressed", String(Boolean(favorite)));
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.textContent = "★";
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled) return;
+    button.disabled = true;
+    const next = !button.classList.contains("active");
+    try {
+      await onToggle(next);
+    } catch (error) {
+      showGlobalToast(`星标更新失败：${friendlyError(error)}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+async function toggleV1Favorite(item, favorite) {
+  await request(`/v1/image/history/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PUT",
+    body: { favorite },
+  });
+  applyV1FavoriteState(item.id, favorite);
+  renderHistory(state.historyItems);
+  if (els.favoritePickerModal && !els.favoritePickerModal.hidden) renderFavoritePicker();
+  if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
+  showGlobalToast(favorite ? "已加入星标。" : "已取消星标。");
+}
+
+function applyV1FavoriteState(outputId, favorite) {
+  state.historyItems = state.historyItems.map((entry) => (entry.id === outputId ? { ...entry, favorite } : entry));
+}
+
+function editableFavoriteHistoryItems() {
+  return state.historyItems
+    .filter((item) => item.favorite)
+    .sort(compareHistoryItems);
+}
+
+function openFavoritePicker() {
+  if (!els.favoritePickerModal) return;
+  renderFavoritePicker();
+  els.favoritePickerModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.closeFavoritePickerBtn?.focus();
+}
+
+function closeFavoritePicker() {
+  if (!els.favoritePickerModal) return;
+  els.favoritePickerModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function renderFavoritePicker() {
+  if (!els.favoritePickerGrid) return;
+  const items = editableFavoriteHistoryItems();
+  els.favoritePickerGrid.innerHTML = "";
+  els.favoritePickerGrid.classList.toggle("empty-v2-list", items.length === 0);
+  els.favoritePickerGrid.classList.toggle("has-empty-message", items.length === 0);
+  if (els.favoritePickerCount) els.favoritePickerCount.textContent = String(items.length);
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-v2-message";
+    empty.textContent = "还没有星标图片。先在历史图片上点亮星标，再回来选择。";
+    els.favoritePickerGrid.appendChild(empty);
+    return;
+  }
+  items.forEach((item, index) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "favorite-picker-card";
+    card.addEventListener("click", () => chooseFavoriteForRevision(item));
+    const preview = document.createElement("span");
+    preview.className = "favorite-picker-preview";
+    const image = document.createElement("img");
+    image.src = item.thumbnail_url || item.url;
+    image.alt = `星标图片 ${index + 1}`;
+    image.loading = "lazy";
+    image.decoding = "async";
+    preview.appendChild(image);
+    const meta = document.createElement("div");
+    meta.className = "favorite-picker-meta";
+    const title = document.createElement("strong");
+    title.textContent = item.original_prompt || item.prompt || item.id;
+    const detail = document.createElement("span");
+    detail.textContent = favoriteRevisionDetail(item);
+    const action = document.createElement("em");
+    action.className = "favorite-picker-action";
+    action.textContent = "选择此图继续修改";
+    meta.append(title, detail, action);
+    card.append(preview, meta);
+    els.favoritePickerGrid.appendChild(card);
+  });
+}
+
+function chooseFavoriteForRevision(item) {
+  const job = {
+    id: item.job_id,
+    trace_id: item.trace_id || "",
+    forceProviderPreference: "openai_gpt_image",
+    revisionSource: item.source || "history",
+  };
+  setRevisionSelection({
+    outputId: item.id,
+    job,
+    imageUrl: item.thumbnail_url || item.url,
+    title: "星标图片",
+    meta: `${shortOutputId(item.id)} · ${favoriteRevisionDetail(item)}`,
+    prompt: promptTextFromHistoryItem(item),
+  });
+  closeFavoritePicker();
+  showNotice("已选中星标图片，将以原图作为参考继续修改。", "success");
+  els.revisionSelectedCard?.scrollIntoView({ behavior: "smooth", block: "center" });
+  els.revisionInput?.focus();
+}
+
+function favoriteRevisionDetail(item) {
+  const source = item.source === "repository" ? "当前任务" : "历史恢复";
+  const provider = providerLabel(item.requested_provider || item.provider || "openai_gpt_image");
+  return `${source} · 使用 GPT Image 2 参考原图继续修改 · ${provider}`;
+}
+
+function shortOutputId(value) {
+  const text = String(value || "").trim();
+  if (!text) return "星标图";
+  return text.length > 14 ? `${text.slice(0, 14)}...` : text;
+}
+
+function setRevisionSelection({ outputId, job, imageUrl, title, meta, prompt }) {
+  state.currentJob = job || null;
+  state.selectedOutputId = outputId || null;
+  state.selectedRevisionSource = {
+    outputId,
+    imageUrl,
+    title,
+    meta,
+    prompt,
+  };
+  if (els.selectedOutputLabel) els.selectedOutputLabel.textContent = outputId ? "已选" : "未选";
+  renderRevisionSelection();
+  updateRevisionState();
+}
+
+function clearRevisionSelection(options = {}) {
+  state.currentJob = null;
+  state.selectedOutputId = null;
+  state.selectedRevisionSource = null;
+  if (els.selectedOutputLabel) els.selectedOutputLabel.textContent = options.label || "未选";
+  renderRevisionSelection();
+  updateRevisionState();
+  if (!options.keepNotice) showNotice("已清除继续修改参考图。", "info");
+}
+
+function renderRevisionSelection() {
+  const selected = state.selectedRevisionSource;
+  if (els.revisionSelectedCard) els.revisionSelectedCard.classList.toggle("is-empty", !selected);
+  const preview = els.revisionSelectedCard?.querySelector(".revision-selected-preview");
+  if (preview) {
+    preview.innerHTML = "";
+    if (selected?.imageUrl) {
+      const image = document.createElement("img");
+      image.src = selected.imageUrl;
+      image.alt = selected.title || "继续修改参考图";
+      image.loading = "lazy";
+      image.decoding = "async";
+      preview.appendChild(image);
+    } else {
+      const empty = document.createElement("span");
+      empty.textContent = "未选";
+      preview.appendChild(empty);
+    }
+  }
+  if (els.revisionSelectedTitle) {
+    els.revisionSelectedTitle.textContent = selected?.title || "未选择图片";
+    els.revisionSelectedTitle.title = selected?.prompt || selected?.title || "";
+  }
+  if (els.revisionSelectedMeta) {
+    els.revisionSelectedMeta.textContent = selected?.meta || "从生成结果、历史图片或星标图片中选择一张继续修改。";
+    els.revisionSelectedMeta.title = selected?.meta || "";
+  }
+  if (els.clearRevisionSelectionBtn) els.clearRevisionSelectionBtn.hidden = !selected;
 }
 
 function renderHeroHistory(items, { source = "v1" } = {}) {
@@ -6065,10 +6482,7 @@ async function deleteHistoryItem(item, card) {
     els.historyCount.textContent = String(remaining);
     els.historyGallery.classList.toggle("empty-history", remaining === 0);
     if (state.selectedOutputId === item.id) {
-      state.currentJob = null;
-      state.selectedOutputId = null;
-      els.selectedOutputLabel.textContent = "未选";
-      updateRevisionState();
+      clearRevisionSelection({ keepNotice: true });
     }
     if (!els.imageLightbox.hidden && els.lightboxDownload.href.includes(encodeURIComponent(item.id))) {
       closeImageLightbox();
@@ -6109,17 +6523,19 @@ function selectHistoryItem(item, card) {
     actions,
   });
   if (item.source !== "repository") {
-    state.currentJob = null;
-    state.selectedOutputId = null;
-    els.selectedOutputLabel.textContent = "只读";
+    clearRevisionSelection({ label: "只读", keepNotice: true });
     updateRevisionState();
     showNotice("这张历史图来自本地历史清单，可查看和下载；当前会话缺少任务上下文，不能直接继续修改。", "warning");
     return;
   }
-  state.currentJob = { id: item.job_id };
-  state.selectedOutputId = item.id;
-  els.selectedOutputLabel.textContent = item.id.slice(0, 10);
-  updateRevisionState();
+  setRevisionSelection({
+    outputId: item.id,
+    job: { id: item.job_id },
+    imageUrl: item.thumbnail_url || item.url,
+    title: "历史图片",
+    meta: `${shortOutputId(item.id)} · ${historyMetaText(item)}`,
+    prompt: promptTextFromHistoryItem(item),
+  });
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 

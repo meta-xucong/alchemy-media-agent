@@ -15,6 +15,7 @@ from app.schemas import (
     GenerationJob,
     GenerationOutput,
     ImageGenerationRequest,
+    ImagePromptPlan,
     JobStatus,
     ProviderError,
     ReviseImageRequest,
@@ -357,8 +358,7 @@ async def create_image_job(
 
 
 async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> GenerationJob | None:
-    source_job = repository.get_job(job_id)
-    source_output = repository.get_output(request.output_id)
+    source_job, source_output = _revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
 
@@ -392,8 +392,7 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
 
 
 async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> PreparedImageJob | None:
-    source_job = repository.get_job(job_id)
-    source_output = repository.get_output(request.output_id)
+    source_job, source_output = _revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
 
@@ -426,6 +425,123 @@ async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, v
     saved = repository.save_job(revision)
     _emit_image_events(saved)
     return PreparedImageJob(saved, image_request, edit=True)
+
+
+def _revision_source(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
+    source_job = repository.get_job(job_id)
+    source_output = repository.get_output(output_id)
+    if source_job and source_output:
+        return source_job, source_output
+    return _restore_revision_source_from_history(job_id, output_id)
+
+
+def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
+    record = _history_record_for_output(output_id)
+    if not record:
+        return None, None
+    record_job_id = str(record.get("job_id") or "")
+    if record_job_id != job_id:
+        return None, None
+    found = media_store.find_output_file(output_id)
+    if not found:
+        return None, None
+    _, output_format, _ = found
+    prompt = _history_record_prompt(record, output_id)
+    created_at = str(record.get("created_at") or record.get("updated_at") or now_iso())
+    updated_at = str(record.get("updated_at") or record.get("created_at") or created_at)
+    prompt_plan = _prompt_plan_from_history_record(record, prompt, output_format)
+    source_job = GenerationJob(
+        id=record_job_id,
+        session_id=record.get("session_id"),
+        job_type="image",
+        status=JobStatus.ready,
+        provider=record.get("provider"),
+        model=record.get("model"),
+        asset_mode=record.get("asset_mode") or "basic",
+        asset_plan=record.get("asset_plan"),
+        prompt_plan=prompt_plan,
+        outputs=[],
+        trace_id=str(record.get("trace_id") or make_id("trace")),
+        raw_response_summary={
+            "restored_from_history": True,
+            "history_source": record.get("source"),
+            "requested_image_provider": record.get("requested_provider") or record.get("provider"),
+            "requested_image_model": record.get("requested_model") or record.get("model"),
+        },
+        provenance={"original_prompt": str(record.get("original_prompt") or prompt)},
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    source_output = GenerationOutput(
+        id=output_id,
+        job_id=record_job_id,
+        url=str(record.get("url") or f"/v1/outputs/{output_id}/download"),
+        thumbnail_url=str(record.get("thumbnail_url") or media_store.thumbnail_url(output_id)),
+        format=output_format,
+        width=_int_or_none(record.get("width")),
+        height=_int_or_none(record.get("height")),
+        version_parent_id=record.get("version_parent_id"),
+        metadata={
+            "restored_from_history": True,
+            "source": record.get("source"),
+            "veyra_user_id": _int_or_none(record.get("veyra_user_id")),
+        },
+    )
+    source_job.outputs = [source_output]
+    repository.save_job(source_job)
+    return source_job, source_output
+
+
+def _history_record_for_output(output_id: str) -> dict | None:
+    for record in media_store.list_history_records(limit=10000):
+        if record.get("id") == output_id:
+            return record
+    for record in media_store.list_generated_output_records(limit=10000):
+        if record.get("id") == output_id:
+            return record
+    return None
+
+
+def _prompt_plan_from_history_record(record: dict, prompt: str, output_format: str) -> ImagePromptPlan:
+    plan_payload = record.get("prompt_plan")
+    if isinstance(plan_payload, dict):
+        try:
+            plan = ImagePromptPlan.model_validate(plan_payload)
+        except Exception:
+            plan = build_prompt_plan(prompt=prompt, count=1, size=record.get("size"), output_format=output_format)
+    else:
+        plan = build_prompt_plan(prompt=prompt, count=1, size=record.get("size"), output_format=output_format)
+    variables = {
+        **(plan.variables or {}),
+        "original_prompt": record.get("original_prompt") or prompt,
+        "generation_prompt": record.get("final_prompt") or record.get("prompt") or prompt,
+        "restored_revision_source": True,
+        "source_history_output_id": record.get("id"),
+    }
+    if record.get("work_intensity"):
+        variables["work_intensity"] = record.get("work_intensity")
+    if record.get("work_intensity_label"):
+        variables["work_intensity_label"] = record.get("work_intensity_label")
+    return plan.model_copy(update={"count": 1, "output_format": output_format, "variables": variables})
+
+
+def _history_record_prompt(record: dict, output_id: str) -> str:
+    for key in ("final_prompt", "prompt", "original_prompt"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            return value
+    return (
+        f"基于星标历史图片 {output_id} 继续修改。"
+        "必须以输入图片为视觉锚点，保持主体、构图、光影、色彩、空间关系和整体风格一致。"
+    )
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed
 
 
 async def run_submitted_image_job(job_id: str, request: ImageGenerationRequest, *, edit: bool = False) -> GenerationJob | None:

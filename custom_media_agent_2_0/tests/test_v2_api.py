@@ -160,22 +160,44 @@ def make_prompt_case(
     )
 
 
-def upload_test_asset(client: TestClient, *, role: str = "subject_reference", color=(32, 96, 180)) -> str:
+def upload_test_asset(
+    client: TestClient,
+    *,
+    role: str = "subject_reference",
+    color=(32, 96, 180),
+    intended_use: str | None = None,
+) -> str:
     image_bytes = BytesIO()
     Image.new("RGB", (320, 240), color).save(image_bytes, format="PNG")
-    return upload_image_asset(client, image_bytes.getvalue(), role=role, filename=f"{role}.png")
+    return upload_image_asset(
+        client,
+        image_bytes.getvalue(),
+        role=role,
+        filename=f"{role}.png",
+        intended_use=intended_use,
+    )
 
 
-def upload_image_asset(client: TestClient, image_content: bytes, *, role: str, filename: str = "uploaded.png") -> str:
+def upload_image_asset(
+    client: TestClient,
+    image_content: bytes,
+    *,
+    role: str,
+    filename: str = "uploaded.png",
+    intended_use: str | None = None,
+) -> str:
+    upload_payload = {
+        "filename": filename,
+        "mime_type": "image/png",
+        "size_bytes": len(image_content),
+        "role": role,
+        "constraint_strength": "required",
+    }
+    if intended_use:
+        upload_payload["intended_use"] = intended_use
     upload = client.post(
         "/api/v2/uploads",
-        json={
-            "filename": filename,
-            "mime_type": "image/png",
-            "size_bytes": len(image_content),
-            "role": role,
-            "constraint_strength": "required",
-        },
+        json=upload_payload,
     )
     assert upload.status_code == 200
     asset_id = upload.json()["asset_id"]
@@ -3709,6 +3731,66 @@ def test_no_template_uploaded_layout_reference_becomes_frame_primary() -> None:
     assert "Retrieved case" in prompt
     assert "not the frame owner" in prompt
     assert "uploaded layout/composition wins" in prompt
+
+
+def test_v2_favorite_continuation_reference_keeps_current_user_edit_in_prompt() -> None:
+    client = fresh_client()
+    repository.upsert_cases(
+        [
+            make_prompt_case(
+                "test_continuation_polish_case",
+                "Commercial Continuation Polish",
+                "poster",
+                "A polished commercial image with refined lighting and controlled background detail.",
+                style_tags=["commercial", "polished"],
+                use_case_tags=["poster"],
+            )
+        ]
+    )
+    asset_id = upload_test_asset(
+        client,
+        role="composition_reference",
+        color=(245, 180, 90),
+        intended_use="continue_modifying_selected_favorite_image",
+    )
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "把主体人物手中的橙汁换成咖啡，其他画面尽量保持一致。",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "composition_reference",
+                    "constraint_strength": "required",
+                    "notes": (
+                        "Use the selected starred V2 history image as the continuation frame: preserve its composition, "
+                        "lighting, palette, spatial hierarchy, and visual rhythm while applying the current user changes."
+                    ),
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    strategy = variables["asset_frame_strategy"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert strategy["mode"] == "uploaded_frame_primary"
+    assert strategy["continuation_frame"] is True
+    assert strategy["uploaded_layout_may_override_case"] is True
+    assert binding["fusion_mode"] == "continuation_frame"
+    assert "highest-priority local edit" in binding["prompt_instruction"]
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == [asset_id]
+    prompt = run["prompt_plan"]["prompt"]
+    assert "STARRED HISTORY CONTINUATION FRAME" in prompt
+    assert "把主体人物手中的橙汁换成咖啡" in prompt
+    assert "replace the conflicting reference detail" in prompt
+    input_images = run["generation_jobs"][0]["outputs"][0]["metadata"]["input_images"]
+    assert input_images[0]["asset_id"] == asset_id
+    assert input_images[0]["fusion_mode"] == "continuation_frame"
 
 
 def test_no_template_composition_reference_strong_is_visible_but_not_frame_primary_without_explicit_layout_intent() -> None:
