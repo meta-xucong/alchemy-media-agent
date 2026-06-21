@@ -34,6 +34,7 @@ alchemy_creative_agent_3_0/docs/10_BRAND_MEMORY_SPEC.md
 alchemy_creative_agent_3_0/docs/11_EVALUATION_AND_REFINEMENT_SPEC.md
 alchemy_creative_agent_3_0/docs/12_PROVIDER_INTERFACES.md
 alchemy_creative_agent_3_0/docs/13_STEP_BY_STEP_DELIVERY_PLAN.md
+alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
 ```
 
 Phase 2 / Phase 3 prompts are for later and should not be implemented in this task:
@@ -50,6 +51,18 @@ The goal is not to generate real images yet.
 
 The goal is to make a natural-language commercial visual request flow through V3-owned schemas and agents into a complete, auditable generation plan without importing or calling V1/V2 runtime code.
 
+The foundation must also reserve the basic product shape:
+
+```text
+independent V3 product entry
+V3-owned UI boundary contract
+V3-owned backend API boundary contract
+Central Creative Brain / Creative Core
+vertical agent registry
+DefaultCommercialPack
+platform adapters for shared balance/account/deployment later
+```
+
 ## Absolute Independence Rules
 
 1. Do not import from V1 or V2 runtime modules.
@@ -57,8 +70,10 @@ The goal is to make a natural-language commercial visual request flow through V3
 3. Do not use V2 `ImagePromptPlan` as a V3 core schema.
 4. Do not write V3 state into V2 `user_variables`.
 5. Do not call V2 prompt transform code.
-6. If behavior from V2 is useful, copy it into V3, rename it, adapt it, and test it as V3-owned code.
-7. V3 must be able to run its tests without loading V2 runtime modules.
+6. Do not route V3 frontend actions through V1/V2 API contracts.
+7. Do not couple V3 UI state to V1/V2 UI state.
+8. If behavior from V2 is useful, copy it into V3, rename it, adapt it, and test it as V3-owned code.
+9. V3 must be able to run its tests without loading V2 runtime modules.
 
 Forbidden examples:
 
@@ -66,6 +81,14 @@ Forbidden examples:
 from custom_media_agent_2_0.app.services.generation import ...
 from custom_media_agent_2_0.app.services.prompt_transform import ...
 from custom_media_agent_2_0.app.models import ...
+```
+
+Allowed shared platform dependencies must be isolated behind V3-owned adapters:
+
+```text
+V3AccountAdapter
+V3BalanceAdapter
+V3DeploymentAdapter
 ```
 
 ## Target Directory
@@ -88,8 +111,19 @@ Recommended structure:
 alchemy_creative_agent_3_0/
   app/
     __init__.py
+    app_shell/
+      __init__.py
+      routes.py
+      navigation.py
+      ui_contracts.py
+    platform_adapters/
+      __init__.py
+      account_adapter.py
+      balance_adapter.py
+      deployment_adapter.py
     creative_core/
       __init__.py
+      central_brain.py
       orchestrator.py
       pipeline.py
       context.py
@@ -118,6 +152,17 @@ alchemy_creative_agent_3_0/
       prompt_compiler_agent.py
       generation_router_agent.py
       critic_refiner_agent.py
+      asset_packager_agent.py
+    vertical_agents/
+      __init__.py
+      registry.py
+      base.py
+      default_commercial_pack.py
+      ecommerce_pack.py
+      brand_ip_pack.py
+      ai_manga_drama_pack.py
+      restaurant_pack.py
+      local_service_pack.py
     brand_memory/
       __init__.py
       store.py
@@ -145,11 +190,70 @@ alchemy_creative_agent_3_0/
     test_schemas.py
     test_rules_and_defaults.py
     test_golden_cases.py
+    test_app_boundary.py
+    test_vertical_agent_registry.py
     test_end_to_end_planning.py
     test_no_v2_imports.py
 ```
 
 If the repository has an existing test convention that makes another test location necessary, keep the V3 tests clearly scoped under a V3-only test directory.
+
+## Required Product Boundary Stubs
+
+Implement lightweight V3-owned contracts or stubs for:
+
+```text
+app_shell/navigation.py
+app_shell/routes.py
+app_shell/ui_contracts.py
+platform_adapters/account_adapter.py
+platform_adapters/balance_adapter.py
+platform_adapters/deployment_adapter.py
+```
+
+First-pass behavior may be simple and non-runtime:
+
+```text
+navigation contract identifies V3 as an independent title-bar entry
+route contract reserves /api/v3/creative-agent namespace
+balance adapter is a mock / protocol only
+account adapter is a mock / protocol only
+deployment adapter is a mock / protocol only
+```
+
+Do not implement full UI in this task.
+
+Do not connect to the real balance system in this task unless a safe existing platform adapter is already documented.
+
+## Required Central Brain and Vertical Agent Behavior
+
+Implement or reserve:
+
+```text
+CentralCreativeBrain
+VerticalAgentPack base contract
+VerticalAgentRegistry
+DefaultCommercialPack
+stub EcommerceAgentFamily
+stub BrandIPAgentFamily
+stub AIMangaDramaAgentFamily
+stub RestaurantAgentFamily
+stub LocalServiceAgentFamily
+```
+
+First-pass behavior:
+
+```text
+VerticalAgentRegistry selects DefaultCommercialPack by default.
+If industry is ecommerce_product, it may select EcommerceAgentFamily stub.
+If industry starts with restaurant_, it may select RestaurantAgentFamily stub.
+All stubs must preserve V3 standard schemas and may no-op.
+Selected pack name must appear in metadata.
+```
+
+Do not implement full vertical specialization yet.
+
+The point is to reserve extension structure.
 
 ## Required Schemas
 
@@ -206,17 +310,19 @@ The first implementation should return a planning result, not real generated ima
 The pipeline should do:
 
 ```text
-1. IntentAgent creates CreativeJob.
-2. CommercialStrategyAgent creates CommercialBrief.
-3. BrandMemoryAgent creates or loads BrandProfile.
-4. CreativeDirectorAgent creates CreativePlan.
-5. SeriesPlannerAgent creates SeriesPlan.
-6. LayoutAgent creates LayoutPlan for each AssetSpec.
-7. PromptCompilerAgent creates PromptCompilationResult for each asset.
-8. GenerationRouterAgent creates ConditionPlan and GenerationPlan.
-9. Evaluation layer creates deterministic planning EvaluationReport.
-10. AssetPackager creates CommercialAssetPack manifest.
-11. PlanningResult wraps the full chain.
+1. CentralCreativeBrain creates pipeline context.
+2. IntentAgent creates CreativeJob.
+3. CommercialStrategyAgent creates CommercialBrief.
+4. VerticalAgentRegistry selects a vertical pack.
+5. BrandMemoryAgent creates or loads BrandProfile.
+6. CreativeDirectorAgent creates CreativePlan.
+7. SeriesPlannerAgent creates SeriesPlan.
+8. LayoutAgent creates LayoutPlan for each AssetSpec.
+9. PromptCompilerAgent creates PromptCompilationResult for each asset.
+10. GenerationRouterAgent creates ConditionPlan and GenerationPlan.
+11. Evaluation layer creates deterministic planning EvaluationReport.
+12. AssetPackager creates CommercialAssetPack manifest.
+13. PlanningResult wraps the full chain.
 ```
 
 ## First-Pass Agent Behavior
@@ -392,8 +498,14 @@ Add tests for:
 9. PromptCompilationResult includes no-fake-text provider note
 10. BrandProfile influences prompt compilation
 11. PlanningResult contains full chain
-12. End-to-end planning pipeline completes without V2 imports
-13. V3 files do not import forbidden V2 modules
+12. CentralCreativeBrain orchestrates the pipeline
+13. VerticalAgentRegistry selects DefaultCommercialPack fallback
+14. selected vertical pack name appears in metadata
+15. V3 app shell contract reserves independent title-bar entry
+16. V3 route contract reserves /api/v3/creative-agent namespace
+17. platform adapters exist as V3-owned boundaries
+18. End-to-end planning pipeline completes without V2 imports
+19. V3 files do not import forbidden V2 modules
 ```
 
 ## Out of Scope for First Task
@@ -411,6 +523,8 @@ video generation
 canvas UI
 node workflow UI
 production database migration
+real balance charging
+full frontend UI
 ```
 
 ## Implementation Quality Rules
@@ -423,6 +537,8 @@ production database migration
 - Do not overfit to a single provider.
 - Prefer provider-neutral contracts.
 - Keep tests deterministic.
+- Preserve V3 independence from V1/V2.
+- Preserve central-brain + multi-agent extensibility.
 - Do not implement V3.1 or V3.2 tasks in this phase unless necessary for the V3.0 contracts.
 
 ## Final Output Required From Codex
@@ -432,6 +548,8 @@ After implementation, report:
 ```text
 V3_FOUNDATION_STATUS: COMPLETE or INCOMPLETE
 INDEPENDENCE_STATUS: PASS or FAIL
+APP_BOUNDARY_STATUS: PASS or FAIL
+VERTICAL_AGENT_EXTENSION_STATUS: PASS or FAIL
 TEST_STATUS: PASS or FAIL
 ```
 
@@ -440,6 +558,9 @@ Also summarize:
 ```text
 - files created
 - schemas implemented
+- app boundary stubs added
+- central brain behavior
+- vertical registry behavior
 - pipeline behavior
 - tests added
 - any known limitations
@@ -458,6 +579,7 @@ can produce a full V3-owned planning chain:
 ```text
 CreativeJob
 CommercialBrief
+SelectedVerticalAgentPack metadata
 BrandProfile
 CreativePlan
 SeriesPlan
@@ -470,4 +592,4 @@ CommercialAssetPack manifest
 PlanningResult
 ```
 
-without importing or calling V1/V2 runtime code.
+and also contains V3-owned app boundary stubs and vertical agent registry stubs, without importing or calling V1/V2 runtime code.
