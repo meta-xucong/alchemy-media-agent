@@ -47,7 +47,12 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "mkdir -p '$DEPLOY_DIR'"
           tar \
             --exclude='.git' \
+            --exclude='.media_storage' \
+            --exclude='src_skeleton/.media_storage' \
             --exclude='src_skeleton/.env' \
+            --exclude='.codex-longrun' \
+            --exclude='.codex-tmp' \
+            --exclude='tmp' \
             --exclude='**/__pycache__' \
             -czf - . | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "tar -xzf - -C '$DEPLOY_DIR'"
 
@@ -67,6 +72,7 @@ jobs:
           DEFAULT_LLM_PROVIDER: ${{ vars.DEFAULT_LLM_PROVIDER || 'anthropic' }}
           KIMI_LLM_MODEL: ${{ vars.KIMI_LLM_MODEL || 'kimi-for-coding' }}
           IMAGE_WORK_INTENSITY: ${{ vars.IMAGE_WORK_INTENSITY || 'atelier' }}
+          V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
         run: |
           REMOTE="${VPS_USER:-root}@${VPS_HOST}"
           if ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "test -s '$DEPLOY_DIR/src_skeleton/.env'"; then
@@ -106,6 +112,7 @@ jobs:
 
           MEDIA_STORAGE_ROOT=.media_storage
           V2_API_PROXY_BASE_URL=http://127.0.0.1:8020
+          V1_MEDIA_STORAGE_DIR=$V1_MEDIA_STORAGE_DIR
           EOF
           sed -i 's/^          //' /tmp/alchemy-media-agent.env
           scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" /tmp/alchemy-media-agent.env "$REMOTE:$DEPLOY_DIR/src_skeleton/.env"
@@ -118,6 +125,7 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
           DEPLOY_DIR: ${{ inputs.deploy_dir }}
           APP_PORT: ${{ inputs.app_port }}
+          V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
         run: |
           REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "cd '$DEPLOY_DIR' && APP_PORT='$APP_PORT' ./scripts/deploy_vps.sh --local --skip-env"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "cd '$DEPLOY_DIR' && APP_PORT='$APP_PORT' V1_MEDIA_STORAGE_DIR='$V1_MEDIA_STORAGE_DIR' ./scripts/deploy_vps.sh --local --skip-env"

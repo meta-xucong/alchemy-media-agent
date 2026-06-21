@@ -6,6 +6,7 @@ DEPLOY_DIR="${DEPLOY_DIR:-/opt/alchemy-media-agent}"
 APP_PORT="${APP_PORT:-8017}"
 V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL:-http://127.0.0.1:8020}"
 V2_STORAGE_DIR="${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}"
+V1_MEDIA_STORAGE_DIR="${V1_MEDIA_STORAGE_DIR:-/var/lib/alchemy/v1/media_storage}"
 LOCAL_MODE=0
 SKIP_ENV=0
 INSTALL_DOCKER=1
@@ -190,19 +191,89 @@ BYTEPLUS_API_KEY=${BYTEPLUS_API_KEY:-}
 MEDIA_STORAGE_ROOT=.media_storage
 V2_API_PROXY_BASE_URL=${V2_API_PROXY_BASE_URL}
 V2_STORAGE_DIR=${V2_STORAGE_DIR}
+V1_MEDIA_STORAGE_DIR=${V1_MEDIA_STORAGE_DIR}
 EOF
+}
+
+ensure_v1_media_storage() {
+  run_as_root mkdir -p "${V1_MEDIA_STORAGE_DIR}"
+  local media_sources=()
+  if [[ -d "${DEPLOY_DIR}/src_skeleton/.media_storage" ]]; then
+    media_sources+=("${DEPLOY_DIR}/src_skeleton/.media_storage")
+  fi
+  if [[ -d "${DEPLOY_DIR}-releases" ]]; then
+    while IFS= read -r source_dir; do
+      media_sources+=("${source_dir}")
+    done < <(find "${DEPLOY_DIR}-releases" -mindepth 3 -maxdepth 3 -type d -path "*/src_skeleton/.media_storage" 2>/dev/null || true)
+  fi
+  for source_dir in "${media_sources[@]}"; do
+    if command -v rsync >/dev/null 2>&1; then
+      run_as_root rsync -a --ignore-existing "${source_dir}/" "${V1_MEDIA_STORAGE_DIR}/" || true
+    else
+      run_as_root cp -an "${source_dir}/." "${V1_MEDIA_STORAGE_DIR}/" 2>/dev/null || true
+    fi
+  done
+  merge_v1_history_records "${media_sources[@]}"
+  if [[ ! -w "${V1_MEDIA_STORAGE_DIR}" ]]; then
+    run_as_root chown -R "$(id -u):$(id -g)" "${V1_MEDIA_STORAGE_DIR}" || true
+  fi
+}
+
+merge_v1_history_records() {
+  if [[ "$#" -eq 0 ]] || ! command -v python3 >/dev/null 2>&1; then
+    return
+  fi
+  run_as_root env V1_MEDIA_STORAGE_DIR="${V1_MEDIA_STORAGE_DIR}" python3 - "$@" <<'PY'
+import json
+import os
+import tempfile
+from pathlib import Path
+
+target = Path(os.environ["V1_MEDIA_STORAGE_DIR"]) / "history" / "outputs.jsonl"
+sources = [Path(item) / "history" / "outputs.jsonl" for item in os.sys.argv[1:]]
+records = {}
+order = []
+
+for path in [target, *sources]:
+    if not path.exists():
+        continue
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        output_id = str(record.get("id") or "").strip()
+        if not output_id:
+            continue
+        if output_id not in records:
+            order.append(output_id)
+        records[output_id] = record
+
+if not records:
+    raise SystemExit(0)
+
+target.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp_name = tempfile.mkstemp(prefix="outputs.", suffix=".jsonl", dir=str(target.parent))
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    for output_id in order:
+        handle.write(json.dumps(records[output_id], ensure_ascii=False, separators=(",", ":")) + "\n")
+os.replace(tmp_name, target)
+PY
 }
 
 start_stack() {
   cd "${DEPLOY_DIR}"
+  ensure_v1_media_storage
   docker rm -f alchemy-media-agent >/dev/null 2>&1 || true
   if docker compose version >/dev/null 2>&1; then
-    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" docker compose up -d --build --remove-orphans
+    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" V1_MEDIA_STORAGE_DIR="${V1_MEDIA_STORAGE_DIR}" docker compose up -d --build --remove-orphans
     return
   fi
 
   if command -v docker-compose >/dev/null 2>&1; then
-    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" docker-compose up -d --build --remove-orphans
+    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" V1_MEDIA_STORAGE_DIR="${V1_MEDIA_STORAGE_DIR}" docker-compose up -d --build --remove-orphans
     return
   fi
 
@@ -215,8 +286,9 @@ start_stack() {
     --env-file ./src_skeleton/.env
     -e "V2_API_PROXY_BASE_URL=${V2_API_PROXY_BASE_URL}"
     -e "V2_STORAGE_DIR=${V2_STORAGE_DIR}"
+    -e "V1_MEDIA_STORAGE_DIR=${V1_MEDIA_STORAGE_DIR}"
     -v "${DEPLOY_DIR}/src_skeleton/.env:/app/.env"
-    -v "${DEPLOY_DIR}/src_skeleton/.media_storage:/app/.media_storage"
+    -v "${V1_MEDIA_STORAGE_DIR}:/app/.media_storage"
   )
   if [[ -d "${V2_STORAGE_DIR}" ]]; then
     docker_run_args+=(-v "${V2_STORAGE_DIR}:${V2_STORAGE_DIR}:ro")

@@ -94,6 +94,8 @@ async def apply_work_intensity(
                 llm_provider=provider,
                 llm_model=model,
                 fallback_used=fallback_used,
+                original_prompt=original_prompt,
+                asset_context=asset_context,
             )
             return merged, {
                 **summary,
@@ -428,8 +430,10 @@ def _planner_instruction() -> str:
     return (
         "You are the image prompt architect for a production image-generation agent. "
         "Return JSON only. Do not include chain-of-thought. Produce concise, high-signal art direction. "
+        "Enhance the user's intent without reversing it: do not add removal, no-text, no-logo, no-people, or replacement constraints unless the user explicitly asked for them. "
         "If required text is present, preserve the exact text string and require normal spacing, clear glyphs, and no extra characters. "
-        "When image references are provided, use them as visual evidence for color, lighting, material, composition, and identity constraints. "
+        "When image references are provided, use them as visual evidence for color, lighting, material, composition, identity, readable text, marks, UI, labels, and other concrete visible information. "
+        "If the user asks to use an uploaded image as a prototype, template, original, or reference, preserve visible information by default and only change details that the user explicitly changes. "
         "Do not mention internal asset ids, storage paths, provider names, API operations, or endpoint details in the final prompt."
     )
 
@@ -448,6 +452,7 @@ def _planner_user_payload(
         "current_plan": plan.model_dump(),
         "asset_context": asset_context or {},
         "asset_context_rule": "Use structured asset context for concise prompt planning. If provider_input_plan includes real image/reference inputs, explicitly bind the final prompt to those uploaded images; otherwise treat material data as a weak brief only.",
+        "intent_preservation_rule": "Planner output may refine quality, style, composition, and production details, but must not contradict the user prompt or silently remove visible content from uploaded references. Never add 'no text', 'no logo', 'no people', or similar exclusions unless the user explicitly requested that exclusion.",
         "required_json_shape": {
             "main_subject": "string",
             "scene": "string",
@@ -570,10 +575,18 @@ def _merge_llm_patch(
     llm_provider: str,
     llm_model: str,
     fallback_used: bool,
+    original_prompt: str = "",
+    asset_context: dict[str, Any] | None = None,
 ) -> ImagePromptPlan:
     text_plan = _merge_text_plan(plan.text, patch.get("text"))
     generation_prompt = str(patch.get("generation_prompt") or plan.variables.get("generation_prompt") or "")
     generation_prompt = _sanitize_generation_prompt(generation_prompt)
+    generation_prompt, guard_notes = _apply_intent_preservation_guard(
+        generation_prompt,
+        original_prompt=original_prompt,
+        asset_context=asset_context,
+        text_plan=text_plan,
+    )
     generation_prompt = _ensure_required_text_instruction(generation_prompt, text_plan)
     negative_constraints = _list_or_existing(patch.get("negative_constraints"), plan.negative_constraints)
     if text_plan.get("required"):
@@ -598,6 +611,7 @@ def _merge_llm_patch(
         "llm_fallback_used": fallback_used,
         "generation_prompt": generation_prompt,
         "planning_notes": patch.get("planning_notes") or [],
+        "intent_preservation_guard": guard_notes,
     }
     return plan.model_copy(
         update={
@@ -633,6 +647,89 @@ def _ensure_required_text_instruction(generation_prompt: str, text: dict[str, An
     if content in generation_prompt and ("不得增删改字" in generation_prompt or "exact" in generation_prompt.lower()):
         return generation_prompt
     return "\n".join(part for part in [generation_prompt.strip(), f"文字要求：{instruction}"] if part).strip()
+
+
+TEXT_REMOVAL_PATTERN = re.compile(
+    r"(?:"
+    r"无文字|不要文字|不加文字|不出现文字|没有文字|去文字|去除文字|去掉文字|移除文字|删除文字|"
+    r"无文案|不要文案|不加文案|不出现文案|去文案|去除文案|去掉文案|移除文案|删除文案|"
+    r"无标题|不要标题|不加标题|不出现标题|去标题|去除标题|去掉标题|移除标题|删除标题|"
+    r"no\s+text|without\s+text|textless|no\s+words|no\s+lettering|no\s+typography|remove\s+text|delete\s+text"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+TEXT_DELETE_REQUEST_PATTERN = re.compile(
+    r"(?:"
+    r"(?:去掉|去除|移除|删除|擦除|清除|不要|不保留).{0,10}(?:文字|文案|标题|字幕|字样|标语|logo|Logo|标志|水印)|"
+    r"(?:remove|delete|erase|clear|no|without).{0,20}(?:text|words|lettering|typography|logo|watermark)"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+REFERENCE_PROTOTYPE_PATTERN = re.compile(
+    r"(?:"
+    r"(?:以|按|基于|根据|参考|照着|用).{0,12}(?:这张图|上传图|参考图|原图|图片|素材|reference image|uploaded image).{0,16}(?:原型|基础|模板|蓝本|参考|改|生成|制作|做)|"
+    r"(?:这张图|上传图|参考图|原图|图片|素材|reference image|uploaded image).{0,16}(?:为原型|为基础|作模板|做模板|继续|改成|生成)"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _apply_intent_preservation_guard(
+    generation_prompt: str,
+    *,
+    original_prompt: str,
+    asset_context: dict[str, Any] | None,
+    text_plan: dict[str, Any],
+) -> tuple[str, list[str]]:
+    prompt = str(generation_prompt or "").strip()
+    source = str(original_prompt or "")
+    guard_notes: list[str] = []
+    has_reference_input = _asset_context_has_reference_input(asset_context)
+    user_requested_text_removal = _user_requested_text_removal(source)
+    text_required = bool(text_plan.get("required"))
+
+    if prompt and TEXT_REMOVAL_PATTERN.search(prompt) and (text_required or has_reference_input) and not user_requested_text_removal:
+        prompt = TEXT_REMOVAL_PATTERN.sub("不要新增无关文字", prompt)
+        prompt = _append_guard_line(
+            prompt,
+            "参考图中的可读文字、标题、品牌标识、标签、界面文字或招牌如果存在，默认属于用户提供的有效信息；除非用户明确要求删除或替换，不要擅自移除、改写或弱化。",
+        )
+        guard_notes.append("removed_unrequested_no_text_constraint")
+
+    if has_reference_input and _uses_uploaded_image_as_prototype(source) and not user_requested_text_removal:
+        prompt = _append_guard_line(
+            prompt,
+            "以上传参考图为原型时，规划器只能增强画面质量和表达方式，不得反向改变用户根本意图；参考图中已有的主体、结构、文字、标识、包装、界面或其他可见信息，除用户明确要求变化的部分外应尽量保留。",
+        )
+        guard_notes.append("added_reference_intent_preservation")
+
+    return prompt, guard_notes
+
+
+def _asset_context_has_reference_input(asset_context: dict[str, Any] | None) -> bool:
+    if not isinstance(asset_context, dict):
+        return False
+    plan = asset_context.get("provider_input_plan") or {}
+    if plan.get("requires_image_reference") or int(plan.get("reference_image_count") or 0) > 0:
+        return True
+    return any((item.get("provider_input_mode") == "reference_image") for item in asset_context.get("assets", []) if isinstance(item, dict))
+
+
+def _user_requested_text_removal(prompt: str) -> bool:
+    return bool(TEXT_DELETE_REQUEST_PATTERN.search(str(prompt or "")))
+
+
+def _uses_uploaded_image_as_prototype(prompt: str) -> bool:
+    return bool(REFERENCE_PROTOTYPE_PATTERN.search(str(prompt or "")))
+
+
+def _append_guard_line(prompt: str, line: str) -> str:
+    clean = prompt.strip()
+    if line in clean:
+        return clean
+    return "\n".join(part for part in [clean, line] if part).strip()
 
 
 def _sanitize_generation_prompt(value: str) -> str:

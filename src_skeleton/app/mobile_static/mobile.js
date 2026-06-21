@@ -3302,8 +3302,13 @@ function inferSimpleAssetRoles(prompt) {
   if (/(产品|瓶|包装|主体|主角|商品|product|subject|bottle|package)/i.test(text)) roles.push("subject_reference");
   if (/(背景|场景|环境|background|scene)/i.test(text)) roles.push("background_reference");
   if (/(构图|版式|布局|海报|composition|layout|poster)/i.test(text)) roles.push("composition_reference");
+  if (simplePromptUsesReferenceAsPrototype(text)) roles.push("subject_reference", "composition_reference", "style_reference");
   if (!roles.length) roles.push("style_reference");
   return Array.from(new Set(roles));
+}
+
+function simplePromptUsesReferenceAsPrototype(prompt) {
+  return /((以|按|基于|根据|参考|照着|用).{0,12}(这张图|上传图|参考图|原图|图片|素材|reference image|uploaded image).{0,16}(原型|基础|模板|蓝本|参考|改|生成|制作|做)|(这张图|上传图|参考图|原图|图片|素材|reference image|uploaded image).{0,16}(为原型|为基础|作模板|做模板|继续|改成|生成))/i.test(String(prompt || ""));
 }
 
 function mapV2RoleToV1Role(role) {
@@ -3350,7 +3355,7 @@ function restorePreview(preview, label, snapshot) {
   if (label) label.textContent = snapshot.label || "";
 }
 
-function setSimpleV1Defaults(assetRoles) {
+function setSimpleV1Defaults(assetRoles, prompt = "") {
   els.countInput.value = "1";
   els.countValue.textContent = "1";
   setSize("");
@@ -3365,7 +3370,12 @@ function setSimpleV1Defaults(assetRoles) {
   if (els.assetPreservationInput) {
     els.assetPreservationInput.value = assetRoles.some((role) => ["logo_overlay", "portrait_identity", "subject_reference"].includes(role)) ? "strict" : "medium";
   }
-  if (els.assetIntentNotesInput) els.assetIntentNotesInput.value = "极简模式自动判断素材用途；请以用户一句话需求为准。";
+  if (els.assetIntentNotesInput) {
+    const prototypeNote = simplePromptUsesReferenceAsPrototype(prompt)
+      ? "用户把上传图作为原型/模板参考；只改变用户明确要求改变的部分，默认保留参考图中的可见主体、文字、标识、包装、界面和场景信息。"
+      : "极简模式自动判断素材用途；请以用户一句话需求为准，不要擅自移除参考图中的有效信息。";
+    els.assetIntentNotesInput.value = prototypeNote;
+  }
 }
 
 function snapshotV1Context() {
@@ -3424,7 +3434,7 @@ async function runV1SimpleMode() {
   const snapshot = snapshotV1Context();
   try {
     const roles = inferSimpleAssetRoles(prompt).map(mapV2RoleToV1Role);
-    setSimpleV1Defaults(roles);
+    setSimpleV1Defaults(roles, prompt);
     els.promptInput.value = prompt;
     const uploaded = [];
     for (const file of files) {

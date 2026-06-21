@@ -425,6 +425,71 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
     assert "上传参考图" in plan.variables["generation_prompt"]
 
 
+def test_work_intensity_guard_removes_unrequested_no_text_for_reference(monkeypatch):
+    original_key = settings.openai_api_key
+    original_base_url = settings.openai_base_url
+    original_provider = settings.default_llm_provider
+    original_openai_llm_model = settings.openai_llm_model
+    original_enabled = settings.llm_prompt_planning_enabled
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                output_text=json.dumps(
+                    {
+                        "main_subject": "商业海报",
+                        "scene": "商业棚拍",
+                        "style": "高级商业视觉",
+                        "composition": "竖版构图",
+                        "brand_constraints": [],
+                        "negative_constraints": [],
+                        "text": {"required": False, "language": "zh-CN"},
+                        "generation_prompt": "以上传参考图为原型，生成高级商业海报。无文字。",
+                        "planning_notes": ["clean layout"],
+                    }
+                )
+            )
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.responses = FakeResponses()
+
+    try:
+        settings.openai_api_key = "sk-test-planner"
+        settings.openai_base_url = "https://example.test/v1"
+        settings.default_llm_provider = "openai"
+        settings.openai_llm_model = "gpt-5.5-test"
+        settings.llm_prompt_planning_enabled = True
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
+
+        plan, summary = asyncio.run(
+            apply_work_intensity(
+                ImagePromptPlan(main_subject="以这张图为原型，生成一张极具商业化风格的海报", count=1),
+                original_prompt="以这张图为原型，生成一张极具商业化风格的海报",
+                work_intensity="balanced",
+                provider_preference="openai_gpt_image",
+                asset_context={
+                    "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1, "requires_image_reference": True},
+                    "assets": [{"role": "composition_reference", "provider_input_mode": "reference_image"}],
+                },
+            )
+        )
+    finally:
+        settings.openai_api_key = original_key
+        settings.openai_base_url = original_base_url
+        settings.default_llm_provider = original_provider
+        settings.openai_llm_model = original_openai_llm_model
+        settings.llm_prompt_planning_enabled = original_enabled
+
+    prompt = plan.variables["generation_prompt"]
+    assert summary["planner"] == "llm"
+    assert "无文字" not in prompt
+    assert "可读文字" in prompt
+    assert "默认属于用户提供的有效信息" in prompt
+    assert "反向改变用户根本意图" in prompt
+    assert "removed_unrequested_no_text_constraint" in plan.variables["intent_preservation_guard"]
+
+
 def test_work_intensity_uses_backup_llm_when_primary_fails(monkeypatch):
     captured = {}
     original_key = settings.openai_api_key

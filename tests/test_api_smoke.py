@@ -1459,6 +1459,56 @@ def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
     assert item["visual_review"]["review_status"] == "ready"
 
 
+def test_v1_prototype_reference_preserves_visible_information_in_asset_prompt():
+    client = TestClient(app)
+    session_id = client.post("/v1/sessions", json={"project_id": "proj_prototype_asset"}).json()["id"]
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "prototype.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(png_b64)),
+            "declared_role": "composition_reference",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    assert upload.status_code == 200
+    asset_id = upload.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/content", json={"content_base64": png_b64, "mime_type": "image/png"}).status_code == 200
+    assert client.post(f"/v1/assets/{asset_id}/complete").status_code == 200
+
+    image_job = client.post(
+        "/v1/image/jobs",
+        json={
+            "session_id": session_id,
+            "prompt": "以这张图为原型，生成一张极具商业化风格的海报。",
+            "asset_mode": "advanced",
+            "asset_intents": [
+                {
+                    "asset_id": asset_id,
+                    "role": "composition_reference",
+                    "priority": 80,
+                    "preservation": "strict",
+                    "strength": 0.8,
+                    "notes": "用户把上传图作为原型/模板参考；只改变用户明确要求改变的部分。",
+                    "consent": {"user_confirmed_rights": True},
+                }
+            ],
+            "provider_preference": "mock_image",
+        },
+    )
+    body = _completed_image_job(client, image_job)
+    final_prompt = body["prompt_plan"]["variables"]["generation_prompt"]
+
+    assert body["status"] == "ready"
+    assert "仅替换用户明确要求改变的内容" in final_prompt
+    assert "文字、标识、包装、界面" in final_prompt
+    assert "主体内容按用户需求替换" not in final_prompt
+
+
 def test_v1_advanced_job_accepts_multiple_uploaded_reference_images():
     client = TestClient(app)
     session_id = client.post("/v1/sessions", json={"project_id": "proj_multi_asset"}).json()["id"]

@@ -417,6 +417,7 @@ def _prompt_constraints(intent: AssetIntent, asset: Asset | None, placement_inte
     vision_hint = _vision_prompt_hint(asset)
     strength = _reference_weight_label(intent)
     placement_hint = _placement_prompt_suffix(placement_intent)
+    prototype_reference = _prototype_preservation_hint(intent)
     if intent.role == "style_reference":
         return [f"{label}：{strength}参考上传图片的配色、光线、材质、背景气质和整体审美；同时保留小面积但有识别度的强调色、金属感或深色点缀；按用户新主题重构内容，不复刻原图主体。{placement_hint}{brief}{vision_hint}"]
     if intent.role == "subject_reference":
@@ -437,6 +438,8 @@ def _prompt_constraints(intent: AssetIntent, asset: Asset | None, placement_inte
     if intent.role == "background_reference":
         return [f"{label}：借鉴上传背景的环境、纵深、氛围和空间线索，让新画面保持相近的空间气质。{placement_hint}{brief}{vision_hint}"]
     if intent.role == "composition_reference":
+        if prototype_reference:
+            return [f"{label}：参考上传图片的机位、取景、主体位置和留白结构；仅替换用户明确要求改变的内容，其余可见主体、文字、标识、包装、界面或场景信息默认保留。{placement_hint}{brief}{vision_hint}"]
         return [f"{label}：参考上传图片的机位、取景、主体位置和留白结构，主体内容按用户需求替换。{placement_hint}{brief}{vision_hint}"]
     if intent.role == "local_edit":
         return ["局部修改：只改变选中的蒙版区域，保持其他区域不被改动。"]
@@ -599,6 +602,17 @@ def _reference_weight_label(intent: AssetIntent) -> str:
     if intent.preservation == "medium" or intent.strength >= 0.4:
         return "中等参考，保留主要色调、光线气质和审美方向，同时允许主体按用户需求重构。"
     return "轻度参考，只借鉴整体审美，不复刻具体内容。"
+
+
+def _prototype_preservation_hint(intent: AssetIntent) -> bool:
+    text = f"{intent.notes or ''} {intent.role or ''}"
+    return bool(
+        re.search(
+            r"(原型|原图|模板|蓝本|继续|复用|一致性|保留|不要移除|不要删除|prototype|template|continue|preserve|keep)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _palette_hex_values(values: list[Any]) -> list[str]:

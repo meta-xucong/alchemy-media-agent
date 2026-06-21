@@ -49,7 +49,7 @@
 - `claude_code/.claude/hooks/`：Claude Code hook 示例。
 - `scripts/deploy_vps.sh`：VPS Docker 一键部署脚本。
 - `.github/workflows/deploy-vps.yml`：GitHub Actions 远程部署模板。
-- `src_skeleton/.media_storage/generated_images/`：随仓库分发的历史图片种子数据，用于新环境首屏展示。
+- `src_skeleton/.media_storage/`：本地运行时图片与历史目录；生产环境应挂载到 release 目录外的持久路径，例如 `/var/lib/alchemy/v1/media_storage`。
 
 ## 重要假设
 
