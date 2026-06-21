@@ -263,9 +263,28 @@ os.replace(tmp_name, target)
 PY
 }
 
+prepare_static_assets() {
+  if ! command -v gzip >/dev/null 2>&1; then
+    return
+  fi
+  local static_roots=(
+    "${DEPLOY_DIR}/src_skeleton/app/static"
+    "${DEPLOY_DIR}/src_skeleton/app/mobile_static"
+  )
+  for static_root in "${static_roots[@]}"; do
+    [[ -d "${static_root}" ]] || continue
+    find "${static_root}" -type f \( \
+      -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \
+    \) -size +1024c -print0 | while IFS= read -r -d '' file; do
+      gzip -kf -9 "${file}"
+    done
+  done
+}
+
 start_stack() {
   cd "${DEPLOY_DIR}"
   ensure_v1_media_storage
+  prepare_static_assets
   docker rm -f alchemy-media-agent >/dev/null 2>&1 || true
   if docker compose version >/dev/null 2>&1; then
     APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" V1_MEDIA_STORAGE_DIR="${V1_MEDIA_STORAGE_DIR}" docker compose up -d --build --remove-orphans
@@ -339,6 +358,35 @@ restart_v2_services_if_present() {
   run_as_root systemctl restart "${present[@]}"
 }
 
+configure_nginx_if_present() {
+  local nginx_conf="${DEPLOY_DIR}/alchemy-media-agent.nginx.conf"
+  [[ -f "${nginx_conf}" ]] || return
+  if ! command -v nginx >/dev/null 2>&1; then
+    return
+  fi
+  local target_conf="/etc/nginx/conf.d/alchemy-media-agent.conf"
+  if [[ -d "/etc/nginx/sites-available" ]]; then
+    target_conf="/etc/nginx/sites-available/alchemy-media-agent"
+    if [[ -d "/etc/nginx/sites-enabled" && ! -e "/etc/nginx/sites-enabled/alchemy-media-agent" ]]; then
+      run_as_root ln -s "${target_conf}" "/etc/nginx/sites-enabled/alchemy-media-agent"
+    fi
+  fi
+  if [[ "${target_conf}" != "/etc/nginx/conf.d/alchemy-media-agent.conf" && -f "/etc/nginx/conf.d/alchemy-media-agent.conf" ]]; then
+    run_as_root rm -f "/etc/nginx/conf.d/alchemy-media-agent.conf"
+  fi
+  run_as_root cp "${nginx_conf}" "${target_conf}"
+  if run_as_root nginx -t; then
+    if command -v systemctl >/dev/null 2>&1; then
+      run_as_root systemctl reload nginx || run_as_root nginx -s reload || true
+    else
+      run_as_root nginx -s reload || true
+    fi
+  else
+    echo "nginx config test failed after installing ${target_conf}" >&2
+    exit 1
+  fi
+}
+
 health_check() {
   local url="http://127.0.0.1:${APP_PORT}/healthz"
   for _ in $(seq 1 30); do
@@ -366,4 +414,5 @@ write_env_file
 ensure_v2_runtime
 start_stack
 restart_v2_services_if_present
+configure_nginx_if_present
 health_check

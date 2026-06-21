@@ -580,13 +580,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (hadVeyraTicket && !ticketAccepted) return;
     if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
     await syncVeyraSessionCookie();
-    await createSession({ announce: false });
-    await loadProviders();
-    await refreshHistory({ silent: true });
-    initV2({ silent: true }).catch((error) => {
-      updateV2Notice(`2.0 API 未连接：${friendlyError(error)}`, "warning");
-      if (els.v2HealthState) els.v2HealthState.textContent = "离线";
-    });
+    updateMobileAccountSummary();
+    await Promise.all([createSession({ announce: false }), loadProviders()]);
+    scheduleInitialBackgroundLoads({ hadVeyraTicket });
   } catch (error) {
     showNotice(`初始化失败：${friendlyError(error)}`, "error");
   }
@@ -599,6 +595,36 @@ window.addEventListener("unhandledrejection", (event) => {
 window.addEventListener("error", (event) => {
   showNotice(`界面异常：${event.message}`, "error");
 });
+
+function scheduleIdleTask(task, { timeout = 1200 } = {}) {
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(task, { timeout });
+    return;
+  }
+  window.setTimeout(task, Math.min(timeout, 800));
+}
+
+function scheduleInitialBackgroundLoads({ hadVeyraTicket = false } = {}) {
+  scheduleIdleTask(() => {
+    refreshHistory({ silent: true }).catch((error) => {
+      console.warn("Initial V1 history refresh failed", error);
+    });
+  }, { timeout: 600 });
+  scheduleIdleTask(() => {
+    if (getVeyraToken() && !hadVeyraTicket) {
+      refreshVeyraAccount().catch(() => {
+        veyraState.account = null;
+        updateMobileAccountSummary();
+      });
+    }
+    if (document.body.dataset.activeModule === "v2") {
+      initV2({ silent: true }).catch((error) => {
+        updateV2Notice(`2.0 API 未连接：${friendlyError(error)}`, "warning");
+        if (els.v2HealthState) els.v2HealthState.textContent = "离线";
+      });
+    }
+  }, { timeout: 1800 });
+}
 
 function bindControls() {
   els.tabs.forEach((button) => {
