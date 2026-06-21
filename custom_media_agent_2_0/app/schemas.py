@@ -536,6 +536,7 @@ class ImageHistoryItem(BaseModel):
     prompt: str
     url: str
     thumbnail_url: str | None = None
+    preview_url: str | None = None
     score: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     veyra_legacy_public: bool = False

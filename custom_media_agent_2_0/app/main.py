@@ -50,7 +50,7 @@ from app.services.generation import create_image_job
 from app.services.favorites import list_favorite_ids, set_favorite
 from app.services.history_reference_assets import create_reference_asset_from_history_output
 from app.services.image_history import delete_image_history_item, list_image_history
-from app.services.history_thumbnails import read_history_thumbnail
+from app.services.history_thumbnails import read_history_preview, read_history_thumbnail
 from app.services.ids import new_id
 from app.services.revision import RevisionSourceError, build_revision_request
 from app.services.resource_sync import get_sync_run, list_resource_providers, sync_resource_provider
@@ -758,6 +758,16 @@ async def image_history_thumbnail(output_id: str, request: Request, authorizatio
     if not thumbnail:
         raise HTTPException(status_code=404, detail={"error_code": "history_thumbnail_not_found", "message": "History thumbnail not found."})
     content, media_type = thumbnail
+    return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/api/v2/image/history/{output_id}/preview")
+async def image_history_preview(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
+    preview = read_history_preview(output_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail={"error_code": "history_preview_not_found", "message": "History preview not found."})
+    content, media_type = preview
     return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 

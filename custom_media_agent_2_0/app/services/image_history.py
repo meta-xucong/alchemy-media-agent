@@ -32,6 +32,7 @@ def persist_image_job_history(job: ImageJob) -> None:
                 prompt=_generation_prompt(job),
                 url=output.url,
                 thumbnail_url=_thumbnail_url(output),
+                preview_url=_preview_url(output),
                 score=output.score,
                 metadata=_history_metadata(job, output),
                 created_at=output.created_at,
@@ -200,12 +201,20 @@ def _thumbnail_url(output: ImageOutput) -> str | None:
     return _thumbnail_endpoint(output.output_id)
 
 
+def _preview_url(output: ImageOutput) -> str | None:
+    if output.metadata.get("native_v2_storage"):
+        return _preview_endpoint(output.output_id)
+    if output.metadata.get("mock"):
+        return output.metadata.get("preview_url") or output.metadata.get("thumbnail_url")
+    return _preview_endpoint(output.output_id)
+
+
 def _normalize_thumbnail_url(item: ImageHistoryItem) -> ImageHistoryItem:
     if item.metadata.get("native_v2_storage"):
-        return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
+        return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id), "preview_url": _preview_endpoint(item.output_id)})
     if item.metadata.get("mock"):
         return item
-    return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id)})
+    return item.model_copy(update={"thumbnail_url": _thumbnail_endpoint(item.output_id), "preview_url": _preview_endpoint(item.output_id)})
 
 
 def _with_veyra_history_access(
@@ -241,6 +250,10 @@ def _can_delete_veyra_history(owner_id: int | None, *, veyra_user_id: int | None
 
 def _thumbnail_endpoint(output_id: str) -> str:
     return f"/api/v2/image/history/{quote(output_id, safe='')}/thumbnail"
+
+
+def _preview_endpoint(output_id: str) -> str:
+    return f"/api/v2/image/history/{quote(output_id, safe='')}/preview"
 
 
 def _timestamp(value: datetime) -> float:

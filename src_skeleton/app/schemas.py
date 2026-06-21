@@ -273,6 +273,7 @@ class GenerationOutput(BaseModel):
     job_id: str
     url: str
     thumbnail_url: str | None = None
+    preview_url: str | None = None
     format: Literal["png", "jpeg", "webp", "mp4"] = "png"
     width: int | None = None
     height: int | None = None
@@ -313,6 +314,7 @@ class ImageHistoryItem(BaseModel):
     session_id: str | None = None
     url: str
     thumbnail_url: str | None = None
+    preview_url: str | None = None
     format: Literal["png", "jpeg", "webp"] = "png"
     width: int | None = None
     height: int | None = None

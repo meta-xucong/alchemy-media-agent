@@ -477,6 +477,7 @@ def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[
         job_id=record_job_id,
         url=str(record.get("url") or f"/v1/outputs/{output_id}/download"),
         thumbnail_url=str(record.get("thumbnail_url") or media_store.thumbnail_url(output_id)),
+        preview_url=str(record.get("preview_url") or media_store.preview_url(output_id)),
         format=output_format,
         width=_int_or_none(record.get("width")),
         height=_int_or_none(record.get("height")),
@@ -797,6 +798,7 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
                 job_id=job.id,
                 url=url,
                 thumbnail_url=media_store.thumbnail_url(output_id),
+                preview_url=media_store.preview_url(output_id),
                 format=output_format,
                 width=width,
                 height=height,
@@ -853,6 +855,7 @@ def _persist_history_records(job: GenerationJob) -> None:
                 "session_id": job.session_id,
                 "url": output.url,
                 "thumbnail_url": output.thumbnail_url or output.url,
+                "preview_url": output.preview_url or media_store.preview_url(output.id),
                 "format": output.format,
                 "width": output.width,
                 "height": output.height,
@@ -1078,7 +1081,9 @@ def _apply_logo_overlay(job: GenerationJob, output: GenerationOutput, spec: dict
             else:
                 base.save(output_path, "PNG", optimize=True)
             output.thumbnail_url = media_store.thumbnail_url(output.id)
+            output.preview_url = media_store.preview_url(output.id)
             media_store.ensure_thumbnail(output_id=output.id, source_path=output_path)
+            media_store.ensure_preview(output_id=output.id, source_path=output_path)
         step.update({"status": "succeeded", "anchor": placement.get("anchor") or "bottom_right"})
         return step
     except Exception as exc:

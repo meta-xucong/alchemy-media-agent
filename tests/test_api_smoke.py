@@ -154,6 +154,10 @@ def test_http_smoke_image_revision_video_and_providers():
     assert thumbnail.status_code == 200
     assert thumbnail.content
     assert image_body["outputs"][0]["thumbnail_url"].endswith("/thumbnail")
+    preview = client.get(image_body["outputs"][0]["preview_url"])
+    assert preview.status_code == 200
+    assert preview.content
+    assert image_body["outputs"][0]["preview_url"].endswith("/preview")
 
     revision = client.post(
         f"/v1/image/jobs/{image_body['id']}/revise",
@@ -169,18 +173,22 @@ def test_http_smoke_image_revision_video_and_providers():
     assert history_body["items"][0]["source"] == "repository"
     assert history_body["items"][0]["url"].startswith("/v1/outputs/")
     assert history_body["items"][0]["thumbnail_url"].endswith("/thumbnail")
+    assert history_body["items"][0]["preview_url"].endswith("/preview")
 
     deleted_url = history_body["items"][0]["url"]
     deleted_thumbnail_url = history_body["items"][0]["thumbnail_url"]
+    deleted_preview_url = history_body["items"][0]["preview_url"]
     delete_history_item = client.delete(f"/v1/image/history/{history_body['items'][0]['id']}")
     assert delete_history_item.status_code == 200
     assert delete_history_item.json()["removed_repository_output"] is True
     assert delete_history_item.json()["deleted_thumbnail"] is True
+    assert delete_history_item.json()["deleted_preview"] is True
     history_after_delete = client.get(f"/v1/image/history?session_id={session_id}")
     assert history_after_delete.status_code == 200
     assert history_after_delete.json()["total"] == 4
     assert client.get(deleted_url).status_code == 404
     assert client.get(deleted_thumbnail_url).status_code == 404
+    assert client.get(deleted_preview_url).status_code == 404
 
     video_job = client.post(
         "/v1/video/jobs",
@@ -2626,9 +2634,11 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
     assert body["items"][0]["source"] == "manifest"
     assert body["items"][0]["url"] == output_url
     assert body["items"][0]["thumbnail_url"].endswith("/thumbnail")
+    assert body["items"][0]["preview_url"].endswith("/preview")
     assert "创作目标：" in body["items"][0]["prompt"]
     assert client.get(output_url).status_code == 200
     assert client.get(body["items"][0]["thumbnail_url"]).status_code == 200
+    assert client.get(body["items"][0]["preview_url"]).status_code == 200
 
     delete = client.delete(f"/v1/image/history/{body['items'][0]['id']}")
     assert delete.status_code == 200
@@ -2680,6 +2690,8 @@ def test_image_history_recovers_generated_files_missing_manifest(tmp_path, monke
     assert "从本地输出目录恢复" in body["items"][0]["prompt"]
     assert client.get(body["items"][0]["url"]).status_code == 200
     assert client.get(body["items"][0]["thumbnail_url"]).status_code == 200
+    assert body["items"][0]["preview_url"].endswith("/preview")
+    assert client.get(body["items"][0]["preview_url"]).status_code == 200
 
 
 def test_image_history_excludes_v2_bridge_outputs(tmp_path, monkeypatch):

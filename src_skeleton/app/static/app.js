@@ -1128,6 +1128,7 @@ function openLabHistoryPreview(item, { promptOnly = false } = {}) {
     title: item.title || "Rare Style Explorer",
     url: item.url,
     thumbnailUrl: item.thumbnail_url || item.url,
+    previewUrl: item.preview_url || item.thumbnail_url || item.url,
     format: item.format || "png",
     meta: labHistoryMetaText(item),
     promptText: item.final_prompt || item.prompt || "",
@@ -1902,6 +1903,7 @@ function openLabPreview(url, title, prompt) {
     title: title || "Alchemy Lab",
     url,
     thumbnailUrl: url,
+    previewUrl: url,
     format: "png",
     meta: "Alchemy Lab",
     promptText: prompt || "",
@@ -5137,6 +5139,7 @@ function renderV2Outputs(outputs, job) {
         title: `2.0 生成结果 ${index + 1}`,
         url: v2OutputImageUrl(output, { thumbnail: false }),
         thumbnailUrl: v2OutputImageUrl(output),
+        previewUrl: v2OutputPreviewCandidates(output)[0] || v2OutputImageUrl(output),
         format: v2OutputFormat(output),
         meta: v2ProviderResultText(job, output),
         promptText: v2PromptTextFromJob(job),
@@ -5422,6 +5425,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     title: cardPrompt ? cardPrompt.slice(0, 34) : `2.0 历史图片 ${index + 1}`,
     url: v2HistoryImageUrl(item, { thumbnail: false }),
     thumbnailUrl: v2HistoryImageUrl(item),
+    previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
     format: v2HistoryFormat(item),
     meta: historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)),
     promptText: v2PromptTextFromHistory(item),
@@ -5566,6 +5570,11 @@ function v2OutputThumbnailUrl(outputId) {
   return clean ? v2MediaUrl(`/api/v2/image/history/${encodeURIComponent(clean)}/thumbnail`) : "";
 }
 
+function v2OutputPreviewUrl(outputId) {
+  const clean = String(outputId || "").trim();
+  return clean ? v2MediaUrl(`/api/v2/image/history/${encodeURIComponent(clean)}/preview`) : "";
+}
+
 function v2OutputImageUrl(output, { thumbnail = true } = {}) {
   return v2OutputImageCandidates(output, { thumbnail })[0] || "";
 }
@@ -5593,6 +5602,24 @@ function v2OutputImageCandidates(output, { thumbnail = true } = {}) {
   ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
+function v2OutputPreviewCandidates(output) {
+  const metadata = output?.metadata || {};
+  const outputId = output?.output_id || metadata.output_id;
+  const previewEndpoint = metadata.mock ? "" : v2OutputPreviewUrl(outputId);
+  return uniqueNonEmpty([
+    output?.preview_url,
+    metadata.preview_url,
+    previewEndpoint,
+    output?.thumbnail_url,
+    metadata.thumbnail_url,
+    v2OutputThumbnailUrl(outputId),
+    output?.url,
+    metadata.url,
+    metadata.download_url,
+    v2OutputDownloadUrl(outputId),
+  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+}
+
 function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
   const metadata = item?.metadata || {};
   const outputId = item?.output_id || metadata.output_id;
@@ -5605,6 +5632,24 @@ function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
     : [];
   return uniqueNonEmpty([
     ...thumbnailCandidates,
+    item?.url,
+    metadata.url,
+    metadata.download_url,
+    v2OutputDownloadUrl(outputId),
+  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+}
+
+function v2HistoryPreviewCandidates(item) {
+  const metadata = item?.metadata || {};
+  const outputId = item?.output_id || metadata.output_id;
+  const previewEndpoint = metadata.mock ? "" : v2OutputPreviewUrl(outputId);
+  return uniqueNonEmpty([
+    item?.preview_url,
+    metadata.preview_url,
+    previewEndpoint,
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
+    v2OutputThumbnailUrl(outputId),
     item?.url,
     metadata.url,
     metadata.download_url,
@@ -5644,6 +5689,34 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     image.classList.remove("image-load-failed", "image-load-missing");
   };
   image.src = urls[0];
+}
+
+function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用" } = {}) {
+  if (!image) return;
+  const display = String(displayUrl || "").trim();
+  const thumbnail = String(thumbnailUrl || "").trim();
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  image.dataset.lightboxLoadToken = token;
+  const hasSeparateThumbnail = Boolean(thumbnail && thumbnail !== display);
+  bindImageWithFallback(image, hasSeparateThumbnail ? [thumbnail, display] : [display, thumbnail], { emptyAlt });
+  if (!display || !hasSeparateThumbnail) {
+    image.classList.remove("is-loading-full");
+    return;
+  }
+  image.classList.add("is-loading-full");
+  const preloader = new Image();
+  preloader.decoding = "async";
+  preloader.onload = () => {
+    if (image.dataset.lightboxLoadToken !== token) return;
+    image.classList.remove("is-loading-full");
+    image.src = display;
+  };
+  preloader.onerror = () => {
+    if (image.dataset.lightboxLoadToken === token) {
+      image.classList.remove("is-loading-full");
+    }
+  };
+  preloader.src = display;
 }
 
 function v2ReviewLabel(decision) {
@@ -6226,8 +6299,9 @@ function accountHistoryCardPrompt(item) {
   return accountHistoryIsV1(item) ? promptTextFromHistoryItem(item).split("\n").find(Boolean) || item?.prompt || "" : v2HistoryCardPrompt(item);
 }
 
-function accountHistoryImageUrl(item, { thumbnail = true } = {}) {
+function accountHistoryImageUrl(item, { thumbnail = true, preview = false } = {}) {
   if (!accountHistoryIsV1(item)) return v2HistoryImageUrl(item, { thumbnail });
+  if (preview) return item?.preview_url || item?.thumbnail_url || item?.url || "";
   return (thumbnail && item?.thumbnail_url) || item?.url || "";
 }
 
@@ -6251,6 +6325,7 @@ function openAccountHistoryLightbox(item, index = 0) {
     title: title ? title.slice(0, 34) : `历史图片 ${index + 1}`,
     url: accountHistoryImageUrl(item, { thumbnail: false }),
     thumbnailUrl: accountHistoryImageUrl(item),
+    previewUrl: accountHistoryImageUrl(item, { preview: true }),
     format: item.format || "png",
     meta: historyMetaText(item),
     promptText: promptTextFromHistoryItem(item),
@@ -7142,6 +7217,8 @@ function renderGallery(outputs) {
         id: output.id,
         title: `生成结果 ${index + 1}`,
         url: output.url,
+        thumbnailUrl: output.thumbnail_url || output.url,
+        previewUrl: output.preview_url || output.thumbnail_url || output.url,
         format: output.format,
         meta: `${outputProviderResultText(output, state.currentJob)} · ${output.format.toUpperCase()} · ${output.width || "-"}x${output.height || "-"}`,
         promptText: promptTextFromJob(state.currentJob),
@@ -7572,6 +7649,7 @@ function openActiveHeroHistorySlide() {
     title: item.title ? item.title.slice(0, 34) : "历史图片",
     url: item.url,
     thumbnailUrl: item.thumbnailUrl || item.url,
+    previewUrl: item.previewUrl || item.thumbnailUrl || item.url,
     format: item.format,
     meta: item.meta,
     promptText: item.promptText,
@@ -7586,6 +7664,7 @@ function normalizeHeroHistoryItem(item, source, index) {
       title,
       url: v2HistoryImageUrl(item, { thumbnail: false }),
       thumbnailUrl: v2HistoryImageUrl(item),
+      previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
       imageCandidates: v2HistoryImageCandidates(item),
       format: v2HistoryFormat(item),
       meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
@@ -7599,6 +7678,7 @@ function normalizeHeroHistoryItem(item, source, index) {
       title: item.title || `Alchemy Lab 历史图片 ${index + 1}`,
       url: item.url,
       thumbnailUrl: item.thumbnail_url || item.url,
+      previewUrl: item.preview_url || item.thumbnail_url || item.url,
       format: item.format || "png",
       meta: labHistoryMetaText(item),
       promptText: item.final_prompt || item.prompt || "",
@@ -7610,6 +7690,7 @@ function normalizeHeroHistoryItem(item, source, index) {
     title: item.original_prompt || item.prompt || `历史图片 ${index + 1}`,
     url: item.url,
     thumbnailUrl: item.thumbnail_url || item.url,
+    previewUrl: item.preview_url || item.thumbnail_url || item.url,
     format: item.format,
     meta: historyMetaText(item),
     promptText: promptTextFromHistoryItem(item),
@@ -7723,6 +7804,7 @@ function selectHistoryItem(item, card) {
     title: (item.original_prompt || item.prompt) ? (item.original_prompt || item.prompt).slice(0, 34) : "历史图片",
     url: item.url,
     thumbnailUrl: item.thumbnail_url || item.url,
+    previewUrl: item.preview_url || item.thumbnail_url || item.url,
     format: item.format,
     meta: historyMetaText(item),
     promptText: promptTextFromHistoryItem(item),
@@ -7745,11 +7827,15 @@ function selectHistoryItem(item, card) {
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 
-function openImageLightbox({ id, title, url, thumbnailUrl, format, meta, promptText, actions = [] }) {
+function openImageLightbox({ id, title, url, thumbnailUrl, previewUrl, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
   els.lightboxImage.alt = title || "放大预览图";
-  bindImageWithFallback(els.lightboxImage, [url, thumbnailUrl], { emptyAlt: els.lightboxImage.alt });
-  els.lightboxImage.dataset.fullUrl = url;
+  els.lightboxImage.dataset.fullUrl = url || "";
+  bindProgressiveLightboxImage(els.lightboxImage, {
+    displayUrl: previewUrl || thumbnailUrl || url,
+    thumbnailUrl,
+    emptyAlt: els.lightboxImage.alt,
+  });
   els.lightboxImage.dataset.shareTitle = title || "Alchemy 生成图片";
   els.lightboxImage.dataset.shareImage = url || "";
   els.lightboxImage.dataset.shareThumb = thumbnailUrl || shareThumbFromImageUrl(url);
@@ -7775,6 +7861,7 @@ function closeImageLightbox() {
   els.imageLightbox.hidden = true;
   els.lightboxImage.removeAttribute("src");
   els.lightboxImage.removeAttribute("data-full-url");
+  els.lightboxImage.removeAttribute("data-lightbox-load-token");
   els.lightboxImage.removeAttribute("data-share-title");
   els.lightboxImage.removeAttribute("data-share-image");
   els.lightboxImage.removeAttribute("data-share-thumb");

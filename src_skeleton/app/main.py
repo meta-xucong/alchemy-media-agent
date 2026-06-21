@@ -719,6 +719,7 @@ async def list_image_history(
                     session_id=job.session_id,
                     url=output.url,
                     thumbnail_url=media_store.thumbnail_url(output.id),
+                    preview_url=media_store.preview_url(output.id),
                     format=output.format,
                     width=output.width,
                     height=output.height,
@@ -786,15 +787,17 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
     output = repository.delete_output(output_id)
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
+    preview_existed = media_store.preview_path(output_id).exists()
     deleted_file = media_store.delete_output_file(
         output_id=output_id,
         job_id=output.job_id if output else None,
         output_format=output.format if output else None,
     )
     deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
+    deleted_preview = media_store.delete_preview(output_id) or preview_existed
     removed_records = media_store.delete_history_record(output_id)
     removed_favorites = delete_favorite(output_id)
-    if not output and not deleted_file and not deleted_thumbnail and removed_records == 0:
+    if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     if output:
         repository.append_event(
@@ -807,6 +810,7 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
         "output_id": output_id,
         "deleted_file": deleted_file,
         "deleted_thumbnail": deleted_thumbnail,
+        "deleted_preview": deleted_preview,
         "removed_history_records": removed_records,
         "removed_favorites": removed_favorites,
         "removed_repository_output": bool(output),
@@ -946,6 +950,16 @@ async def thumbnail_output(output_id: str, request: Request, authorization: str 
     if thumbnail_path == media_store.thumbnail_path(output_id):
         return FileResponse(thumbnail_path, media_type="image/jpeg", headers=IMMUTABLE_IMAGE_HEADERS)
     return FileResponse(thumbnail_path, headers=IMMUTABLE_IMAGE_HEADERS)
+
+
+@app.get("/v1/outputs/{output_id}/preview")
+async def preview_output(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization)
+    path, _ = _resolve_output_file(output_id)
+    preview_path = media_store.ensure_preview(output_id=output_id, source_path=path)
+    if preview_path == media_store.preview_path(output_id):
+        return FileResponse(preview_path, media_type="image/webp", headers=IMMUTABLE_IMAGE_HEADERS)
+    return FileResponse(preview_path, headers=IMMUTABLE_IMAGE_HEADERS)
 
 
 def _resolve_output_file(output_id: str) -> tuple[Path, str]:

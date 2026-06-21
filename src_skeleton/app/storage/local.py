@@ -27,6 +27,10 @@ class LocalMediaStore:
         return self.root / "thumbnails"
 
     @property
+    def preview_root(self) -> Path:
+        return self.root / "previews"
+
+    @property
     def history_file(self) -> Path:
         return self.root / "history" / "outputs.jsonl"
 
@@ -37,6 +41,7 @@ class LocalMediaStore:
         path = output_dir / f"{output_id}.{ext}"
         path.write_bytes(base64.b64decode(b64_json))
         self.ensure_thumbnail(output_id=output_id, source_path=path)
+        self.ensure_preview(output_id=output_id, source_path=path)
         return f"/v1/outputs/{output_id}/download"
 
     def save_asset_bytes(self, *, asset_id: str, filename: str, content: bytes) -> Path:
@@ -65,6 +70,12 @@ class LocalMediaStore:
     def thumbnail_path(self, output_id: str) -> Path:
         return self.thumbnail_root / f"{output_id}.jpg"
 
+    def preview_url(self, output_id: str) -> str:
+        return f"/v1/outputs/{output_id}/preview"
+
+    def preview_path(self, output_id: str) -> Path:
+        return self.preview_root / f"{output_id}.webp"
+
     def ensure_thumbnail(self, *, output_id: str, source_path: Path, max_size: tuple[int, int] = (512, 512)) -> Path:
         thumbnail_path = self.thumbnail_path(output_id)
         if thumbnail_path.exists():
@@ -86,6 +97,34 @@ class LocalMediaStore:
                 image.save(temporary_path, "JPEG", quality=82, optimize=True, progressive=True)
                 temporary_path.replace(thumbnail_path)
                 return thumbnail_path
+        except Exception:
+            return source_path
+
+    def ensure_preview(self, *, output_id: str, source_path: Path, max_size: tuple[int, int] = (1600, 1600)) -> Path:
+        preview_path = self.preview_path(output_id)
+        if preview_path.exists():
+            try:
+                if preview_path.stat().st_mtime >= source_path.stat().st_mtime:
+                    return preview_path
+            except OSError:
+                pass
+
+        try:
+            from PIL import Image, ImageOps
+
+            self.preview_root.mkdir(parents=True, exist_ok=True)
+            with Image.open(source_path) as image:
+                image = ImageOps.exif_transpose(image)
+                image.thumbnail(max_size, Image.Resampling.LANCZOS)
+                if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+                    image = image.convert("RGBA")
+                    temporary_path = preview_path.with_suffix(".tmp.webp")
+                    image.save(temporary_path, "WEBP", quality=84, method=6)
+                else:
+                    temporary_path = preview_path.with_suffix(".tmp.webp")
+                    image.convert("RGB").save(temporary_path, "WEBP", quality=84, method=6)
+                temporary_path.replace(preview_path)
+                return preview_path
         except Exception:
             return source_path
 
@@ -121,6 +160,7 @@ class LocalMediaStore:
                 continue
             record["source"] = "manifest"
             record["thumbnail_url"] = self.thumbnail_url(output_id)
+            record["preview_url"] = self.preview_url(output_id)
             existing = records_by_output.get(output_id)
             if existing is None or _record_timestamp(record) >= _record_timestamp(existing):
                 records_by_output[output_id] = record
@@ -152,6 +192,7 @@ class LocalMediaStore:
                     "job_id": job_id,
                     "url": f"/v1/outputs/{output_id}/download",
                     "thumbnail_url": self.thumbnail_url(output_id),
+                    "preview_url": self.preview_url(output_id),
                     "format": output_format,
                     "provider": "local_filesystem",
                     "model": "recovered-output",
@@ -185,6 +226,7 @@ class LocalMediaStore:
 
         target.unlink(missing_ok=True)
         self.delete_thumbnail(output_id)
+        self.delete_preview(output_id)
         parent = target.parent
         try:
             if parent != generated_root and parent.parent == generated_root and not any(parent.iterdir()):
@@ -204,6 +246,19 @@ class LocalMediaStore:
             return False
 
         thumbnail_path.unlink(missing_ok=True)
+        return True
+
+    def delete_preview(self, output_id: str) -> bool:
+        preview_path = self.preview_path(output_id)
+        if not preview_path.exists():
+            return False
+
+        preview_root = self.preview_root.resolve()
+        resolved = preview_path.resolve()
+        if preview_root not in resolved.parents:
+            return False
+
+        preview_path.unlink(missing_ok=True)
         return True
 
     def delete_history_record(self, output_id: str) -> int:

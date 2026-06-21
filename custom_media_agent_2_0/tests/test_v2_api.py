@@ -2584,10 +2584,12 @@ def test_v2_native_generation_preserves_uploaded_logo_reference() -> None:
     assert output.metadata["native_v2"] is True
     assert output.metadata["native_v2_storage"] is True
     assert output.metadata["thumbnail_url"].startswith("/api/v2/image/history/")
+    assert output.metadata["preview_url"].startswith("/api/v2/image/history/")
     assert output.metadata["input_images"][0]["asset_id"] == asset_id
     assert output.metadata["input_images"][0]["role"] == "logo_reference"
     assert "logo_overlay" not in str(output.metadata)
     assert Path(output.metadata["storage_path"]).exists()
+    assert Path(output.metadata["preview_path"]).exists()
 
 
 def test_uploaded_asset_metadata_survives_repository_reset_for_worker() -> None:
@@ -5232,6 +5234,7 @@ def test_image_history_records_generated_outputs(tmp_path) -> None:
     assert history["items"][0]["prompt"]
     assert history["items"][0]["url"].startswith("/api/v2/outputs/")
     assert history["items"][0]["thumbnail_url"].startswith("/api/v2/image/history/")
+    assert history["items"][0]["preview_url"].startswith("/api/v2/image/history/")
     assert history["items"][0]["metadata"]["original_prompt"] == "Minimal clean ecommerce product listing image."
     assert history["items"][0]["metadata"]["final_prompt"] == history["items"][0]["prompt"]
     assert history["items"][0]["metadata"]["native_v2"] is True
@@ -5299,6 +5302,26 @@ def test_image_history_thumbnail_endpoint_serves_v2_native_webp(tmp_path) -> Non
     with Image.open(BytesIO(response.content)) as thumbnail:
         assert thumbnail.width <= 512
         assert thumbnail.height <= 512
+
+
+def test_image_history_preview_endpoint_serves_v2_native_webp(tmp_path) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "persist_image_history", True)
+    object.__setattr__(settings, "image_history_path", tmp_path / "image_history.jsonl")
+    run = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Premium coffee poster.", "output": {"count": 1}},
+    ).json()
+    output_id = run["generation_jobs"][0]["outputs"][0]["output_id"]
+
+    response = client.get(f"/api/v2/image/history/{output_id}/preview")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/webp"
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert list((settings.storage_dir / "previews").rglob("*.webp"))
+    with Image.open(BytesIO(response.content)) as preview:
+        assert preview.width <= 1600
+        assert preview.height <= 1600
 
 
 def test_image_history_normalizes_external_thumbnail_url_to_v2_endpoint(tmp_path) -> None:

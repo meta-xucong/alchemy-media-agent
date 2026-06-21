@@ -16,6 +16,8 @@ from app.services.qr_preservation import preserve_requested_qr_code
 
 THUMBNAIL_SIZE = (512, 512)
 THUMBNAIL_QUALITY = 78
+PREVIEW_SIZE = (1600, 1600)
+PREVIEW_QUALITY = 84
 
 
 def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str) -> ImageOutput:
@@ -33,12 +35,15 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
     output_path = output_dir / f"{output.output_id}.{fmt}"
     output_path.write_bytes(content)
     thumbnail_path = _write_thumbnail(output.output_id, content)
+    preview_path = _write_preview(output.output_id, content)
     metadata = {
         **output.metadata,
         "native_v2_storage": True,
         "storage_path": str(output_path),
         "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
         "thumbnail_url": _thumbnail_url(output.output_id) if thumbnail_path else None,
+        "preview_path": str(preview_path) if preview_path else None,
+        "preview_url": _preview_url(output.output_id) if preview_path else None,
         "mime_type": mime_type,
         "format": fmt,
     }
@@ -84,18 +89,44 @@ def read_output_thumbnail(output_id: str) -> tuple[bytes, str] | None:
     return path.read_bytes(), "image/webp"
 
 
+def read_output_preview(output_id: str) -> tuple[bytes, str] | None:
+    output = repository.get_output(output_id)
+    path = None
+    if output:
+        path = _path_from_metadata(output.metadata, "preview_path")
+    if not path:
+        item = _history_item(output_id)
+        if item:
+            path = _path_from_metadata(item.metadata, "preview_path")
+    if not path or not path.exists():
+        content = read_output_content(output_id)
+        if not content:
+            return None
+        preview = _make_preview(content[0])
+        if not preview:
+            return None
+        path = _preview_path(output_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(preview)
+    return path.read_bytes(), "image/webp"
+
+
 def delete_output_storage(output_id: str, metadata: dict[str, Any] | None = None) -> dict[str, bool]:
     metadata = metadata or {}
     deleted_output = False
     deleted_thumbnail = False
+    deleted_preview = False
     output_path = _path_from_metadata(metadata, "storage_path")
     thumbnail_path = _path_from_metadata(metadata, "thumbnail_path") or _thumbnail_path(output_id)
+    preview_path = _path_from_metadata(metadata, "preview_path") or _preview_path(output_id)
     if output_path:
         deleted_output = _safe_unlink(output_path, settings.storage_dir)
         _prune_empty_output_parent(output_path)
     if thumbnail_path:
         deleted_thumbnail = _safe_unlink(thumbnail_path, settings.storage_dir)
-    return {"deleted_file": deleted_output, "deleted_thumbnail": deleted_thumbnail}
+    if preview_path:
+        deleted_preview = _safe_unlink(preview_path, settings.storage_dir)
+    return {"deleted_file": deleted_output, "deleted_thumbnail": deleted_thumbnail, "deleted_preview": deleted_preview}
 
 
 def _output_path_and_type(output_id: str) -> tuple[Path | None, str]:
@@ -125,6 +156,16 @@ def _write_thumbnail(output_id: str, content: bytes) -> Path | None:
     return path
 
 
+def _write_preview(output_id: str, content: bytes) -> Path | None:
+    preview = _make_preview(content)
+    if not preview:
+        return None
+    path = _preview_path(output_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(preview)
+    return path
+
+
 def _make_thumbnail(content: bytes) -> bytes | None:
     try:
         with Image.open(io.BytesIO(content)) as image:
@@ -144,8 +185,31 @@ def _make_thumbnail(content: bytes) -> bytes | None:
         return None
 
 
+def _make_preview(content: bytes) -> bytes | None:
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            if image.mode in {"RGBA", "LA", "P"}:
+                converted = image.convert("RGBA") if image.mode == "P" else image
+                canvas = Image.new("RGBA", converted.size, (255, 255, 255, 0))
+                canvas.paste(converted, mask=converted.getchannel("A") if "A" in converted.getbands() else None)
+                image = canvas
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="WEBP", quality=PREVIEW_QUALITY, method=6)
+            return output.getvalue()
+    except (OSError, ValueError):
+        return None
+
+
 def _thumbnail_path(output_id: str) -> Path:
     return settings.storage_dir / "thumbnails" / f"{output_id}.webp"
+
+
+def _preview_path(output_id: str) -> Path:
+    return settings.storage_dir / "previews" / f"{output_id}.webp"
 
 
 def _safe_unlink(path: Path, root: Path) -> bool:
@@ -174,6 +238,10 @@ def _prune_empty_output_parent(path: Path) -> None:
 
 def _thumbnail_url(output_id: str) -> str:
     return f"/api/v2/image/history/{quote(output_id, safe='')}/thumbnail"
+
+
+def _preview_url(output_id: str) -> str:
+    return f"/api/v2/image/history/{quote(output_id, safe='')}/preview"
 
 
 def _path_from_metadata(metadata: dict[str, Any], key: str) -> Path | None:
