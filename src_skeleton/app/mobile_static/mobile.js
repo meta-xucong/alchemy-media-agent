@@ -2697,6 +2697,17 @@ function setSummaryText(id, text) {
   if (node) node.textContent = text;
 }
 
+function v2MobileHistorySummaryText() {
+  const renderableItems = v2State.history.filter(isRenderableV2HistoryImage);
+  if (!v2State.history.length || !renderableItems.length) return "暂无历史";
+
+  const totalCount = Math.max(v2State.historyTotal || 0, v2State.history.length, renderableItems.length);
+  const loadedLabel = totalCount > renderableItems.length ? `${renderableItems.length}/${totalCount} 张历史` : `${renderableItems.length} 张历史`;
+  const favoriteCount = renderableItems.filter((item) => item.favorite).length;
+  const suffix = favoriteCount > 0 ? `${favoriteCount} 星标` : v2State.historyFavoritesOnly ? "只看星标" : "点进查看星标";
+  return `${loadedLabel} · ${suffix}`;
+}
+
 function updateMobileSummaries() {
   setSummaryText(
     "mobileV1ParamsSummary",
@@ -2733,9 +2744,7 @@ function updateMobileSummaries() {
   );
   const runStatus = v2State.currentRun?.status || v2State.progressStageKey;
   setSummaryText("mobileV2RunSummary", v2State.currentRun ? `${v2RunStatusLabel(runStatus)} · ${els.v2TraceId?.textContent || "-"}` : "等待 Agent 输出");
-  const v2RenderableHistory = v2State.history.filter(isRenderableV2HistoryImage);
-  const v2FavoriteCount = v2RenderableHistory.filter((item) => item.favorite).length;
-  setSummaryText("mobileV2HistorySummary", v2State.history.length ? `${v2RenderableHistory.length} 张历史 · ${v2FavoriteCount} 星标` : "暂无历史");
+  setSummaryText("mobileV2HistorySummary", v2MobileHistorySummaryText());
   const v2Provider = v2EffectiveImageProvider(v2State.modelSettings || {});
   setSummaryText("mobileV2SettingsSummary", `${v2ImageChannelLabel(v2Provider)} · Claude Code`);
   updateMobileLabSummaries();
