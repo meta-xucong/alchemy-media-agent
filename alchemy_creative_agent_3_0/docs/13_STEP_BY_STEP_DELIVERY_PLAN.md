@@ -15,6 +15,7 @@ V3.2 Generation Loop MVP
 V3.3 Commercial Poster Rendering
 V3.4 Reference Conditioning Sidecars
 V3.5 Product API and Minimal UX
+V3.6 Vertical Agent Specialization
 ```
 
 This document focuses especially on V3.1 and V3.2 because they are the second and third development waves after the foundation.
@@ -25,18 +26,33 @@ This document focuses especially on V3.1 and V3.2 because they are the second an
 
 Build an independent planning-only V3 program.
 
+V3.0 must also reserve the product boundary and extension architecture:
+
+```text
+independent V3 product entry contract
+V3-owned backend API boundary contract
+central brain / Creative Core
+vertical agent registry
+DefaultCommercialPack
+platform adapter stubs for account / balance / deployment
+```
+
 ### User-Facing Capability
 
 The user can input a natural-language request, and the system can produce a full commercial planning chain.
 
 No real image generation is required.
 
+No full frontend UI is required.
+
 ### Internal Capability
 
 ```text
 Natural language
+→ CentralCreativeBrain
 → CreativeJob
 → CommercialBrief
+→ selected vertical agent pack metadata
 → temporary BrandProfile
 → CreativePlan
 → SeriesPlan
@@ -51,9 +67,12 @@ Natural language
 ### Required Modules
 
 ```text
+app_shell contract stubs
+platform_adapters contract stubs
 schemas
 agents
-creative_core
+vertical_agents registry + DefaultCommercialPack
+creative_core / central brain
 brand_memory minimal
 layout_engine minimal
 prompt_compiler minimal
@@ -71,6 +90,12 @@ asset_pack manifest
 3. Golden cases produce expected planning structures.
 4. Tests pass offline.
 5. No real image generation is attempted.
+6. V3 app shell contract reserves an independent title-bar entry.
+7. V3 route contract reserves /api/v3/creative-agent namespace.
+8. Platform adapter stubs exist for account / balance / deployment.
+9. CentralCreativeBrain orchestrates the planning pipeline.
+10. VerticalAgentRegistry selects DefaultCommercialPack fallback.
+11. Selected vertical pack metadata is included in PlanningResult or pipeline metadata.
 ```
 
 ### Output Status
@@ -80,6 +105,8 @@ Codex should report:
 ```text
 V3_FOUNDATION_STATUS: COMPLETE or INCOMPLETE
 INDEPENDENCE_STATUS: PASS or FAIL
+APP_BOUNDARY_STATUS: PASS or FAIL
+VERTICAL_AGENT_EXTENSION_STATUS: PASS or FAIL
 TEST_STATUS: PASS or FAIL
 ```
 
@@ -190,6 +217,20 @@ If brand_id exists, load it.
 
 If brand_id is missing, create a temporary profile with warning metadata.
 
+#### 3.1.7 Vertical Pack Awareness
+
+Brand memory logic should remain compatible with vertical packs.
+
+Examples:
+
+```text
+RestaurantPack can later emphasize food cleanliness and appetite.
+EcommercePack can later emphasize product consistency and SKU clarity.
+BrandIPPack can later emphasize character consistency.
+```
+
+V3.1 may keep non-default packs as stubs.
+
 ### Required Tests
 
 ```text
@@ -201,6 +242,7 @@ test_rejected_style_tags_in_negative_direction
 test_continuation_request_loads_brand_profile
 test_mock_rejected_candidate_does_not_update_memory
 test_memory_update_is_proposed_for_accepted_output
+test_brand_memory_works_with_selected_vertical_pack_metadata
 ```
 
 ### V3.1 Out of Scope
@@ -211,6 +253,7 @@ real visual embedding extraction
 real IP-Adapter / InstantStyle
 real database migration
 UI asset library
+full vertical agent specialization
 ```
 
 ### V3.1 Acceptance Criteria
@@ -222,6 +265,7 @@ UI asset library
 4. Continuation requests are handled deterministically.
 5. MemoryUpdate proposal exists but is not blindly applied.
 6. Tests pass without V2 imports.
+7. Brand memory remains compatible with vertical pack metadata.
 ```
 
 ## 4. V3.2 Generation Loop MVP
@@ -329,6 +373,19 @@ Default:
 propose only
 ```
 
+#### 4.2.7 Vertical Pack Scoring Hooks
+
+V3.2 should allow selected vertical packs to influence evaluation policy.
+
+Examples:
+
+```text
+EcommercePack can weight product clarity higher later.
+RestaurantPack can weight appetite and cleanliness higher later.
+BrandIPPack can weight character consistency higher later.
+AIMangaDramaPack can weight scene continuity higher later.
+```
+
 ### Required Tests
 
 ```text
@@ -342,6 +399,7 @@ test_asset_pack_contains_selected_candidate
 test_accepted_candidate_proposes_memory_update
 test_rejected_candidate_does_not_update_memory
 test_generation_loop_runs_without_v2_imports
+test_selected_vertical_pack_can_adjust_evaluation_policy_stub
 ```
 
 ### V3.2 Out of Scope
@@ -355,6 +413,7 @@ ComfyUI sidecar
 production-grade rendering
 full UI
 video
+full vertical agent specialization
 ```
 
 ### V3.2 Acceptance Criteria
@@ -368,6 +427,7 @@ video
 6. AssetPack contains final selected candidates.
 7. Brand memory update proposal is connected.
 8. Tests pass without V2 imports.
+9. Vertical pack evaluation hook is reserved.
 ```
 
 ## 5. V3.3 Commercial Poster Rendering
@@ -433,7 +493,7 @@ Add optional style/layout consistency providers.
 
 ### Goal
 
-Expose V3 as a product API and optional minimal UI.
+Expose V3 as an independent product API and minimal V3 UI.
 
 ### API Concepts
 
@@ -444,6 +504,17 @@ asset series
 candidate
 selected result
 style continuation
+balance estimate
+```
+
+### Required Product Boundary
+
+```text
+1. V3 has independent title-bar entry.
+2. V3 frontend uses V3-owned routes.
+3. V3 backend route namespace is /api/v3/creative-agent/*.
+4. Shared balance is accessed only through V3BalanceAdapter.
+5. Existing V1/V2 generation routes are not used.
 ```
 
 ### Do Not Expose by Default
@@ -460,13 +531,40 @@ node graph
 ### Acceptance Criteria
 
 ```text
-1. User can create a creative job through API.
-2. User can retrieve planning/generation status.
+1. User can create a creative job through V3 API.
+2. User can retrieve planning/generation status through V3 API.
 3. User can select a result.
 4. Selected result can update brand memory.
+5. V3 UI entry is independent from V1/V2 UI flows.
 ```
 
-## 8. Sequential Execution Rule
+## 8. V3.6 Vertical Agent Specialization
+
+### Goal
+
+Start implementing real industry-specific sub-agent packs under the V3 framework.
+
+### Priority Order
+
+```text
+1. EcommerceAgentFamily
+2. RestaurantAgentFamily
+3. BrandIPAgentFamily
+4. AIMangaDramaAgentFamily
+5. LocalServiceAgentFamily
+```
+
+### Acceptance Criteria
+
+```text
+1. Vertical packs extend V3 standard schemas.
+2. Vertical packs do not fork the runtime.
+3. Vertical pack selection is automatic from intent and brief.
+4. Vertical pack metadata appears in PlanningResult / GenerationResult.
+5. Tests prove default fallback still works.
+```
+
+## 9. Sequential Execution Rule
 
 Do not start V3.2 before V3.1 is accepted.
 
@@ -474,7 +572,11 @@ Do not start V3.3 before V3.2 has stable asset pack outputs.
 
 Do not start V3.4 heavy providers before V3 provider interfaces are stable.
 
-## 9. Development Gate Checklist
+Do not start V3.5 frontend/API integration before V3.2 asset pack contracts are stable.
+
+Do not start V3.6 full vertical packs before the vertical registry and default pack are stable.
+
+## 10. Development Gate Checklist
 
 Before moving from V3.0 to V3.1:
 
@@ -482,6 +584,8 @@ Before moving from V3.0 to V3.1:
 schemas pass
 planning pipeline passes
 golden cases pass
+app boundary stubs pass
+vertical registry stub passes
 no V2 imports
 ```
 
@@ -492,6 +596,7 @@ brand memory store passes
 continuation behavior passes
 brand influence tests pass
 memory update proposal passes
+vertical metadata compatibility passes
 ```
 
 Before moving from V3.2 to V3.3:
@@ -511,7 +616,23 @@ Chinese text exact preservation passes
 render manifest passes
 ```
 
-## 10. Strategic Reminder
+Before moving from V3.4 to V3.5:
+
+```text
+provider interface tests pass
+optional sidecar failure degrades gracefully
+asset pack contract remains stable
+```
+
+Before moving from V3.5 to V3.6:
+
+```text
+V3 route namespace passes
+V3 UI entry is independent
+V3BalanceAdapter boundary is tested
+```
+
+## 11. Strategic Reminder
 
 The user experience should remain simple at every stage.
 
@@ -519,4 +640,12 @@ Internal complexity may grow, but the default user flow remains:
 
 ```text
 natural language input → commercial visual asset series
+```
+
+The product boundary remains:
+
+```text
+shared domain / homepage / balance / server
++
+independent V3 UI / backend / runtime / agents
 ```
