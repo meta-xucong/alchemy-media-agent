@@ -84,6 +84,8 @@ Expected output:
 
 ## Document Index
 
+Core docs:
+
 ```text
 alchemy_creative_agent_3_0/docs/00_ROOT_RULES.md
 alchemy_creative_agent_3_0/docs/01_PRODUCT_VISION.md
@@ -92,6 +94,46 @@ alchemy_creative_agent_3_0/docs/03_AGENT_AND_MODULE_SPEC.md
 alchemy_creative_agent_3_0/docs/04_OPEN_SOURCE_REFERENCE_MAP.md
 alchemy_creative_agent_3_0/docs/05_DEVELOPMENT_ROADMAP.md
 alchemy_creative_agent_3_0/docs/06_CODEX_TASK_PROMPT.md
+```
+
+Development contract docs:
+
+```text
+alchemy_creative_agent_3_0/docs/07_SCHEMA_CONTRACTS.md
+alchemy_creative_agent_3_0/docs/08_GOLDEN_CASES.md
+alchemy_creative_agent_3_0/docs/09_RULES_AND_DEFAULTS.md
+alchemy_creative_agent_3_0/docs/10_BRAND_MEMORY_SPEC.md
+alchemy_creative_agent_3_0/docs/11_EVALUATION_AND_REFINEMENT_SPEC.md
+alchemy_creative_agent_3_0/docs/12_PROVIDER_INTERFACES.md
+```
+
+Step-by-step delivery docs:
+
+```text
+alchemy_creative_agent_3_0/docs/13_STEP_BY_STEP_DELIVERY_PLAN.md
+alchemy_creative_agent_3_0/docs/14_CODEX_TASK_PROMPTS_PHASE_2_AND_3.md
+```
+
+## Implementation Waves
+
+```text
+V3.0 Foundation
+  Independent planning-only skeleton, schemas, agents, rule-based pipeline, tests.
+
+V3.1 Brand Consistency Foundation
+  Persistent V3-owned brand memory, continuation behavior, brand influence on plans and prompts.
+
+V3.2 Generation Loop MVP
+  Candidate generation abstraction, scoring, ranking, refinement plan, selected asset packaging.
+
+V3.3 Commercial Poster Rendering
+  HTML/SVG text overlay and accurate Chinese commercial poster rendering.
+
+V3.4 Reference Conditioning Sidecars
+  Optional IP-Adapter / InstantStyle / ControlNet / ImageReward / ComfyUI-style providers.
+
+V3.5 Product API and Minimal UX
+  Simple natural-language product API and user-facing flow.
 ```
 
 ## High-Level Architecture
