@@ -45,7 +45,7 @@ jobs:
             --exclude='**/__pycache__' \
             -czf - . | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "tar -xzf - -C '$DEPLOY_DIR'"
 
-      - name: Write runtime env
+      - name: Ensure runtime env exists
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -63,6 +63,10 @@ jobs:
           IMAGE_WORK_INTENSITY: ${{ vars.IMAGE_WORK_INTENSITY || 'atelier' }}
         run: |
           REMOTE="${VPS_USER:-root}@${VPS_HOST}"
+          if ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "test -s '$DEPLOY_DIR/src_skeleton/.env'"; then
+            echo "Existing runtime env found; preserving VPS production settings."
+            exit 0
+          fi
           umask 077
           cat > /tmp/alchemy-media-agent.env <<EOF
           MEDIA_AGENT_MODE=live
@@ -95,6 +99,7 @@ jobs:
           BYTEPLUS_API_KEY=
 
           MEDIA_STORAGE_ROOT=.media_storage
+          V2_API_PROXY_BASE_URL=http://127.0.0.1:8020
           EOF
           sed -i 's/^          //' /tmp/alchemy-media-agent.env
           scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" /tmp/alchemy-media-agent.env "$REMOTE:$DEPLOY_DIR/src_skeleton/.env"

@@ -4,6 +4,8 @@ set -Eeuo pipefail
 REPO_URL="${REPO_URL:-https://github.com/meta-xucong/alchemy-media-agent.git}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/alchemy-media-agent}"
 APP_PORT="${APP_PORT:-8017}"
+V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL:-http://host.docker.internal:8020}"
+V2_STORAGE_DIR="${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}"
 LOCAL_MODE=0
 SKIP_ENV=0
 INSTALL_DOCKER=1
@@ -186,25 +188,43 @@ GEMINI_IMAGE_API_KEY=${GEMINI_IMAGE_API_KEY:-}
 BYTEPLUS_API_KEY=${BYTEPLUS_API_KEY:-}
 
 MEDIA_STORAGE_ROOT=.media_storage
+V2_API_PROXY_BASE_URL=${V2_API_PROXY_BASE_URL}
+V2_STORAGE_DIR=${V2_STORAGE_DIR}
 EOF
 }
 
 start_stack() {
   cd "${DEPLOY_DIR}"
+  docker rm -f alchemy-media-agent >/dev/null 2>&1 || true
   if docker compose version >/dev/null 2>&1; then
-    APP_PORT="${APP_PORT}" docker compose up -d --build
+    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" docker compose up -d --build --remove-orphans
+    return
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1; then
+    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL}" V2_STORAGE_DIR="${V2_STORAGE_DIR}" docker-compose up -d --build --remove-orphans
     return
   fi
 
   docker build -t alchemy-media-agent:latest ./src_skeleton
-  docker rm -f alchemy-media-agent >/dev/null 2>&1 || true
-  docker run -d \
-    --name alchemy-media-agent \
-    --restart unless-stopped \
-    --env-file ./src_skeleton/.env \
-    -p "127.0.0.1:${APP_PORT}:8017" \
-    -v "${DEPLOY_DIR}/src_skeleton/.env:/app/.env" \
-    -v "${DEPLOY_DIR}/src_skeleton/.media_storage:/app/.media_storage" \
+  local docker_run_args=(
+    -d
+    --name alchemy-media-agent
+    --restart unless-stopped
+    --env-file ./src_skeleton/.env
+    -e "V2_API_PROXY_BASE_URL=${V2_API_PROXY_BASE_URL}"
+    -e "V2_STORAGE_DIR=${V2_STORAGE_DIR}"
+    -p "127.0.0.1:${APP_PORT}:8017"
+    -v "${DEPLOY_DIR}/src_skeleton/.env:/app/.env"
+    -v "${DEPLOY_DIR}/src_skeleton/.media_storage:/app/.media_storage"
+  )
+  if [[ -d "${V2_STORAGE_DIR}" ]]; then
+    docker_run_args+=(-v "${V2_STORAGE_DIR}:${V2_STORAGE_DIR}:ro")
+  fi
+  if docker run --help 2>/dev/null | grep -q -- "--add-host"; then
+    docker_run_args+=(--add-host "host.docker.internal:host-gateway")
+  fi
+  docker run "${docker_run_args[@]}" \
     alchemy-media-agent:latest
 }
 
@@ -261,6 +281,8 @@ health_check() {
   echo "Service did not pass health check. Recent logs:" >&2
   if docker compose version >/dev/null 2>&1; then
     docker compose -f "${DEPLOY_DIR}/docker-compose.yml" logs --tail=80 alchemy-media-agent >&2 || true
+  elif command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -f "${DEPLOY_DIR}/docker-compose.yml" logs --tail=80 alchemy-media-agent >&2 || true
   else
     docker logs --tail=80 alchemy-media-agent >&2 || true
   fi
