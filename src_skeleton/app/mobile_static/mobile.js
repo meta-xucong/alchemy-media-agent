@@ -51,6 +51,7 @@ const labReferenceStrengthLabels = {
 };
 const v2RunLongWaitAttempt = 120;
 const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
+const v2MediaDisplayBase = window.ALCHEMY_V2_MEDIA_BASE || (isLocalAlchemyHost() ? "http://127.0.0.1:8020/api/v2" : v2ApiBase);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
@@ -150,6 +151,11 @@ const state = {
   imageProgressStartedAt: null,
   imageProgressTimer: null,
   imageProgressLabel: "生成中",
+};
+
+const simpleModeState = {
+  v1: { mode: "professional", files: [], running: false },
+  v2: { mode: "professional", files: [], running: false },
 };
 
 const v2State = {
@@ -439,6 +445,20 @@ const els = {
   assetPlacementInput: document.querySelector("#assetPlacementInput"),
   assetIntentNotesInput: document.querySelector("#assetIntentNotesInput"),
   promptInput: document.querySelector("#promptInput"),
+  v1SimplePromptInput: document.querySelector("#v1SimplePromptInput"),
+  v1SimpleAssetInput: document.querySelector("#v1SimpleAssetInput"),
+  v1SimpleAssetSummary: document.querySelector("#v1SimpleAssetSummary"),
+  v1SimpleFileList: document.querySelector("#v1SimpleFileList"),
+  v1SimpleNotice: document.querySelector("#v1SimpleNotice"),
+  v1SimpleRunBtn: document.querySelector("#v1SimpleRunBtn"),
+  v1SimpleClearBtn: document.querySelector("#v1SimpleClearBtn"),
+  v2SimplePromptInput: document.querySelector("#v2SimplePromptInput"),
+  v2SimpleAssetInput: document.querySelector("#v2SimpleAssetInput"),
+  v2SimpleAssetSummary: document.querySelector("#v2SimpleAssetSummary"),
+  v2SimpleFileList: document.querySelector("#v2SimpleFileList"),
+  v2SimpleNotice: document.querySelector("#v2SimpleNotice"),
+  v2SimpleRunBtn: document.querySelector("#v2SimpleRunBtn"),
+  v2SimpleClearBtn: document.querySelector("#v2SimpleClearBtn"),
   generateBtn: document.querySelector("#generateBtn"),
   smokeBtn: document.querySelector("#smokeBtn"),
   newSessionBtn: document.querySelector("#newSessionBtn"),
@@ -509,7 +529,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const ticketAccepted = await handleVeyraTicketFromUrl();
     if (hadVeyraTicket && !ticketAccepted) return;
     if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
-    syncVeyraSessionCookie();
+    await syncVeyraSessionCookie();
     await createSession({ announce: false });
     await loadProviders();
     await refreshHistory({ silent: true });
@@ -666,6 +686,7 @@ function bindControls() {
   }
   if (els.veyraRefreshAccountBtn) els.veyraRefreshAccountBtn.addEventListener("click", () => loadVeyraAccountPanel({ silent: false, force: true }));
   if (els.v2RunBtn) els.v2RunBtn.addEventListener("click", runV2Creative);
+  bindSimpleModeControls();
   if (els.labImagesPerStyleInput) {
     els.labImagesPerStyleInput.addEventListener("input", () => {
       labState.imagesPerStyle = Number(els.labImagesPerStyleInput.value || 1);
@@ -2183,6 +2204,7 @@ function createMobileV1Architecture(stack) {
 
   const actions = document.createElement("section");
   actions.className = "mobile-action-panel mobile-v1-main-actions";
+  actions.dataset.modeArea = "v1-professional";
   actions.innerHTML = `
     <div class="mobile-summary-grid">
       ${mobileEntryMarkup("v1-params", "参数", "默认参数", "mobileV1ParamsSummary")}
@@ -2261,6 +2283,7 @@ function createMobileV2Architecture(stack) {
 
   const actions = document.createElement("section");
   actions.className = "mobile-action-panel mobile-v2-main-actions";
+  actions.dataset.modeArea = "v2-professional";
   actions.innerHTML = `
     <div class="mobile-summary-grid">
       ${mobileEntryMarkup("v2-cases", "案例模板", "未选择模板", "mobileV2TemplateSummary")}
@@ -2346,6 +2369,7 @@ function createV2HomeContext(agent, actions) {
   if (!agent || document.querySelector(".mobile-v2-context-strip")) return;
   const context = document.createElement("section");
   context.className = "mobile-v2-context-strip";
+  context.dataset.modeArea = "v2-professional";
   context.innerHTML = `
     <div id="mobileV2ContextSummary" class="mobile-v2-context-icons" aria-label="当前上下文"></div>
     <button id="mobileV2AssetThumb" class="mobile-v2-asset-thumb empty" data-mobile-open="v2-assets" type="button" aria-label="打开上传素材">+</button>
@@ -2843,6 +2867,405 @@ function renderAdvancedAssetRoles() {
 function primaryAssetRole() {
   const priority = ["logo_overlay", "portrait_identity", "subject_reference", "style_reference", "background_reference", "composition_reference"];
   return priority.find((role) => state.selectedAssetRoles.includes(role)) || state.selectedAssetRoles[0] || "style_reference";
+}
+
+function bindSimpleModeControls() {
+  document.querySelectorAll("[data-mode-switch]").forEach((button) => {
+    if (button.dataset.simpleModeBound === "true") return;
+    button.dataset.simpleModeBound = "true";
+    button.addEventListener("click", () => {
+      setSimpleMode(button.dataset.modeSwitch, button.dataset.modeValue || "professional");
+    });
+  });
+  if (els.v1SimpleAssetInput) {
+    els.v1SimpleAssetInput.addEventListener("change", () => handleSimpleFileSelection("v1"));
+  }
+  if (els.v2SimpleAssetInput) {
+    els.v2SimpleAssetInput.addEventListener("change", () => handleSimpleFileSelection("v2"));
+  }
+  if (els.v1SimpleRunBtn) els.v1SimpleRunBtn.addEventListener("click", runV1SimpleMode);
+  if (els.v2SimpleRunBtn) els.v2SimpleRunBtn.addEventListener("click", runV2SimpleMode);
+  if (els.v1SimpleClearBtn) els.v1SimpleClearBtn.addEventListener("click", () => clearSimpleMode("v1"));
+  if (els.v2SimpleClearBtn) els.v2SimpleClearBtn.addEventListener("click", () => clearSimpleMode("v2"));
+  setSimpleMode("v1", simpleModeState.v1.mode);
+  setSimpleMode("v2", simpleModeState.v2.mode);
+  renderSimpleFileList("v1");
+  renderSimpleFileList("v2");
+}
+
+function simpleModeEls(version) {
+  if (version === "v2") {
+    return {
+      prompt: els.v2SimplePromptInput,
+      input: els.v2SimpleAssetInput,
+      summary: els.v2SimpleAssetSummary,
+      list: els.v2SimpleFileList,
+      notice: els.v2SimpleNotice,
+      run: els.v2SimpleRunBtn,
+      clear: els.v2SimpleClearBtn,
+    };
+  }
+  return {
+    prompt: els.v1SimplePromptInput,
+    input: els.v1SimpleAssetInput,
+    summary: els.v1SimpleAssetSummary,
+    list: els.v1SimpleFileList,
+    notice: els.v1SimpleNotice,
+    run: els.v1SimpleRunBtn,
+    clear: els.v1SimpleClearBtn,
+  };
+}
+
+function setSimpleMode(version, mode) {
+  if (!simpleModeState[version]) return;
+  const nextMode = mode === "simple" ? "simple" : "professional";
+  simpleModeState[version].mode = nextMode;
+  document.querySelectorAll(`[data-mode-root="${version}"]`).forEach((root) => {
+    root.dataset.currentMode = nextMode;
+  });
+  document.querySelectorAll(`[data-simple-panel="${version}"]`).forEach((panel) => {
+    panel.hidden = nextMode !== "simple";
+  });
+  document.querySelectorAll(`[data-mode-switch="${version}"]`).forEach((button) => {
+    const active = button.dataset.modeValue === nextMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+}
+
+function handleSimpleFileSelection(version) {
+  const refs = simpleModeEls(version);
+  const files = Array.from(refs.input?.files || []);
+  const imageFiles = files.filter(isImageAssetFile);
+  if (imageFiles.length !== files.length) {
+    updateSimpleNotice(version, "已跳过非图片文件。", "warning");
+  }
+  simpleModeState[version].files = imageFiles;
+  renderSimpleFileList(version);
+  if (refs.input) refs.input.value = "";
+}
+
+function clearSimpleMode(version) {
+  const refs = simpleModeEls(version);
+  simpleModeState[version].files = [];
+  if (refs.prompt) refs.prompt.value = "";
+  if (refs.input) refs.input.value = "";
+  renderSimpleFileList(version);
+  updateSimpleNotice(version, version === "v2" ? "已清空极简输入；专业设置未变。" : "已清空极简输入。", "info");
+}
+
+function renderSimpleFileList(version) {
+  const refs = simpleModeEls(version);
+  const files = simpleModeState[version]?.files || [];
+  if (refs.summary) {
+    refs.summary.textContent = files.length ? `${files.length} 张图片待使用` : version === "v2" ? "可选，V2 自动判断用途" : "可选，支持多张图片";
+  }
+  if (!refs.list) return;
+  refs.list.innerHTML = "";
+  refs.list.classList.toggle("empty-simple-list", !files.length);
+  if (!files.length) {
+    refs.list.textContent = "未上传图片";
+    return;
+  }
+  files.slice(0, 6).forEach((file, index) => {
+    const row = document.createElement("div");
+    row.className = "simple-file-row";
+    const title = document.createElement("strong");
+    title.textContent = `${index + 1}. ${file.name}`;
+    const meta = document.createElement("span");
+    meta.textContent = simpleFileSize(file.size);
+    row.append(title, meta);
+    refs.list.appendChild(row);
+  });
+}
+
+function updateSimpleNotice(version, message, type = "info") {
+  const refs = simpleModeEls(version);
+  if (!refs.notice) return;
+  refs.notice.textContent = message;
+  refs.notice.className = `notice-bar simple-notice ${type}`.trim();
+}
+
+function setSimpleRunning(version, running) {
+  const refs = simpleModeEls(version);
+  simpleModeState[version].running = running;
+  if (refs.run) {
+    refs.run.disabled = running;
+    refs.run.textContent = running ? "生成中..." : "一键生成";
+  }
+  if (refs.clear) refs.clear.disabled = running;
+}
+
+function simpleFileSize(size) {
+  if (!Number.isFinite(size) || size <= 0) return "-";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function simplePromptOrFallback(version, prompt, files) {
+  const clean = String(prompt || "").trim();
+  if (clean) return clean;
+  if (!files.length) return "";
+  return version === "v2"
+    ? "基于上传的参考图片生成一张高质量视觉图，保持核心主体和风格一致，并由 V2 Agent 自动选择合适案例与表现方式。"
+    : "基于上传的参考图片生成一张高质量视觉图，保持核心主体和风格一致。";
+}
+
+function inferSimpleAssetRoles(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  const roles = [];
+  if (/(logo|标志|商标|品牌|字标)/i.test(text)) roles.push("logo_reference");
+  if (/(人脸|头像|肖像|脸|人物|模特|portrait|face|person|model)/i.test(text)) roles.push("face_reference");
+  if (/(产品|瓶|包装|主体|主角|商品|product|subject|bottle|package)/i.test(text)) roles.push("subject_reference");
+  if (/(背景|场景|环境|background|scene)/i.test(text)) roles.push("background_reference");
+  if (/(构图|版式|布局|海报|composition|layout|poster)/i.test(text)) roles.push("composition_reference");
+  if (!roles.length) roles.push("style_reference");
+  return Array.from(new Set(roles));
+}
+
+function mapV2RoleToV1Role(role) {
+  const map = {
+    logo_reference: "logo_overlay",
+    face_reference: "portrait_identity",
+    subject_reference: "subject_reference",
+    background_reference: "background_reference",
+    composition_reference: "composition_reference",
+    style_reference: "style_reference",
+  };
+  return map[role] || "style_reference";
+}
+
+function setCheckedByDataset(selector, datasetKey, values) {
+  const selected = new Set(values.filter(Boolean));
+  document.querySelectorAll(selector).forEach((input) => {
+    input.checked = selected.has(input.dataset[datasetKey]);
+  });
+}
+
+function snapshotInput(input) {
+  return input ? input.value : "";
+}
+
+function restoreInput(input, value) {
+  if (input) input.value = value;
+}
+
+function snapshotPreview(preview, label) {
+  return preview
+    ? {
+        className: preview.className,
+        backgroundImage: preview.style.backgroundImage || "",
+        label: label?.textContent || "",
+      }
+    : null;
+}
+
+function restorePreview(preview, label, snapshot) {
+  if (!preview || !snapshot) return;
+  preview.className = snapshot.className || preview.className;
+  preview.style.backgroundImage = snapshot.backgroundImage || "";
+  if (label) label.textContent = snapshot.label || "";
+}
+
+function setSimpleV1Defaults(assetRoles) {
+  els.countInput.value = "1";
+  els.countValue.textContent = "1";
+  setSize("");
+  setFormat("png");
+  setQuality("high");
+  setIntensity("balanced");
+  setAdvancedAssetRoles(assetRoles);
+  if (els.assetStrengthInput) {
+    els.assetStrengthInput.value = "70";
+    els.assetStrengthValue.textContent = "70%";
+  }
+  if (els.assetPreservationInput) {
+    els.assetPreservationInput.value = assetRoles.some((role) => ["logo_overlay", "portrait_identity", "subject_reference"].includes(role)) ? "strict" : "medium";
+  }
+  if (els.assetIntentNotesInput) els.assetIntentNotesInput.value = "极简模式自动判断素材用途；请以用户一句话需求为准。";
+}
+
+function snapshotV1Context() {
+  return {
+    prompt: snapshotInput(els.promptInput),
+    count: snapshotInput(els.countInput) || "1",
+    size: state.selectedSize,
+    format: state.selectedFormat,
+    quality: state.selectedQuality,
+    intensity: state.selectedIntensity,
+    assets: [...state.assets],
+    assetIds: [...state.assetIds],
+    assetMode: state.assetMode,
+    roles: [...state.selectedAssetRoles],
+    assetStrength: snapshotInput(els.assetStrengthInput) || "65",
+    assetPreservation: snapshotInput(els.assetPreservationInput),
+    assetNotes: snapshotInput(els.assetIntentNotesInput),
+    assetPreview: snapshotPreview(els.assetPreview, els.assetPreviewLabel),
+  };
+}
+
+function restoreV1Context(snapshot) {
+  restoreInput(els.promptInput, snapshot.prompt);
+  restoreInput(els.countInput, snapshot.count);
+  els.countValue.textContent = snapshot.count;
+  setSize(snapshot.size);
+  setFormat(snapshot.format);
+  setQuality(snapshot.quality);
+  setIntensity(snapshot.intensity);
+  state.assets = snapshot.assets;
+  state.assetIds = snapshot.assetIds;
+  state.assetMode = snapshot.assetMode;
+  setAdvancedAssetRoles(snapshot.roles);
+  if (els.assetStrengthInput) {
+    els.assetStrengthInput.value = snapshot.assetStrength;
+    els.assetStrengthValue.textContent = `${snapshot.assetStrength}%`;
+  }
+  restoreInput(els.assetPreservationInput, snapshot.assetPreservation);
+  restoreInput(els.assetIntentNotesInput, snapshot.assetNotes);
+  restorePreview(els.assetPreview, els.assetPreviewLabel, snapshot.assetPreview);
+  renderAssetPanel();
+  scheduleMobileSummaryUpdate();
+}
+
+async function runV1SimpleMode() {
+  const files = simpleModeState.v1.files || [];
+  const prompt = simplePromptOrFallback("v1", els.v1SimplePromptInput?.value || "", files);
+  if (!prompt) {
+    updateSimpleNotice("v1", "请先输入一句需求，或上传参考图。", "warning");
+    els.v1SimplePromptInput?.focus();
+    return;
+  }
+  setSimpleRunning("v1", true);
+  updateSimpleNotice("v1", "正在准备 V1 极简生成。", "info");
+  const snapshot = snapshotV1Context();
+  try {
+    const roles = inferSimpleAssetRoles(prompt).map(mapV2RoleToV1Role);
+    setSimpleV1Defaults(roles);
+    els.promptInput.value = prompt;
+    const uploaded = [];
+    for (const file of files) {
+      uploaded.push(await uploadV1AssetFile(file));
+      updateSimpleNotice("v1", `已上传 ${uploaded.length}/${files.length} 张参考图。`, "info");
+    }
+    state.assets = uploaded;
+    state.assetIds = uploaded.map((asset) => asset.asset_id);
+    state.assetMode = uploaded.length ? "advanced" : "basic";
+    renderAssetPanel();
+    updateSimpleNotice("v1", "已交给 V1 生成链路。", "info");
+    await generateImage();
+    updateSimpleNotice("v1", "V1 生成链路已返回，请查看结果区或页面提示。", "info");
+  } catch (error) {
+    updateSimpleNotice("v1", `V1 极简生成失败：${friendlyError(error)}`, "error");
+  } finally {
+    restoreV1Context(snapshot);
+    setSimpleRunning("v1", false);
+  }
+}
+
+function snapshotV2Context() {
+  return {
+    prompt: snapshotInput(els.v2PromptInput),
+    count: snapshotInput(els.v2CountInput) || "1",
+    ratio: v2State.selectedRatio,
+    transformMode: v2PromptTransformMode(),
+    uploadedAssets: [...v2State.uploadedAssets],
+    selectedTemplateId: v2State.selectedTemplateId,
+    selectedTemplateDetail: v2State.selectedTemplateDetail,
+    favoriteReferenceItem: v2State.favoriteReferenceItem,
+    favoriteReferenceAsset: v2State.favoriteReferenceAsset,
+    subject: snapshotInput(els.v2SubjectInput),
+    style: snapshotInput(els.v2StyleInput),
+    useCase: snapshotInput(els.v2UseCaseInput),
+    assetStrength: snapshotInput(els.v2AssetStrengthInput) || "strong",
+    assetNotes: snapshotInput(els.v2AssetNotesInput),
+    roles: v2SelectedAssetRoles(),
+    assetPreview: snapshotPreview(els.v2AssetPreview, els.v2AssetPreviewLabel),
+  };
+}
+
+function restoreV2Context(snapshot) {
+  restoreInput(els.v2PromptInput, snapshot.prompt);
+  restoreInput(els.v2CountInput, snapshot.count);
+  if (els.v2CountValue) els.v2CountValue.textContent = snapshot.count;
+  v2State.selectedRatio = snapshot.ratio;
+  hydrateV2AspectButtons();
+  document.querySelectorAll("[data-v2-ratio]").forEach((button) => {
+    const active = (button.dataset.v2Ratio || "") === (snapshot.ratio || "");
+    button.classList.toggle("active", active);
+  });
+  setV2PromptTransformMode(snapshot.transformMode);
+  v2State.uploadedAssets = snapshot.uploadedAssets;
+  v2State.selectedTemplateId = snapshot.selectedTemplateId;
+  v2State.selectedTemplateDetail = snapshot.selectedTemplateDetail;
+  v2State.favoriteReferenceItem = snapshot.favoriteReferenceItem;
+  v2State.favoriteReferenceAsset = snapshot.favoriteReferenceAsset;
+  restoreInput(els.v2SubjectInput, snapshot.subject);
+  restoreInput(els.v2StyleInput, snapshot.style);
+  restoreInput(els.v2UseCaseInput, snapshot.useCase);
+  restoreInput(els.v2AssetStrengthInput, snapshot.assetStrength);
+  restoreInput(els.v2AssetNotesInput, snapshot.assetNotes);
+  setCheckedByDataset("[data-v2-asset-role]", "v2AssetRole", snapshot.roles);
+  els.v2SelectedTemplateLabel.textContent = snapshot.selectedTemplateId
+    ? `模板：${v2State.templates.find((item) => item.case_id === snapshot.selectedTemplateId)?.title || snapshot.selectedTemplateId}`
+    : "未选择模板";
+  restorePreview(els.v2AssetPreview, els.v2AssetPreviewLabel, snapshot.assetPreview);
+  renderV2Templates(v2State.visibleTemplates);
+  renderV2AssetPanel();
+  updateV2FavoriteReferenceLabel();
+  scheduleMobileSummaryUpdate();
+}
+
+async function runV2SimpleMode() {
+  const files = simpleModeState.v2.files || [];
+  const prompt = simplePromptOrFallback("v2", els.v2SimplePromptInput?.value || "", files);
+  if (!prompt) {
+    updateSimpleNotice("v2", "请先输入一句需求，或上传参考图。", "warning");
+    els.v2SimplePromptInput?.focus();
+    return;
+  }
+  setSimpleRunning("v2", true);
+  updateSimpleNotice("v2", "正在准备 V2 极简生成。", "info");
+  const snapshot = snapshotV2Context();
+  try {
+    const roles = inferSimpleAssetRoles(prompt);
+    els.v2PromptInput.value = prompt;
+    els.v2CountInput.value = "1";
+    els.v2CountValue.textContent = "1";
+    v2State.selectedRatio = "";
+    document.querySelectorAll("[data-v2-ratio]").forEach((button) => {
+      button.classList.toggle("active", (button.dataset.v2Ratio || "") === "");
+    });
+    setV2PromptTransformMode("auto");
+    v2State.selectedTemplateId = null;
+    v2State.selectedTemplateDetail = null;
+    v2State.favoriteReferenceItem = null;
+    v2State.favoriteReferenceAsset = null;
+    restoreInput(els.v2SubjectInput, "");
+    restoreInput(els.v2StyleInput, "");
+    restoreInput(els.v2UseCaseInput, "");
+    setCheckedByDataset("[data-v2-asset-role]", "v2AssetRole", roles);
+    if (els.v2AssetStrengthInput) els.v2AssetStrengthInput.value = "strong";
+    if (els.v2AssetNotesInput) els.v2AssetNotesInput.value = "极简模式自动判断素材用途；请以用户一句话需求为准。";
+    const uploaded = [];
+    const primaryRole = roles[0] || "style_reference";
+    for (const file of files) {
+      uploaded.push(await uploadV2AssetFile(file, { role: primaryRole, strength: "strong" }));
+      updateSimpleNotice("v2", `已上传 ${uploaded.length}/${files.length} 张参考图。`, "info");
+    }
+    v2State.uploadedAssets = uploaded.map((asset) => ({ ...asset, roles, constraint_strength: "strong" }));
+    els.v2SelectedTemplateLabel.textContent = "未选择模板";
+    updateV2FavoriteReferenceLabel();
+    renderV2Templates(v2State.visibleTemplates);
+    renderV2AssetPanel();
+    updateSimpleNotice("v2", "已交给 V2 Agent 极简链路。", "info");
+    await runV2Creative();
+    updateSimpleNotice("v2", "V2 Agent 链路已返回，请查看结果区或页面提示。", "info");
+  } catch (error) {
+    updateSimpleNotice("v2", `V2 极简生成失败：${friendlyError(error)}`, "error");
+  } finally {
+    restoreV2Context(snapshot);
+    setSimpleRunning("v2", false);
+  }
 }
 
 function assetRolePriority(role) {
@@ -3380,38 +3803,46 @@ async function initV2({ silent = true, force = false } = {}) {
   toggleV2Loading(true);
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
   try {
-    const [health, providersResponse, imageProviderCapabilities, templateIndexResponse, templatesPageResponse, historyResponse, orchestratorStatus, modelSettings] = await Promise.all([
-      v2Request("/health"),
-      v2Request("/resource-providers"),
-      v2Request("/provider-capabilities"),
-      v2Request("/templates/index"),
-      v2Request(v2TemplatePageEndpoint()),
-      loadV2HistoryResponse(),
-      v2Request("/orchestrator/status"),
-      v2Request("/runtime/model-settings"),
-    ]);
-    v2State.health = health;
-    v2State.providers = providersResponse.providers || [];
-    v2State.imageProviderCapabilities = imageProviderCapabilities.providers || [];
-    v2State.orchestratorStatus = orchestratorStatus;
-    v2State.modelSettings = modelSettings;
-    applyV2TemplateIndex(templateIndexResponse);
-    applyV2TemplatePage(templatesPageResponse, { reset: true });
-    scheduleV2TemplatePrefetch();
+    const historyResponse = await loadV2HistoryResponse();
     v2State.historyRenderLimit = v2HistoryPageSize;
     v2State.history = historyResponse.items || [];
+    renderV2History(v2State.history);
+    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+
+    const [health, providersResponse, imageProviderCapabilities, templateIndexResponse, templatesPageResponse, orchestratorStatus, modelSettings] = await Promise.all([
+      loadV2OptionalResource("/health", { agents_sdk_available: false }),
+      loadV2OptionalResource("/resource-providers", { providers: [] }),
+      loadV2OptionalResource("/provider-capabilities", { providers: [] }),
+      loadV2OptionalResource("/templates/index", null),
+      loadV2OptionalResource(v2TemplatePageEndpoint(), { items: [] }),
+      loadV2OptionalResource("/orchestrator/status", null),
+      loadV2OptionalResource("/runtime/model-settings", null),
+    ]);
+    v2State.health = health;
+    v2State.providers = providersResponse?.providers || [];
+    v2State.imageProviderCapabilities = imageProviderCapabilities?.providers || [];
+    v2State.orchestratorStatus = orchestratorStatus;
+    v2State.modelSettings = modelSettings;
+    if (templateIndexResponse) applyV2TemplateIndex(templateIndexResponse);
+    applyV2TemplatePage(templatesPageResponse || { items: [] }, { reset: true });
+    scheduleV2TemplatePrefetch();
     v2State.loaded = true;
     renderV2Health(health);
     renderV2Providers(v2State.providers);
     renderV2CaseFacets();
     renderV2Templates(v2State.visibleTemplates);
-    renderV2History(v2State.history);
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
     renderV2ModelSettings();
     renderV2ProviderInheritance();
     renderV2Brain(null, orchestratorStatus);
     renderV2AssetPanel();
-    updateV2Notice(silent ? "V2.0 Agent 中枢待命。" : "V2.0 Agent 中枢已就绪。", "success");
+    const readyMessage = v2State.history.length
+      ? silent
+        ? "V2.0 历史已加载，中枢状态同步完成。"
+        : "V2.0 Agent 中枢已就绪，历史已加载。"
+      : silent
+        ? "V2.0 Agent 中枢待命。"
+        : "V2.0 Agent 中枢已就绪。";
+    updateV2Notice(readyMessage, "success");
   } catch (error) {
     v2State.loaded = false;
     if (els.v2HealthState) els.v2HealthState.textContent = "离线";
@@ -5042,16 +5473,17 @@ function renderV2Outputs(outputs, job) {
     } else {
       preview.type = "button";
       const image = document.createElement("img");
-      image.src = v2MediaUrl(output.metadata?.thumbnail_url || output.url);
       image.alt = `2.0 生成结果 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
+      bindImageWithFallback(image, v2OutputImageCandidates(output), { emptyAlt: image.alt });
       preview.appendChild(image);
       preview.addEventListener("click", () => {
         openImageLightbox({
           id: output.output_id,
           title: `2.0 生成结果 ${index + 1}`,
-          url: v2MediaUrl(output.url),
+          url: v2OutputImageUrl(output, { thumbnail: false }),
+          thumbnailUrl: v2OutputImageUrl(output),
           format: v2OutputFormat(output),
           meta: v2ProviderResultText(job, output),
           promptText: v2PromptTextFromJob(job),
@@ -5104,10 +5536,10 @@ function renderV2History(items) {
     } else {
       preview.type = "button";
       const image = document.createElement("img");
-      image.src = v2MediaUrl(item.thumbnail_url || item.url);
       image.alt = cardPrompt || `2.0 历史 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
+      bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt });
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2HistoryLightbox(item, index, card));
     }
@@ -5181,8 +5613,8 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
   openImageLightbox({
     id: item.output_id,
     title: cardPrompt ? cardPrompt.slice(0, 34) : `2.0 历史图片 ${index + 1}`,
-    url: v2MediaUrl(item.url),
-    thumbnailUrl: v2MediaUrl(item.thumbnail_url || item.url),
+    url: v2HistoryImageUrl(item, { thumbnail: false }),
+    thumbnailUrl: v2HistoryImageUrl(item),
     format: v2HistoryFormat(item),
     meta: historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)),
     promptText: v2PromptTextFromHistory(item),
@@ -5299,11 +5731,115 @@ function v2MediaUrl(url) {
   if (url.startsWith("/api/v2/")) {
     return `${v2ApiBase}${url.slice("/api/v2".length)}`;
   }
+  if (url.startsWith("/outputs/") || url.startsWith("/image/") || url.startsWith("/uploads/")) {
+    return `${v2ApiBase}${url}`;
+  }
   return url;
 }
 
+function v2DisplayMediaUrl(url) {
+  if (!url) return "";
+  if (url.startsWith("/api/v2/")) {
+    return `${v2MediaDisplayBase}${url.slice("/api/v2".length)}`;
+  }
+  if (url.startsWith("/outputs/") || url.startsWith("/image/") || url.startsWith("/uploads/")) {
+    return `${v2MediaDisplayBase}${url}`;
+  }
+  return url;
+}
+
+function uniqueNonEmpty(values) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function v2OutputDownloadUrl(outputId) {
+  const clean = String(outputId || "").trim();
+  return clean ? v2MediaUrl(`/api/v2/outputs/${encodeURIComponent(clean)}/download`) : "";
+}
+
+function v2OutputThumbnailUrl(outputId) {
+  const clean = String(outputId || "").trim();
+  return clean ? v2MediaUrl(`/api/v2/image/history/${encodeURIComponent(clean)}/thumbnail`) : "";
+}
+
 function v2HistoryImageUrl(item, { thumbnail = true } = {}) {
-  return v2MediaUrl((thumbnail && item?.thumbnail_url) || item?.url || "");
+  return v2HistoryImageCandidates(item, { thumbnail })[0] || "";
+}
+
+function v2OutputImageUrl(output, { thumbnail = true } = {}) {
+  return v2OutputImageCandidates(output, { thumbnail })[0] || "";
+}
+
+function v2OutputImageCandidates(output, { thumbnail = true } = {}) {
+  const metadata = output?.metadata || {};
+  const outputId = output?.output_id || metadata.output_id;
+  const thumbnailCandidates = thumbnail
+    ? [
+        output?.thumbnail_url,
+        metadata.thumbnail_url,
+        v2OutputThumbnailUrl(outputId),
+      ]
+    : [];
+  return uniqueNonEmpty([
+    ...thumbnailCandidates,
+    output?.url,
+    metadata.url,
+    metadata.download_url,
+    v2OutputDownloadUrl(outputId),
+  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+}
+
+function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
+  const metadata = item?.metadata || {};
+  const outputId = item?.output_id || metadata.output_id;
+  const thumbnailCandidates = thumbnail
+    ? [
+        item?.thumbnail_url,
+        metadata.thumbnail_url,
+        v2OutputThumbnailUrl(outputId),
+      ]
+    : [];
+  return uniqueNonEmpty([
+    ...thumbnailCandidates,
+    item?.url,
+    metadata.url,
+    metadata.download_url,
+    v2OutputDownloadUrl(outputId),
+  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+}
+
+function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用" } = {}) {
+  if (!image) return;
+  const urls = uniqueNonEmpty(candidates || []);
+  image.dataset.fallbackIndex = "0";
+  if (!urls.length) {
+    image.removeAttribute("src");
+    image.alt = image.alt || emptyAlt;
+    image.classList.add("image-load-missing");
+    return;
+  }
+  image.classList.remove("image-load-missing", "image-load-failed");
+  image.dataset.fallbackUrls = JSON.stringify(urls);
+  image.onerror = () => {
+    let fallbackUrls = [];
+    try {
+      fallbackUrls = JSON.parse(image.dataset.fallbackUrls || "[]");
+    } catch {
+      fallbackUrls = [];
+    }
+    const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1;
+    if (fallbackUrls[nextIndex]) {
+      image.dataset.fallbackIndex = String(nextIndex);
+      image.src = fallbackUrls[nextIndex];
+      return;
+    }
+    image.onerror = null;
+    image.classList.add("image-load-failed");
+  };
+  image.onload = () => {
+    image.classList.remove("image-load-failed", "image-load-missing");
+  };
+  image.src = urls[0];
 }
 
 function v2ReviewLabel(decision) {
@@ -5376,12 +5912,73 @@ function updateV2Notice(message, type = "info") {
   els.v2NoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
 }
 
+const v2AccountHistoryPath = "/veyra/history?limit=1000";
+const v2ImageHistoryPath = "/image/history?limit=1000";
+const v2AccountHistoryTimeoutMs = 3500;
+const v2OptionalResourceTimeoutMs = 3500;
+
 function v2HistoryPath() {
-  return "/veyra/history?limit=1000";
+  return v2AccountHistoryPath;
+}
+
+function v2HistoryItemCount(response) {
+  return Array.isArray(response?.items) ? response.items.length : 0;
+}
+
+function v2HistoryLoadErrorMessage(error) {
+  if (!error) return "";
+  if (error.name === "AbortError") return "请求超时";
+  return friendlyError(error);
+}
+
+async function loadV2RequestWithTimeout(path, timeoutMs) {
+  if (!timeoutMs) return await v2Request(path);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await v2Request(path, { signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function loadV2HistoryWithTimeout(path, timeoutMs) {
+  return await loadV2RequestWithTimeout(path, timeoutMs);
+}
+
+async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = v2OptionalResourceTimeoutMs } = {}) {
+  try {
+    return await loadV2RequestWithTimeout(path, timeoutMs);
+  } catch (error) {
+    console.warn(`V2 optional resource unavailable: ${path}`, error);
+    return fallbackValue;
+  }
+}
+
+async function loadV2ImageHistoryFallback(reason = "") {
+  try {
+    const response = await v2Request(v2ImageHistoryPath);
+    if (v2HistoryItemCount(response) && reason) {
+      console.warn(`V2 account history unavailable, using image history fallback: ${reason}`);
+    }
+    return response;
+  } catch (error) {
+    console.warn("V2 image history fallback failed", error);
+    return null;
+  }
 }
 
 async function loadV2HistoryResponse() {
-  return await v2Request(v2HistoryPath());
+  try {
+    const response = await loadV2HistoryWithTimeout(v2HistoryPath(), v2AccountHistoryTimeoutMs);
+    if (v2HistoryItemCount(response)) return response;
+    const fallback = await loadV2ImageHistoryFallback("empty account history");
+    return fallback || response;
+  } catch (error) {
+    const fallback = await loadV2ImageHistoryFallback(v2HistoryLoadErrorMessage(error));
+    if (fallback) return fallback;
+    throw error;
+  }
 }
 
 async function loadVeyraAuthPolicy() {
@@ -5496,6 +6093,7 @@ async function v2Request(path, options = {}) {
     headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
     credentials: "include",
+    signal: options.signal,
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -5692,10 +6290,10 @@ function renderVeyraAccountHistory(items = []) {
     } else {
       preview.type = "button";
       const image = document.createElement("img");
-      image.src = imageUrl;
       image.alt = cardPrompt || `账户生成记录 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
+      bindImageWithFallback(image, accountHistoryImageCandidates(item), { emptyAlt: image.alt });
       preview.appendChild(image);
       preview.addEventListener("click", () => openAccountHistoryLightbox(item, index));
     }
@@ -5858,6 +6456,11 @@ function accountHistoryCardPrompt(item) {
 function accountHistoryImageUrl(item, { thumbnail = true } = {}) {
   if (!accountHistoryIsV1(item)) return v2HistoryImageUrl(item, { thumbnail });
   return (thumbnail && item?.thumbnail_url) || item?.url || "";
+}
+
+function accountHistoryImageCandidates(item, { thumbnail = true } = {}) {
+  if (!accountHistoryIsV1(item)) return v2HistoryImageCandidates(item, { thumbnail });
+  return uniqueNonEmpty([(thumbnail && item?.thumbnail_url) || "", item?.url || ""]);
 }
 
 function accountHistoryProviderText(item) {
@@ -6762,10 +7365,10 @@ function renderV2FavoriteReferencePicker() {
     const preview = document.createElement("span");
     preview.className = "favorite-picker-preview";
     const image = document.createElement("img");
-    image.src = v2HistoryImageUrl(item);
     image.alt = v2HistoryCardPrompt(item) || `2.0 星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
+    bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt });
     preview.appendChild(image);
     const meta = document.createElement("span");
     meta.className = "favorite-picker-meta";
@@ -7075,10 +7678,10 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
     slide.className = `case-slide ${index === 0 ? "active" : ""}`;
 
     const image = document.createElement("img");
-    image.src = item.thumbnailUrl || item.url;
     image.alt = item.title || `历史生成作品 ${index + 1}`;
     image.loading = index === 0 ? "eager" : "lazy";
     image.decoding = "async";
+    bindImageWithFallback(image, item.imageCandidates || [item.thumbnailUrl, item.url], { emptyAlt: image.alt });
 
     slide.append(image);
     els.heroHistoryCarousel.appendChild(slide);
@@ -7110,8 +7713,9 @@ function normalizeHeroHistoryItem(item, source, index) {
     return {
       id: item.output_id || item.id || `v2-history-${index}`,
       title,
-      url: v2MediaUrl(item.url),
-      thumbnailUrl: v2MediaUrl(item.thumbnail_url || item.url),
+      url: v2HistoryImageUrl(item, { thumbnail: false }),
+      thumbnailUrl: v2HistoryImageUrl(item),
+      imageCandidates: v2HistoryImageCandidates(item),
       format: v2HistoryFormat(item),
       meta: `${v2HistoryProviderResultText(item)} · ${formatDate(item.created_at || item.updated_at)}`,
       promptText: v2PromptTextFromHistory(item),
@@ -7279,8 +7883,8 @@ function selectHistoryItem(item, card) {
 
 function openImageLightbox({ id, title, url, thumbnailUrl, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
-  els.lightboxImage.src = url;
   els.lightboxImage.alt = title || "放大预览图";
+  bindImageWithFallback(els.lightboxImage, [url, thumbnailUrl], { emptyAlt: els.lightboxImage.alt });
   els.lightboxImage.dataset.fullUrl = url;
   els.lightboxImage.dataset.shareTitle = title || "Alchemy 生成图片";
   els.lightboxImage.dataset.shareImage = url || "";

@@ -581,6 +581,114 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
   max-width: 100%;
 }
 
+.mode-switch-row {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0 4px;
+}
+
+.mode-switch-copy {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mode-switch-copy strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 560;
+}
+
+.mode-switch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mode-workspace[data-current-mode="simple"] [data-mode-area] {
+  display: none !important;
+}
+
+.simple-mode-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0 24px;
+  border-top: 1px solid var(--line);
+}
+
+.simple-mode-panel[hidden] {
+  display: none !important;
+}
+
+.simple-mode-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.simple-prompt-field,
+.simple-drop-grid,
+.simple-file-list,
+.simple-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.simple-prompt-field span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.simple-file-drop {
+  min-height: 104px;
+  align-content: center;
+  border-radius: var(--radius);
+}
+
+.simple-file-list {
+  min-height: 84px;
+  align-content: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 252, 0.52);
+}
+
+.simple-file-list.empty-simple-list {
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.simple-file-row {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid rgba(24, 25, 21, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 252, 0.72);
+  font-size: 12px;
+}
+
+.simple-file-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simple-file-row span {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.simple-actions .button {
+  width: 100%;
+}
+
 .flow-section {
   padding: 28px 0;
   border-top: 1px solid var(--line);

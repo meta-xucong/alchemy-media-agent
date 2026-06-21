@@ -102,8 +102,46 @@
         </section>
 
         <section id="imageTab" class="module-panel active" data-panel="image" role="tabpanel">
-          <div class="module-stack">
-            <section class="studio-panel flow-section">
+          <div class="module-stack mode-workspace" data-mode-root="v1" data-current-mode="professional">
+            <div class="mode-switch-row" aria-label="V1 工作模式">
+              <div class="mode-switch-copy">
+                <p class="eyebrow">Mode</p>
+                <strong>V1 工作模式</strong>
+              </div>
+              <div class="segmented mode-switch" role="radiogroup" aria-label="V1 工作模式">
+                <button class="segment" data-mode-switch="v1" data-mode-value="simple" role="radio" aria-checked="false" type="button">极简模式</button>
+                <button class="segment active" data-mode-switch="v1" data-mode-value="professional" role="radio" aria-checked="true" type="button">专业模式</button>
+              </div>
+            </div>
+
+            <section id="v1SimplePanel" class="simple-mode-panel flow-section" data-simple-panel="v1" hidden>
+              <div class="simple-mode-hero">
+                <div>
+                  <p class="eyebrow">Simple Mode</p>
+                  <h3>一句话生成 V1 图片</h3>
+                </div>
+                <span class="state-pill">自动参数</span>
+              </div>
+              <label class="field simple-prompt-field">
+                <span>你想要什么图</span>
+                <textarea id="v1SimplePromptInput" rows="5" placeholder="例如：把这张人物图做成清爽咖啡广告，手里的橙汁换成热咖啡。"></textarea>
+              </label>
+              <div class="simple-drop-grid">
+                <label class="file-drop simple-file-drop" for="v1SimpleAssetInput">
+                  <input id="v1SimpleAssetInput" type="file" accept="image/*" multiple />
+                  <span class="file-title">上传参考图</span>
+                  <span id="v1SimpleAssetSummary" class="file-meta">可选，支持多张图片</span>
+                </label>
+                <div id="v1SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
+              </div>
+              <div id="v1SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">自动套用 1 张、高质量、PNG、均衡强度。</div>
+              <div class="simple-actions">
+                <button id="v1SimpleRunBtn" class="button primary" type="button">一键生成</button>
+                <button id="v1SimpleClearBtn" class="button ghost" type="button">清空</button>
+              </div>
+            </section>
+
+            <section class="studio-panel flow-section" data-mode-area="v1-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">01 / Workbench</p>
@@ -136,7 +174,7 @@
               </div>
             </section>
 
-            <section class="panel flow-section tuning-section">
+            <section class="panel flow-section tuning-section" data-mode-area="v1-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">02 / Materials & Controls</p>
@@ -276,7 +314,7 @@
               <div id="gallery" class="gallery empty-gallery" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section revision-section">
+            <section class="panel flow-section revision-section" data-mode-area="v1-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">04 / Revision</p>
@@ -322,7 +360,7 @@
               <div id="historyGallery" class="history-gallery empty-history" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section provider-panel">
+            <section class="panel flow-section provider-panel" data-mode-area="v1-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Model & API</p>
@@ -474,7 +512,7 @@
               </details>
             </section>
 
-            <section class="panel flow-section">
+            <section class="panel flow-section" data-mode-area="v1-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">07 / Events</p>
@@ -488,8 +526,46 @@
         </section>
 
         <section id="v2Tab" class="module-panel" data-panel="v2" role="tabpanel" hidden>
-          <div class="module-stack v2-workbench">
-            <section class="panel flow-section v2-case-area">
+          <div class="module-stack v2-workbench mode-workspace" data-mode-root="v2" data-current-mode="professional">
+            <div class="mode-switch-row" aria-label="V2 工作模式">
+              <div class="mode-switch-copy">
+                <p class="eyebrow">Mode</p>
+                <strong>V2 工作模式</strong>
+              </div>
+              <div class="segmented mode-switch" role="radiogroup" aria-label="V2 工作模式">
+                <button class="segment" data-mode-switch="v2" data-mode-value="simple" role="radio" aria-checked="false" type="button">极简模式</button>
+                <button class="segment active" data-mode-switch="v2" data-mode-value="professional" role="radio" aria-checked="true" type="button">专业模式</button>
+              </div>
+            </div>
+
+            <section id="v2SimplePanel" class="simple-mode-panel flow-section" data-simple-panel="v2" hidden>
+              <div class="simple-mode-hero">
+                <div>
+                  <p class="eyebrow">Simple Mode</p>
+                  <h3>一句话交给 V2 Agent</h3>
+                </div>
+                <span class="state-pill">自动案例</span>
+              </div>
+              <label class="field simple-prompt-field">
+                <span>你想要什么图</span>
+                <textarea id="v2SimplePromptInput" rows="5" placeholder="例如：参考我上传的产品图，生成一张高级电商主图，画面干净，有品牌质感。"></textarea>
+              </label>
+              <div class="simple-drop-grid">
+                <label class="file-drop simple-file-drop" for="v2SimpleAssetInput">
+                  <input id="v2SimpleAssetInput" type="file" accept="image/*" multiple />
+                  <span class="file-title">上传参考图</span>
+                  <span id="v2SimpleAssetSummary" class="file-meta">可选，V2 会自动判断用途</span>
+                </label>
+                <div id="v2SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
+              </div>
+              <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">不使用当前模板或星标参考图，由 V2 Agent 自动匹配案例与素材用途。</div>
+              <div class="simple-actions">
+                <button id="v2SimpleRunBtn" class="button primary" type="button">一键生成</button>
+                <button id="v2SimpleClearBtn" class="button ghost" type="button">清空</button>
+              </div>
+            </section>
+
+            <section class="panel flow-section v2-case-area" data-mode-area="v2-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">01 / Case Gallery</p>
@@ -515,7 +591,7 @@
               <div id="v2TemplateGrid" class="v2-template-grid empty-v2-list" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section v2-agent-area">
+            <section class="panel flow-section v2-agent-area" data-mode-area="v2-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">02 / AI Agent Studio</p>
@@ -721,7 +797,7 @@
               <div id="v2HistoryGrid" class="v2-history-grid empty-v2-list" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section v2-provider-area">
+            <section class="panel flow-section v2-provider-area" data-mode-area="v2-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Model Status</p>
@@ -809,7 +885,7 @@
               </details>
             </section>
 
-            <section class="studio-panel flow-section">
+            <section class="studio-panel flow-section" data-mode-area="v2-professional">
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Agent Models</p>
