@@ -9,7 +9,7 @@
     <meta property="og:description" content="AI 自动优化创作表达，快速生成高质感视觉内容。" />
     <meta property="og:image" content="/mobile-static/showcase/city-poster.jpg" />
     <title>Verya Alchemy H5</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260621-mode-switch-fix" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260621-simple-case-visibility" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -558,7 +558,8 @@
                 </label>
                 <div id="v2SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
               </div>
-              <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">不使用当前模板或星标参考图，由 V2 Agent 自动匹配案例与素材用途。</div>
+              <div id="v2SimpleCaseSummary" class="simple-case-summary" aria-live="polite"></div>
+              <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">V2 Agent 自动匹配案例库与素材用途。</div>
               <div class="simple-actions">
                 <button id="v2SimpleRunBtn" class="button primary" type="button">一键生成</button>
                 <button id="v2SimpleClearBtn" class="button ghost" type="button">清空</button>
@@ -1410,6 +1411,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260621-v2-guide-copy" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260621-simple-case-visibility" defer></script>
   </body>
 </html>

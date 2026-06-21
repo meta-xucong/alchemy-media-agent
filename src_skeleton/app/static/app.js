@@ -462,6 +462,7 @@ const els = {
   v2SimpleAssetInput: document.querySelector("#v2SimpleAssetInput"),
   v2SimpleAssetSummary: document.querySelector("#v2SimpleAssetSummary"),
   v2SimpleFileList: document.querySelector("#v2SimpleFileList"),
+  v2SimpleCaseSummary: document.querySelector("#v2SimpleCaseSummary"),
   v2SimpleNotice: document.querySelector("#v2SimpleNotice"),
   v2SimpleRunBtn: document.querySelector("#v2SimpleRunBtn"),
   v2SimpleClearBtn: document.querySelector("#v2SimpleClearBtn"),
@@ -2129,6 +2130,7 @@ function bindSimpleModeControls() {
   setSimpleMode("v2", simpleModeState.v2.mode);
   renderSimpleFileList("v1");
   renderSimpleFileList("v2");
+  renderV2SimpleCaseSummary("idle");
 }
 
 function applyModeSwitch(button) {
@@ -2211,6 +2213,7 @@ function clearSimpleMode(version) {
   if (refs.prompt) refs.prompt.value = "";
   if (refs.input) refs.input.value = "";
   renderSimpleFileList(version);
+  if (version === "v2") renderV2SimpleCaseSummary("idle");
   updateSimpleNotice(version, version === "v2" ? "已清空极简模式输入；专业模式设置未变。" : "已清空极简模式输入。", "info");
 }
 
@@ -2244,6 +2247,53 @@ function updateSimpleNotice(version, message, type = "info") {
   if (!refs.notice) return;
   refs.notice.textContent = message;
   refs.notice.className = `notice-bar simple-notice ${type}`.trim();
+}
+
+function renderV2SimpleCaseSummary(state = "idle", cases = []) {
+  const target = els.v2SimpleCaseSummary;
+  if (!target) return;
+  const selectedCases = Array.isArray(cases) ? cases.filter(Boolean) : [];
+  const previewCases = selectedCases.slice(0, 3);
+  const className = state === "matching" ? "matching" : selectedCases.length ? "selected" : "idle";
+  const title =
+    state === "matching"
+      ? "正在匹配案例库"
+      : selectedCases.length
+        ? `已参考 ${selectedCases.length} 个案例`
+        : "自动匹配案例库";
+  const detail =
+    state === "matching"
+      ? "Claude 中枢会从案例库提炼视觉结构，再结合你的需求生成。"
+      : selectedCases.length
+        ? "案例库已参与本次视觉策略。"
+        : "无需手选案例，生成时自动选择视觉参考。";
+  const chips = previewCases
+    .map((item) => item.title || item.name || item.category || "视觉参考")
+    .filter(Boolean)
+    .map((label) => `<span class="simple-case-chip">${escapeHtml(label)}</span>`)
+    .join("");
+  target.className = `simple-case-summary ${className}`.trim();
+  target.innerHTML = `
+    <div class="simple-case-summary-main">
+      <span>案例库</span>
+      <strong>${escapeHtml(title)}</strong>
+    </div>
+    <p>${escapeHtml(detail)}</p>
+    ${chips ? `<div class="simple-case-chips">${chips}</div>` : ""}
+  `;
+}
+
+function v2SimpleRunStatusLabel(status) {
+  const labels = {
+    queued: "排队中",
+    running: "运行中",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+    blocked_by_policy: "策略阻止",
+    waiting_for_user: "等待处理",
+  };
+  return labels[status] || status || "未知状态";
 }
 
 function setSimpleRunning(version, running) {
@@ -2483,7 +2533,8 @@ async function runV2SimpleMode() {
     return;
   }
   setSimpleRunning("v2", true);
-  updateSimpleNotice("v2", "正在准备 V2 极简生成。", "info");
+  renderV2SimpleCaseSummary("matching");
+  updateSimpleNotice("v2", "正在准备 V2 极简生成，并自动匹配案例库。", "info");
   const snapshot = snapshotV2Context();
   try {
     const roles = inferSimpleAssetRoles(prompt);
@@ -2516,9 +2567,17 @@ async function runV2SimpleMode() {
     updateV2FavoriteReferenceLabel();
     renderV2Templates(v2State.visibleTemplates);
     renderV2AssetPanel();
-    updateSimpleNotice("v2", "已交给 V2 Agent 极简链路。", "info");
-    await runV2Creative();
-    updateSimpleNotice("v2", "V2 Agent 链路已返回，请查看结果区或页面提示。", "info");
+    updateSimpleNotice("v2", "已交给 V2 Agent 极简链路，正在提炼案例参考。", "info");
+    const run = await runV2Creative();
+    renderV2SimpleCaseSummary(run ? "selected" : "idle", run?.selected_cases || []);
+    const caseCount = Array.isArray(run?.selected_cases) ? run.selected_cases.length : 0;
+    if (run?.status === "completed") {
+      updateSimpleNotice("v2", caseCount ? `V2 Agent 已参考 ${caseCount} 个案例完成生成。` : "V2 Agent 已完成生成。", "info");
+    } else if (run) {
+      updateSimpleNotice("v2", `V2 Agent 链路已返回：${v2SimpleRunStatusLabel(run.status)}。`, run.status === "failed" ? "error" : "warning");
+    } else {
+      updateSimpleNotice("v2", "V2 Agent 未完成，请查看结果区错误提示。", "error");
+    }
   } catch (error) {
     updateSimpleNotice("v2", `V2 极简生成失败：${friendlyError(error)}`, "error");
   } finally {
@@ -4249,11 +4308,13 @@ async function runV2Creative() {
     scrollV2HomeResultsIntoView(run);
     await loadV2History({ silent: true });
     await refreshVeyraAccountPanelAfterHistoryChange();
+    return run;
   } catch (error) {
     const message = `V2.0 Agent 失败：${friendlyError(error)}`;
     finishV2Progress("failed", message, "error");
     updateV2Notice(message, "error");
     clearV2RunResult();
+    return null;
   } finally {
     clearV2ProgressTimer();
     toggleV2Loading(false);

@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260621-mode-switch-fix" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260621-simple-case-visibility" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -586,7 +586,8 @@
                 </label>
                 <div id="v2SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
               </div>
-              <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">极简模式不使用当前模板或星标参考图，由 V2 Agent 自动匹配案例与素材用途。</div>
+              <div id="v2SimpleCaseSummary" class="simple-case-summary" aria-live="polite"></div>
+              <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">极简模式由 V2 Agent 自动匹配案例库与素材用途。</div>
               <div class="simple-actions">
                 <button id="v2SimpleRunBtn" class="button primary" type="button">一键生成</button>
                 <button id="v2SimpleClearBtn" class="button ghost" type="button">清空</button>
@@ -1406,6 +1407,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260621-mode-switch-fix" defer></script>
+    <script src="/static/app.js?v=20260621-simple-case-visibility" defer></script>
   </body>
 </html>
