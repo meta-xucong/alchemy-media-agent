@@ -22,13 +22,19 @@ jobs:
       - name: Prepare SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           test -n "$VPS_HOST"
-          test -n "$VPS_SSH_KEY"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
           mkdir -p ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
           chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
       - name: Sync source to VPS
         env:
