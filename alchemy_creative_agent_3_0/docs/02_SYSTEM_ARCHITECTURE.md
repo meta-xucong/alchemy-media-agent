@@ -38,32 +38,153 @@ Commercial Asset Pack
 
 Each layer should have explicit inputs, outputs, schemas, and metadata.
 
-## 2. Core Concept: Creative Core
+## 2. Product Boundary Architecture
+
+V3 must be a separate product area inside the larger site.
+
+Allowed relationship with the existing product:
+
+```text
+same domain
+same top-level home page
+same deployment server
+same balance / credit system
+same platform account identity if needed
+```
+
+Forbidden relationship:
+
+```text
+shared V1/V2 runtime APIs
+shared V1/V2 generation services
+shared V1/V2 prompt plan objects
+shared V1/V2 frontend workflow state
+shared V1/V2 provider parameter contracts
+```
+
+Target product shell:
+
+```text
+Shared Home Page / Site Shell
+  ├── existing product entries
+  └── Alchemy Creative Agent 3.0 title-bar entry
+        └── V3 Frontend App
+              └── V3 API Layer
+                    └── V3 Creative Core
+                          └── V3 Agents / Providers / Memory / Asset Pack
+```
+
+The V3 frontend should call V3-owned APIs only.
+
+If V3 needs shared account or balance information, it must use explicit platform adapters:
+
+```text
+V3AccountAdapter
+V3BalanceAdapter
+V3DeploymentAdapter
+```
+
+These adapters are boundary adapters, not business logic dependencies.
+
+## 3. Core Concept: Central Creative Brain
 
 The central system should be called:
+
+```text
+Central Creative Brain
+```
+
+It may also be referred to in code as:
 
 ```text
 Creative Core
 ```
 
-Creative Core owns:
+The Central Creative Brain owns orchestration:
 
 - business intent interpretation
+- vertical agent pack selection
 - commercial brief generation
 - brand memory usage
 - creative planning
 - asset series planning
 - layout planning
 - prompt compilation
-- generation planning
+- condition planning
+- generation routing
 - scoring and refinement coordination
 - final asset manifest generation
 
-Creative Core is the V3 product brain.
+The Central Creative Brain is the V3 product brain.
 
 It does not directly depend on V2.
 
-## 3. Core Intermediate Representation
+## 4. Multi-Agent and Vertical Extension Architecture
+
+V3 must preserve a central-brain + multi-agent framework.
+
+Base agents:
+
+```text
+IntentAgent
+CommercialStrategyAgent
+BrandMemoryAgent
+CreativeDirectorAgent
+SeriesPlannerAgent
+LayoutAgent
+PromptCompilerAgent
+GenerationRouterAgent
+CriticRefinerAgent
+AssetPackagerAgent
+```
+
+Future industry-specific capabilities should be implemented as vertical agent packs.
+
+Examples:
+
+```text
+EcommerceAgentFamily
+BrandIPAgentFamily
+AIMangaDramaAgentFamily
+RestaurantAgentFamily
+LocalServiceAgentFamily
+EducationAgentFamily
+HospitalityAgentFamily
+```
+
+A vertical agent pack may customize:
+
+```text
+intent rules
+commercial strategy
+creative direction
+series planning
+layout templates
+prompt compilation
+scoring rules
+provider routing
+asset pack output format
+```
+
+But it must still emit V3 standard schemas.
+
+Vertical packs extend the V3 framework. They do not fork the V3 runtime.
+
+Recommended architecture:
+
+```text
+Central Creative Brain
+  ↓
+VerticalAgentRegistry
+  ↓
+Selected VerticalAgentPack
+  ↓
+Base Agent Contracts
+  ↓
+V3 Standard Schemas
+```
+
+## 5. Core Intermediate Representation
 
 V3 must define its own intermediate representation, or IR.
 
@@ -103,9 +224,9 @@ GPT Image can be replaced later.
 
 The product contract should remain stable.
 
-## 4. High-Level Data Flow
+## 6. High-Level Data Flow
 
-### 4.1 Input
+### 6.1 Input
 
 ```json
 {
@@ -116,7 +237,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.2 CreativeJob
+### 6.2 CreativeJob
 
 ```json
 {
@@ -125,11 +246,13 @@ The product contract should remain stable.
   "language": "zh-CN",
   "requested_output": "commercial_image_series",
   "constraints": [],
-  "metadata": {}
+  "metadata": {
+    "selected_vertical_pack": "restaurant_or_beverage_default"
+  }
 }
 ```
 
-### 4.3 CommercialBrief
+### 6.3 CommercialBrief
 
 ```json
 {
@@ -143,7 +266,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.4 BrandProfile
+### 6.4 BrandProfile
 
 ```json
 {
@@ -158,7 +281,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.5 CreativePlan
+### 6.5 CreativePlan
 
 ```json
 {
@@ -171,7 +294,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.6 SeriesPlan
+### 6.6 SeriesPlan
 
 ```json
 {
@@ -192,7 +315,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.7 LayoutPlan
+### 6.7 LayoutPlan
 
 ```json
 {
@@ -216,7 +339,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.8 PromptCompilationResult
+### 6.8 PromptCompilationResult
 
 ```json
 {
@@ -231,7 +354,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.9 ConditionPlan
+### 6.9 ConditionPlan
 
 ```json
 {
@@ -252,7 +375,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.10 GenerationPlan
+### 6.10 GenerationPlan
 
 ```json
 {
@@ -269,7 +392,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.11 EvaluationReport
+### 6.11 EvaluationReport
 
 ```json
 {
@@ -284,7 +407,7 @@ The product contract should remain stable.
 }
 ```
 
-### 4.12 CommercialAssetPack
+### 6.12 CommercialAssetPack
 
 ```json
 {
@@ -305,9 +428,38 @@ The product contract should remain stable.
 }
 ```
 
-## 5. Module Layers
+## 7. Module Layers
 
-### 5.1 creative_core
+### 7.1 app_shell
+
+Owns V3 frontend entry and V3 UI boundary later.
+
+Responsibilities:
+
+- V3 title-bar entry specification
+- V3-only route namespace
+- V3 UI state separation
+- V3 frontend to V3 API calls only
+- platform adapter calls for balance/account only
+
+### 7.2 platform_adapters
+
+Owns narrow adapters to shared platform services.
+
+Examples:
+
+```text
+V3BalanceAdapter
+V3AccountAdapter
+V3DeploymentAdapter
+```
+
+Responsibilities:
+
+- isolate shared balance/account/deployment concerns
+- prevent V3 business logic from depending on V1/V2 internals
+
+### 7.3 creative_core
 
 Owns orchestration.
 
@@ -315,16 +467,17 @@ Responsibilities:
 
 - accepts user input
 - creates CreativeJob
+- selects vertical agent pack when needed
 - calls intent, brief, brand, creative, layout, prompt, generation, scoring, and refinement modules
 - returns CommercialAssetPack
 
-### 5.2 schemas
+### 7.4 schemas
 
 Owns all V3 Pydantic models.
 
 Must not import V2 schemas.
 
-### 5.3 agents
+### 7.5 agents
 
 Owns all V3 agent contracts and prompt specifications.
 
@@ -339,8 +492,29 @@ Suggested agents:
 - PromptCompilerAgent
 - GenerationRouterAgent
 - CriticRefinerAgent
+- AssetPackagerAgent
 
-### 5.4 brand_memory
+### 7.6 vertical_agents
+
+Owns future industry-specific agent packs.
+
+Responsibilities:
+
+- register vertical agent packs
+- select pack by industry / scenario / product mode
+- allow vertical overrides while preserving V3 standard schemas
+
+First-pass packs may include only default stubs:
+
+```text
+DefaultCommercialPack
+RestaurantPack later
+EcommercePack later
+BrandIPPack later
+AIMangaDramaPack later
+```
+
+### 7.7 brand_memory
 
 Owns persistent brand profiles and historical preference memory.
 
@@ -352,7 +526,7 @@ Responsibilities:
 - store reference assets
 - summarize successful visual patterns
 
-### 5.5 layout_engine
+### 7.8 layout_engine
 
 Owns commercial layout and text rendering plans.
 
@@ -363,7 +537,7 @@ Responsibilities:
 - text region reservation
 - HTML / SVG / Canvas rendering in future implementation
 
-### 5.6 prompt_compiler
+### 7.9 prompt_compiler
 
 Owns provider-neutral prompt compilation.
 
@@ -374,7 +548,7 @@ Responsibilities:
 - avoid final text rendering when external text rendering is required
 - produce metadata
 
-### 5.7 condition_engine
+### 7.10 condition_engine
 
 Owns style, reference, layout, and identity conditioning plans.
 
@@ -387,7 +561,7 @@ Responsibilities:
 
 External projects such as InstantStyle, IP-Adapter, ControlNet, PhotoMaker, and InstantID should be implemented here later as providers, not core dependencies.
 
-### 5.8 generation_router
+### 7.11 generation_router
 
 Owns provider selection.
 
@@ -398,7 +572,7 @@ Responsibilities:
 - choose retry strategy
 - create candidate records
 
-### 5.9 evaluation
+### 7.12 evaluation
 
 Owns scoring and critique.
 
@@ -413,7 +587,7 @@ Responsibilities:
 
 External projects such as ImageReward may be integrated here later.
 
-### 5.10 asset_pack
+### 7.13 asset_pack
 
 Owns final output packaging.
 
@@ -426,7 +600,7 @@ Responsibilities:
 - metadata export
 - brand memory update payload
 
-## 6. Provider Interface Pattern
+## 8. Provider Interface Pattern
 
 Each external capability should implement a V3-owned interface.
 
@@ -449,7 +623,7 @@ NoopStyleProvider
 
 Core code should depend on `StyleConditionProvider`, not directly on InstantStyle or IP-Adapter.
 
-## 7. Refinement Loop
+## 9. Refinement Loop
 
 The refinement loop should work as follows:
 
@@ -468,7 +642,7 @@ The refinement loop should work as follows:
 
 The system should never hide refinement steps. All refinements must be saved in metadata.
 
-## 8. Text Rendering Strategy
+## 10. Text Rendering Strategy
 
 For poster-like outputs, V3 should prefer:
 
@@ -480,7 +654,7 @@ accurate text rendered by layout engine
 
 The prompt compiler should instruct the image model to reserve clean regions and avoid fake text.
 
-## 9. Brand Memory Update Strategy
+## 11. Brand Memory Update Strategy
 
 After completion, the system should update brand memory only when there is a successful output.
 
@@ -493,7 +667,7 @@ Possible update signals:
 
 Brand memory should not blindly store every generated candidate.
 
-## 10. Architecture Non-Goals
+## 12. Architecture Non-Goals
 
 V3 foundation should not initially include:
 
@@ -503,8 +677,9 @@ V3 foundation should not initially include:
 - full ComfyUI embedding
 - large GPU provider integration in the core service
 - direct runtime import from V2
+- coupling V3 frontend to V1/V2 UI state
 
-## 11. Definition of Architectural Success
+## 13. Definition of Architectural Success
 
 The architecture is successful if:
 
@@ -516,4 +691,7 @@ The architecture is successful if:
 5. Prompt compilation is provider-neutral.
 6. Candidate scoring and refinement are built into the workflow.
 7. V3 runs independently from V2.
+8. V3 has an independent frontend entry and V3-owned backend API boundary.
+9. V3 uses shared platform services only through boundary adapters.
+10. V3 preserves the central-brain + multi-agent + vertical sub-agent architecture.
 ```
