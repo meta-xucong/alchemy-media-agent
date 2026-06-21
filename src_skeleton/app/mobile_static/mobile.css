@@ -2080,11 +2080,37 @@ body.h5-simplified .mobile-v2-home-results {
   margin-top: 4px;
 }
 
+.run-progress-panel,
 .v2-progress-panel {
   margin-top: 12px;
   padding: 12px;
 }
 
+.run-progress-panel[hidden],
+.v2-progress-panel[hidden] {
+  display: none !important;
+}
+
+.run-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-progress-head strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.run-progress-head span,
+.run-progress-detail {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.run-progress-meter,
 .v2-progress-meter {
   height: 8px;
   overflow: hidden;
@@ -2093,6 +2119,7 @@ body.h5-simplified .mobile-v2-home-results {
   background: rgba(125, 139, 111, 0.14);
 }
 
+.run-progress-meter span,
 .v2-progress-meter span,
 #v2ProgressFill {
   display: block;
@@ -2102,12 +2129,14 @@ body.h5-simplified .mobile-v2-home-results {
   background: linear-gradient(90deg, var(--sage), var(--champagne));
 }
 
+.run-progress-steps,
 .v2-progress-steps {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
+.run-progress-step,
 .v2-progress-step {
   min-height: 28px;
   display: inline-flex;
@@ -2120,12 +2149,21 @@ body.h5-simplified .mobile-v2-home-results {
   font-size: 11px;
 }
 
+.run-progress-step.done,
+.run-progress-step.active,
 .v2-progress-step.done,
 .v2-progress-step.active {
   border-color: rgba(125, 139, 111, 0.55);
   color: var(--sage-deep);
 }
 
+.run-progress-step.failed,
+.v2-progress-step.failed {
+  border-color: rgba(181, 73, 59, 0.42);
+  color: #9f3a2d;
+}
+
+.run-progress-detail,
 .v2-progress-detail {
   margin-top: 8px;
   color: var(--muted);

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import httpx
 import logging
+import os
 from html import escape
 from pathlib import Path
 import textwrap
@@ -981,6 +982,54 @@ def _safe_public_share_url(request: Request, value: str | None, *, fallback: str
     return str(request.base_url).rstrip("/") + quote(fallback, safe="/:?&=%#.-_~")
 
 
+def _share_output_id_from_path(path: str, prefix: str, suffix: str) -> str | None:
+    normalized = str(path or "")
+    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
+        return None
+    output_id = normalized[len(prefix) : len(normalized) - len(suffix)]
+    decoded = unquote(output_id.strip("/"))
+    if not decoded or "/" in decoded or "\\" in decoded:
+        return None
+    if any(char in decoded for char in "*?[]"):
+        return None
+    return decoded
+
+
+def _v2_storage_root() -> Path:
+    configured = str(os.getenv("V2_STORAGE_DIR") or "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "custom_media_agent_2_0" / ".v2_storage"
+
+
+def _safe_file_under(path: Path, root: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+        resolved_root = root.resolve()
+    except OSError:
+        return None
+    if resolved_root != resolved and resolved_root not in resolved.parents:
+        return None
+    return resolved if resolved.exists() and resolved.is_file() else None
+
+
+def _v2_output_file_from_share_path(path: str) -> Path | None:
+    output_id = _share_output_id_from_path(path, "/api/v2/outputs/", "/download")
+    storage_root = _v2_storage_root()
+    if output_id:
+        outputs_root = storage_root / "outputs"
+        for candidate in outputs_root.glob(f"*/{output_id}.*"):
+            resolved = _safe_file_under(candidate, storage_root)
+            if resolved:
+                return resolved
+    thumbnail_id = _share_output_id_from_path(path, "/api/v2/image/history/", "/thumbnail")
+    if thumbnail_id:
+        resolved = _safe_file_under(storage_root / "thumbnails" / f"{thumbnail_id}.webp", storage_root)
+        if resolved:
+            return resolved
+    return None
+
+
 def _share_text(value: str | None, fallback: str, limit: int) -> str:
     compact = " ".join(str(value or "").split())
     if not compact:
@@ -1251,6 +1300,17 @@ def _load_share_preview_image(request: Request, value: str | None):
     try:
         decoded = unquote(str(value or "").strip())
         split = urlsplit(decoded)
+        v2_output_file = _v2_output_file_from_share_path(split.path or decoded)
+        if v2_output_file:
+            return Image.open(v2_output_file)
+        if split.path.startswith("/api/v2/"):
+            target = settings.v2_api_proxy_base_url.rstrip("/") + split.path
+            if split.query:
+                target = f"{target}?{split.query}"
+            with httpx.Client(timeout=8, follow_redirects=True) as client:
+                response = client.get(target)
+                response.raise_for_status()
+                return Image.open(BytesIO(response.content))
         if split.path.startswith("/v1/outputs/"):
             parts = split.path.strip("/").split("/")
             if len(parts) >= 3:

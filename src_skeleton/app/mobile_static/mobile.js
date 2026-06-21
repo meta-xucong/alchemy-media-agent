@@ -86,6 +86,33 @@ const v2StatusStageMap = {
   blocked_by_policy: "failed",
   waiting_for_user: "reviewing",
 };
+const v1ProgressStages = [
+  { key: "preparing", label: "准备需求", short: "准备中", percent: 8 },
+  { key: "assets", label: "处理素材", short: "传图中", percent: 20 },
+  { key: "submitting", label: "提交任务", short: "提交中", percent: 34 },
+  { key: "queued", label: "任务排队", short: "排队中", percent: 46 },
+  { key: "generating", label: "模型生成", short: "出图中", percent: 70 },
+  { key: "postprocessing", label: "整理结果", short: "整理中", percent: 88 },
+  { key: "ready", label: "完成", short: "已完成", percent: 100 },
+  { key: "failed", label: "已停止", short: "已停止", percent: 100 },
+];
+const v1ProgressByKey = Object.fromEntries(v1ProgressStages.map((stage) => [stage.key, stage]));
+const v1JobStatusStageMap = {
+  created: "queued",
+  queued: "queued",
+  submitted: "queued",
+  planning: "generating",
+  safety_check: "postprocessing",
+  generating: "generating",
+  processing: "generating",
+  postprocessing: "postprocessing",
+  evaluating: "postprocessing",
+  ready: "ready",
+  failed: "failed",
+  provider_not_configured: "failed",
+  rejected: "failed",
+  canceled: "failed",
+};
 const v2CategoryLabels = {
   "ad-creative": "广告创意",
   ecommerce: "电商主图",
@@ -151,11 +178,15 @@ const state = {
   imageProgressStartedAt: null,
   imageProgressTimer: null,
   imageProgressLabel: "生成中",
+  imageProgressStageKey: "preparing",
+  imageProgressDetail: "",
+  imageProgressType: "info",
+  imageProgressNoticeKey: "",
 };
 
 const simpleModeState = {
-  v1: { mode: "professional", files: [], running: false },
-  v2: { mode: "professional", files: [], running: false },
+  v1: { mode: "professional", files: [], running: false, progressStartedAt: null, progressTimer: null, progressStageKey: "preparing", progressDetail: "" },
+  v2: { mode: "professional", files: [], running: false, progressStartedAt: null, progressTimer: null, progressStageKey: "queued", progressDetail: "" },
 };
 
 const v2State = {
@@ -316,6 +347,12 @@ const els = {
   v2ProgressFill: document.querySelector("#v2ProgressFill"),
   v2ProgressSteps: document.querySelector("#v2ProgressSteps"),
   v2ProgressDetail: document.querySelector("#v2ProgressDetail"),
+  v1ProgressPanel: document.querySelector("#v1ProgressPanel"),
+  v1ProgressTitle: document.querySelector("#v1ProgressTitle"),
+  v1ProgressElapsed: document.querySelector("#v1ProgressElapsed"),
+  v1ProgressFill: document.querySelector("#v1ProgressFill"),
+  v1ProgressSteps: document.querySelector("#v1ProgressSteps"),
+  v1ProgressDetail: document.querySelector("#v1ProgressDetail"),
   v2RunBtn: document.querySelector("#v2RunBtn"),
   v2SelectedTemplateLabel: document.querySelector("#v2SelectedTemplateLabel"),
   v2PickFavoriteReferenceBtn: document.querySelector("#v2PickFavoriteReferenceBtn"),
@@ -449,6 +486,12 @@ const els = {
   v1SimpleAssetInput: document.querySelector("#v1SimpleAssetInput"),
   v1SimpleAssetSummary: document.querySelector("#v1SimpleAssetSummary"),
   v1SimpleFileList: document.querySelector("#v1SimpleFileList"),
+  v1SimpleProgressPanel: document.querySelector("#v1SimpleProgressPanel"),
+  v1SimpleProgressTitle: document.querySelector("#v1SimpleProgressTitle"),
+  v1SimpleProgressElapsed: document.querySelector("#v1SimpleProgressElapsed"),
+  v1SimpleProgressFill: document.querySelector("#v1SimpleProgressFill"),
+  v1SimpleProgressSteps: document.querySelector("#v1SimpleProgressSteps"),
+  v1SimpleProgressDetail: document.querySelector("#v1SimpleProgressDetail"),
   v1SimpleNotice: document.querySelector("#v1SimpleNotice"),
   v1SimpleRunBtn: document.querySelector("#v1SimpleRunBtn"),
   v1SimpleClearBtn: document.querySelector("#v1SimpleClearBtn"),
@@ -457,6 +500,12 @@ const els = {
   v2SimpleAssetSummary: document.querySelector("#v2SimpleAssetSummary"),
   v2SimpleFileList: document.querySelector("#v2SimpleFileList"),
   v2SimpleCaseSummary: document.querySelector("#v2SimpleCaseSummary"),
+  v2SimpleProgressPanel: document.querySelector("#v2SimpleProgressPanel"),
+  v2SimpleProgressTitle: document.querySelector("#v2SimpleProgressTitle"),
+  v2SimpleProgressElapsed: document.querySelector("#v2SimpleProgressElapsed"),
+  v2SimpleProgressFill: document.querySelector("#v2SimpleProgressFill"),
+  v2SimpleProgressSteps: document.querySelector("#v2SimpleProgressSteps"),
+  v2SimpleProgressDetail: document.querySelector("#v2SimpleProgressDetail"),
   v2SimpleNotice: document.querySelector("#v2SimpleNotice"),
   v2SimpleRunBtn: document.querySelector("#v2SimpleRunBtn"),
   v2SimpleClearBtn: document.querySelector("#v2SimpleClearBtn"),
@@ -3002,6 +3051,7 @@ function clearSimpleMode(version) {
   if (refs.prompt) refs.prompt.value = "";
   if (refs.input) refs.input.value = "";
   renderSimpleFileList(version);
+  resetSimpleProgress(version);
   if (version === "v2") renderV2SimpleCaseSummary("idle");
   updateSimpleNotice(version, version === "v2" ? "已清空极简输入；专业设置未变。" : "已清空极简输入。", "info");
 }
@@ -3036,6 +3086,140 @@ function updateSimpleNotice(version, message, type = "info") {
   if (!refs.notice) return;
   refs.notice.textContent = message;
   refs.notice.className = `notice-bar simple-notice ${type}`.trim();
+}
+
+function progressElapsedLabel(startedAt) {
+  if (!startedAt) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
+
+function renderRunProgress({ panel, title, elapsed, fill, steps, detail }, stageList, stageKey, detailText, startedAt, { failed = false } = {}) {
+  if (!panel) return;
+  const activeKey = stageList.some((stage) => stage.key === stageKey) ? stageKey : stageList[0]?.key;
+  const stage = stageList.find((item) => item.key === activeKey) || stageList[0];
+  const activeIndex = Math.max(0, stageList.findIndex((item) => item.key === activeKey));
+  panel.hidden = false;
+  if (title) title.textContent = stage?.label || "处理中";
+  if (elapsed) elapsed.textContent = progressElapsedLabel(startedAt) ? `已用 ${progressElapsedLabel(startedAt)}` : "刚开始";
+  if (fill) fill.style.width = `${stage?.percent || 0}%`;
+  if (detail) detail.textContent = detailText || stage?.label || "正在处理。";
+  if (!steps) return;
+  steps.innerHTML = "";
+  stageList.forEach((item, index) => {
+    const step = document.createElement("span");
+    step.className = "run-progress-step";
+    if (index < activeIndex) step.classList.add("done");
+    if (index === activeIndex) step.classList.add(failed ? "failed" : "active");
+    step.textContent = item.label;
+    steps.appendChild(step);
+  });
+}
+
+function simpleProgressEls(version) {
+  if (version === "v2") {
+    return {
+      panel: els.v2SimpleProgressPanel,
+      title: els.v2SimpleProgressTitle,
+      elapsed: els.v2SimpleProgressElapsed,
+      fill: els.v2SimpleProgressFill,
+      steps: els.v2SimpleProgressSteps,
+      detail: els.v2SimpleProgressDetail,
+    };
+  }
+  return {
+    panel: els.v1SimpleProgressPanel,
+    title: els.v1SimpleProgressTitle,
+    elapsed: els.v1SimpleProgressElapsed,
+    fill: els.v1SimpleProgressFill,
+    steps: els.v1SimpleProgressSteps,
+    detail: els.v1SimpleProgressDetail,
+  };
+}
+
+function simpleProgressStages(version) {
+  return version === "v2" ? v2ProgressStages : v1ProgressStages;
+}
+
+function startSimpleProgress(version, stageKey, detailText) {
+  const progress = simpleModeState[version];
+  if (!progress) return;
+  clearSimpleProgressTimer(version);
+  progress.progressStartedAt = Date.now();
+  setSimpleProgress(version, stageKey, detailText);
+  progress.progressTimer = window.setInterval(() => renderSimpleProgress(version), 1000);
+}
+
+function setSimpleProgress(version, stageKey, detailText, { type = "info" } = {}) {
+  const progress = simpleModeState[version];
+  if (!progress) return;
+  progress.progressStageKey = stageKey;
+  progress.progressDetail = detailText || "";
+  progress.progressType = type;
+  renderSimpleProgress(version);
+}
+
+function renderSimpleProgress(version) {
+  const progress = simpleModeState[version];
+  if (!progress) return;
+  renderRunProgress(
+    simpleProgressEls(version),
+    simpleProgressStages(version),
+    progress.progressStageKey,
+    progress.progressDetail,
+    progress.progressStartedAt,
+    { failed: progress.progressType === "error" || progress.progressStageKey === "failed" }
+  );
+}
+
+function finishSimpleProgress(version, stageKey, detailText, type = "success") {
+  setSimpleProgress(version, stageKey, detailText, { type });
+  clearSimpleProgressTimer(version);
+}
+
+function clearSimpleProgressTimer(version) {
+  const progress = simpleModeState[version];
+  if (!progress?.progressTimer) return;
+  window.clearInterval(progress.progressTimer);
+  progress.progressTimer = null;
+}
+
+function resetSimpleProgress(version) {
+  clearSimpleProgressTimer(version);
+  const progress = simpleModeState[version];
+  if (progress) {
+    progress.progressStartedAt = null;
+    progress.progressStageKey = version === "v2" ? "queued" : "preparing";
+    progress.progressDetail = "";
+    progress.progressType = "info";
+  }
+  const refs = simpleProgressEls(version);
+  if (refs.panel) refs.panel.hidden = true;
+}
+
+function updateSimpleProgressFromV1Job(version, job, { actionLabel = "生成" } = {}) {
+  const status = job?.status || "queued";
+  const stageKey = v1JobStatusStageMap[status] || "generating";
+  const outputs = Array.isArray(job?.outputs) ? job.outputs.length : 0;
+  let detail = `${actionLabel}任务正在处理。`;
+  if (stageKey === "queued") detail = `${actionLabel}任务已提交，正在等待模型接手。`;
+  if (stageKey === "generating") detail = `模型正在出图，已返回 ${outputs} 张。`;
+  if (stageKey === "postprocessing") detail = outputs ? `已得到 ${outputs} 张，正在整理结果。` : "正在整理生成结果。";
+  if (stageKey === "ready") detail = `完成，共得到 ${outputs} 张输出。`;
+  if (stageKey === "failed") detail = jobErrorMessage(job);
+  setSimpleProgress(version, stageKey, detail, { type: stageKey === "failed" ? "error" : stageKey === "ready" ? "success" : "info" });
+}
+
+function updateSimpleProgressFromV2Run(run) {
+  const statusStage = v2StatusStageMap[run?.status] || "planning";
+  const stageKey = refineV2ProgressStage(statusStage, run);
+  const detail = v2ProgressDetailForRun(stageKey, run);
+  setSimpleProgress("v2", stageKey, detail, { type: v2ProgressTypeForRun(run) });
+  if (stageKey === "retrieving_cases" || (run?.selected_cases || []).length) {
+    renderV2SimpleCaseSummary("matching", run?.selected_cases || []);
+  }
 }
 
 function renderV2SimpleCaseSummary(state = "idle", cases = []) {
@@ -3235,6 +3419,7 @@ async function runV1SimpleMode() {
     return;
   }
   setSimpleRunning("v1", true);
+  startSimpleProgress("v1", "preparing", "正在理解一句话需求并套用 V1 默认参数。");
   updateSimpleNotice("v1", "正在准备 V1 极简生成。", "info");
   const snapshot = snapshotV1Context();
   try {
@@ -3243,6 +3428,7 @@ async function runV1SimpleMode() {
     els.promptInput.value = prompt;
     const uploaded = [];
     for (const file of files) {
+      setSimpleProgress("v1", "assets", `正在上传参考图 ${uploaded.length + 1}/${files.length}。`);
       uploaded.push(await uploadV1AssetFile(file));
       updateSimpleNotice("v1", `已上传 ${uploaded.length}/${files.length} 张参考图。`, "info");
     }
@@ -3251,9 +3437,23 @@ async function runV1SimpleMode() {
     state.assetMode = uploaded.length ? "advanced" : "basic";
     renderAssetPanel();
     updateSimpleNotice("v1", "已交给 V1 生成链路。", "info");
-    await generateImage();
-    updateSimpleNotice("v1", "V1 生成链路已返回，请查看结果区或页面提示。", "info");
+    setSimpleProgress("v1", "submitting", "正在提交给 V1 生图链路。");
+    const completedJob = await generateImage({
+      progressTarget: "simple-v1",
+      onJobUpdate: (job) => updateSimpleProgressFromV1Job("v1", job, { actionLabel: "生成" }),
+    });
+    if (v1ImageJobReady(completedJob)) {
+      finishSimpleProgress("v1", "ready", `V1 已完成，共得到 ${completedJob.outputs.length} 张输出。`);
+      updateSimpleNotice("v1", "V1 已完成，请查看结果区。", "success");
+    } else if (completedJob) {
+      finishSimpleProgress("v1", "failed", `V1 未完成：${jobErrorMessage(completedJob)}`, "error");
+      updateSimpleNotice("v1", `V1 未完成：${jobErrorMessage(completedJob)}`, "error");
+    } else {
+      finishSimpleProgress("v1", "failed", "V1 生成链路未返回结果，请查看页面提示。", "error");
+      updateSimpleNotice("v1", "V1 生成链路未返回结果，请查看页面提示。", "error");
+    }
   } catch (error) {
+    finishSimpleProgress("v1", "failed", `V1 极简生成失败：${friendlyError(error)}`, "error");
     updateSimpleNotice("v1", `V1 极简生成失败：${friendlyError(error)}`, "error");
   } finally {
     restoreV1Context(snapshot);
@@ -3323,6 +3523,7 @@ async function runV2SimpleMode() {
     return;
   }
   setSimpleRunning("v2", true);
+  startSimpleProgress("v2", "queued", "正在整理需求，准备提交给 V2 Agent。");
   renderV2SimpleCaseSummary("matching");
   updateSimpleNotice("v2", "正在准备 V2 极简生成，并自动匹配案例库。", "info");
   const snapshot = snapshotV2Context();
@@ -3349,6 +3550,7 @@ async function runV2SimpleMode() {
     const uploaded = [];
     const primaryRole = roles[0] || "style_reference";
     for (const file of files) {
+      setSimpleProgress("v2", "planning", `正在上传并理解素材 ${uploaded.length + 1}/${files.length}。`);
       uploaded.push(await uploadV2AssetFile(file, { role: primaryRole, strength: "strong" }));
       updateSimpleNotice("v2", `已上传 ${uploaded.length}/${files.length} 张参考图。`, "info");
     }
@@ -3358,17 +3560,25 @@ async function runV2SimpleMode() {
     renderV2Templates(v2State.visibleTemplates);
     renderV2AssetPanel();
     updateSimpleNotice("v2", "已交给 V2 Agent 极简链路，正在提炼案例参考。", "info");
-    const run = await runV2Creative();
+    setSimpleProgress("v2", "retrieving_cases", "正在匹配案例库并提炼可复用视觉结构。");
+    const run = await runV2Creative({
+      progressTarget: "simple-v2",
+      onRunUpdate: updateSimpleProgressFromV2Run,
+    });
     renderV2SimpleCaseSummary(run ? "selected" : "idle", run?.selected_cases || []);
     const caseCount = Array.isArray(run?.selected_cases) ? run.selected_cases.length : 0;
     if (run?.status === "completed") {
+      finishSimpleProgress("v2", "completed", caseCount ? `已参考 ${caseCount} 个案例完成生成。` : "V2 Agent 已完成生成。");
       updateSimpleNotice("v2", caseCount ? `V2 Agent 已参考 ${caseCount} 个案例完成生成。` : "V2 Agent 已完成生成。", "info");
     } else if (run) {
+      finishSimpleProgress("v2", v2StatusStageMap[run.status] || "failed", `V2 Agent 链路已返回：${v2SimpleRunStatusLabel(run.status)}。`, run.status === "failed" ? "error" : "warning");
       updateSimpleNotice("v2", `V2 Agent 链路已返回：${v2SimpleRunStatusLabel(run.status)}。`, run.status === "failed" ? "error" : "warning");
     } else {
+      finishSimpleProgress("v2", "failed", "V2 Agent 未完成，请查看结果区错误提示。", "error");
       updateSimpleNotice("v2", "V2 Agent 未完成，请查看结果区错误提示。", "error");
     }
   } catch (error) {
+    finishSimpleProgress("v2", "failed", `V2 极简生成失败：${friendlyError(error)}`, "error");
     updateSimpleNotice("v2", `V2 极简生成失败：${friendlyError(error)}`, "error");
   } finally {
     restoreV2Context(snapshot);
@@ -4924,6 +5134,10 @@ function finishV2Progress(stageKey, detail, type = "success") {
   scheduleMobileSummaryUpdate();
 }
 
+function shouldShowV2ProfessionalProgress(options = {}) {
+  return options.progressTarget !== "simple-v2";
+}
+
 function setV2Progress(stageKey = "planning", detail = "", type = "info", { forceNotice = false } = {}) {
   const normalizedStage = v2ProgressByKey[stageKey] ? stageKey : "planning";
   const stage = v2ProgressByKey[normalizedStage];
@@ -5059,7 +5273,8 @@ function v2FallbackReasonLabel(reason) {
   return "Claude 中枢未产出可恢复结果，流程已按中枢原则处理。";
 }
 
-async function runV2Creative() {
+async function runV2Creative(options = {}) {
+  if (options instanceof Event) options = {};
   const prompt = buildV2UserPrompt();
   if (!v2HasGenerationInput(prompt)) {
     updateV2Notice("信息不全：请先填写提示词，或选择案例模板/星标参考图/上传素材后再生成。", "warning");
@@ -5071,9 +5286,13 @@ async function runV2Creative() {
   if (imageProvider === "mock_image") {
     updateV2Notice("当前选择的是 Mock 测试通道，会快速生成占位图；需要真实生图请切换到 OpenAI 或 Gemini。", "warning");
   }
-  expandH5AdvancedPanel("v2");
+  if (shouldShowV2ProfessionalProgress(options)) {
+    expandH5AdvancedPanel("v2");
+  }
   toggleV2Loading(true);
-  startV2Progress("queued", "正在提交任务到 V2.0 Agent。");
+  if (shouldShowV2ProfessionalProgress(options)) {
+    startV2Progress("queued", "正在提交任务到 V2.0 Agent。");
+  }
   renderV2RunPlaceholder();
   try {
     const favoriteReferenceAsset = await ensureV2FavoriteReferenceAsset();
@@ -5104,13 +5323,18 @@ async function runV2Creative() {
     });
     v2State.currentRun = queuedRun;
     els.v2TraceId.textContent = queuedRun.trace_id || queuedRun.run_id || "planning";
-    setV2Progress("planning", "任务已创建，Claude Code 中枢开始规划。", "info", { forceNotice: true });
-    const run = v2IsTerminalRun(queuedRun) ? queuedRun : await pollV2Run(queuedRun.run_id);
+    options.onRunUpdate?.(queuedRun);
+    if (shouldShowV2ProfessionalProgress(options)) {
+      setV2Progress("planning", "任务已创建，Claude Code 中枢开始规划。", "info", { forceNotice: true });
+    }
+    const run = v2IsTerminalRun(queuedRun) ? queuedRun : await pollV2Run(queuedRun.run_id, options);
     v2State.currentRun = run;
     renderV2Run(run);
     const notice = v2RunNotice(run);
     updateV2Notice(notice.message, notice.type);
-    finishV2Progress(v2StatusStageMap[run.status] || "completed", notice.message, notice.type);
+    if (shouldShowV2ProfessionalProgress(options)) {
+      finishV2Progress(v2StatusStageMap[run.status] || "completed", notice.message, notice.type);
+    }
     showGlobalToast("V2.0 Agent 已完成出图流程。");
     scrollV2HomeResultsIntoView(run);
     await loadV2History({ silent: true });
@@ -5118,19 +5342,24 @@ async function runV2Creative() {
     return run;
   } catch (error) {
     const message = `V2.0 Agent 失败：${friendlyError(error)}`;
-    finishV2Progress("failed", message, "error");
+    if (shouldShowV2ProfessionalProgress(options)) {
+      finishV2Progress("failed", message, "error");
+    }
     updateV2Notice(message, "error");
     clearV2RunResult();
     return null;
   } finally {
-    clearV2ProgressTimer();
+    if (shouldShowV2ProfessionalProgress(options)) {
+      clearV2ProgressTimer();
+    }
     toggleV2Loading(false);
   }
 }
 
-async function pollV2Run(runId) {
+async function pollV2Run(runId, options = {}) {
   let attempt = 0;
   let consecutiveReadErrors = 0;
+  const showProfessionalProgress = shouldShowV2ProfessionalProgress(options);
   while (true) {
     await v2Delay(attempt === 0 ? 800 : 2000);
     attempt += 1;
@@ -5140,21 +5369,34 @@ async function pollV2Run(runId) {
       consecutiveReadErrors = 0;
     } catch (error) {
       consecutiveReadErrors += 1;
-      setV2Progress(
-        v2State.progressStageKey || "planning",
-        `暂时读不到后台状态，正在继续刷新；已重试 ${consecutiveReadErrors} 次。`,
-        "warning",
-        { forceNotice: consecutiveReadErrors === 1 || consecutiveReadErrors % 5 === 0 }
-      );
+      const retryDetail = `暂时读不到后台状态，正在继续刷新；已重试 ${consecutiveReadErrors} 次。`;
+      if (showProfessionalProgress) {
+        setV2Progress(
+          v2State.progressStageKey || "planning",
+          retryDetail,
+          "warning",
+          { forceNotice: consecutiveReadErrors === 1 || consecutiveReadErrors % 5 === 0 }
+        );
+      } else {
+        setSimpleProgress("v2", simpleModeState.v2.progressStageKey || "planning", retryDetail, { type: "warning" });
+      }
       continue;
     }
 
     v2State.currentRun = run;
     els.v2TraceId.textContent = run.trace_id || run.run_id || "planning";
-    updateV2ProgressFromRun(run);
+    options.onRunUpdate?.(run);
+    if (showProfessionalProgress) {
+      updateV2ProgressFromRun(run);
+    }
     if (attempt === v2RunLongWaitAttempt || (attempt > v2RunLongWaitAttempt && attempt % 30 === 0)) {
       const stage = refineV2ProgressStage(v2StatusStageMap[run.status] || "planning", run);
-      setV2Progress(stage, "后台仍在运行，页面会持续刷新直到任务明确完成或失败；真实出图可能需要数分钟。", "info", { forceNotice: true });
+      const longWaitDetail = "后台仍在运行，页面会持续刷新直到任务明确完成或失败；真实出图可能需要数分钟。";
+      if (showProfessionalProgress) {
+        setV2Progress(stage, longWaitDetail, "info", { forceNotice: true });
+      } else {
+        setSimpleProgress("v2", stage, longWaitDetail);
+      }
     }
     if (run.prompt_plan || run.orchestrator_decision || run.generation_jobs?.length || run.progress_summary?.message || run.progress_events?.length) {
       renderV2Run(run);
@@ -7092,11 +7334,12 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttempts = 120 } = {}) {
+async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttempts = 120, onJobUpdate = null } = {}) {
   let job = initialJob;
   let transientErrors = 0;
   for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
     state.currentJob = job;
+    onJobUpdate?.(job);
     setStatus(job?.status || "生成中", job?.outputs?.length || 0, job?.trace_id || "-");
     if (v1ImageJobReady(job) || v1ImageJobTerminal(job)) {
       return job;
@@ -7111,6 +7354,7 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttemp
     try {
       job = await request(`/v1/image/jobs/${encodeURIComponent(job.id)}`);
       transientErrors = 0;
+      onJobUpdate?.(job);
     } catch (error) {
       transientErrors += 1;
       if (transientErrors >= 3) {
@@ -7121,13 +7365,15 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttemp
   throw new Error(`${actionLabel}仍在后台进行，请稍后刷新历史查看结果。`);
 }
 
-async function generateImage() {
+async function generateImage(options = {}) {
+  if (options instanceof Event) options = {};
+  const showProfessionalProgress = options.progressTarget !== "simple-v1";
   const prompt = els.promptInput.value.trim();
   if (!prompt) {
     showNotice("信息不全：请先填写提示词后再生成图片。", "warning");
     showGlobalToast("请先填写提示词。", "error");
     els.promptInput.focus();
-    return;
+    return null;
   }
   await ensureSession();
   await flushProviderSettingsSync({ silent: true });
@@ -7148,7 +7394,7 @@ async function generateImage() {
         ? els.doubaoImageApiKeyInput
         : els.openaiApiKeyInput;
     keyInput.focus();
-    return;
+    return null;
   }
 
   let assetPayload;
@@ -7156,7 +7402,7 @@ async function generateImage() {
     assetPayload = imageAssetPayload();
   } catch (error) {
     showNotice(friendlyError(error), "warning");
-    return;
+    return null;
   }
 
   toggleBusy(true);
@@ -7164,7 +7410,15 @@ async function generateImage() {
   const providerName = providerLabel(state.selectedProvider);
   const modeText = assetPayload.asset_mode === "advanced" ? "V1.0 高级版" : "V1.0 基础版";
   showNotice(`${modeText}正在生成 ${count} 张图片；使用 ${providerName} 独立通道，质量：${qualityMap[state.selectedQuality]}。`, "info");
-  startImageProgress({ label: "生成中", count, providerName });
+  if (showProfessionalProgress) {
+    startImageProgress({
+      label: "生成中",
+      count,
+      providerName,
+      stageKey: "submitting",
+      detail: `正在提交 ${count} 张图片任务到 ${providerName}。`,
+    });
+  }
   renderSkeleton(count);
   let submittedJob = null;
   try {
@@ -7185,30 +7439,45 @@ async function generateImage() {
       method: "POST",
       body,
     });
-    const completedJob = await waitForV1ImageJob(submittedJob, { actionLabel: "生成" });
-    stopImageProgress();
+    if (showProfessionalProgress) {
+      setImageProgress("queued", "任务已提交，正在等待模型接手。");
+    }
+    options.onJobUpdate?.(submittedJob);
+    const completedJob = await waitForV1ImageJob(submittedJob, {
+      actionLabel: "生成",
+      onJobUpdate: (job) => {
+        if (showProfessionalProgress) updateV1ProfessionalProgressFromJob(job, { actionLabel: "生成" });
+        options.onJobUpdate?.(job);
+      },
+    });
     state.currentJob = completedJob;
     setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
     if (!v1ImageJobReady(completedJob)) {
+      if (showProfessionalProgress) finishImageProgress("failed", `生成失败：${jobErrorMessage(completedJob)}`, "error");
       renderGallery([]);
       showNotice(`生成失败：${jobErrorMessage(completedJob)}`, "error");
       await refreshEvents();
-      return;
+      return completedJob;
     }
+    if (showProfessionalProgress) finishImageProgress("ready", `完成，共得到 ${completedJob.outputs.length} 张输出。`);
     renderGallery(completedJob.outputs);
     showNotice(`已生成 ${completedJob.outputs.length} 张图片：${imageProviderResultText(completedJob)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
     await refreshHistory({ silent: true });
     await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
+    return completedJob;
   } catch (error) {
-    stopImageProgress();
     const submitted = Boolean(submittedJob?.id);
+    if (showProfessionalProgress) {
+      finishImageProgress(submitted ? "queued" : "failed", submitted ? friendlyError(error) : `生成失败：${friendlyError(error)}`, submitted ? "warning" : "error");
+    }
     showNotice(submitted ? friendlyError(error) : `生成失败：${friendlyError(error)}`, submitted ? "warning" : "error");
     setStatus(submitted ? "后台处理中" : "失败", 0, submittedJob?.trace_id || "-");
     if (!submitted) {
       renderGallery([]);
     }
+    return null;
   } finally {
     stopImageProgress();
     toggleBusy(false);
@@ -7226,7 +7495,14 @@ async function reviseSelectedOutput() {
   showNotice("V1.0 基础版正在生成修改版本。", "info");
   const sourceJobId = state.currentJob.id;
   const revisionProvider = state.currentJob.forceProviderPreference || state.selectedProvider;
-  startImageProgress({ label: "修改中", count: 1, providerName: providerLabel(revisionProvider), traceId: state.currentJob.trace_id });
+  startImageProgress({
+    label: "修改中",
+    count: 1,
+    providerName: providerLabel(revisionProvider),
+    traceId: state.currentJob.trace_id,
+    stageKey: "submitting",
+    detail: "正在提交继续修改任务。",
+  });
   let submittedJob = null;
   try {
     submittedJob = await request(`/v1/image/jobs/${sourceJobId}/revise`, {
@@ -7238,15 +7514,20 @@ async function reviseSelectedOutput() {
         provider_preference: revisionProvider,
       },
     });
-    const completedJob = await waitForV1ImageJob(submittedJob, { actionLabel: "修改" });
-    stopImageProgress();
+    setImageProgress("queued", "修改任务已提交，正在等待模型接手。");
+    const completedJob = await waitForV1ImageJob(submittedJob, {
+      actionLabel: "修改",
+      onJobUpdate: (job) => updateV1ProfessionalProgressFromJob(job, { actionLabel: "修改" }),
+    });
     state.currentJob = completedJob;
     setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
     if (!v1ImageJobReady(completedJob)) {
+      finishImageProgress("failed", `修改失败：${jobErrorMessage(completedJob)}`, "error");
       showNotice(`修改失败：${jobErrorMessage(completedJob)}`, "error");
       await refreshEvents();
       return;
     }
+    finishImageProgress("ready", `修改完成，共得到 ${completedJob.outputs.length} 张输出。`);
     renderGallery(completedJob.outputs);
     showNotice(`修改版本已生成：${imageProviderResultText(completedJob)}。`, "success");
     els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -7254,8 +7535,8 @@ async function reviseSelectedOutput() {
     await refreshVeyraAccountPanelAfterHistoryChange();
     await refreshEvents();
   } catch (error) {
-    stopImageProgress();
     const submitted = Boolean(submittedJob?.id);
+    finishImageProgress(submitted ? "queued" : "failed", submitted ? friendlyError(error) : `修改失败：${friendlyError(error)}`, submitted ? "warning" : "error");
     showNotice(submitted ? friendlyError(error) : `修改失败：${friendlyError(error)}`, submitted ? "warning" : "error");
   } finally {
     stopImageProgress();
@@ -8538,18 +8819,72 @@ function renderEvents(events) {
   scheduleMobileSummaryUpdate();
 }
 
-function startImageProgress({ label, count, providerName, traceId = "pending" }) {
+function v1ProfessionalProgressEls() {
+  return {
+    panel: els.v1ProgressPanel,
+    title: els.v1ProgressTitle,
+    elapsed: els.v1ProgressElapsed,
+    fill: els.v1ProgressFill,
+    steps: els.v1ProgressSteps,
+    detail: els.v1ProgressDetail,
+  };
+}
+
+function startImageProgress({ label, count, providerName, traceId = "pending", stageKey = "submitting", detail: initialDetail = "" }) {
   stopImageProgress();
   state.imageProgressStartedAt = Date.now();
   state.imageProgressLabel = label || "生成中";
-  const detail = `${providerName || "生图引擎"} · ${count || 1} 张`;
+  state.imageProgressStageKey = stageKey;
+  state.imageProgressDetail = initialDetail || `${providerName || "生图引擎"} · ${count || 1} 张`;
+  state.imageProgressType = "info";
+  state.imageProgressNoticeKey = "";
+  const outputDetail = `${providerName || "生图引擎"} · ${count || 1} 张`;
   const update = () => {
     const elapsed = imageProgressElapsedLabel();
-    setStatus(`${state.imageProgressLabel} · ${elapsed}`, 0, traceId);
-    if (els.outputCount) els.outputCount.title = detail;
+    renderImageProgress();
+    const stage = v1ProgressByKey[state.imageProgressStageKey] || v1ProgressByKey.generating;
+    setStatus(`${stage.short || state.imageProgressLabel} · ${elapsed}`, 0, traceId);
+    if (els.outputCount) els.outputCount.title = outputDetail;
   };
   update();
   state.imageProgressTimer = window.setInterval(update, 1000);
+}
+
+function setImageProgress(stageKey, detail = "", type = "info") {
+  const normalized = v1ProgressByKey[stageKey] ? stageKey : "generating";
+  state.imageProgressStageKey = normalized;
+  state.imageProgressDetail = detail || v1ProgressByKey[normalized]?.label || "正在处理。";
+  state.imageProgressType = type;
+  renderImageProgress();
+}
+
+function renderImageProgress() {
+  renderRunProgress(
+    v1ProfessionalProgressEls(),
+    v1ProgressStages,
+    state.imageProgressStageKey,
+    state.imageProgressDetail,
+    state.imageProgressStartedAt,
+    { failed: state.imageProgressType === "error" || state.imageProgressStageKey === "failed" }
+  );
+}
+
+function finishImageProgress(stageKey, detail = "", type = "success") {
+  setImageProgress(stageKey, detail, type);
+  stopImageProgress();
+}
+
+function updateV1ProfessionalProgressFromJob(job, { actionLabel = "生成" } = {}) {
+  const status = job?.status || "queued";
+  const stageKey = v1JobStatusStageMap[status] || "generating";
+  const outputs = Array.isArray(job?.outputs) ? job.outputs.length : 0;
+  let detail = `${actionLabel}任务正在处理。`;
+  if (stageKey === "queued") detail = `${actionLabel}任务已提交，后台正在排队或准备模型。`;
+  if (stageKey === "generating") detail = `模型正在出图，已返回 ${outputs} 张。`;
+  if (stageKey === "postprocessing") detail = outputs ? `已得到 ${outputs} 张，正在整理和复检。` : "正在整理生成结果。";
+  if (stageKey === "ready") detail = `完成，共得到 ${outputs} 张输出。`;
+  if (stageKey === "failed") detail = jobErrorMessage(job);
+  setImageProgress(stageKey, detail, stageKey === "failed" ? "error" : stageKey === "ready" ? "success" : "info");
 }
 
 function stopImageProgress() {

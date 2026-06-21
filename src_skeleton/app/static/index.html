@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260621-simple-case-visibility" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260621-progress-share-fix" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -159,6 +159,17 @@
                 </label>
                 <div id="v1SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
               </div>
+              <div id="v1SimpleProgressPanel" class="run-progress-panel simple-run-progress" aria-live="polite" hidden>
+                <div class="run-progress-head">
+                  <strong id="v1SimpleProgressTitle">待命</strong>
+                  <span id="v1SimpleProgressElapsed">刚开始</span>
+                </div>
+                <div class="run-progress-meter" aria-hidden="true">
+                  <span id="v1SimpleProgressFill"></span>
+                </div>
+                <div id="v1SimpleProgressSteps" class="run-progress-steps" aria-label="V1 极简生图进度"></div>
+                <p id="v1SimpleProgressDetail" class="run-progress-detail">等待提交任务。</p>
+              </div>
               <div id="v1SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">极简模式会自动套用 1 张、高质量、PNG、均衡强度。</div>
               <div class="simple-actions">
                 <button id="v1SimpleRunBtn" class="button primary" type="button">一键生成</button>
@@ -177,6 +188,17 @@
 
               <textarea id="promptInput" rows="6" placeholder="生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的"></textarea>
               <div id="noticeBar" class="notice-bar" role="status" aria-live="polite">正在检查图片模型配置。</div>
+              <div id="v1ProgressPanel" class="run-progress-panel v1-progress-panel" aria-live="polite" hidden>
+                <div class="run-progress-head">
+                  <strong id="v1ProgressTitle">待命</strong>
+                  <span id="v1ProgressElapsed">刚开始</span>
+                </div>
+                <div class="run-progress-meter" aria-hidden="true">
+                  <span id="v1ProgressFill"></span>
+                </div>
+                <div id="v1ProgressSteps" class="run-progress-steps" aria-label="V1 生图进度"></div>
+                <p id="v1ProgressDetail" class="run-progress-detail">等待提交任务。</p>
+              </div>
 
               <div class="composer-actions">
                 <button id="generateBtn" class="button primary" type="button">生成图片</button>
@@ -587,6 +609,17 @@
                 <div id="v2SimpleFileList" class="simple-file-list empty-simple-list">未上传图片</div>
               </div>
               <div id="v2SimpleCaseSummary" class="simple-case-summary" aria-live="polite"></div>
+              <div id="v2SimpleProgressPanel" class="run-progress-panel simple-run-progress" aria-live="polite" hidden>
+                <div class="run-progress-head">
+                  <strong id="v2SimpleProgressTitle">待命</strong>
+                  <span id="v2SimpleProgressElapsed">刚开始</span>
+                </div>
+                <div class="run-progress-meter" aria-hidden="true">
+                  <span id="v2SimpleProgressFill"></span>
+                </div>
+                <div id="v2SimpleProgressSteps" class="run-progress-steps" aria-label="V2 极简生图进度"></div>
+                <p id="v2SimpleProgressDetail" class="run-progress-detail">等待提交任务。</p>
+              </div>
               <div id="v2SimpleNotice" class="notice-bar simple-notice" role="status" aria-live="polite">极简模式由 V2 Agent 自动匹配案例库与素材用途。</div>
               <div class="simple-actions">
                 <button id="v2SimpleRunBtn" class="button primary" type="button">一键生成</button>
@@ -1407,6 +1440,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260621-simple-case-visibility" defer></script>
+    <script src="/static/app.js?v=20260621-progress-share-fix" defer></script>
   </body>
 </html>

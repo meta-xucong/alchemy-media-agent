@@ -873,6 +873,7 @@ select:focus,
   background: rgba(184, 51, 51, 0.07);
 }
 
+.run-progress-panel,
 .v2-progress-panel {
   margin-top: 10px;
   padding: 12px;
@@ -881,28 +882,49 @@ select:focus,
   background: rgba(255, 255, 255, 0.66);
 }
 
+.run-progress-panel[hidden],
+.v2-progress-panel[hidden] {
+  display: none !important;
+}
+
+.simple-run-progress {
+  margin-top: 12px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.v1-progress-panel {
+  border-color: rgba(47, 90, 69, 0.18);
+}
+
+.run-progress-head,
 .v2-progress-head,
+.run-progress-steps,
 .v2-progress-steps {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+.run-progress-head,
 .v2-progress-head {
   justify-content: space-between;
 }
 
+.run-progress-head strong,
 .v2-progress-head strong {
   color: var(--ink);
   font-size: 13px;
 }
 
+.run-progress-head span,
+.run-progress-detail,
 .v2-progress-head span,
 .v2-progress-detail {
   color: var(--muted);
   font-size: 12px;
 }
 
+.run-progress-meter,
 .v2-progress-meter {
   height: 8px;
   margin-top: 10px;
@@ -911,6 +933,7 @@ select:focus,
   background: rgba(23, 20, 17, 0.08);
 }
 
+.run-progress-meter span,
 .v2-progress-meter span {
   display: block;
   width: 0;
@@ -920,11 +943,18 @@ select:focus,
   transition: width 300ms ease;
 }
 
+.v1-progress-panel .run-progress-meter span,
+.simple-run-progress .run-progress-meter span {
+  background: linear-gradient(90deg, var(--green), var(--blue), var(--brass));
+}
+
+.run-progress-steps,
 .v2-progress-steps {
   flex-wrap: wrap;
   margin-top: 10px;
 }
 
+.run-progress-step,
 .v2-progress-step {
   min-height: 24px;
   display: inline-flex;
@@ -938,18 +968,28 @@ select:focus,
   font-weight: 750;
 }
 
+.run-progress-step.done,
 .v2-progress-step.done {
   border-color: rgba(47, 90, 69, 0.2);
   color: var(--green);
   background: rgba(47, 90, 69, 0.07);
 }
 
+.run-progress-step.active,
 .v2-progress-step.active {
   border-color: rgba(34, 93, 168, 0.24);
   color: var(--blue);
   background: rgba(34, 93, 168, 0.08);
 }
 
+.run-progress-step.failed,
+.v2-progress-step.failed {
+  border-color: rgba(184, 51, 51, 0.22);
+  color: var(--red);
+  background: rgba(184, 51, 51, 0.07);
+}
+
+.run-progress-detail,
 .v2-progress-detail {
   margin: 10px 0 0;
   line-height: 1.45;

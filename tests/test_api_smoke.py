@@ -1760,7 +1760,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260620-lab-h5-history-fix" in index.text
+    assert "20260621-progress-share-fix" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -2134,7 +2134,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260620-lab-h5-history-fix" in h5.text
+    assert "20260621-progress-share-fix" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
@@ -2462,6 +2462,41 @@ def test_image_share_poster_returns_downloadable_png():
     assert response.headers["content-type"].startswith("image/png")
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(response.content) > 10_000
+
+
+def test_image_share_poster_reads_v2_local_output(tmp_path, monkeypatch):
+    from PIL import Image
+
+    storage_root = tmp_path / "v2_storage"
+    output_id = "out_v2_share"
+    output_dir = storage_root / "outputs" / "job_v2_share"
+    output_dir.mkdir(parents=True)
+    source_path = output_dir / f"{output_id}.png"
+    Image.new("RGB", (640, 640), (20, 120, 220)).save(source_path)
+    thumbnail_dir = storage_root / "thumbnails"
+    thumbnail_dir.mkdir(parents=True)
+    Image.new("RGB", (320, 320), (20, 120, 220)).save(thumbnail_dir / f"{output_id}.webp")
+    monkeypatch.setenv("V2_STORAGE_DIR", str(storage_root))
+    captured = {}
+
+    def fake_render_share_poster(**kwargs):
+        image = main_module._load_share_preview_image(kwargs["request"], kwargs["image_value"])
+        captured["pixel"] = image.convert("RGB").getpixel((0, 0))
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    monkeypatch.setattr(main_module, "_render_share_poster", fake_render_share_poster)
+    client = TestClient(app)
+
+    response = client.get(
+        "/share/poster",
+        params={
+            "image": f"/api/v2/outputs/{output_id}/download",
+            "thumb": f"/api/v2/image/history/{output_id}/thumbnail",
+        },
+    )
+
+    assert response.status_code == 200
+    assert all(abs(actual - expected) <= 4 for actual, expected in zip(captured["pixel"], (20, 120, 220)))
 
 
 def test_image_share_poster_qr_defaults_to_share_landing_page(monkeypatch):
