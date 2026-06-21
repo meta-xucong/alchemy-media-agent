@@ -131,6 +131,7 @@ alchemy_creative_agent_3_0/docs/09_RULES_AND_DEFAULTS.md
 alchemy_creative_agent_3_0/docs/10_BRAND_MEMORY_SPEC.md
 alchemy_creative_agent_3_0/docs/11_EVALUATION_AND_REFINEMENT_SPEC.md
 alchemy_creative_agent_3_0/docs/12_PROVIDER_INTERFACES.md
+alchemy_creative_agent_3_0/docs/16_V3_FOUNDATION_EXECUTION_GUARDRAILS.md
 ```
 
 Step-by-step delivery docs:

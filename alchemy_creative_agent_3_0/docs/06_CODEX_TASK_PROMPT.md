@@ -35,6 +35,7 @@ alchemy_creative_agent_3_0/docs/11_EVALUATION_AND_REFINEMENT_SPEC.md
 alchemy_creative_agent_3_0/docs/12_PROVIDER_INTERFACES.md
 alchemy_creative_agent_3_0/docs/13_STEP_BY_STEP_DELIVERY_PLAN.md
 alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
+alchemy_creative_agent_3_0/docs/16_V3_FOUNDATION_EXECUTION_GUARDRAILS.md
 ```
 
 Phase 2 / Phase 3 prompts are for later and should not be implemented in this task:
@@ -74,6 +75,7 @@ platform adapters for shared balance/account/deployment later
 7. Do not couple V3 UI state to V1/V2 UI state.
 8. If behavior from V2 is useful, copy it into V3, rename it, adapt it, and test it as V3-owned code.
 9. V3 must be able to run its tests without loading V2 runtime modules.
+10. The V3.0 Foundation implementation must follow `alchemy_creative_agent_3_0/docs/16_V3_FOUNDATION_EXECUTION_GUARDRAILS.md`.
 
 Forbidden examples:
 
@@ -506,6 +508,7 @@ Add tests for:
 17. platform adapters exist as V3-owned boundaries
 18. End-to-end planning pipeline completes without V2 imports
 19. V3 files do not import forbidden V2 modules
+20. V3 guardrail tests pass before and after implementation
 ```
 
 ## Out of Scope for First Task
@@ -540,6 +543,8 @@ full frontend UI
 - Preserve V3 independence from V1/V2.
 - Preserve central-brain + multi-agent extensibility.
 - Do not implement V3.1 or V3.2 tasks in this phase unless necessary for the V3.0 contracts.
+- Do not modify V1, V2, or Alchemy Lab implementation files during this foundation task.
+- Do not auto-merge the implementation branch after tests pass.
 
 ## Final Output Required From Codex
 
