@@ -17,13 +17,33 @@ alchemy_creative_agent_3_0/
     04_OPEN_SOURCE_REFERENCE_MAP.md
     05_DEVELOPMENT_ROADMAP.md
     06_CODEX_TASK_PROMPT.md
+    07_SCHEMA_CONTRACTS.md
+    08_GOLDEN_CASES.md
+    09_RULES_AND_DEFAULTS.md
+    10_BRAND_MEMORY_SPEC.md
+    11_EVALUATION_AND_REFINEMENT_SPEC.md
+    12_PROVIDER_INTERFACES.md
+    13_STEP_BY_STEP_DELIVERY_PLAN.md
+    14_CODEX_TASK_PROMPTS_PHASE_2_AND_3.md
+    15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
   app/
     __init__.py
+    app_shell/
+      __init__.py
+      routes.py
+      navigation.py
+      ui_contracts.py
+    platform_adapters/
+      __init__.py
+      account_adapter.py
+      balance_adapter.py
+      deployment_adapter.py
     creative_core/
       __init__.py
       orchestrator.py
       pipeline.py
       context.py
+      central_brain.py
     schemas/
       __init__.py
       creative_job.py
@@ -49,6 +69,17 @@ alchemy_creative_agent_3_0/
       prompt_compiler_agent.py
       generation_router_agent.py
       critic_refiner_agent.py
+      asset_packager_agent.py
+    vertical_agents/
+      __init__.py
+      registry.py
+      base.py
+      default_commercial_pack.py
+      ecommerce_pack.py
+      brand_ip_pack.py
+      ai_manga_drama_pack.py
+      restaurant_pack.py
+      local_service_pack.py
     brand_memory/
       __init__.py
       store.py
@@ -87,25 +118,78 @@ alchemy_creative_agent_3_0/
       __init__.py
       packager.py
       manifest.py
-    tests/
-      test_schemas.py
-      test_intent_agent.py
-      test_commercial_brief.py
-      test_brand_memory.py
-      test_creative_plan.py
-      test_series_planner.py
-      test_layout_plan.py
-      test_prompt_compiler.py
-      test_condition_plan.py
-      test_generation_plan.py
-      test_evaluation_report.py
-      test_refinement_policy.py
-      test_end_to_end_planning.py
+  tests/
+    test_schemas.py
+    test_rules_and_defaults.py
+    test_golden_cases.py
+    test_intent_agent.py
+    test_commercial_brief.py
+    test_brand_memory.py
+    test_creative_plan.py
+    test_series_planner.py
+    test_layout_plan.py
+    test_prompt_compiler.py
+    test_condition_plan.py
+    test_generation_plan.py
+    test_evaluation_report.py
+    test_refinement_policy.py
+    test_app_boundary.py
+    test_vertical_agent_registry.py
+    test_end_to_end_planning.py
+    test_no_v2_imports.py
 ```
 
 This directory is intentionally independent from V1 and V2.
 
-## 2. Agent Contracts
+## 2. App Shell and Product Boundary Modules
+
+### 2.1 app_shell
+
+The `app_shell` package reserves V3's independent product entry and UI contract.
+
+V3 frontend requirements:
+
+```text
+1. V3 appears as an independent title-bar entry.
+2. Entering V3 opens V3-owned UI.
+3. V3 UI calls V3-owned backend APIs.
+4. V3 UI state is not coupled to V1/V2 UI state.
+5. V3 may coexist on the same domain and home page.
+```
+
+First-pass backend docs may create contracts only. Full UI implementation can come later.
+
+### 2.2 platform_adapters
+
+`platform_adapters` isolates the few allowed shared platform dependencies.
+
+Allowed shared systems:
+
+```text
+account identity
+balance / credit system
+deployment environment
+platform logging later
+```
+
+Adapters:
+
+```text
+V3AccountAdapter
+V3BalanceAdapter
+V3DeploymentAdapter
+```
+
+Rules:
+
+```text
+1. V3 business logic must not know V1/V2 internals.
+2. Shared balance access must go through V3BalanceAdapter.
+3. Shared account access must go through V3AccountAdapter.
+4. Adapters must be narrow and testable.
+```
+
+## 3. Agent Contracts
 
 All agents should follow a simple contract:
 
@@ -120,7 +204,83 @@ Do not store hidden decision-making without metadata.
 
 Each agent should accept structured inputs and produce structured outputs.
 
-## 3. IntentAgent
+## 4. Central Creative Brain
+
+The central brain is the orchestrator of the V3 multi-agent system.
+
+Recommended implementation:
+
+```text
+creative_core/central_brain.py
+creative_core/orchestrator.py
+creative_core/pipeline.py
+```
+
+Responsibilities:
+
+```text
+1. accept user input
+2. create pipeline context
+3. select vertical agent pack
+4. call base agents in order
+5. call vertical overrides when registered
+6. route provider decisions
+7. coordinate evaluation and refinement
+8. assemble asset pack
+9. preserve metadata
+```
+
+The central brain must not become a monolithic prompt expander.
+
+It is an orchestrator.
+
+## 5. Vertical Agent Pack System
+
+V3 must reserve extension points for future industry-specific sub-agents.
+
+Recommended interface:
+
+```python
+class VerticalAgentPack:
+    name: str
+    supported_industries: list[str]
+    supported_scenarios: list[str]
+
+    def refine_commercial_brief(self, context): ...
+    def refine_creative_plan(self, context): ...
+    def refine_series_plan(self, context): ...
+    def refine_layout_plan(self, context): ...
+    def refine_prompt_compilation(self, context): ...
+    def refine_evaluation_policy(self, context): ...
+```
+
+First-pass implementation may include only:
+
+```text
+DefaultCommercialPack
+```
+
+Reserve stubs for:
+
+```text
+EcommerceAgentFamily
+BrandIPAgentFamily
+AIMangaDramaAgentFamily
+RestaurantAgentFamily
+LocalServiceAgentFamily
+```
+
+Rules:
+
+```text
+1. Vertical packs extend V3 standard contracts.
+2. Vertical packs must not fork the runtime.
+3. Vertical packs must not import V1/V2.
+4. Vertical packs must preserve metadata showing which pack was selected.
+5. If no pack matches, use DefaultCommercialPack.
+```
+
+## 6. IntentAgent
 
 ### Responsibility
 
@@ -158,7 +318,7 @@ Default behavior: avoid asking follow-up questions unless the task cannot be exe
 
 For small-business users, the system should make reasonable defaults.
 
-## 4. CommercialStrategyAgent
+## 7. CommercialStrategyAgent
 
 ### Responsibility
 
@@ -170,6 +330,7 @@ Convert `CreativeJob` into `CommercialBrief`.
 CreativeJob
 optional BrandProfile
 optional template hints
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -191,25 +352,7 @@ CommercialBrief
 - copywriting strategy
 - commercial risks
 
-### Example
-
-Input:
-
-```text
-“帮我做一个火锅店冬季套餐推广图。”
-```
-
-Output should include:
-
-```text
-industry: restaurant / hotpot
-scenario: winter set meal promotion
-business_goal: drive local conversion
-visual_hook: warm, abundant, appetite-driven
-copy_strategy: clear offer + dish richness + urgency
-```
-
-## 5. BrandMemoryAgent
+## 8. BrandMemoryAgent
 
 ### Responsibility
 
@@ -256,7 +399,7 @@ Update only from:
 - high-scoring candidates
 - explicit user preference
 
-## 6. CreativeDirectorAgent
+## 9. CreativeDirectorAgent
 
 ### Responsibility
 
@@ -268,6 +411,7 @@ Create the overall visual and creative direction.
 CreativeJob
 CommercialBrief
 BrandProfile
+selected VerticalAgentPack
 optional template references
 ```
 
@@ -295,7 +439,7 @@ CreativePlan
 
 The Creative Director Agent should behave like an art director plus commercial strategist, not like a prompt expander.
 
-## 7. SeriesPlannerAgent
+## 10. SeriesPlannerAgent
 
 ### Responsibility
 
@@ -307,6 +451,7 @@ Decide which asset variants should be generated.
 CreativePlan
 CommercialBrief
 BrandProfile
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -325,6 +470,8 @@ SeriesPlan
 - store display screen
 - WeChat Moments poster
 - detail page banner
+- brand IP character card later
+- AI manga drama scene card later
 
 ### Platform Defaults
 
@@ -339,7 +486,7 @@ store_screen: 16:9
 poster_print: 3:4 or A-series later
 ```
 
-## 8. LayoutAgent
+## 11. LayoutAgent
 
 ### Responsibility
 
@@ -352,6 +499,7 @@ AssetSpec
 CreativePlan
 CommercialBrief
 BrandProfile
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -382,7 +530,7 @@ text_rendering = html_overlay
 
 The image prompt should tell the model to avoid fake text and reserve clean text areas.
 
-## 9. PromptCompilerAgent
+## 12. PromptCompilerAgent
 
 ### Responsibility
 
@@ -396,6 +544,7 @@ LayoutPlan
 BrandProfile
 ConditionPlan
 ProviderCapability
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -423,7 +572,7 @@ Do not import V2 prompt transform code.
 
 If any V2 behavior is needed, copy it into V3 and rename it under V3 concepts.
 
-## 10. GenerationRouterAgent
+## 13. GenerationRouterAgent
 
 ### Responsibility
 
@@ -436,6 +585,7 @@ PromptCompilationResult
 ConditionPlan
 GenerationPlan
 ProviderCapabilities
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -464,7 +614,7 @@ Need fast baseline:
   use default image provider
 ```
 
-## 11. CriticRefinerAgent
+## 14. CriticRefinerAgent
 
 ### Responsibility
 
@@ -478,6 +628,7 @@ EvaluationReport
 CreativePlan
 LayoutPlan
 BrandProfile
+selected VerticalAgentPack
 ```
 
 ### Outputs
@@ -508,9 +659,9 @@ food does not look appetizing
 composition is not platform-friendly
 ```
 
-## 12. Provider Interfaces
+## 15. Provider Interfaces
 
-### 12.1 StyleConditionProvider
+### 15.1 StyleConditionProvider
 
 Used for brand style consistency.
 
@@ -521,7 +672,7 @@ Possible future implementations:
 - SimpleReferenceImageProvider
 - NoopStyleProvider
 
-### 12.2 LayoutConditionProvider
+### 15.2 LayoutConditionProvider
 
 Used for structure and composition control.
 
@@ -532,7 +683,7 @@ Possible future implementations:
 - PosterLayoutProvider
 - NoopLayoutProvider
 
-### 12.3 ScoringProvider
+### 15.3 ScoringProvider
 
 Used for candidate scoring.
 
@@ -543,7 +694,7 @@ Possible future implementations:
 - BrandConsistencyScorer
 - RuleBasedLayoutScorer
 
-### 12.4 GenerationProvider
+### 15.4 GenerationProvider
 
 Used for image generation.
 
@@ -556,7 +707,7 @@ Possible future implementations:
 - ComfyUISidecarProvider
 - DiffusersProvider
 
-## 13. First-Pass Implementation Scope
+## 16. First-Pass Implementation Scope
 
 The first implementation should not integrate every heavy model.
 
@@ -566,28 +717,34 @@ First-pass scope:
 1. V3 directory structure.
 2. V3 schemas.
 3. Rule-based or LLM-stub agents.
-4. BrandProfile in local JSON store.
-5. CreativePlan and SeriesPlan generation.
-6. LayoutPlan generation with external text policy.
-7. PromptCompilationResult generation.
-8. GenerationPlan without real heavy sidecars.
-9. EvaluationReport schema and mock scorers.
-10. End-to-end planning test.
+4. CentralCreativeBrain / Creative Core orchestration.
+5. DefaultCommercialPack + vertical agent registry stub.
+6. App shell and platform adapter contracts only.
+7. BrandProfile in local JSON store.
+8. CreativePlan and SeriesPlan generation.
+9. LayoutPlan generation with external text policy.
+10. PromptCompilationResult generation.
+11. GenerationPlan without real heavy sidecars.
+12. EvaluationReport schema and mock scorers.
+13. End-to-end planning test.
+14. No V1/V2 import test.
 ```
 
-## 14. What Not To Do
+## 17. What Not To Do
 
 Do not:
 
 - call V2 generation directly
 - import V2 prompt transform directly
 - reuse V2 schemas by reference
+- route V3 frontend through V1/V2 APIs
+- couple V3 UI state to V1/V2 UI state
 - add ComfyUI as the first dependency
 - expose model parameters to default users
 - make the user choose IP-Adapter / ControlNet manually
 - depend on GPU-heavy models before core contracts exist
 
-## 15. End-to-End Planning Example
+## 18. End-to-End Planning Example
 
 Input:
 
@@ -600,6 +757,7 @@ Expected V3 internal outputs:
 ```text
 CreativeJob
 CommercialBrief
+SelectedVerticalAgentPack
 BrandProfile
 CreativePlan
 SeriesPlan
