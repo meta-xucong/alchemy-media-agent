@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.agents import AGENTS_SDK_AVAILABLE, CreativeManagerRuntime
 from app.config import ensure_runtime_dirs, settings
@@ -52,6 +53,7 @@ from app.services.history_reference_assets import create_reference_asset_from_hi
 from app.services.image_history import delete_image_history_item, list_image_history
 from app.services.history_thumbnails import read_history_preview, read_history_thumbnail
 from app.services.ids import new_id
+from app.services.media_acceleration import signed_output_url as signed_v2_output_url
 from app.services.revision import RevisionSourceError, build_revision_request
 from app.services.resource_sync import get_sync_run, list_resource_providers, sync_resource_provider
 from app.services.resource_sync_scheduler import ResourceSyncScheduler
@@ -88,6 +90,7 @@ from app.services.visual_review_agent import get_visual_review_agent_status, ref
 from app.repositories.memory import utc_now
 from app.providers.images import list_v2_image_provider_capabilities
 from app.services.output_storage import read_output_content
+from app.services.output_storage import resolve_output_file
 
 
 logger = logging.getLogger(__name__)
@@ -834,6 +837,13 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
 @app.get("/api/v2/outputs/{output_id}/download")
 async def output_download(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
+    output_file = resolve_output_file(output_id)
+    if output_file:
+        path, media_type = output_file
+        accelerated_url = await signed_v2_output_url(output_id=output_id, source_path=path)
+        if accelerated_url:
+            return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
+        return Response(content=path.read_bytes(), media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
     output = read_output_content(output_id)
     if not output:
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "V2 output file not found."})

@@ -177,6 +177,12 @@ class Settings:
     veyra_session_cookie_secure: bool = True
     veyra_billing_enabled: bool = True
     veyra_generation_charge_amount: float = 0.0
+    media_acceleration_enabled: bool = False
+    media_acceleration_base_url: str = ""
+    media_acceleration_signing_secret: str | None = None
+    media_acceleration_url_ttl_seconds: int = 300
+    media_acceleration_verify_remote: bool = True
+    media_acceleration_verify_timeout_seconds: float = 1.2
     cors_allow_origins: tuple[str, ...] = (
         "http://127.0.0.1:8017",
         "http://localhost:8017",
@@ -426,6 +432,14 @@ def load_settings() -> Settings:
         in {"1", "true", "yes", "on"},
         veyra_billing_enabled=os.getenv("VEYRA_BILLING_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
         veyra_generation_charge_amount=max(0.0, float(os.getenv("VEYRA_GENERATION_CHARGE_AMOUNT", "0"))),
+        media_acceleration_enabled=os.getenv("ALCHEMY_MEDIA_ACCELERATION_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        media_acceleration_base_url=(os.getenv("ALCHEMY_MEDIA_BASE_URL") or "").rstrip("/"),
+        media_acceleration_signing_secret=os.getenv("ALCHEMY_MEDIA_SIGNING_SECRET") or None,
+        media_acceleration_url_ttl_seconds=max(30, int(os.getenv("ALCHEMY_MEDIA_URL_TTL_SECONDS", "300"))),
+        media_acceleration_verify_remote=os.getenv("ALCHEMY_MEDIA_VERIFY_REMOTE_EXISTS", "true").lower()
+        in {"1", "true", "yes", "on"},
+        media_acceleration_verify_timeout_seconds=max(0.2, float(os.getenv("ALCHEMY_MEDIA_VERIFY_TIMEOUT_SECONDS", "1.2"))),
         cors_allow_origins=_parse_csv_env(
             "V2_CORS_ALLOW_ORIGINS",
             (

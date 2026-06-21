@@ -61,6 +61,7 @@ from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabA
 from app.services.events import format_sse_events
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
+from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.session_service import create_session, handle_message
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
@@ -939,6 +940,9 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Requ
 async def download_output(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
     path, _ = _resolve_output_file(output_id)
+    accelerated_url = await signed_v1_output_url(output_id=output_id, source_path=path, storage_root=media_store.root)
+    if accelerated_url:
+        return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
     return FileResponse(path, headers=IMMUTABLE_IMAGE_HEADERS)
 
 

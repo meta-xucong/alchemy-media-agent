@@ -106,6 +106,12 @@ def fresh_client() -> TestClient:
     object.__setattr__(settings, "veyra_session_secret", None)
     object.__setattr__(settings, "veyra_billing_enabled", True)
     object.__setattr__(settings, "veyra_generation_charge_amount", 0.0)
+    object.__setattr__(settings, "media_acceleration_enabled", False)
+    object.__setattr__(settings, "media_acceleration_base_url", "")
+    object.__setattr__(settings, "media_acceleration_signing_secret", None)
+    object.__setattr__(settings, "media_acceleration_url_ttl_seconds", 300)
+    object.__setattr__(settings, "media_acceleration_verify_remote", True)
+    object.__setattr__(settings, "media_acceleration_verify_timeout_seconds", 1.2)
     object.__setattr__(settings, "case_intelligence_provider", "rules")
     object.__setattr__(settings, "case_intelligence_model", None)
     object.__setattr__(settings, "case_index_path", test_dir / "case_index.json")
@@ -5214,6 +5220,57 @@ def test_image_job_endpoint_and_feedback() -> None:
     )
     assert feedback.status_code == 201
     assert feedback.json()["output_id"] == output_id
+
+
+def test_v2_media_acceleration_redirects_v2_native_output() -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "media_acceleration_enabled", True)
+    object.__setattr__(settings, "media_acceleration_base_url", "https://media.example.test")
+    object.__setattr__(settings, "media_acceleration_signing_secret", "test-secret")
+    object.__setattr__(settings, "media_acceleration_url_ttl_seconds", 120)
+    object.__setattr__(settings, "media_acceleration_verify_remote", False)
+    run = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Minimal clean ecommerce product listing image.", "output": {"count": 1}},
+    ).json()
+    prompt_plan = run["prompt_plan"]
+    job = client.post("/api/v2/image/jobs", json={"run_id": run["run_id"], "prompt_plan": prompt_plan}).json()
+    output_id = job["outputs"][0]["output_id"]
+
+    response = client.get(f"/api/v2/outputs/{output_id}/download", follow_redirects=False)
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://media.example.test/dl/v2/outputs/")
+    assert f"/{output_id}.png?" in location
+    assert "expires=" in location
+    assert "md5=" in location
+
+
+def test_v2_media_acceleration_falls_back_when_remote_file_missing(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "media_acceleration_enabled", True)
+    object.__setattr__(settings, "media_acceleration_base_url", "https://media.example.test")
+    object.__setattr__(settings, "media_acceleration_signing_secret", "test-secret")
+    object.__setattr__(settings, "media_acceleration_url_ttl_seconds", 120)
+    object.__setattr__(settings, "media_acceleration_verify_remote", True)
+
+    async def fake_remote_missing(url: str) -> bool:
+        return False
+
+    monkeypatch.setattr("app.services.media_acceleration._remote_exists", fake_remote_missing)
+    run = client.post(
+        "/api/v2/creative/runs",
+        json={"user_prompt": "Minimal clean ecommerce product listing image.", "output": {"count": 1}},
+    ).json()
+    job = client.post("/api/v2/image/jobs", json={"run_id": run["run_id"], "prompt_plan": run["prompt_plan"]}).json()
+    output_id = job["outputs"][0]["output_id"]
+
+    response = client.get(f"/api/v2/outputs/{output_id}/download", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/")
+    assert "location" not in response.headers
 
 
 def test_image_history_records_generated_outputs(tmp_path) -> None:

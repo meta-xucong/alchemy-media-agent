@@ -67,6 +67,13 @@ def read_output_content(output_id: str) -> tuple[bytes, str] | None:
     return path.read_bytes(), mime_type
 
 
+def resolve_output_file(output_id: str) -> tuple[Path, str] | None:
+    path, mime_type = _output_path_and_type(output_id)
+    if not path or not path.exists() or not path.is_file():
+        return None
+    return path, mime_type
+
+
 def read_output_thumbnail(output_id: str) -> tuple[bytes, str] | None:
     output = repository.get_output(output_id)
     path = None

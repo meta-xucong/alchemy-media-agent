@@ -150,6 +150,12 @@ class Settings(BaseModel):
     veyra_usage_path: Path = Field(default_factory=lambda: Path(os.getenv("VEYRA_USAGE_PATH", ".media_storage/veyra_usage.jsonl")))
     v2_api_proxy_base_url: str = os.getenv("V2_API_PROXY_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
     v2_api_proxy_timeout_seconds: float = _float_env("V2_API_PROXY_TIMEOUT_SECONDS", 120.0)
+    media_acceleration_enabled: bool = os.getenv("ALCHEMY_MEDIA_ACCELERATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    media_acceleration_base_url: str = os.getenv("ALCHEMY_MEDIA_BASE_URL", "").rstrip("/")
+    media_acceleration_signing_secret: str | None = os.getenv("ALCHEMY_MEDIA_SIGNING_SECRET") or None
+    media_acceleration_url_ttl_seconds: int = _int_env("ALCHEMY_MEDIA_URL_TTL_SECONDS", 300)
+    media_acceleration_verify_remote: bool = os.getenv("ALCHEMY_MEDIA_VERIFY_REMOTE_EXISTS", "true").lower() in {"1", "true", "yes", "on"}
+    media_acceleration_verify_timeout_seconds: float = _float_env("ALCHEMY_MEDIA_VERIFY_TIMEOUT_SECONDS", 1.2)
 
     @property
     def live_mode(self) -> bool:

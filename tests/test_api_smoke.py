@@ -56,6 +56,12 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     original_mock_enabled = settings.mock_image_provider_enabled
     original_veyra_usage_path = settings.veyra_usage_path
     original_lab_llm_enabled = settings.lab_llm_enabled
+    original_media_acceleration_enabled = settings.media_acceleration_enabled
+    original_media_acceleration_base_url = settings.media_acceleration_base_url
+    original_media_acceleration_signing_secret = settings.media_acceleration_signing_secret
+    original_media_acceleration_url_ttl_seconds = settings.media_acceleration_url_ttl_seconds
+    original_media_acceleration_verify_remote = settings.media_acceleration_verify_remote
+    original_media_acceleration_verify_timeout_seconds = settings.media_acceleration_verify_timeout_seconds
     monkeypatch.setattr(media_store, "root", tmp_path)
     monkeypatch.setitem(image_service_module.registry.image_providers, "mock_image", MockImageProvider())
     settings.default_image_provider = "mock_image"
@@ -68,6 +74,12 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.gemini_image_generation_enabled = False
     settings.veyra_usage_path = tmp_path / "veyra_usage.jsonl"
     settings.lab_llm_enabled = False
+    settings.media_acceleration_enabled = False
+    settings.media_acceleration_base_url = ""
+    settings.media_acceleration_signing_secret = None
+    settings.media_acceleration_url_ttl_seconds = 300
+    settings.media_acceleration_verify_remote = True
+    settings.media_acceleration_verify_timeout_seconds = 1.2
     repository.reset()
     lab_store.reset()
     yield
@@ -83,6 +95,12 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.mock_image_provider_enabled = original_mock_enabled
     settings.veyra_usage_path = original_veyra_usage_path
     settings.lab_llm_enabled = original_lab_llm_enabled
+    settings.media_acceleration_enabled = original_media_acceleration_enabled
+    settings.media_acceleration_base_url = original_media_acceleration_base_url
+    settings.media_acceleration_signing_secret = original_media_acceleration_signing_secret
+    settings.media_acceleration_url_ttl_seconds = original_media_acceleration_url_ttl_seconds
+    settings.media_acceleration_verify_remote = original_media_acceleration_verify_remote
+    settings.media_acceleration_verify_timeout_seconds = original_media_acceleration_verify_timeout_seconds
 
 
 def _completed_image_job(client: TestClient, response, *, headers: dict[str, str] | None = None, max_attempts: int = 30) -> dict:
@@ -3037,6 +3055,116 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_internal_token = original_internal_token
         settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_media_acceleration_redirects_only_after_account_visibility(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+    settings.media_acceleration_enabled = True
+    settings.media_acceleration_base_url = "https://media.example.test"
+    settings.media_acceleration_signing_secret = "test-secret"
+    settings.media_acceleration_url_ttl_seconds = 120
+    settings.media_acceleration_verify_remote = False
+
+    async def fake_load_account(user_id: int):
+        return type("Account", (), {"user_id": user_id, "role": "user"})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+
+    try:
+        client = TestClient(app)
+        owner_token = _issue_test_veyra_session_token(42)
+        other_token = _issue_test_veyra_session_token(77)
+        output_id = "out_accelerated_owner"
+        path = media_store.output_path(job_id="job_accelerated_owner", output_id=output_id, output_format="png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": output_id,
+                "job_id": "job_accelerated_owner",
+                "session_id": "ses_accelerated_owner",
+                "url": f"/v1/outputs/{output_id}/download",
+                "thumbnail_url": f"/v1/outputs/{output_id}/thumbnail",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": "private accelerated image",
+                "veyra_user_id": 42,
+                "created_at": "2026-06-22T00:00:00+00:00",
+                "updated_at": "2026-06-22T00:00:00+00:00",
+            }
+        )
+
+        owner_download = client.get(
+            f"/v1/outputs/{output_id}/download",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            follow_redirects=False,
+        )
+        other_download = client.get(
+            f"/v1/outputs/{output_id}/download",
+            headers={"Authorization": f"Bearer {other_token}"},
+            follow_redirects=False,
+        )
+
+        assert owner_download.status_code == 302
+        location = owner_download.headers["location"]
+        assert location.startswith("https://media.example.test/dl/v1/generated_images/job_accelerated_owner/out_accelerated_owner.png?")
+        assert "expires=" in location
+        assert "md5=" in location
+        assert other_download.status_code == 403
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_media_acceleration_falls_back_when_remote_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    settings.media_acceleration_enabled = True
+    settings.media_acceleration_base_url = "https://media.example.test"
+    settings.media_acceleration_signing_secret = "test-secret"
+    settings.media_acceleration_url_ttl_seconds = 120
+    settings.media_acceleration_verify_remote = True
+
+    async def fake_remote_missing(url: str) -> bool:
+        return False
+
+    monkeypatch.setattr("app.services.media_acceleration._remote_exists", fake_remote_missing)
+
+    client = TestClient(app)
+    output_id = "out_accelerated_missing_remote"
+    path = media_store.output_path(job_id="job_accelerated_missing_remote", output_id=output_id, output_format="png")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": output_id,
+            "job_id": "job_accelerated_missing_remote",
+            "session_id": "ses_accelerated_missing_remote",
+            "url": f"/v1/outputs/{output_id}/download",
+            "thumbnail_url": f"/v1/outputs/{output_id}/thumbnail",
+            "format": "png",
+            "provider": "mock_image",
+            "model": "mock-image-v1",
+            "prompt": "remote missing falls back",
+            "created_at": "2026-06-22T00:00:00+00:00",
+            "updated_at": "2026-06-22T00:00:00+00:00",
+        }
+    )
+
+    response = client.get(f"/v1/outputs/{output_id}/download", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\n"
+    assert "location" not in response.headers
 
 
 def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, monkeypatch):
