@@ -4,7 +4,7 @@ set -Eeuo pipefail
 REPO_URL="${REPO_URL:-https://github.com/meta-xucong/alchemy-media-agent.git}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/alchemy-media-agent}"
 APP_PORT="${APP_PORT:-8017}"
-V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL:-http://host.docker.internal:8020}"
+V2_API_PROXY_BASE_URL="${V2_API_PROXY_BASE_URL:-http://127.0.0.1:8020}"
 V2_STORAGE_DIR="${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}"
 LOCAL_MODE=0
 SKIP_ENV=0
@@ -211,21 +211,19 @@ start_stack() {
     -d
     --name alchemy-media-agent
     --restart unless-stopped
+    --network host
     --env-file ./src_skeleton/.env
     -e "V2_API_PROXY_BASE_URL=${V2_API_PROXY_BASE_URL}"
     -e "V2_STORAGE_DIR=${V2_STORAGE_DIR}"
-    -p "127.0.0.1:${APP_PORT}:8017"
     -v "${DEPLOY_DIR}/src_skeleton/.env:/app/.env"
     -v "${DEPLOY_DIR}/src_skeleton/.media_storage:/app/.media_storage"
   )
   if [[ -d "${V2_STORAGE_DIR}" ]]; then
     docker_run_args+=(-v "${V2_STORAGE_DIR}:${V2_STORAGE_DIR}:ro")
   fi
-  if docker run --help 2>/dev/null | grep -q -- "--add-host"; then
-    docker_run_args+=(--add-host "host.docker.internal:host-gateway")
-  fi
   docker run "${docker_run_args[@]}" \
-    alchemy-media-agent:latest
+    alchemy-media-agent:latest \
+    python -m uvicorn app.main:app --host 127.0.0.1 --port "${APP_PORT}"
 }
 
 ensure_v2_runtime() {

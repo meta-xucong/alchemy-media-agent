@@ -7,12 +7,10 @@ services:
     env_file:
       - ./src_skeleton/.env
     environment:
-      V2_API_PROXY_BASE_URL: ${V2_API_PROXY_BASE_URL:-http://host.docker.internal:8020}
+      V2_API_PROXY_BASE_URL: ${V2_API_PROXY_BASE_URL:-http://127.0.0.1:8020}
       V2_STORAGE_DIR: ${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:${APP_PORT:-8017}:8017"
+    network_mode: host
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "${APP_PORT:-8017}"]
     volumes:
       - ./src_skeleton/.env:/app/.env
       - ./src_skeleton/.media_storage:/app/.media_storage
