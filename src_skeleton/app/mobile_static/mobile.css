@@ -583,8 +583,8 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
 
 .mode-switch-row {
   display: grid;
-  gap: 10px;
-  padding: 14px 0 4px;
+  gap: 8px;
+  padding: 12px 0 2px;
 }
 
 .mode-switch-copy {
@@ -601,7 +601,28 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
 }
 
 .mode-switch {
+  min-height: 42px;
+  padding: 4px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-radius: 999px;
+  background: rgba(24, 25, 21, 0.055);
+  cursor: pointer;
+}
+
+.mode-switch .segment {
+  min-height: 34px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.mode-switch .segment.active {
+  color: #fffdf8;
+  background: var(--sage-deep);
+  box-shadow: 0 8px 18px rgba(24, 25, 21, 0.12);
 }
 
 .mode-workspace[data-current-mode="simple"] [data-mode-area] {
@@ -2776,6 +2797,12 @@ select:focus {
   font-weight: 520;
 }
 
+.mode-switch .segment {
+  min-height: 34px;
+  font-size: 12px;
+  font-weight: 680;
+}
+
 .v2-transform-segmented .segment {
   min-height: 36px;
 }
@@ -2883,10 +2910,14 @@ select:focus {
 
 .h5-quick-guide {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
+  grid-template-columns: repeat(var(--quick-guide-steps, 3), minmax(0, 1fr));
+  gap: 5px;
   margin-top: 6px;
-  padding-bottom: 16px;
+  padding-bottom: 12px;
+}
+
+.h5-quick-guide[data-guide-steps="4"] {
+  --quick-guide-steps: 4;
 }
 
 .h5-quick-guide strong {
@@ -2895,11 +2926,11 @@ select:focus {
 }
 
 .h5-quick-guide span {
-  min-height: 28px;
+  min-height: 26px;
   min-width: 0;
   flex: none;
-  padding: 0 8px;
-  font-size: 10px;
+  padding: 0 5px;
+  font-size: 9.5px;
   white-space: nowrap;
 }
 

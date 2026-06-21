@@ -896,6 +896,7 @@ function switchTab(tabName) {
     panel.classList.toggle("active", active);
     panel.hidden = !active;
   });
+  updateH5QuickGuide(tabName);
   if (tabName === "v2" && !v2State.loaded && !v2State.loading) {
     initV2({ silent: false }).catch((error) => {
       updateV2Notice(`2.0 API 未连接：${friendlyError(error)}`, "warning");
@@ -2050,13 +2051,19 @@ function insertH5QuickGuide() {
   const guide = document.createElement("section");
   guide.className = "h5-quick-guide";
   guide.setAttribute("aria-label", "快速使用步骤");
-  guide.innerHTML = `
-    <strong>怎么用</strong>
-    <span>1 写需求</span>
-    <span>2 可选案例或素材</span>
-    <span>3 点生成</span>
-  `;
   hero.insertAdjacentElement("afterend", guide);
+  updateH5QuickGuide(document.body.dataset.activeModule || "image");
+}
+
+function updateH5QuickGuide(tabName = document.body.dataset.activeModule || "image") {
+  const guide = document.querySelector(".h5-quick-guide");
+  if (!guide) return;
+  const steps =
+    tabName === "v2"
+      ? ["1 写需求", "2 选案例", "3 传图设参", "4 点生成"]
+      : ["1 写需求", "2 可选案例或素材", "3 点生成"];
+  guide.dataset.guideSteps = String(steps.length);
+  guide.innerHTML = `<strong>怎么用</strong>${steps.map((step) => `<span>${escapeHtml(step)}</span>`).join("")}`;
 }
 
 function ensureMobileLayers() {
@@ -2873,8 +2880,24 @@ function bindSimpleModeControls() {
   document.querySelectorAll("[data-mode-switch]").forEach((button) => {
     if (button.dataset.simpleModeBound === "true") return;
     button.dataset.simpleModeBound = "true";
-    button.addEventListener("click", () => {
-      setSimpleMode(button.dataset.modeSwitch, button.dataset.modeValue || "professional");
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      applyModeSwitch(button);
+    });
+    button.addEventListener("keydown", (event) => {
+      handleModeSwitchKey(event, button);
+    });
+  });
+  document.querySelectorAll(".mode-switch").forEach((control) => {
+    if (control.dataset.modeSwitchFallbackBound === "true") return;
+    control.dataset.modeSwitchFallbackBound = "true";
+    control.addEventListener("click", (event) => {
+      if (event.target.closest("[data-mode-switch]")) return;
+      const buttons = Array.from(control.querySelectorAll("[data-mode-switch]"));
+      if (!buttons.length) return;
+      const rect = control.getBoundingClientRect();
+      const target = event.clientX < rect.left + rect.width / 2 ? buttons[0] : buttons[buttons.length - 1];
+      applyModeSwitch(target);
     });
   });
   if (els.v1SimpleAssetInput) {
@@ -2891,6 +2914,28 @@ function bindSimpleModeControls() {
   setSimpleMode("v2", simpleModeState.v2.mode);
   renderSimpleFileList("v1");
   renderSimpleFileList("v2");
+}
+
+function applyModeSwitch(button) {
+  if (!button) return;
+  setSimpleMode(button.dataset.modeSwitch, button.dataset.modeValue || "professional");
+}
+
+function handleModeSwitchKey(event, button) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const control = button.closest(".mode-switch");
+  if (!control) return;
+  const buttons = Array.from(control.querySelectorAll("[data-mode-switch]"));
+  const currentIndex = buttons.indexOf(button);
+  if (currentIndex < 0) return;
+  event.preventDefault();
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
+  if (event.key === "ArrowRight") nextIndex = Math.min(buttons.length - 1, currentIndex + 1);
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = buttons.length - 1;
+  buttons[nextIndex]?.focus();
+  applyModeSwitch(buttons[nextIndex]);
 }
 
 function simpleModeEls(version) {

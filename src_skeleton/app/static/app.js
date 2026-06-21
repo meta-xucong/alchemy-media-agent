@@ -2095,8 +2095,24 @@ function bindSimpleModeControls() {
   document.querySelectorAll("[data-mode-switch]").forEach((button) => {
     if (button.dataset.simpleModeBound === "true") return;
     button.dataset.simpleModeBound = "true";
-    button.addEventListener("click", () => {
-      setSimpleMode(button.dataset.modeSwitch, button.dataset.modeValue || "professional");
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      applyModeSwitch(button);
+    });
+    button.addEventListener("keydown", (event) => {
+      handleModeSwitchKey(event, button);
+    });
+  });
+  document.querySelectorAll(".mode-switch").forEach((control) => {
+    if (control.dataset.modeSwitchFallbackBound === "true") return;
+    control.dataset.modeSwitchFallbackBound = "true";
+    control.addEventListener("click", (event) => {
+      if (event.target.closest("[data-mode-switch]")) return;
+      const buttons = Array.from(control.querySelectorAll("[data-mode-switch]"));
+      if (!buttons.length) return;
+      const rect = control.getBoundingClientRect();
+      const target = event.clientX < rect.left + rect.width / 2 ? buttons[0] : buttons[buttons.length - 1];
+      applyModeSwitch(target);
     });
   });
   if (els.v1SimpleAssetInput) {
@@ -2113,6 +2129,28 @@ function bindSimpleModeControls() {
   setSimpleMode("v2", simpleModeState.v2.mode);
   renderSimpleFileList("v1");
   renderSimpleFileList("v2");
+}
+
+function applyModeSwitch(button) {
+  if (!button) return;
+  setSimpleMode(button.dataset.modeSwitch, button.dataset.modeValue || "professional");
+}
+
+function handleModeSwitchKey(event, button) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const control = button.closest(".mode-switch");
+  if (!control) return;
+  const buttons = Array.from(control.querySelectorAll("[data-mode-switch]"));
+  const currentIndex = buttons.indexOf(button);
+  if (currentIndex < 0) return;
+  event.preventDefault();
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
+  if (event.key === "ArrowRight") nextIndex = Math.min(buttons.length - 1, currentIndex + 1);
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = buttons.length - 1;
+  buttons[nextIndex]?.focus();
+  applyModeSwitch(buttons[nextIndex]);
 }
 
 function simpleModeEls(version) {

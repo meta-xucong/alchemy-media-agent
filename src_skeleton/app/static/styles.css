@@ -546,26 +546,58 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 10px 12px;
+  gap: 16px;
+  padding: 10px 10px 10px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.62);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 244, 236, 0.68)),
+    rgba(255, 255, 255, 0.62);
 }
 
 .mode-switch-copy {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
 .mode-switch-copy strong {
-  font-size: 14px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 720;
 }
 
 .mode-switch {
-  width: min(300px, 100%);
+  width: min(252px, 100%);
+  min-height: 42px;
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  flex: 0 0 min(300px, 44vw);
+  gap: 4px;
+  flex: 0 0 min(252px, 38vw);
+  padding: 4px;
+  border-radius: 999px;
+  cursor: pointer;
+  isolation: isolate;
+}
+
+.mode-switch .segment {
+  min-height: 34px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.mode-switch .segment.active {
+  color: #fffdf8;
+  background: var(--sage-deep, var(--ink));
+  box-shadow: 0 8px 18px rgba(24, 25, 21, 0.12);
+}
+
+.mode-switch .segment:not(.active):hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .mode-workspace[data-current-mode="simple"] [data-mode-area] {
@@ -4536,11 +4568,29 @@ select:focus,
   flex: 0 0 188px;
 }
 
+.mode-switch {
+  width: min(252px, 100%);
+  min-height: 42px;
+  flex: 0 0 min(252px, 38vw);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(24, 25, 21, 0.055);
+}
+
 .segment {
   min-height: 31px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.mode-switch .segment {
+  min-height: 34px;
+  border: 0;
+  border-radius: 999px;
+  font-weight: 680;
 }
 
 .segment.active,
@@ -4550,6 +4600,12 @@ select:focus,
   color: #fffdf8;
   background: var(--sage-deep);
   box-shadow: none;
+}
+
+.mode-switch .segment.active {
+  color: #fffdf8;
+  background: var(--sage-deep);
+  box-shadow: 0 8px 18px rgba(24, 25, 21, 0.12);
 }
 
 .role-check {
@@ -6215,6 +6271,7 @@ button.favorite-picker-card {
   .mode-switch {
     width: 100%;
     flex-basis: auto;
+    min-height: 44px;
   }
 
   .simple-drop-grid {
