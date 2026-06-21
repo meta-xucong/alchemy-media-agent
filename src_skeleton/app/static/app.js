@@ -2666,6 +2666,10 @@ async function runV1SimpleMode() {
     if (v1ImageJobReady(completedJob)) {
       finishSimpleProgress("v1", "ready", `V1 已完成，共得到 ${completedJob.outputs.length} 张输出。`);
       updateSimpleNotice("v1", "V1 已完成，请查看结果区。", "success");
+    } else if (v1ImageJobDeferred(completedJob)) {
+      const message = v1ImageJobDeferredMessage(completedJob, "生成");
+      finishSimpleProgress("v1", "generating", message, "warning");
+      updateSimpleNotice("v1", message, "warning");
     } else if (completedJob) {
       finishSimpleProgress("v1", "failed", `V1 未完成：${jobErrorMessage(completedJob)}`, "error");
       updateSimpleNotice("v1", `V1 未完成：${jobErrorMessage(completedJob)}`, "error");
@@ -6713,6 +6717,24 @@ function v1ImageJobReady(job) {
   return job?.status === "ready" && Array.isArray(job.outputs) && job.outputs.length > 0;
 }
 
+function v1ImageJobDeferred(job) {
+  return Boolean(job?.polling_deferred);
+}
+
+function v1ImageJobDeferredMessage(job, actionLabel = "生成") {
+  return job?.polling_message || `${actionLabel}任务已提交，后台仍在处理；稍后刷新历史即可看到结果。`;
+}
+
+function deferV1ImageJob(job, message) {
+  return {
+    ...(job || {}),
+    status: job?.status || "generating",
+    outputs: Array.isArray(job?.outputs) ? job.outputs : [],
+    polling_deferred: true,
+    polling_message: message,
+  };
+}
+
 function v1ImageJobTerminal(job) {
   return ["ready", "failed", "provider_not_configured", "rejected", "canceled"].includes(job?.status);
 }
@@ -6725,6 +6747,29 @@ function v1ImageJobPollDelay(attempt) {
 
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function scrollV1GalleryIntoView() {
+  try {
+    els.galleryWrap?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    console.warn("V1 gallery scroll failed", error);
+  }
+}
+
+async function refreshV1GenerationSideEffects() {
+  const tasks = [
+    ["history", () => refreshHistory({ silent: true })],
+    ["account", () => refreshVeyraAccountPanelAfterHistoryChange()],
+    ["events", () => refreshEvents()],
+  ];
+  for (const [label, task] of tasks) {
+    try {
+      await task();
+    } catch (error) {
+      console.warn(`V1 post-generation ${label} refresh failed`, error);
+    }
+  }
 }
 
 async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttempts = 120, onJobUpdate = null } = {}) {
@@ -6751,11 +6796,14 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttemp
     } catch (error) {
       transientErrors += 1;
       if (transientErrors >= 3) {
-        throw new Error(`${actionLabel}状态查询中断：${friendlyError(error)}。任务可能仍在后台继续，请稍后刷新历史。`);
+        return deferV1ImageJob(
+          job,
+          `${actionLabel}任务已提交，但状态查询暂时中断；后台会继续处理，稍后刷新历史即可看到结果。`
+        );
       }
     }
   }
-  throw new Error(`${actionLabel}仍在后台进行，请稍后刷新历史查看结果。`);
+  return deferV1ImageJob(job, `${actionLabel}仍在后台进行，请稍后刷新历史查看结果。`);
 }
 
 async function generateImage(options = {}) {
@@ -6845,6 +6893,14 @@ async function generateImage(options = {}) {
     });
     state.currentJob = completedJob;
     setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
+    if (v1ImageJobDeferred(completedJob)) {
+      const message = v1ImageJobDeferredMessage(completedJob, "生成");
+      if (showProfessionalProgress) finishImageProgress("generating", message, "warning");
+      showNotice(message, "warning");
+      setStatus("后台处理中", completedJob.outputs.length, completedJob.trace_id);
+      await refreshV1GenerationSideEffects();
+      return completedJob;
+    }
     if (!v1ImageJobReady(completedJob)) {
       if (showProfessionalProgress) finishImageProgress("failed", `生成失败：${jobErrorMessage(completedJob)}`, "error");
       renderGallery([]);
@@ -6855,10 +6911,8 @@ async function generateImage(options = {}) {
     if (showProfessionalProgress) finishImageProgress("ready", `完成，共得到 ${completedJob.outputs.length} 张输出。`);
     renderGallery(completedJob.outputs);
     showNotice(`已生成 ${completedJob.outputs.length} 张图片：${imageProviderResultText(completedJob)}。`, "success");
-    els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
-    await refreshHistory({ silent: true });
-    await refreshVeyraAccountPanelAfterHistoryChange();
-    await refreshEvents();
+    scrollV1GalleryIntoView();
+    await refreshV1GenerationSideEffects();
     return completedJob;
   } catch (error) {
     const submitted = Boolean(submittedJob?.id);
@@ -6914,6 +6968,14 @@ async function reviseSelectedOutput() {
     });
     state.currentJob = completedJob;
     setStatus(completedJob.status, completedJob.outputs.length, completedJob.trace_id);
+    if (v1ImageJobDeferred(completedJob)) {
+      const message = v1ImageJobDeferredMessage(completedJob, "修改");
+      finishImageProgress("generating", message, "warning");
+      showNotice(message, "warning");
+      setStatus("后台处理中", completedJob.outputs.length, completedJob.trace_id);
+      await refreshV1GenerationSideEffects();
+      return;
+    }
     if (!v1ImageJobReady(completedJob)) {
       finishImageProgress("failed", `修改失败：${jobErrorMessage(completedJob)}`, "error");
       showNotice(`修改失败：${jobErrorMessage(completedJob)}`, "error");
@@ -6923,10 +6985,8 @@ async function reviseSelectedOutput() {
     finishImageProgress("ready", `修改完成，共得到 ${completedJob.outputs.length} 张输出。`);
     renderGallery(completedJob.outputs);
     showNotice(`修改版本已生成：${imageProviderResultText(completedJob)}。`, "success");
-    els.galleryWrap.scrollIntoView({ behavior: "smooth", block: "start" });
-    await refreshHistory({ silent: true });
-    await refreshVeyraAccountPanelAfterHistoryChange();
-    await refreshEvents();
+    scrollV1GalleryIntoView();
+    await refreshV1GenerationSideEffects();
   } catch (error) {
     const submitted = Boolean(submittedJob?.id);
     finishImageProgress(submitted ? "queued" : "failed", submitted ? friendlyError(error) : `修改失败：${friendlyError(error)}`, submitted ? "warning" : "error");

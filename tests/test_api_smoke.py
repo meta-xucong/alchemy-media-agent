@@ -2166,7 +2166,9 @@ def test_frontend_static_app_is_served():
     assert "v2HistoryTemplateCaseId" in script.text
     assert "/v1/veyra/usage?limit=100" in script.text
     assert "refreshVeyraAccountPanelAfterHistoryChange" in script.text
-    assert script.text.count("await refreshVeyraAccountPanelAfterHistoryChange();") >= 4
+    assert script.text.count("await refreshVeyraAccountPanelAfterHistoryChange();") >= 3
+    assert "function refreshV1GenerationSideEffects" in script.text
+    assert "await refreshV1GenerationSideEffects();" in script.text
     assert "/veyra/history?limit=1000" in script.text
     assert "管理员可见全部账户" in script.text
     assert "当前账户与旧版生图记录" in script.text
@@ -2427,6 +2429,25 @@ def test_mobile_h5_app_is_served_independently():
     assert "长按保存，扫码打开。" in mobile_script.text
     assert "微信内请用右上角分享" in mobile_script.text
     assert "分享链接" in mobile_script.text
+
+
+def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
+    client = TestClient(app)
+    desktop_script = client.get("/static/app.js")
+    mobile_script = client.get("/mobile-static/mobile.js")
+
+    for script in (desktop_script, mobile_script):
+        assert script.status_code == 200
+        text = script.text
+        assert "function v1ImageJobDeferred" in text
+        assert "polling_deferred: true" in text
+        assert "状态查询暂时中断" in text
+        assert "return deferV1ImageJob(job" in text
+        assert "function refreshV1GenerationSideEffects" in text
+        assert "V1 post-generation" in text
+        assert "scrollV1GalleryIntoView();" in text
+        assert "else if (v1ImageJobDeferred(completedJob))" in text
+        assert "finishSimpleProgress(\"v1\", \"generating\", message, \"warning\")" in text
 
 
 def test_veyra_ui_gate_enters_return_router_before_login():
