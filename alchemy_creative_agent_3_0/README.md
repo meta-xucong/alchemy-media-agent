@@ -44,6 +44,32 @@ See:
 
 ```text
 alchemy_creative_agent_3_0/docs/00_ROOT_RULES.md
+alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
+```
+
+## Product Boundary
+
+V3 is an independent product area inside the larger site.
+
+Allowed shared platform layer:
+
+```text
+same domain
+same homepage / site shell
+same balance / credit system
+same server / deployment environment
+```
+
+V3-owned layer:
+
+```text
+independent title-bar entry
+independent V3 UI
+independent V3 backend APIs
+independent V3 runtime
+independent V3 schemas
+independent V3 agents
+independent V3 provider contracts
 ```
 
 ## Core Product Goal
@@ -114,6 +140,12 @@ alchemy_creative_agent_3_0/docs/13_STEP_BY_STEP_DELIVERY_PLAN.md
 alchemy_creative_agent_3_0/docs/14_CODEX_TASK_PROMPTS_PHASE_2_AND_3.md
 ```
 
+Product boundary and extensibility docs:
+
+```text
+alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
+```
+
 ## Implementation Waves
 
 ```text
@@ -139,6 +171,12 @@ V3.5 Product API and Minimal UX
 ## High-Level Architecture
 
 ```text
+Shared Home Page / Site Shell
+  └── Alchemy Creative Agent 3.0 title-bar entry
+        └── V3 Frontend App
+              └── V3 API Layer
+                    └── Central Creative Brain
+                          ↓
 Natural Language Input
   ↓
 Intent Understanding Agent
@@ -164,6 +202,22 @@ Candidate Scoring + Critic + Refinement Loop
 Commercial Asset Pack
 ```
 
+## Vertical Agent Extensibility
+
+V3 keeps the central-brain + multi-agent framework and reserves vertical sub-agent packs for future industries:
+
+```text
+EcommerceAgentFamily
+BrandIPAgentFamily
+AIMangaDramaAgentFamily
+RestaurantAgentFamily
+LocalServiceAgentFamily
+EducationAgentFamily
+HospitalityAgentFamily
+```
+
+These vertical packs extend the V3 framework through standard contracts. They must not fork the runtime.
+
 ## Strategic Direction
 
 Do not build a Lovart clone.
@@ -179,5 +233,6 @@ Build a simpler, vertical, agentic commercial image production system that absor
 - candidate scoring
 - automatic refinement
 - reusable brand memory
+- future vertical industry agent packs
 
 The product should be easier than Lovart for non-design users because the user does not need to operate a design workflow. The AI agents should operate the workflow internally.
