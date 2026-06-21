@@ -242,12 +242,18 @@ async def veyra_me(request: Request, authorization: str = Header(default="")):
 
 
 @app.get("/api/v2/veyra/history", response_model=ImageHistoryResponse)
-async def veyra_history(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+async def veyra_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    authorization: str = Header(default=""),
+):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit, veyra_user_id=None, include_legacy_public=True, include_all=True)
+        return list_image_history(limit=limit, offset=offset, veyra_user_id=None, include_legacy_public=True, include_all=True)
     context = await _veyra_request_context(request, authorization)
     return list_image_history(
         limit=limit,
+        offset=offset,
         veyra_user_id=context["user_id"],
         include_legacy_public=True,
         include_all=context["is_admin"],
@@ -727,12 +733,18 @@ async def image_job(body: CreateImageJobRequest, request: Request, authorization
 
 
 @app.get("/api/v2/image/history", response_model=ImageHistoryResponse)
-async def image_history(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
+async def image_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    authorization: str = Header(default=""),
+):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit)
+        return list_image_history(limit=limit, offset=offset)
     context = await _veyra_request_context(request, authorization)
     return list_image_history(
         limit=limit,
+        offset=offset,
         veyra_user_id=context["user_id"],
         include_legacy_public=True,
         include_all=context["is_admin"],

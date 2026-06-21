@@ -693,6 +693,7 @@ async def list_image_history(
     request: Request,
     session_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
@@ -748,7 +749,7 @@ async def list_image_history(
                 )
             )
 
-    for record in media_store.list_history_records(limit=limit, session_id=session_id):
+    for record in media_store.list_history_records(limit=10000, session_id=session_id):
         if _is_non_v1_history_record(record):
             blocked_output_ids.add(record["id"])
             continue
@@ -758,7 +759,7 @@ async def list_image_history(
         items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
 
     if not session_id:
-        for record in media_store.list_generated_output_records(limit=limit):
+        for record in media_store.list_generated_output_records(limit=10000):
             if _is_non_v1_history_record(record):
                 blocked_output_ids.add(record["id"])
                 continue
@@ -769,7 +770,7 @@ async def list_image_history(
 
     items = [_with_veyra_history_access(item, veyra_context) for item in items if _history_visible_to_veyra(item, veyra_context)]
     items.sort(key=_history_sort_key, reverse=True)
-    return ImageHistoryResponse(items=items[:limit], total=len(items))
+    return ImageHistoryResponse(items=items[offset : offset + limit], total=len(items))
 
 
 @app.get("/v1/veyra/usage")

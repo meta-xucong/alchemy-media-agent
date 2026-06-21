@@ -44,6 +44,7 @@ def persist_image_job_history(job: ImageJob) -> None:
 def list_image_history(
     limit: int = 50,
     *,
+    offset: int = 0,
     veyra_user_id: int | None = None,
     include_legacy_public: bool = True,
     include_all: bool = False,
@@ -79,7 +80,8 @@ def list_image_history(
         if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
             records_by_output[item.output_id] = item
     items = sorted(records_by_output.values(), key=lambda item: (_timestamp(item.created_at), item.job_id), reverse=True)
-    return ImageHistoryResponse(items=items[:limit], total=len(items))
+    safe_offset = max(0, offset)
+    return ImageHistoryResponse(items=items[safe_offset : safe_offset + limit], total=len(items))
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:

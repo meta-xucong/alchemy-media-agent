@@ -2169,7 +2169,9 @@ def test_frontend_static_app_is_served():
     assert script.text.count("await refreshVeyraAccountPanelAfterHistoryChange();") >= 3
     assert "function refreshV1GenerationSideEffects" in script.text
     assert "await refreshV1GenerationSideEffects();" in script.text
-    assert "/veyra/history?limit=1000" in script.text
+    assert "function v2HistoryEndpoint" in script.text
+    assert "loadV2HistoryResponse({ full: true" in script.text
+    assert "const v2HistoryFetchPageSize = 72" in script.text
     assert "管理员可见全部账户" in script.text
     assert "当前账户与旧版生图记录" in script.text
     assert "生成修改版本" in script.text
@@ -2421,7 +2423,9 @@ def test_mobile_h5_app_is_served_independently():
     assert "if (url?.startsWith(\"/api/v2/\")) return v2MediaUrl(url);" in mobile_script.text
     assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
-    assert "/veyra/history?limit=1000" in mobile_script.text
+    assert "function v2HistoryEndpoint" in mobile_script.text
+    assert "loadV2HistoryResponse({ full: true" in mobile_script.text
+    assert "const v2HistoryFetchPageSize = 72" in mobile_script.text
     assert "/v1/veyra/usage?limit=100" in mobile_script.text
     assert "await refreshVeyraAccountPanelAfterHistoryChange();" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
@@ -2868,6 +2872,50 @@ def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatc
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["items"]] == ["out_new", "out_mid", "out_old"]
+
+
+def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    client = TestClient(app)
+    records = [
+        ("out_page_1", "job_page_1", "2026-04-04T09:00:00+00:00"),
+        ("out_page_2", "job_page_2", "2026-04-03T09:00:00+00:00"),
+        ("out_page_3", "job_page_3", "2026-04-02T09:00:00+00:00"),
+        ("out_page_4", "job_page_4", "2026-04-01T09:00:00+00:00"),
+    ]
+    for output_id, job_id, created_at in records:
+        path = media_store.output_path(job_id=job_id, output_id=output_id, output_format="png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        media_store.save_history_record(
+            {
+                "id": output_id,
+                "job_id": job_id,
+                "session_id": "ses_history_page",
+                "url": f"/v1/outputs/{output_id}/download",
+                "thumbnail_url": f"/v1/outputs/{output_id}/download",
+                "format": "png",
+                "provider": "mock_image",
+                "model": "mock-image-v1",
+                "prompt": output_id,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        )
+
+    first_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=0")
+    second_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=2")
+    empty_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=99")
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert empty_page.status_code == 200
+    assert first_page.json()["total"] == 4
+    assert second_page.json()["total"] == 4
+    assert [item["id"] for item in first_page.json()["items"]] == ["out_page_1", "out_page_2"]
+    assert [item["id"] for item in second_page.json()["items"]] == ["out_page_3", "out_page_4"]
+    assert empty_page.json()["items"] == []
 
 
 def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monkeypatch):

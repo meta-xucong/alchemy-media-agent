@@ -27,10 +27,12 @@ const defaultImageCount = "1";
 const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
+const historyFetchPageSize = 72;
 const heroHistoryPageSize = 8;
 const v2TemplatePageSize = 10;
 const v2TemplateEagerImageCount = 4;
 const v2HistoryPageSize = 24;
+const v2HistoryFetchPageSize = 72;
 const labStylePageSize = 80;
 const labPollIntervalMs = 3000;
 const labPollMaxAttempts = 360;
@@ -173,6 +175,8 @@ const state = {
   heroHistorySource: "v1",
   historyItems: [],
   historyFavoritesOnly: false,
+  historyTotal: 0,
+  historyLoadingMore: false,
   selectedRevisionSource: null,
   historyRenderLimit: historyPageSize,
   imageProgressStartedAt: null,
@@ -210,6 +214,8 @@ const v2State = {
   visibleTemplates: [],
   history: [],
   historyFavoritesOnly: false,
+  historyTotal: 0,
+  historyLoadingMore: false,
   favoriteReferenceItem: null,
   favoriteReferenceAsset: null,
   selectedTemplateId: null,
@@ -704,6 +710,7 @@ function bindControls() {
       state.historyFavoritesOnly = els.historyFavoritesOnly.checked;
       state.historyRenderLimit = historyPageSize;
       renderHistory(state.historyItems);
+      if (state.historyFavoritesOnly) loadRemainingV1HistoryForFavorites();
       scheduleMobileSummaryUpdate();
     });
   }
@@ -757,6 +764,7 @@ function bindControls() {
       v2State.historyFavoritesOnly = els.v2HistoryFavoritesOnly.checked;
       v2State.historyRenderLimit = v2HistoryPageSize;
       renderV2History(v2State.history);
+      if (v2State.historyFavoritesOnly) loadRemainingV2HistoryForFavorites();
       scheduleMobileSummaryUpdate();
     });
   }
@@ -4161,13 +4169,17 @@ async function initV2({ silent = true, force = false } = {}) {
   toggleV2Loading(true);
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
   try {
-    const historyResponse = await loadV2HistoryResponse();
-    v2State.historyRenderLimit = v2HistoryPageSize;
-    v2State.history = historyResponse.items || [];
-    renderV2History(v2State.history);
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
-
-    const [health, providersResponse, imageProviderCapabilities, templateIndexResponse, templatesPageResponse, orchestratorStatus, modelSettings] = await Promise.all([
+    const [
+      historyResponse,
+      health,
+      providersResponse,
+      imageProviderCapabilities,
+      templateIndexResponse,
+      templatesPageResponse,
+      orchestratorStatus,
+      modelSettings,
+    ] = await Promise.all([
+      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs }),
       loadV2OptionalResource("/health", { agents_sdk_available: false }),
       loadV2OptionalResource("/resource-providers", { providers: [] }),
       loadV2OptionalResource("/provider-capabilities", { providers: [] }),
@@ -4176,6 +4188,11 @@ async function initV2({ silent = true, force = false } = {}) {
       loadV2OptionalResource("/orchestrator/status", null),
       loadV2OptionalResource("/runtime/model-settings", null),
     ]);
+    v2State.historyRenderLimit = v2HistoryPageSize;
+    v2State.history = historyResponse.items || [];
+    v2State.historyTotal = Number.isFinite(historyResponse.total) ? historyResponse.total : v2State.history.length;
+    renderV2History(v2State.history);
+    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
     v2State.health = health;
     v2State.providers = providersResponse?.providers || [];
     v2State.imageProviderCapabilities = imageProviderCapabilities?.providers || [];
@@ -4641,8 +4658,9 @@ async function loadV2History({ silent = true } = {}) {
   if (!silent) updateV2Notice("正在刷新 2.0 历史。", "info");
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = true;
   try {
-    const response = await loadV2HistoryResponse();
+    const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0 });
     v2State.history = response.items || [];
+    v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length;
     if (
       v2State.favoriteReferenceItem &&
       !v2State.history.some(
@@ -4654,11 +4672,68 @@ async function loadV2History({ silent = true } = {}) {
     v2State.historyRenderLimit = v2HistoryPageSize;
     renderV2History(v2State.history);
     if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
-    if (!silent) updateV2Notice(`已加载 ${v2State.history.length} 条 2.0 历史。`, "success");
+    if (!silent) updateV2Notice(`已加载 ${v2State.history.length} / ${v2State.historyTotal} 条 2.0 历史。`, "success");
   } catch (error) {
     if (!silent) updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error");
   } finally {
     if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = false;
+  }
+}
+
+function hasMoreV2History() {
+  return v2State.history.length < (v2State.historyTotal || v2State.history.length);
+}
+
+async function loadMoreV2History() {
+  if (v2State.historyLoadingMore) return;
+  const renderableItems = v2State.history.filter(isRenderableV2HistoryImage);
+  const visibleItems = renderableItems.filter((item) => !v2State.historyFavoritesOnly || item.favorite);
+  if (v2State.historyRenderLimit < visibleItems.length) {
+    v2State.historyRenderLimit = Math.min(v2State.historyRenderLimit + v2HistoryPageSize, visibleItems.length);
+    renderV2History(v2State.history);
+    return;
+  }
+  if (!hasMoreV2History()) return;
+  v2State.historyLoadingMore = true;
+  renderV2History(v2State.history);
+  try {
+    const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: v2State.history.length });
+    const existing = new Set(v2State.history.map((item) => item.output_id));
+    const nextItems = (response.items || []).filter((item) => item.output_id && !existing.has(item.output_id));
+    v2State.history = [...v2State.history, ...nextItems];
+    v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length;
+    v2State.historyRenderLimit += v2HistoryPageSize;
+    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+  } catch (error) {
+    updateV2Notice(`更多 2.0 历史加载失败：${friendlyError(error)}`, "error");
+  } finally {
+    v2State.historyLoadingMore = false;
+    renderV2History(v2State.history);
+    scheduleMobileSummaryUpdate();
+  }
+}
+
+async function loadRemainingV2HistoryForFavorites() {
+  if (v2State.historyLoadingMore || !hasMoreV2History()) return;
+  v2State.historyLoadingMore = true;
+  renderV2History(v2State.history);
+  try {
+    while (hasMoreV2History()) {
+      const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: v2State.history.length });
+      const existing = new Set(v2State.history.map((item) => item.output_id));
+      const nextItems = (response.items || []).filter((item) => item.output_id && !existing.has(item.output_id));
+      v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length + nextItems.length;
+      if (!nextItems.length) break;
+      v2State.history = [...v2State.history, ...nextItems];
+    }
+    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+    if (els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) renderV2FavoriteReferencePicker();
+  } catch (error) {
+    updateV2Notice(`星标历史补全失败：${friendlyError(error)}`, "warning");
+  } finally {
+    v2State.historyLoadingMore = false;
+    renderV2History(v2State.history);
+    scheduleMobileSummaryUpdate();
   }
 }
 
@@ -5914,7 +5989,9 @@ function renderV2History(items) {
   const hiddenMockCount = items.length - renderableItems.length;
   const renderLimit = Math.min(v2State.historyRenderLimit, visibleItems.length);
   const renderedItems = visibleItems.slice(0, renderLimit);
-  els.v2HistoryCount.textContent = renderLimit < visibleItems.length ? `${renderLimit}/${visibleItems.length}` : String(visibleItems.length);
+  const totalCount = Math.max(v2State.historyTotal || 0, items.length);
+  els.v2HistoryCount.textContent =
+    renderLimit < visibleItems.length || hasMoreV2History() ? `${renderLimit}/${totalCount}` : String(visibleItems.length);
   els.v2HistoryGrid.classList.toggle("empty-v2-list", visibleItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
@@ -5965,19 +6042,19 @@ function renderV2History(items) {
     note.textContent = `已隐藏 ${hiddenMockCount} 条测试占位记录，只显示真实图片。`;
     els.v2HistoryGrid.appendChild(note);
   }
-  if (renderLimit < visibleItems.length) {
+  if (renderLimit < visibleItems.length || hasMoreV2History()) {
     const loadMore = document.createElement("article");
     loadMore.className = "v2-template-load-more v2-history-load-more";
     const text = document.createElement("span");
-    text.textContent = `已加载 ${renderLimit} / ${visibleItems.length}`;
+    text.textContent = v2State.historyLoadingMore
+      ? "正在加载更多历史"
+      : `已显示 ${renderLimit} / ${Math.max(totalCount, visibleItems.length)}`;
     const button = document.createElement("button");
     button.className = "button secondary";
     button.type = "button";
-    button.textContent = "加载更多历史";
-    button.addEventListener("click", () => {
-      v2State.historyRenderLimit = Math.min(v2State.historyRenderLimit + v2HistoryPageSize, visibleItems.length);
-      renderV2History(items);
-    });
+    button.disabled = v2State.historyLoadingMore;
+    button.textContent = v2State.historyLoadingMore ? "加载中" : "加载更多历史";
+    button.addEventListener("click", () => loadMoreV2History());
     loadMore.append(text, button);
     els.v2HistoryGrid.appendChild(loadMore);
   }
@@ -6304,13 +6381,20 @@ function updateV2Notice(message, type = "info") {
   els.v2NoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
 }
 
-const v2AccountHistoryPath = "/veyra/history?limit=1000";
-const v2ImageHistoryPath = "/image/history?limit=1000";
 const v2AccountHistoryTimeoutMs = 3500;
 const v2OptionalResourceTimeoutMs = 3500;
 
-function v2HistoryPath() {
-  return v2AccountHistoryPath;
+function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
+  if (full) return `${basePath}?limit=1000`;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(Math.max(0, offset || 0)),
+  });
+  return `${basePath}?${params.toString()}`;
+}
+
+function v2HistoryPath(options = {}) {
+  return v2HistoryEndpoint("/veyra/history", options);
 }
 
 function v2HistoryItemCount(response) {
@@ -6347,9 +6431,9 @@ async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = 
   }
 }
 
-async function loadV2ImageHistoryFallback(reason = "") {
+async function loadV2ImageHistoryFallback(reason = "", options = {}) {
   try {
-    const response = await v2Request(v2ImageHistoryPath);
+    const response = await v2Request(v2HistoryEndpoint("/image/history", options));
     if (v2HistoryItemCount(response) && reason) {
       console.warn(`V2 account history unavailable, using image history fallback: ${reason}`);
     }
@@ -6360,14 +6444,15 @@ async function loadV2ImageHistoryFallback(reason = "") {
   }
 }
 
-async function loadV2HistoryResponse() {
+async function loadV2HistoryResponse(options = {}) {
+  const timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs") ? options.timeoutMs : v2AccountHistoryTimeoutMs;
   try {
-    const response = await loadV2HistoryWithTimeout(v2HistoryPath(), v2AccountHistoryTimeoutMs);
+    const response = await loadV2HistoryWithTimeout(v2HistoryPath(options), timeoutMs);
     if (v2HistoryItemCount(response)) return response;
-    const fallback = await loadV2ImageHistoryFallback("empty account history");
+    const fallback = await loadV2ImageHistoryFallback("empty account history", options);
     return fallback || response;
   } catch (error) {
-    const fallback = await loadV2ImageHistoryFallback(v2HistoryLoadErrorMessage(error));
+    const fallback = await loadV2ImageHistoryFallback(v2HistoryLoadErrorMessage(error), options);
     if (fallback) return fallback;
     throw error;
   }
@@ -6923,7 +7008,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
     const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
       refreshVeyraAccount(),
       request("/v1/image/history?limit=1000"),
-      loadV2HistoryResponse(),
+      loadV2HistoryResponse({ full: true, timeoutMs: v2AccountHistoryTimeoutMs }),
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
@@ -7705,24 +7790,85 @@ function renderSkeleton(count) {
   }
 }
 
-async function refreshHistory({ silent = false } = {}) {
+async function refreshHistory({ silent = false, append = false } = {}) {
   if (!els.historyGallery) return;
-  els.refreshHistoryBtn.disabled = true;
+  const offset = append ? state.historyItems.length : 0;
+  if (!append) els.refreshHistoryBtn.disabled = true;
+  else state.historyLoadingMore = true;
   try {
-    const history = await request("/v1/image/history?limit=1000");
-    state.historyItems = history.items || [];
-    state.historyRenderLimit = historyPageSize;
+    const history = await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
+    const nextItems = history.items || [];
+    if (append) {
+      const existing = new Set(state.historyItems.map((item) => item.id));
+      state.historyItems = [...state.historyItems, ...nextItems.filter((item) => item.id && !existing.has(item.id))];
+    } else {
+      state.historyItems = nextItems;
+      state.historyRenderLimit = historyPageSize;
+    }
+    state.historyTotal = Number.isFinite(history.total) ? history.total : state.historyItems.length;
     renderHistory(state.historyItems);
-    if (activePanelName() === "image") renderHeroHistory(history.items || [], { source: "v1" });
+    if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
     if (!silent) {
-      showNotice(`已加载 ${history.items?.length || 0} 张历史图片。`, "success");
+      showNotice(`已加载 ${state.historyItems.length} / ${state.historyTotal} 张历史图片。`, "success");
       showGlobalToast("历史图片已刷新。");
     }
   } catch (error) {
     restartHeroCarousels();
     if (!silent) showNotice(`历史图片加载失败：${friendlyError(error)}`, "error");
+    if (append) throw error;
   } finally {
-    els.refreshHistoryBtn.disabled = false;
+    if (append) state.historyLoadingMore = false;
+    if (!append) els.refreshHistoryBtn.disabled = false;
+    renderHistory(state.historyItems);
+  }
+}
+
+function hasMoreV1History() {
+  return state.historyItems.length < (state.historyTotal || state.historyItems.length);
+}
+
+async function loadMoreV1History() {
+  if (state.historyLoadingMore) return;
+  const visibleItems = [...state.historyItems].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
+  if (state.historyRenderLimit < visibleItems.length) {
+    state.historyRenderLimit = Math.min(state.historyRenderLimit + historyPageSize, visibleItems.length);
+    renderHistory(state.historyItems);
+    return;
+  }
+  if (!hasMoreV1History()) return;
+  state.historyLoadingMore = true;
+  renderHistory(state.historyItems);
+  try {
+    await refreshHistory({ silent: true, append: true });
+    state.historyRenderLimit += historyPageSize;
+  } catch (error) {
+    showNotice(`更多历史图片加载失败：${friendlyError(error)}`, "error");
+  } finally {
+    state.historyLoadingMore = false;
+    renderHistory(state.historyItems);
+  }
+}
+
+async function loadRemainingV1HistoryForFavorites() {
+  if (state.historyLoadingMore || !hasMoreV1History()) return;
+  state.historyLoadingMore = true;
+  renderHistory(state.historyItems);
+  try {
+    while (hasMoreV1History()) {
+      const response = await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${state.historyItems.length}`);
+      const existing = new Set(state.historyItems.map((item) => item.id));
+      const nextItems = (response.items || []).filter((item) => item.id && !existing.has(item.id));
+      state.historyTotal = Number.isFinite(response.total) ? response.total : state.historyItems.length + nextItems.length;
+      if (!nextItems.length) break;
+      state.historyItems = [...state.historyItems, ...nextItems];
+    }
+    if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
+    if (els.favoritePickerModal && !els.favoritePickerModal.hidden) renderFavoritePicker();
+  } catch (error) {
+    showNotice(`星标历史补全失败：${friendlyError(error)}`, "warning");
+  } finally {
+    state.historyLoadingMore = false;
+    renderHistory(state.historyItems);
   }
 }
 
@@ -7731,7 +7877,8 @@ function renderHistory(items) {
   const sortedItems = [...items].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
   const renderLimit = Math.min(state.historyRenderLimit, sortedItems.length);
   const renderedItems = sortedItems.slice(0, renderLimit);
-  els.historyCount.textContent = renderLimit < sortedItems.length ? `${renderLimit}/${sortedItems.length}` : String(sortedItems.length);
+  const totalCount = Math.max(state.historyTotal || 0, items.length);
+  els.historyCount.textContent = renderLimit < sortedItems.length || hasMoreV1History() ? `${renderLimit}/${totalCount}` : String(sortedItems.length);
   els.historyGallery.classList.toggle("empty-history", sortedItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
@@ -7779,19 +7926,17 @@ function renderHistory(items) {
     card.append(preview, favoriteButton, meta, footer);
     els.historyGallery.appendChild(card);
   });
-  if (renderLimit < sortedItems.length) {
+  if (renderLimit < sortedItems.length || hasMoreV1History()) {
     const loadMore = document.createElement("article");
     loadMore.className = "history-load-more";
     const text = document.createElement("span");
-    text.textContent = `已加载 ${renderLimit} / ${sortedItems.length}`;
+    text.textContent = state.historyLoadingMore ? "正在加载更多历史" : `已显示 ${renderLimit} / ${Math.max(totalCount, sortedItems.length)}`;
     const button = document.createElement("button");
     button.className = "button secondary";
     button.type = "button";
-    button.textContent = "加载更多历史";
-    button.addEventListener("click", () => {
-      state.historyRenderLimit = Math.min(state.historyRenderLimit + historyPageSize, sortedItems.length);
-      renderHistory(state.historyItems);
-    });
+    button.disabled = state.historyLoadingMore;
+    button.textContent = state.historyLoadingMore ? "加载中" : "加载更多历史";
+    button.addEventListener("click", () => loadMoreV1History());
     loadMore.append(text, button);
     els.historyGallery.appendChild(loadMore);
   }
@@ -7823,6 +7968,7 @@ function openV2FavoriteReferencePicker() {
   els.v2FavoriteReferenceModal.hidden = false;
   document.body.classList.add("modal-open");
   els.closeV2FavoriteReferenceBtn?.focus();
+  loadRemainingV2HistoryForFavorites();
 }
 
 function closeV2FavoriteReferencePicker() {
@@ -7998,6 +8144,7 @@ function openFavoritePicker() {
   els.favoritePickerModal.hidden = false;
   document.body.classList.add("modal-open");
   els.closeFavoritePickerBtn?.focus();
+  loadRemainingV1HistoryForFavorites();
 }
 
 function closeFavoritePicker() {

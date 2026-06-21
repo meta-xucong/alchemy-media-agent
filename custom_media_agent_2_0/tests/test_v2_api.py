@@ -5238,6 +5238,49 @@ def test_image_history_records_generated_outputs(tmp_path) -> None:
     assert history["items"][0]["metadata"]["native_v2_storage"] is True
 
 
+def test_v2_image_history_supports_offset_pagination(tmp_path) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "image_history_path", tmp_path / "image_history.jsonl")
+    records = []
+    for index in range(4):
+        output_number = index + 1
+        record = {
+            "output_id": f"out_v2_page_{output_number}",
+            "job_id": f"job_v2_page_{output_number}",
+            "run_id": f"run_v2_page_{output_number}",
+            "status": "completed",
+            "provider_id": "mock_image",
+            "model": "mock-image-v2",
+            "mode": "smart_enhance",
+            "template_case_id": None,
+            "prompt": f"Paged V2 history {output_number}",
+            "url": f"/api/v2/outputs/out_v2_page_{output_number}/download",
+            "thumbnail_url": "",
+            "score": {},
+            "metadata": {"format": "png"},
+            "created_at": f"2026-06-0{output_number}T09:00:00Z",
+            "updated_at": f"2026-06-0{output_number}T09:00:00Z",
+        }
+        records.append(record)
+    settings.image_history_path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    first_page = client.get("/api/v2/image/history", params={"limit": 2, "offset": 0})
+    second_page = client.get("/api/v2/image/history", params={"limit": 2, "offset": 2})
+    veyra_page = client.get("/api/v2/veyra/history", params={"limit": 2, "offset": 2})
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert veyra_page.status_code == 200
+    assert first_page.json()["total"] == 4
+    assert second_page.json()["total"] == 4
+    assert [item["output_id"] for item in first_page.json()["items"]] == ["out_v2_page_4", "out_v2_page_3"]
+    assert [item["output_id"] for item in second_page.json()["items"]] == ["out_v2_page_2", "out_v2_page_1"]
+    assert [item["output_id"] for item in veyra_page.json()["items"]] == ["out_v2_page_2", "out_v2_page_1"]
+
+
 def test_image_history_thumbnail_endpoint_serves_v2_native_webp(tmp_path) -> None:
     client = fresh_client()
     object.__setattr__(settings, "persist_image_history", True)
