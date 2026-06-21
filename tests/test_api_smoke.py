@@ -1818,7 +1818,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260621-progress-share-fix" in index.text
+    assert "20260621-preview-speed" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -2196,7 +2196,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260621-progress-share-fix" in h5.text
+    assert "20260621-preview-speed" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
