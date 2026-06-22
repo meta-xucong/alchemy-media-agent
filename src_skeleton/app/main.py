@@ -425,7 +425,14 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
 
 def _v2_proxy_target_url(path: str, query: str = "") -> str:
     clean_path = str(path or "").lstrip("/")
-    target = f"{settings.v2_api_proxy_base_url}/api/v2/{clean_path}"
+    if clean_path == "api/v2":
+        clean_path = ""
+    elif clean_path.startswith("api/v2/"):
+        clean_path = clean_path.removeprefix("api/v2/")
+    base_url = str(settings.v2_api_proxy_base_url or "").rstrip("/")
+    if not base_url.endswith("/api/v2"):
+        base_url = f"{base_url}/api/v2"
+    target = f"{base_url}/{clean_path}" if clean_path else base_url
     return f"{target}?{query}" if query else target
 
 
@@ -1323,9 +1330,7 @@ def _load_share_preview_image(request: Request, value: str | None):
         if v2_output_file:
             return Image.open(v2_output_file)
         if split.path.startswith("/api/v2/"):
-            target = settings.v2_api_proxy_base_url.rstrip("/") + split.path
-            if split.query:
-                target = f"{target}?{split.query}"
+            target = _v2_proxy_target_url(split.path, split.query)
             with httpx.Client(timeout=8, follow_redirects=True) as client:
                 response = client.get(target)
                 response.raise_for_status()

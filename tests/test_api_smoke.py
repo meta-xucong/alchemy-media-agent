@@ -2875,6 +2875,19 @@ def test_v2_local_proxy_target_uses_same_origin_shell():
     assert main_module._v2_proxy_target_url("/templates/page").endswith("/api/v2/templates/page")
 
 
+def test_v2_local_proxy_target_does_not_duplicate_api_prefix():
+    original_base_url = settings.v2_api_proxy_base_url
+    try:
+        settings.v2_api_proxy_base_url = "http://127.0.0.1:8020"
+        assert main_module._v2_proxy_target_url("veyra/login") == "http://127.0.0.1:8020/api/v2/veyra/login"
+
+        settings.v2_api_proxy_base_url = "http://127.0.0.1:8020/api/v2"
+        assert main_module._v2_proxy_target_url("veyra/login") == "http://127.0.0.1:8020/api/v2/veyra/login"
+        assert main_module._v2_proxy_target_url("/api/v2/health", "x=1") == "http://127.0.0.1:8020/api/v2/health?x=1"
+    finally:
+        settings.v2_api_proxy_base_url = original_base_url
+
+
 def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     repository.reset()
