@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import math
 import re
 import time
 from contextlib import ExitStack
 from collections import deque
 from email.utils import parsedate_to_datetime
+
+import httpx
 
 from app.config import settings
 from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationResult
@@ -261,22 +264,7 @@ class OpenAIGPTImageProvider:
                 provider=self.name,
                 detail={"error_type": type(last_error).__name__, "message": str(last_error), "request_index": index},
             )
-        outputs: list[dict] = []
-        for item in response.data:
-            b64_json = getattr(item, "b64_json", None)
-            if not b64_json:
-                raise ProviderRuntimeError("OpenAI response did not include image bytes.", provider=self.name)
-            outputs.append(
-                {
-                    "b64_json": b64_json,
-                    "mime_type": f"image/{plan.output_format}",
-                    "format": plan.output_format,
-                    "width": self._parse_size(plan.size)[0],
-                    "height": self._parse_size(plan.size)[1],
-                    "request_index": index,
-                }
-            )
-        return outputs
+        return self._outputs_from_response(response, plan, request_index=index)
 
     async def _generate_one_with_references(self, client, prompt: str, plan, reference_paths: list, *, index: int) -> list[dict]:
         max_attempts = 6
@@ -352,23 +340,10 @@ class OpenAIGPTImageProvider:
                 provider=self.name,
                 detail={"error_type": type(last_error).__name__, "message": str(last_error), "request_index": index},
             )
-        outputs: list[dict] = []
-        for item in response.data:
-            b64_json = getattr(item, "b64_json", None)
-            if not b64_json:
-                raise ProviderRuntimeError("OpenAI response did not include image bytes.", provider=self.name)
-            outputs.append(
-                {
-                    "b64_json": b64_json,
-                    "mime_type": f"image/{plan.output_format}",
-                    "format": plan.output_format,
-                    "width": self._parse_size(plan.size)[0],
-                    "height": self._parse_size(plan.size)[1],
-                    "request_index": index,
-                    "reference_image_count": len(reference_paths),
-                    "api_operation": "images.edit",
-                }
-            )
+        outputs = self._outputs_from_response(response, plan, request_index=index)
+        for output in outputs:
+            output["reference_image_count"] = len(reference_paths)
+            output["api_operation"] = "images.edit"
         return outputs
 
     async def edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
@@ -460,6 +435,74 @@ class OpenAIGPTImageProvider:
         if plan.size:
             kwargs["size"] = plan.size
         return kwargs
+
+    def _outputs_from_response(self, response, plan, *, request_index: int) -> list[dict]:
+        outputs: list[dict] = []
+        width, height = self._parse_size(plan.size)
+        for item in getattr(response, "data", []) or []:
+            b64_json = getattr(item, "b64_json", None)
+            source = "b64_json"
+            if not b64_json:
+                url = getattr(item, "url", None)
+                if not url and hasattr(item, "model_dump"):
+                    url = (item.model_dump(exclude_none=True) or {}).get("url")
+                if url:
+                    b64_json = self._download_url_as_b64(str(url))
+                    source = "url"
+            if not b64_json:
+                keys = []
+                if hasattr(item, "model_dump"):
+                    keys = sorted((item.model_dump(exclude_none=True) or {}).keys())
+                raise ProviderRuntimeError(
+                    "OpenAI response did not include image bytes.",
+                    provider=self.name,
+                    detail={"response_item_keys": keys, "request_index": request_index},
+                )
+            outputs.append(
+                {
+                    "b64_json": b64_json,
+                    "mime_type": f"image/{plan.output_format}",
+                    "format": plan.output_format,
+                    "width": width,
+                    "height": height,
+                    "request_index": request_index,
+                    "api_response_source": source,
+                }
+            )
+        return outputs
+
+    def _download_url_as_b64(self, url: str) -> str:
+        try:
+            with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                response = client.get(url)
+                response.raise_for_status()
+                content_type = str(response.headers.get("content-type") or "").lower()
+                content = response.content
+        except Exception as exc:
+            raise ProviderRuntimeError(
+                "OpenAI image URL could not be downloaded.",
+                provider=self.name,
+                detail={"error_type": type(exc).__name__, "message": str(exc)[:500]},
+            ) from exc
+        if not content:
+            raise ProviderRuntimeError(
+                "OpenAI image URL returned empty content.",
+                provider=self.name,
+                detail={"url_present": True},
+            )
+        if content_type and not (content_type.startswith("image/") or "octet-stream" in content_type):
+            raise ProviderRuntimeError(
+                "OpenAI image URL returned non-image content.",
+                provider=self.name,
+                detail={"content_type": content_type[:120]},
+            )
+        if len(content) > 64 * 1024 * 1024:
+            raise ProviderRuntimeError(
+                "OpenAI image URL returned an unexpectedly large file.",
+                provider=self.name,
+                detail={"size_bytes": len(content)},
+            )
+        return base64.b64encode(content).decode("ascii")
 
     def _is_retryable_error(self, exc: Exception) -> bool:
         status_code = getattr(exc, "status_code", None)

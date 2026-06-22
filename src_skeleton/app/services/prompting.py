@@ -111,6 +111,32 @@ def _infer_brand_constraints(prompt: str, asset_ids: list[str]) -> list[str]:
 
 def _infer_text(prompt: str) -> dict[str, str | bool]:
     quoted = [item.strip() for item in re.findall(r"[“\"「『《]([^”\"」』》]+)[”\"」』》]", prompt) if item.strip()]
-    if quoted:
-        return {"required": True, "content": quoted[0], "language": "zh-CN"}
+    replacement_targets = _quoted_replacement_targets(prompt)
+    if replacement_targets:
+        return {"required": True, "content": "；".join(replacement_targets), "language": "zh-CN"}
+    retained = [item for item in quoted if not _quoted_text_is_removal_or_replacement(prompt, item)]
+    if retained:
+        return {"required": True, "content": retained[0], "language": "zh-CN"}
     return {"required": "文字" in prompt or "标题" in prompt, "language": "zh-CN"}
+
+
+def _quoted_replacement_targets(prompt: str) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for item in re.findall(r"(?:改成|换成|替换为|替换成)\s*[“\"「『《]([^”\"」』》]+)[”\"」』》]", prompt):
+        clean = item.strip()
+        if clean and clean not in seen:
+            targets.append(clean)
+            seen.add(clean)
+    return targets
+
+
+def _quoted_text_is_removal_or_replacement(prompt: str, text: str) -> bool:
+    escaped = re.escape(text)
+    patterns = [
+        rf"(?:去掉|去除|移除|删除|擦除|清除|不要|不保留).{{0,24}}[“\"「『《]{escaped}[”\"」』》]",
+        rf"[“\"「『《]{escaped}[”\"」』》].{{0,16}}(?:去掉|去除|移除|删除|擦除|清除|不要|不保留)",
+        rf"把[“\"「『《]{escaped}[”\"」』》].{{0,24}}(?:改成|换成|替换为|替换成)",
+        rf"[“\"「『《]{escaped}[”\"」』》]\s*(?:改成|换成|替换为|替换成)",
+    ]
+    return any(re.search(pattern, prompt) for pattern in patterns)

@@ -14,6 +14,7 @@ import app.providers.openai_image as openai_image_provider
 from app.providers.registry import registry
 from app.schemas import ImageGenerationRequest, ImagePromptPlan
 from app.config import settings
+from app.services.prompting import build_prompt_plan
 from app.services.work_intensity import apply_work_intensity
 from app.storage import media_store
 
@@ -172,6 +173,51 @@ def test_openai_image_provider_passes_quality_to_sdk_call():
 
     assert captured["quality"] == "low"
     assert captured["model"] == "gpt-image-2"
+
+
+def test_openai_image_provider_accepts_url_response(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    tiny_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+
+    class FakeResponse:
+        content = tiny_png
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get(self, url):
+            assert url == "https://image.example.test/out.png"
+            return FakeResponse()
+
+    monkeypatch.setattr(openai_image_provider.httpx, "Client", FakeClient)
+
+    result = provider._outputs_from_response(
+        SimpleNamespace(data=[SimpleNamespace(url="https://image.example.test/out.png")]),
+        ImagePromptPlan(main_subject="咖啡海报", count=1, quality="low"),
+        request_index=0,
+    )
+
+    assert base64.b64decode(result[0]["b64_json"]) == tiny_png
+    assert result[0]["api_response_source"] == "url"
+
+
+def test_v1_prompting_does_not_require_deleted_or_replaced_quoted_text():
+    delete_plan = build_prompt_plan(prompt='把左上角的“ALCOEN”logo去掉，保持整体风格。')
+    replace_plan = build_prompt_plan(prompt='把“江苏纯安科技有限公司”改成“华斐达集团”，英文换成“HUAFEIDA GROUP”。')
+
+    assert delete_plan.text.get("content") is None
+    assert replace_plan.text["content"] == "华斐达集团；HUAFEIDA GROUP"
 
 
 def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path):
