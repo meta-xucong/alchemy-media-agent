@@ -143,6 +143,13 @@ class V2OpenAIGPTImage2Provider:
             limits={
                 "max_batch": 8,
                 "max_reference_images": 5,
+                "sizes": ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
+                "custom_size": {
+                    "min_width": 1024,
+                    "min_height": 1024,
+                    "max_width": 3840,
+                    "max_height": 3840,
+                },
                 "local_max_requests_per_minute": settings.openai_image_local_max_requests_per_minute,
                 "local_max_outputs_per_minute": settings.openai_image_local_max_outputs_per_minute,
                 "local_queue_timeout_seconds": settings.openai_image_local_queue_timeout_seconds,

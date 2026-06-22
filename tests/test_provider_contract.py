@@ -25,6 +25,8 @@ def test_openai_image_provider_capabilities():
     assert "generate" in caps.operations
     assert "edit" in caps.operations
     assert caps.models == ["gpt-image-2"]
+    assert "custom_dimensions" in caps.limits["sizes"]
+    assert caps.limits["custom_size"]["max_width"] == 3840
     assert caps.limits["qualities"] == ["auto", "low", "medium", "high"]
 
 
@@ -237,9 +239,9 @@ def test_v1_prompting_infers_size_from_default_prompt_language():
     square_plan = build_prompt_plan(prompt="生成正方形头像。")
     explicit_plan = build_prompt_plan(prompt="生成A4海报。", size="1024x1024")
 
-    assert a4_plan.size == "1024x1536"
+    assert a4_plan.size == "2400x3392"
     assert "竖版构图" in a4_plan.composition
-    assert landscape_a4_plan.size == "1536x1024"
+    assert landscape_a4_plan.size == "3392x2400"
     assert portrait_plan.size == "1024x1536"
     assert landscape_plan.size == "1536x1024"
     assert square_plan.size == "1024x1024"

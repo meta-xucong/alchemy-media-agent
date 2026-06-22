@@ -19,6 +19,12 @@ _BASE_NEGATIVE_TERMS = [
     "unintended direct copying of unrelated references",
 ]
 
+A4_PORTRAIT_SIZE = "2400x3392"
+A4_LANDSCAPE_SIZE = "3392x2400"
+PORTRAIT_SIZE = "1024x1536"
+LANDSCAPE_SIZE = "1536x1024"
+SQUARE_SIZE = "1024x1024"
+
 
 def summarize_intent(user_prompt: str) -> str:
     clean = " ".join(user_prompt.strip().split())
@@ -90,7 +96,9 @@ def compose_prompt_plan(
         orchestrator_decision,
         visual_grammar_contract=visual_grammar_contract,
     )
-    aspect_lock = _aspect_lock_from_requested_output(requested_output or {})
+    requested_output = requested_output or {}
+    provider_parameters = _apply_prompt_size_inference(provider_parameters, user_prompt=user_prompt, requested_output=requested_output)
+    aspect_lock = _aspect_lock_from_requested_output(requested_output)
     prompt_transform_request = _prompt_transform_request_from_output(requested_output or {})
     provider_parameters = _apply_aspect_lock(provider_parameters, aspect_lock)
     prompt = _append_aspect_lock_instruction(prompt, aspect_lock)
@@ -276,6 +284,78 @@ def _build_provider_parameters(
     params["count"] = max(1, min(count, 8))
     params["quality"] = params.get("quality", "high")
     return params
+
+
+def _apply_prompt_size_inference(params: dict, *, user_prompt: str, requested_output: dict) -> dict:
+    if _has_manual_dimension(requested_output) or _has_dimension(params):
+        return params
+    inferred = _infer_size_from_prompt(user_prompt)
+    if not inferred:
+        return params
+    next_params = dict(params)
+    next_params["size"] = inferred
+    return next_params
+
+
+def _has_manual_dimension(value: dict) -> bool:
+    for key in ("size", "aspect_ratio"):
+        raw = value.get(key)
+        if _clean_dimension_value(raw):
+            return True
+    return False
+
+
+def _has_dimension(params: dict) -> bool:
+    return bool(_clean_dimension_value(params.get("size")) or _clean_dimension_value(params.get("aspect_ratio")))
+
+
+def _infer_size_from_prompt(prompt: str) -> str | None:
+    prompt_text = prompt or ""
+    if _mentions_a4(prompt_text):
+        if _mentions_landscape(prompt_text):
+            return A4_LANDSCAPE_SIZE
+        return A4_PORTRAIT_SIZE
+    if _mentions_square(prompt_text):
+        return SQUARE_SIZE
+    if _mentions_portrait(prompt_text):
+        return PORTRAIT_SIZE
+    if _mentions_landscape(prompt_text):
+        return LANDSCAPE_SIZE
+    return None
+
+
+def _mentions_a4(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(?<![A-Za-z0-9])A\s*4(?![A-Za-z0-9])|A4\s*(?:大小|尺寸|画幅|比例|版式|纸|图|海报)?",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _mentions_square(prompt: str) -> bool:
+    return bool(re.search(r"(方图|正方形|方形|1\s*[:：]\s*1|\bsquare\b)", prompt, flags=re.IGNORECASE))
+
+
+def _mentions_portrait(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(竖版|竖向|纵向|竖图|竖幅|海报竖版|9\s*[:：]\s*16|3\s*[:：]\s*4|\bportrait\b)",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _mentions_landscape(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(横版|横向|横图|横幅|宽幅|16\s*[:：]\s*9|4\s*[:：]\s*3|\blandscape\b)",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _aspect_lock_from_requested_output(requested_output: dict) -> dict[str, object]:

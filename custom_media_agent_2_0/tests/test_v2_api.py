@@ -4264,6 +4264,42 @@ def test_creative_run_preserves_manual_aspect_ratio_only() -> None:
     assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "1536x1024"
 
 
+def test_creative_run_infers_a4_size_when_output_aspect_is_auto() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "以这张图为原型，生成一张极具商业化风格的A4海报。",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    params = run["prompt_plan"]["provider_parameters"]
+    assert params["size"] == "2400x3392"
+    assert "aspect_ratio" not in params
+
+
+def test_creative_run_manual_aspect_overrides_prompt_a4_inference() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "生成一张A4商业海报。",
+            "output": {"count": 1, "provider_hint": "mock_image", "aspect_ratio": "1536x1024"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    params = run["prompt_plan"]["provider_parameters"]
+    assert params["aspect_ratio"] == "1536x1024"
+    assert "size" not in params
+
+
 def test_exploration_mode_preserves_manual_aspect_ratio_and_adds_prompt_fallback(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)

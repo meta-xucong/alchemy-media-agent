@@ -206,8 +206,7 @@ def _size(plan) -> str | None:
     size = params.get("size") or params.get("aspect_ratio")
     if not size or str(size).strip().lower() in {"auto", "default"}:
         return None
-    if isinstance(size, str) and "x" in size:
-        return size
+    text = str(size).strip()
     mapping = {
         "1:1": "1024x1024",
         "2:3": "1024x1536",
@@ -217,7 +216,17 @@ def _size(plan) -> str | None:
         "9:16": "1024x1536",
         "16:9": "1536x1024",
     }
-    return mapping.get(str(size))
+    if text in {"1024x1024", "1024x1536", "1536x1024"}:
+        return text
+    mapped = mapping.get(text)
+    if mapped:
+        return mapped
+    width, height = _dimensions(text)
+    if width and height:
+        if width == height:
+            return "1024x1024"
+        return "1024x1536" if height > width else "1536x1024"
+    return None
 
 
 async def _outputs_from_response(

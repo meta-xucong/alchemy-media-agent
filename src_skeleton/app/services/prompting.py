@@ -5,6 +5,13 @@ import re
 from app.schemas import ImagePromptPlan, PromptPatch
 
 
+A4_PORTRAIT_SIZE = "2400x3392"
+A4_LANDSCAPE_SIZE = "3392x2400"
+PORTRAIT_SIZE = "1024x1536"
+LANDSCAPE_SIZE = "1536x1024"
+SQUARE_SIZE = "1024x1024"
+
+
 def build_prompt_plan(
     *,
     prompt: str,
@@ -80,17 +87,27 @@ def _infer_size(prompt: str, requested_size: str | None) -> str | None:
     if requested_size:
         return requested_size.strip() or None
     prompt_text = prompt or ""
-    if re.search(r"\bA4\b|A\s*4|A4\s*(?:大小|尺寸|画幅|比例|版式)?", prompt_text, flags=re.IGNORECASE):
+    if _mentions_a4(prompt_text):
         if _mentions_landscape(prompt_text):
-            return "1536x1024"
-        return "1024x1536"
+            return A4_LANDSCAPE_SIZE
+        return A4_PORTRAIT_SIZE
     if _mentions_square(prompt_text):
-        return "1024x1024"
+        return SQUARE_SIZE
     if _mentions_portrait(prompt_text):
-        return "1024x1536"
+        return PORTRAIT_SIZE
     if _mentions_landscape(prompt_text):
-        return "1536x1024"
+        return LANDSCAPE_SIZE
     return None
+
+
+def _mentions_a4(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(?<![A-Za-z0-9])A\s*4(?![A-Za-z0-9])|A4\s*(?:大小|尺寸|画幅|比例|版式|纸|图|海报)?",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _mentions_square(prompt: str) -> bool:
@@ -128,11 +145,26 @@ def _infer_style(prompt: str) -> str | None:
 
 
 def _infer_composition(prompt: str, size: str | None) -> str:
-    if size == "1024x1536":
+    orientation = _orientation_from_size(size)
+    if orientation == "portrait":
         return "竖版构图，主体清晰居中，预留安全标题区域。"
-    if size == "1536x1024":
+    if orientation == "landscape":
         return "横版构图，前景与背景层次清楚。"
     return "均衡方图构图，主体明确，四周留白干净。"
+
+
+def _orientation_from_size(size: str | None) -> str:
+    try:
+        width_text, height_text = str(size or "").lower().split("x", 1)
+        width = int(width_text.strip())
+        height = int(height_text.strip())
+    except (AttributeError, ValueError):
+        return "square"
+    if height > width:
+        return "portrait"
+    if width > height:
+        return "landscape"
+    return "square"
 
 
 def _infer_brand_constraints(prompt: str, asset_ids: list[str]) -> list[str]:
