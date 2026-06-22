@@ -51,7 +51,7 @@ def test_create_image_job_batch_outputs_and_persisted_metadata():
     assert job.provider == "mock_image"
     assert len(job.outputs) == 4
     assert job.prompt_plan is not None
-    assert job.prompt_plan.size is None
+    assert job.prompt_plan.size == "1024x1536"
     assert job.cost_estimate is not None
     assert job.outputs[0].score is not None
     assert job.outputs[0].url.startswith("/v1/outputs/")
@@ -62,7 +62,7 @@ def test_create_image_job_rejects_blank_prompt():
         asyncio.run(create_image_job(session_id="ses_test", prompt="   "))
 
 
-def test_create_image_job_preserves_manual_size_only():
+def test_create_image_job_preserves_default_size_when_prompt_has_no_size_language():
     default_job = asyncio.run(
         create_image_job(
             session_id="ses_test",

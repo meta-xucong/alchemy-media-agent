@@ -229,6 +229,23 @@ def test_v1_prompting_does_not_require_deleted_or_replaced_quoted_text():
     assert replace_plan.text["content"] == "华斐达集团；HUAFEIDA GROUP"
 
 
+def test_v1_prompting_infers_size_from_default_prompt_language():
+    a4_plan = build_prompt_plan(prompt="尺寸不变，A4大小。生成高清4K图片。")
+    landscape_a4_plan = build_prompt_plan(prompt="生成横版A4商业海报。")
+    portrait_plan = build_prompt_plan(prompt="生成一张竖版节日海报。")
+    landscape_plan = build_prompt_plan(prompt="做成16:9横向封面。")
+    square_plan = build_prompt_plan(prompt="生成正方形头像。")
+    explicit_plan = build_prompt_plan(prompt="生成A4海报。", size="1024x1024")
+
+    assert a4_plan.size == "1024x1536"
+    assert "竖版构图" in a4_plan.composition
+    assert landscape_a4_plan.size == "1536x1024"
+    assert portrait_plan.size == "1024x1536"
+    assert landscape_plan.size == "1536x1024"
+    assert square_plan.size == "1024x1024"
+    assert explicit_plan.size == "1024x1024"
+
+
 def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path):
     provider = registry.image("openai_gpt_image")
     captured = {}

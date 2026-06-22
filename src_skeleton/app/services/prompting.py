@@ -78,8 +78,43 @@ def _revision_generation_prompt(*, base_generation_prompt: str, patch: PromptPat
 
 def _infer_size(prompt: str, requested_size: str | None) -> str | None:
     if requested_size:
-        return requested_size
+        return requested_size.strip() or None
+    prompt_text = prompt or ""
+    if re.search(r"\bA4\b|A\s*4|A4\s*(?:大小|尺寸|画幅|比例|版式)?", prompt_text, flags=re.IGNORECASE):
+        if _mentions_landscape(prompt_text):
+            return "1536x1024"
+        return "1024x1536"
+    if _mentions_square(prompt_text):
+        return "1024x1024"
+    if _mentions_portrait(prompt_text):
+        return "1024x1536"
+    if _mentions_landscape(prompt_text):
+        return "1536x1024"
     return None
+
+
+def _mentions_square(prompt: str) -> bool:
+    return bool(re.search(r"(方图|正方形|方形|1\s*[:：]\s*1|\bsquare\b)", prompt, flags=re.IGNORECASE))
+
+
+def _mentions_portrait(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(竖版|竖向|纵向|竖图|竖幅|海报竖版|9\s*[:：]\s*16|3\s*[:：]\s*4|\bportrait\b)",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _mentions_landscape(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"(横版|横向|横图|横幅|宽幅|16\s*[:：]\s*9|4\s*[:：]\s*3|\blandscape\b)",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _infer_scene(prompt: str) -> str | None:
