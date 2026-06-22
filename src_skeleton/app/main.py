@@ -34,7 +34,7 @@ from app.schemas import (
     RuntimeProviderSettingsRequest,
     RuntimeProviderSettingsResponse,
 )
-from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content
+from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content, store_asset_content_bytes
 from app.services.alchemy_lab import (
     LAB_PROJECT_ID,
     ExplorationRequest,
@@ -602,9 +602,15 @@ def create_asset_upload_endpoint(body: CreateAssetUploadRequest, request: Reques
 
 
 @app.put("/v1/assets/{asset_id}/content")
-def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
+async def put_asset_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
     _require_asset_visible(request, asset_id, authorization)
-    asset = store_asset_content(asset_id, body)
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if content_type == "application/json":
+        body = AssetContentUploadRequest.model_validate(await request.json())
+        asset = store_asset_content(asset_id, body)
+    else:
+        mime_type = request.headers.get("x-asset-mime-type") or content_type or None
+        asset = store_asset_content_bytes(asset_id, await request.body(), mime_type=mime_type)
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
     if asset.status == "failed":
@@ -613,7 +619,7 @@ def put_asset_content_endpoint(asset_id: str, body: AssetContentUploadRequest, r
             status_code=400,
             detail={
                 "code": error.get("code") or "invalid_asset_content",
-                "message": error.get("message") or "Asset content is not valid base64.",
+                "message": error.get("message") or "Asset content is invalid.",
             },
         )
     return asset

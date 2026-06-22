@@ -46,7 +46,7 @@ def create_uploaded_asset(request: CreateUploadedAssetRequest, *, veyra_user_id:
     return CreateUploadedAssetResponse(
         asset_id=asset.asset_id,
         upload_url=upload_url,
-        headers={"x-upload-mode": "json-base64"} if upload_url else {},
+        headers={"x-upload-mode": "binary"} if upload_url else {},
     )
 
 
@@ -54,10 +54,28 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
     asset = get_uploaded_asset(asset_id)
     if not asset:
         return None
+    try:
+        content = base64.b64decode(request.content_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        failed = asset.model_copy(
+            update={
+                "status": "failed",
+                "error": {"code": "invalid_base64", "message": str(exc)[:200]},
+                "updated_at": utc_now(),
+            }
+        )
+        return _save_uploaded_asset(failed)
+    return store_uploaded_asset_bytes(asset_id, content, mime_type=request.mime_type)
+
+
+def store_uploaded_asset_bytes(asset_id: str, content: bytes, *, mime_type: str | None = None) -> UploadedAsset | None:
+    asset = get_uploaded_asset(asset_id)
+    if not asset:
+        return None
     if asset.status == "rejected":
         return asset
-    mime_type = request.mime_type or asset.mime_type
-    if not _is_image_mime(mime_type):
+    resolved_mime_type = mime_type or asset.mime_type
+    if not _is_image_mime(resolved_mime_type):
         failed = asset.model_copy(
             update={
                 "status": "failed",
@@ -66,13 +84,11 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
             }
         )
         return _save_uploaded_asset(failed)
-    try:
-        content = base64.b64decode(request.content_base64, validate=True)
-    except (ValueError, TypeError) as exc:
+    if not content:
         failed = asset.model_copy(
             update={
                 "status": "failed",
-                "error": {"code": "invalid_base64", "message": str(exc)[:200]},
+                "error": {"code": "invalid_asset_content", "message": "Uploaded asset content is empty."},
                 "updated_at": utc_now(),
             }
         )
@@ -105,7 +121,7 @@ def store_uploaded_asset_content(asset_id: str, request: AssetContentUploadReque
     stored = asset.model_copy(
         update={
             "status": "stored",
-            "mime_type": mime_type,
+            "mime_type": resolved_mime_type,
             "size_bytes": len(content),
             "storage_path": str(path),
             "source_url": f"/api/v2/uploads/{asset.asset_id}/content",

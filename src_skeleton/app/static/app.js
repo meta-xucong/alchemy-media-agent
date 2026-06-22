@@ -6517,11 +6517,12 @@ async function handleV2Asset() {
 }
 
 async function uploadV2AssetFile(file, { role, strength }) {
+  const mimeType = file.type || imageMimeTypeFromName(file.name);
   const upload = await v2Request("/uploads", {
     method: "POST",
     body: {
       filename: file.name,
-      mime_type: file.type || imageMimeTypeFromName(file.name),
+      mime_type: mimeType,
       size_bytes: file.size,
       role,
       constraint_strength: strength,
@@ -6531,13 +6532,7 @@ async function uploadV2AssetFile(file, { role, strength }) {
   if (!upload.upload_url) {
     throw new Error("素材未通过 V2 上传校验。");
   }
-  await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/content`, {
-    method: "PUT",
-    body: {
-      content_base64: await fileToBase64(file),
-      mime_type: file.type || imageMimeTypeFromName(file.name),
-    },
-  });
+  await uploadBinaryFile(`${v2ApiBase}/uploads/${encodeURIComponent(upload.asset_id)}/content`, file, mimeType);
   const asset = await v2Request(`/uploads/${encodeURIComponent(upload.asset_id)}/complete`, { method: "POST" });
   if (asset.status !== "ready") {
     throw new Error(asset.error?.message || `素材状态：${asset.status}`);
@@ -6733,11 +6728,12 @@ async function handleAsset() {
 
 async function uploadV1AssetFile(file) {
   const consent = assetConsentPayload();
+  const mimeType = file.type || imageMimeTypeFromName(file.name);
   const upload = await request("/v1/assets/upload-url", {
     method: "POST",
     body: {
       filename: file.name,
-      mime_type: file.type || imageMimeTypeFromName(file.name),
+      mime_type: mimeType,
       size_bytes: file.size,
       declared_role: primaryAssetRole(),
       intended_use: "image_generation",
@@ -6747,13 +6743,7 @@ async function uploadV1AssetFile(file) {
   if (!upload.upload_url) {
     throw new Error("素材未通过校验，请更换素材后重试。");
   }
-  await request(`/v1/assets/${upload.asset_id}/content`, {
-    method: "PUT",
-    body: {
-      content_base64: await fileToBase64(file),
-      mime_type: file.type || imageMimeTypeFromName(file.name),
-    },
-  });
+  await uploadBinaryFile(upload.upload_url || `/v1/assets/${encodeURIComponent(upload.asset_id)}/content`, file, mimeType);
   const asset = await request(`/v1/assets/${upload.asset_id}/complete`, { method: "POST" });
   if (asset.status !== "ready") {
     throw new Error(asset.error?.message || `素材状态：${asset.status}`);
@@ -6792,6 +6782,27 @@ function assetConsentPayload() {
     portrait_identity_allowed: true,
     commercial_use_allowed: true,
   };
+}
+
+async function uploadBinaryFile(pathOrUrl, file, mimeType) {
+  const headers = {
+    "Content-Type": mimeType,
+    "X-Asset-Mime-Type": mimeType,
+  };
+  const token = getVeyraToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(pathOrUrl, {
+    method: "PUT",
+    headers,
+    body: file,
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    if (response.status === 401) await handleVeyraUnauthorized();
+    throw new Error(detail);
+  }
+  return response.json();
 }
 
 async function fileToBase64(file) {

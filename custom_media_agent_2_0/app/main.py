@@ -75,6 +75,7 @@ from app.services.uploaded_assets import (
     get_uploaded_asset,
     read_uploaded_asset_content,
     store_uploaded_asset_content,
+    store_uploaded_asset_bytes,
 )
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
@@ -460,9 +461,15 @@ def create_upload(body: CreateUploadedAssetRequest, request: Request, authorizat
 
 
 @app.put("/api/v2/uploads/{asset_id}/content")
-def put_upload_content(asset_id: str, body: AssetContentUploadRequest, request: Request, authorization: str = Header(default="")):
+async def put_upload_content(asset_id: str, request: Request, authorization: str = Header(default="")):
     _require_uploaded_asset_visible(request, asset_id, authorization)
-    asset = store_uploaded_asset_content(asset_id, body)
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if content_type == "application/json":
+        body = AssetContentUploadRequest.model_validate(await request.json())
+        asset = store_uploaded_asset_content(asset_id, body)
+    else:
+        mime_type = request.headers.get("x-asset-mime-type") or content_type or None
+        asset = store_uploaded_asset_bytes(asset_id, await request.body(), mime_type=mime_type)
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
     if asset.status == "failed":

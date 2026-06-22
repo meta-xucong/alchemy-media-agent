@@ -642,6 +642,40 @@ def test_v2_upload_rejects_invalid_image_content() -> None:
     assert asset.json()["status"] == "failed"
 
 
+def test_v2_upload_accepts_binary_image_content() -> None:
+    client = fresh_client()
+    image_bytes = BytesIO()
+    Image.new("RGB", (32, 24), (32, 96, 180)).save(image_bytes, format="PNG")
+    image_content = image_bytes.getvalue()
+    upload = client.post(
+        "/api/v2/uploads",
+        json={
+            "filename": "binary-product.png",
+            "mime_type": "image/png",
+            "size_bytes": len(image_content),
+            "role": "subject_reference",
+            "constraint_strength": "required",
+        },
+    )
+
+    assert upload.status_code == 200
+    upload_body = upload.json()
+    assert upload_body["headers"]["x-upload-mode"] == "binary"
+    asset_id = upload_body["asset_id"]
+    content = client.put(
+        f"/api/v2/uploads/{asset_id}/content",
+        content=image_content,
+        headers={"content-type": "image/png", "x-asset-mime-type": "image/png"},
+    )
+
+    assert content.status_code == 200
+    assert content.json()["status"] == "stored"
+    assert content.json()["size_bytes"] == len(image_content)
+    completed = client.post(f"/api/v2/uploads/{asset_id}/complete")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "ready"
+
+
 def test_v2_upload_complete_requires_stored_image_content() -> None:
     client = fresh_client()
     upload = client.post(

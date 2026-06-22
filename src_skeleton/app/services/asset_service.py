@@ -58,25 +58,39 @@ def create_asset_upload(request: CreateAssetUploadRequest, *, veyra_user_id: int
         updated_at=now,
     )
     repository.save_asset(asset)
-    return CreateAssetUploadResponse(asset_id=asset.id, upload_url=upload_url, headers={"x-upload-mode": "json-base64"})
+    return CreateAssetUploadResponse(asset_id=asset.id, upload_url=upload_url, headers={"x-upload-mode": "binary"})
 
 
 def store_asset_content(asset_id: str, request: AssetContentUploadRequest) -> Asset | None:
     asset = repository.get_asset(asset_id)
     if not asset:
         return None
-    if asset.status == "rejected":
-        asset.updated_at = now_iso()
-        return repository.save_asset(asset)
-    if request.mime_type and not _is_image_mime(request.mime_type):
-        asset.status = "failed"
-        asset.updated_at = now_iso()
-        return repository.save_asset(asset)
     try:
         content = base64.b64decode(request.content_base64, validate=True)
     except (ValueError, TypeError):
         asset.status = "failed"
         asset.error = {"code": "invalid_base64", "message": "Asset content is not valid base64."}
+        asset.updated_at = now_iso()
+        return repository.save_asset(asset)
+    return store_asset_content_bytes(asset_id, content, mime_type=request.mime_type)
+
+
+def store_asset_content_bytes(asset_id: str, content: bytes, *, mime_type: str | None = None) -> Asset | None:
+    asset = repository.get_asset(asset_id)
+    if not asset:
+        return None
+    if asset.status == "rejected":
+        asset.updated_at = now_iso()
+        return repository.save_asset(asset)
+    resolved_mime_type = mime_type or asset.mime_type
+    if resolved_mime_type and not _is_image_mime(resolved_mime_type):
+        asset.status = "failed"
+        asset.error = {"code": "unsupported_type", "message": "Advanced assets currently accept image MIME types only."}
+        asset.updated_at = now_iso()
+        return repository.save_asset(asset)
+    if not content:
+        asset.status = "failed"
+        asset.error = {"code": "invalid_asset_content", "message": "Asset content is empty."}
         asset.updated_at = now_iso()
         return repository.save_asset(asset)
     if len(content) > settings.max_asset_upload_bytes:
@@ -89,8 +103,9 @@ def store_asset_content(asset_id: str, request: AssetContentUploadRequest) -> As
         return repository.save_asset(asset)
     media_store.save_asset_bytes(asset_id=asset.id, filename=asset.filename, content=content)
     asset.status = "stored"
-    if request.mime_type:
-        asset.mime_type = request.mime_type
+    if resolved_mime_type:
+        asset.mime_type = resolved_mime_type
+    asset.size_bytes = len(content)
     asset.thumbnail_url = media_store.asset_url(asset.id) if asset.mime_type.startswith("image/") else None
     asset.normalized_url = media_store.asset_url(asset.id) if asset.mime_type.startswith("image/") else None
     asset.updated_at = now_iso()

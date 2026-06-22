@@ -1389,6 +1389,40 @@ def test_asset_upload_rejects_oversized_declared_and_actual_content():
         settings.max_asset_upload_bytes = original_limit
 
 
+def test_asset_upload_accepts_binary_image_content():
+    client = TestClient(app)
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+
+    upload = client.post(
+        "/v1/assets/upload-url",
+        json={
+            "filename": "binary-style.png",
+            "mime_type": "image/png",
+            "size_bytes": len(png),
+            "declared_role": "style_reference",
+            "intended_use": "image_generation",
+            "consent": {"user_confirmed_rights": True},
+        },
+    )
+    assert upload.status_code == 200
+    upload_body = upload.json()
+    assert upload_body["headers"]["x-upload-mode"] == "binary"
+    asset_id = upload_body["asset_id"]
+
+    content = client.put(
+        f"/v1/assets/{asset_id}/content",
+        content=png,
+        headers={"content-type": "image/png", "x-asset-mime-type": "image/png"},
+    )
+    assert content.status_code == 200
+    assert content.json()["status"] == "stored"
+    assert content.json()["size_bytes"] == len(png)
+
+    completed = client.post(f"/v1/assets/{asset_id}/complete")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "ready"
+
+
 def test_advanced_asset_mode_uploads_content_and_records_prompt_plan():
     client = TestClient(app)
     session_id = client.post("/v1/sessions", json={"project_id": "proj_advanced"}).json()["id"]
