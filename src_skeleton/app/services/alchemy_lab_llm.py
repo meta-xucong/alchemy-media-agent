@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.config import settings
+from app.config import openai_sdk_client_kwargs, settings
 
 
 LAB_LLM_PROVIDERS = {"openai", "kimi", "doubao"}
@@ -158,10 +158,14 @@ async def _ask_openai_json(
     token = _lab_token("openai")
     if not token:
         raise LabLLMError("Lab OpenAI API key is not configured")
-    client_kwargs = {"api_key": token, "timeout": timeout_seconds, "max_retries": 0}
-    if settings.lab_openai_base_url:
-        client_kwargs["base_url"] = settings.lab_openai_base_url
-    client = AsyncOpenAI(**client_kwargs)
+    client = AsyncOpenAI(
+        **openai_sdk_client_kwargs(
+            api_key=token,
+            base_url=settings.lab_openai_base_url,
+            timeout=timeout_seconds,
+            max_retries=0,
+        )
+    )
     content: list[dict[str, Any]] = [{"type": "input_text", "text": json.dumps(user_payload, ensure_ascii=False)}]
     for path in image_paths[:4]:
         content.append({"type": "input_image", "image_url": _image_data_url(path)})

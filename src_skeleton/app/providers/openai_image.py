@@ -11,7 +11,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-from app.config import settings
+from app.config import openai_sdk_client_kwargs, settings
 from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationResult
 from app.providers.base import ProviderCapabilities, ProviderNotConfiguredError, ProviderRateLimitError, ProviderRuntimeError
 from app.services.asset_planning import reference_image_paths
@@ -172,10 +172,7 @@ class OpenAIGPTImageProvider:
 
         plan = request.prompt_plan
         prompt = self._render_prompt(plan)
-        client_kwargs = {"api_key": settings.openai_api_key}
-        if settings.openai_base_url:
-            client_kwargs["base_url"] = settings.openai_base_url
-        client = AsyncOpenAI(**client_kwargs)
+        client = AsyncOpenAI(**openai_sdk_client_kwargs(api_key=settings.openai_api_key, base_url=settings.openai_base_url))
         output_count = plan.count
         outputs = []
         asset_plan = request.asset_plan or (plan.variables.get("asset_plan") if getattr(plan, "variables", None) else None)
@@ -368,10 +365,7 @@ class OpenAIGPTImageProvider:
         except ModuleNotFoundError as exc:
             raise ProviderNotConfiguredError("The openai package is not installed.", provider=self.name) from exc
 
-        client_kwargs = {"api_key": settings.openai_api_key}
-        if settings.openai_base_url:
-            client_kwargs["base_url"] = settings.openai_base_url
-        client = AsyncOpenAI(**client_kwargs)
+        client = AsyncOpenAI(**openai_sdk_client_kwargs(api_key=settings.openai_api_key, base_url=settings.openai_base_url))
         plan = request.prompt_plan
         prompt = self._render_prompt(plan)
         async with _openai_image_generation_lock:

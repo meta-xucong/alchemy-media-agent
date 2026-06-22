@@ -50,6 +50,16 @@ def _normalize_openai_base_url(value: str | None) -> str | None:
     return stripped
 
 
+def openai_sdk_client_kwargs(*, api_key: str | None, base_url: str | None, **extra: object) -> dict[str, object]:
+    kwargs: dict[str, object] = {key: value for key, value in extra.items() if value is not None}
+    if api_key:
+        kwargs["api_key"] = api_key
+    # Explicitly pass a concrete base_url so the OpenAI SDK cannot inherit an
+    # empty OPENAI_BASE_URL/OPENAI_API_BASE value from the process environment.
+    kwargs["base_url"] = _normalize_openai_base_url(base_url) or "https://api.openai.com/v1"
+    return kwargs
+
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))

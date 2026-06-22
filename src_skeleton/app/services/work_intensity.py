@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from app.config import settings
+from app.config import openai_sdk_client_kwargs, settings
 from app.schemas import ImagePromptPlan
 
 
@@ -300,10 +300,14 @@ async def _ask_openai_for_json_plan(
     except ModuleNotFoundError as exc:
         raise RuntimeError("openai package is not installed") from exc
 
-    client_kwargs = {"api_key": settings.openai_api_key, "timeout": timeout_seconds, "max_retries": 0}
-    if settings.openai_base_url:
-        client_kwargs["base_url"] = settings.openai_base_url
-    client = AsyncOpenAI(**client_kwargs)
+    client = AsyncOpenAI(
+        **openai_sdk_client_kwargs(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            timeout=timeout_seconds,
+            max_retries=0,
+        )
+    )
 
     response = await client.responses.create(
         model=model,
@@ -365,10 +369,14 @@ async def _ask_openai_for_prompt_plan(
     except ModuleNotFoundError as exc:
         raise RuntimeError("openai package is not installed") from exc
 
-    client_kwargs = {"api_key": settings.openai_api_key, "timeout": 30.0, "max_retries": 0}
-    if settings.openai_base_url:
-        client_kwargs["base_url"] = settings.openai_base_url
-    client = AsyncOpenAI(**client_kwargs)
+    client = AsyncOpenAI(
+        **openai_sdk_client_kwargs(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            timeout=30.0,
+            max_retries=0,
+        )
+    )
 
     response = await client.responses.create(
         model=model,

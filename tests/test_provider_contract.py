@@ -13,7 +13,7 @@ import app.providers.gemini_image as gemini_image_provider
 import app.providers.openai_image as openai_image_provider
 from app.providers.registry import registry
 from app.schemas import ImageGenerationRequest, ImagePromptPlan
-from app.config import settings
+from app.config import openai_sdk_client_kwargs, settings
 from app.services.prompting import build_prompt_plan
 from app.services.work_intensity import apply_work_intensity
 from app.storage import media_store
@@ -142,6 +142,15 @@ def test_openai_image_provider_detects_image_quota_limit():
 
     assert provider._is_retryable_error(exc) is True
     assert provider._is_image_quota_limit_error(exc) is True
+
+
+def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+
+    kwargs = openai_sdk_client_kwargs(api_key="sk-test", base_url=None)
+
+    assert kwargs["api_key"] == "sk-test"
+    assert kwargs["base_url"] == "https://api.openai.com/v1"
 
 
 def test_openai_image_provider_passes_quality_to_sdk_call():
