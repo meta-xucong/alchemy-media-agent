@@ -3495,6 +3495,7 @@ async function runV1SimpleMode() {
     setSimpleProgress("v1", "submitting", "正在提交给 V1 生图链路。");
     const completedJob = await generateImage({
       progressTarget: "simple-v1",
+      imageRequestOverrides: { count: 1, quality: "high", workIntensity: "balanced", outputFormat: "png", size: "" },
       onJobUpdate: (job) => updateSimpleProgressFromV1Job("v1", job, { actionLabel: "生成" }),
     });
     if (v1ImageJobReady(completedJob)) {
@@ -7683,10 +7684,17 @@ async function generateImage(options = {}) {
   }
 
   toggleBusy(true);
-  const count = Number(els.countInput.value);
+  const imageRequestOverrides = options.imageRequestOverrides || {};
+  const count = Number(imageRequestOverrides.count ?? els.countInput.value);
+  const requestQuality = imageRequestOverrides.quality || state.selectedQuality;
+  const requestIntensity = imageRequestOverrides.workIntensity || state.selectedIntensity;
+  const requestFormat = imageRequestOverrides.outputFormat || state.selectedFormat;
+  const requestSize = Object.prototype.hasOwnProperty.call(imageRequestOverrides, "size")
+    ? imageRequestOverrides.size
+    : state.selectedSize;
   const providerName = providerLabel(state.selectedProvider);
   const modeText = assetPayload.asset_mode === "advanced" ? "V1.0 高级版" : "V1.0 基础版";
-  showNotice(`${modeText}正在生成 ${count} 张图片；使用 ${providerName} 独立通道，质量：${qualityMap[state.selectedQuality]}。`, "info");
+  showNotice(`${modeText}正在生成 ${count} 张图片；使用 ${providerName} 独立通道，质量：${qualityMap[requestQuality] || qualityMap[state.selectedQuality]}。`, "info");
   if (showProfessionalProgress) {
     startImageProgress({
       label: "生成中",
@@ -7704,13 +7712,13 @@ async function generateImage(options = {}) {
       prompt,
       ...assetPayload,
       count,
-      quality: state.selectedQuality,
-      work_intensity: state.selectedIntensity,
-      output_format: state.selectedFormat,
+      quality: requestQuality,
+      work_intensity: requestIntensity,
+      output_format: requestFormat,
       provider_preference: state.selectedProvider,
     };
-    if (state.selectedSize) {
-      body.size = state.selectedSize;
+    if (requestSize) {
+      body.size = requestSize;
     }
     submittedJob = await request("/v1/image/jobs", {
       method: "POST",
@@ -8916,6 +8924,7 @@ function normalizeOriginalDownloadUrl(url = "") {
 }
 
 async function downloadImageFile(url, filename, link) {
+  url = normalizeOriginalDownloadUrl(url);
   const originalText = link?.textContent;
   if (link?.dataset.downloading === "true") return;
   if (link) {

@@ -1836,7 +1836,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260622-original-download-v2" in index.text
+    assert "20260622-original-download-v3" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -2106,6 +2106,9 @@ def test_frontend_static_app_is_served():
     assert 'if (activeTabName === "v2")' in script.text
     assert 'setSize("")' in script.text
     assert 'const defaultImageCount = "1"' in script.text
+    assert 'imageRequestOverrides: { count: 1, quality: "high", workIntensity: "balanced", outputFormat: "png", size: "" }' in script.text
+    assert "const requestFormat = imageRequestOverrides.outputFormat || state.selectedFormat" in script.text
+    assert "output_format: requestFormat" in script.text
     assert "openSampleGuide" in script.text
     assert "applyCoffeeSample" in script.text
     assert "refreshHistory" in script.text
@@ -2114,6 +2117,7 @@ def test_frontend_static_app_is_served():
     assert "function v2ExplicitDownloadUrl" in script.text
     assert "function normalizeOriginalDownloadUrl" in script.text
     assert "normalizeOriginalDownloadUrl(downloadUrl || url)" in script.text
+    assert "url = normalizeOriginalDownloadUrl(url)" in script.text
     assert "/v1/outputs/$1/download" in script.text
     assert "/api/v2/outputs/$1/download" in script.text
     assert "下载原图" in index.text
@@ -2228,7 +2232,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260622-original-download-v2" in h5.text
+    assert "20260622-original-download-v3" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
@@ -2471,6 +2475,10 @@ def test_mobile_h5_app_is_served_independently():
     assert "deleteV2HistoryItem" in mobile_script.text
     assert "function normalizeOriginalDownloadUrl" in mobile_script.text
     assert "normalizeOriginalDownloadUrl(downloadUrl || url)" in mobile_script.text
+    assert "url = normalizeOriginalDownloadUrl(url)" in mobile_script.text
+    assert 'imageRequestOverrides: { count: 1, quality: "high", workIntensity: "balanced", outputFormat: "png", size: "" }' in mobile_script.text
+    assert "const requestFormat = imageRequestOverrides.outputFormat || state.selectedFormat" in mobile_script.text
+    assert "output_format: requestFormat" in mobile_script.text
     assert "/v1/outputs/$1/download" in mobile_script.text
     assert "/api/v2/outputs/$1/download" in mobile_script.text
     assert "下载原图" in h5.text
