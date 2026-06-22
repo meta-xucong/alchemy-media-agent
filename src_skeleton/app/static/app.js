@@ -1087,7 +1087,7 @@ function renderLabHistory(items) {
         <span class="output-id">${escapeHtml(footerText || `#${index + 1}`)}</span>
         <div class="history-card-actions">
           <button class="download-link lab-text-link" data-lab-history-prompt="${index}" type="button">提示词</button>
-          <a class="download-link" href="${escapeHtml(item.url || "#")}" data-lab-download="${escapeHtml(item.url || "")}" data-lab-filename="${escapeHtml(`alchemy-lab-${item.id || index}.png`)}">下载</a>
+          <a class="download-link" href="${escapeHtml(item.url || "#")}" data-lab-download="${escapeHtml(item.url || "")}" data-lab-filename="${escapeHtml(`alchemy-lab-${item.id || index}.png`)}">下载原图</a>
         </div>
       </div>
     `;
@@ -1808,7 +1808,7 @@ function renderLabBoard(board) {
       ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
       : `<div class="lab-error-tile">${escapeHtml(labPlaceholderText(card))}</div>`;
     const imageActions = card.image_url
-      ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载</a>`
+      ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载原图</a>`
       : "";
     const qualityText = labQualityMetaText(card.quality);
     const qualityDetails = labQualityDetailsText(card.quality);
@@ -5228,7 +5228,7 @@ function renderV2History(items) {
       v2ExplicitDownloadUrl(item),
       `${item.output_id || "v2-image"}.${v2HistoryFormat(item) === "jpeg" ? "jpg" : v2HistoryFormat(item)}`,
     );
-    link.textContent = "下载";
+    link.textContent = "下载原图";
     actions.append(link);
     if (historyItemCanDelete(item)) {
       const deleteButton = document.createElement("button");
@@ -7392,7 +7392,7 @@ function renderHistory(items) {
     const link = document.createElement("a");
     link.className = "download-link";
     bindDownloadLink(link, v1ExplicitDownloadUrl(item), `${item.id}.${item.format === "jpeg" ? "jpg" : item.format}`);
-    link.textContent = "下载";
+    link.textContent = "下载原图";
     let deleteButton = null;
     if (historyItemCanDelete(item)) {
       deleteButton = document.createElement("button");
@@ -7673,7 +7673,7 @@ function openActiveHeroHistorySlide() {
     id: item.id,
     title: item.title ? item.title.slice(0, 34) : "历史图片",
     url: item.url,
-    downloadUrl: item.downloadUrl || item.url,
+    downloadUrl: normalizeOriginalDownloadUrl(item.downloadUrl || item.url),
     thumbnailUrl: item.thumbnailUrl || item.url,
     previewUrl: item.previewUrl || item.thumbnailUrl || item.url,
     format: item.format,
@@ -7717,6 +7717,7 @@ function normalizeHeroHistoryItem(item, source, index) {
     id: item.id,
     title: item.original_prompt || item.prompt || `历史图片 ${index + 1}`,
     url: item.url,
+    downloadUrl: v1ExplicitDownloadUrl(item),
     thumbnailUrl: item.thumbnail_url || item.url,
     previewUrl: item.preview_url || item.thumbnail_url || item.url,
     format: item.format,
@@ -7879,7 +7880,7 @@ function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewU
   els.lightboxPromptBtn.classList.toggle("available", Boolean(fullPrompt));
   closeLightboxPrompt();
   resetLightboxZoom();
-  bindDownloadLink(els.lightboxDownload, downloadUrl || url, `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
+  bindDownloadLink(els.lightboxDownload, normalizeOriginalDownloadUrl(downloadUrl || url), `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
   renderLightboxActions([{ label: "分享", tone: "primary", run: shareCurrentLightboxImage }, ...actions]);
   els.imageLightbox.hidden = false;
   document.body.classList.add("modal-open");
@@ -8108,9 +8109,10 @@ function resetLightboxZoom() {
 
 function bindDownloadLink(link, url, filename) {
   if (!link) return;
-  link.href = url || "#";
+  const downloadUrl = normalizeOriginalDownloadUrl(url);
+  link.href = downloadUrl || "#";
   link.download = filename || "image.png";
-  link.dataset.downloadUrl = url || "";
+  link.dataset.downloadUrl = downloadUrl || "";
   link.dataset.downloadFilename = filename || "image.png";
   if (link.dataset.downloadBound !== "true") {
     link.addEventListener("click", handleDownloadLinkClick);
@@ -8122,10 +8124,19 @@ async function handleDownloadLinkClick(event) {
   event.preventDefault();
   event.stopPropagation();
   const link = event.currentTarget;
-  const url = link?.dataset?.downloadUrl || link?.href;
+  const url = normalizeOriginalDownloadUrl(link?.dataset?.downloadUrl || link?.href);
   const filename = link?.dataset?.downloadFilename || link?.download || "image.png";
   if (!url || url === "#") return;
   await downloadImageFile(url, filename, link);
+}
+
+function normalizeOriginalDownloadUrl(url = "") {
+  const value = String(url || "").trim();
+  if (!value || value === "#") return value;
+  return value
+    .replace(/\/v1\/outputs\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/v1/outputs/$1/download")
+    .replace(/\/api\/v2\/image\/history\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/api/v2/outputs/$1/download")
+    .replace(/\/image\/history\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/outputs/$1/download");
 }
 
 async function downloadImageFile(url, filename, link) {
@@ -8155,7 +8166,7 @@ async function downloadImageFile(url, filename, link) {
   } finally {
     if (link) {
       link.dataset.downloading = "false";
-      link.textContent = originalText || "下载";
+      link.textContent = originalText || "下载原图";
     }
   }
 }

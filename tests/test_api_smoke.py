@@ -1836,7 +1836,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260622-original-download" in index.text
+    assert "20260622-original-download-v2" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -2112,7 +2112,11 @@ def test_frontend_static_app_is_served():
     assert "openImageLightbox" in script.text
     assert "function v1ExplicitDownloadUrl" in script.text
     assert "function v2ExplicitDownloadUrl" in script.text
-    assert "bindDownloadLink(els.lightboxDownload, downloadUrl || url" in script.text
+    assert "function normalizeOriginalDownloadUrl" in script.text
+    assert "normalizeOriginalDownloadUrl(downloadUrl || url)" in script.text
+    assert "/v1/outputs/$1/download" in script.text
+    assert "/api/v2/outputs/$1/download" in script.text
+    assert "下载原图" in index.text
     assert "toggleLightboxPrompt" in script.text
     assert "promptTextFromJob" in script.text
     assert "素材视觉理解" in script.text
@@ -2206,7 +2210,11 @@ def test_frontend_static_app_is_served():
     assert "生成修改版本" in script.text
     assert "function v1ExplicitDownloadUrl" in script.text
     assert "function v2ExplicitDownloadUrl" in script.text
-    assert "bindDownloadLink(els.lightboxDownload, downloadUrl || url" in script.text
+    assert "function normalizeOriginalDownloadUrl" in script.text
+    assert "normalizeOriginalDownloadUrl(downloadUrl || url)" in script.text
+    assert "/v1/outputs/$1/download" in script.text
+    assert "/api/v2/outputs/$1/download" in script.text
+    assert "下载原图" in index.text
     assert "后续接入" not in script.text
 
 
@@ -2220,7 +2228,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260622-original-download" in h5.text
+    assert "20260622-original-download-v2" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
@@ -2461,6 +2469,11 @@ def test_mobile_h5_app_is_served_independently():
     assert "/v1/veyra/usage?limit=100" in mobile_script.text
     assert "await refreshVeyraAccountPanelAfterHistoryChange();" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
+    assert "function normalizeOriginalDownloadUrl" in mobile_script.text
+    assert "normalizeOriginalDownloadUrl(downloadUrl || url)" in mobile_script.text
+    assert "/v1/outputs/$1/download" in mobile_script.text
+    assert "/api/v2/outputs/$1/download" in mobile_script.text
+    assert "下载原图" in h5.text
     assert "share-poster-download" not in mobile_script.text
     assert "长按保存，扫码打开。" in mobile_script.text
     assert "微信内请用右上角分享" in mobile_script.text
