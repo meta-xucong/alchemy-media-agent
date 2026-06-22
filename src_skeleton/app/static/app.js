@@ -8146,7 +8146,7 @@ async function handleDownloadLinkClick(event) {
   const url = normalizeOriginalDownloadUrl(link?.dataset?.downloadUrl || link?.href);
   const filename = link?.dataset?.downloadFilename || link?.download || "image.png";
   if (!url || url === "#") return;
-  await downloadImageFile(url, filename, link);
+  downloadImageFile(url, filename, link);
 }
 
 function normalizeOriginalDownloadUrl(url = "") {
@@ -8158,26 +8158,22 @@ function normalizeOriginalDownloadUrl(url = "") {
     .replace(/\/image\/history\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/outputs/$1/download");
 }
 
-async function downloadImageFile(url, filename, link) {
+function downloadImageFile(url, filename, link) {
   url = normalizeOriginalDownloadUrl(url);
   const originalText = link?.textContent;
   if (link?.dataset.downloading === "true") return;
   if (link) {
     link.dataset.downloading = "true";
-    link.textContent = "下载中";
+    link.textContent = "已开始";
   }
   try {
-    const response = await fetch(url, { credentials: "include" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = objectUrl;
+    anchor.href = url;
     anchor.download = filename || "image.png";
+    anchor.rel = "noopener";
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1200);
     showGlobalToast("图片下载已开始。");
   } catch (error) {
     const fallbackUrl = url.startsWith("http") || url.startsWith("/") ? url : link?.href;
@@ -8185,8 +8181,10 @@ async function downloadImageFile(url, filename, link) {
     showGlobalToast("下载受浏览器限制，已在新标签打开原图。");
   } finally {
     if (link) {
-      link.dataset.downloading = "false";
-      link.textContent = originalText || "下载原图";
+      window.setTimeout(() => {
+        link.dataset.downloading = "false";
+        link.textContent = originalText || "下载原图";
+      }, 900);
     }
   }
 }
