@@ -1125,8 +1125,9 @@ function handleLabHistoryClick(event) {
   }
   const downloadLink = event.target.closest("[data-lab-download]");
   if (downloadLink) {
-    event.preventDefault();
-    downloadImageFile(downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png", downloadLink);
+    prepareNativeDownloadLink(downloadLink, downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png");
+    showDownloadStartHint(downloadLink);
+    event.stopPropagation();
     return;
   }
   const card = event.target.closest("[data-lab-history-card]");
@@ -1866,8 +1867,9 @@ async function handleLabComparisonClick(event) {
   }
   const downloadLink = event.target.closest("[data-lab-download]");
   if (downloadLink) {
-    event.preventDefault();
-    await downloadImageFile(downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png", downloadLink);
+    prepareNativeDownloadLink(downloadLink, downloadLink.dataset.labDownload || downloadLink.href, downloadLink.dataset.labFilename || "alchemy-lab.png");
+    showDownloadStartHint(downloadLink);
+    event.stopPropagation();
     return;
   }
   const favoriteButton = event.target.closest("[data-lab-favorite]");
@@ -8904,25 +8906,35 @@ function resetLightboxZoom() {
 
 function bindDownloadLink(link, url, filename) {
   if (!link) return;
-  const downloadUrl = normalizeOriginalDownloadUrl(url);
-  link.href = downloadUrl || "#";
-  link.download = filename || "image.png";
-  link.dataset.downloadUrl = downloadUrl || "";
-  link.dataset.downloadFilename = filename || "image.png";
+  prepareNativeDownloadLink(link, url, filename);
   if (link.dataset.downloadBound !== "true") {
     link.addEventListener("click", handleDownloadLinkClick);
     link.dataset.downloadBound = "true";
   }
 }
 
-async function handleDownloadLinkClick(event) {
-  event.preventDefault();
+function prepareNativeDownloadLink(link, url, filename) {
+  if (!link) return;
+  const downloadUrl = normalizeOriginalDownloadUrl(url);
+  const downloadFilename = filename || "image.png";
+  link.href = downloadUrl || "#";
+  link.download = downloadFilename;
+  link.dataset.downloadUrl = downloadUrl || "";
+  link.dataset.downloadFilename = downloadFilename;
+  link.rel = "noopener";
+}
+
+function handleDownloadLinkClick(event) {
   event.stopPropagation();
   const link = event.currentTarget;
   const url = normalizeOriginalDownloadUrl(link?.dataset?.downloadUrl || link?.href);
   const filename = link?.dataset?.downloadFilename || link?.download || "image.png";
-  if (!url || url === "#") return;
-  downloadImageFile(url, filename, link);
+  if (!url || url === "#") {
+    event.preventDefault();
+    return;
+  }
+  prepareNativeDownloadLink(link, url, filename);
+  showDownloadStartHint(link);
 }
 
 function normalizeOriginalDownloadUrl(url = "") {
@@ -8936,6 +8948,7 @@ function normalizeOriginalDownloadUrl(url = "") {
 
 function downloadImageFile(url, filename, link) {
   url = normalizeOriginalDownloadUrl(url);
+  if (link) prepareNativeDownloadLink(link, url, filename);
   const originalText = link?.textContent;
   if (link?.dataset.downloading === "true") return;
   if (link) {
@@ -8963,6 +8976,19 @@ function downloadImageFile(url, filename, link) {
       }, 900);
     }
   }
+}
+
+function showDownloadStartHint(link) {
+  const originalText = link?.textContent;
+  if (link) {
+    link.dataset.downloading = "true";
+    link.textContent = "已开始";
+    window.setTimeout(() => {
+      link.dataset.downloading = "false";
+      link.textContent = originalText || "下载原图";
+    }, 1200);
+  }
+  showGlobalToast("已交给浏览器下载原图，大图可能需要几秒。");
 }
 
 function toggleLightboxPrompt() {

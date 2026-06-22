@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -91,7 +92,7 @@ def frontend_app(request: Request):
     gate = _veyra_page_gate(request, target="alchemy")
     if gate:
         return gate
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
 
 
 @app.get("/h5")
@@ -100,7 +101,7 @@ def mobile_frontend_app(request: Request):
     gate = _veyra_page_gate(request, target="alchemy-mobile")
     if gate:
         return gate
-    return FileResponse(MOBILE_STATIC_DIR / "index.html")
+    return FileResponse(MOBILE_STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
 
 
 @app.get("/admin/billing")
