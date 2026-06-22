@@ -5138,6 +5138,7 @@ function renderV2Outputs(outputs, job) {
         id: output.output_id,
         title: `2.0 生成结果 ${index + 1}`,
         url: v2OutputImageUrl(output, { thumbnail: false }),
+        downloadUrl: v2ExplicitDownloadUrl(output),
         thumbnailUrl: v2OutputImageUrl(output),
         previewUrl: v2OutputPreviewCandidates(output)[0] || v2OutputImageUrl(output),
         format: v2OutputFormat(output),
@@ -5224,7 +5225,7 @@ function renderV2History(items) {
     link.className = "download-link";
     bindDownloadLink(
       link,
-      v2HistoryImageUrl(item, { thumbnail: false }),
+      v2ExplicitDownloadUrl(item),
       `${item.output_id || "v2-image"}.${v2HistoryFormat(item) === "jpeg" ? "jpg" : v2HistoryFormat(item)}`,
     );
     link.textContent = "下载";
@@ -5424,6 +5425,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     id: item.output_id,
     title: cardPrompt ? cardPrompt.slice(0, 34) : `2.0 历史图片 ${index + 1}`,
     url: v2HistoryImageUrl(item, { thumbnail: false }),
+    downloadUrl: v2ExplicitDownloadUrl(item),
     thumbnailUrl: v2HistoryImageUrl(item),
     previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
     format: v2HistoryFormat(item),
@@ -5560,9 +5562,34 @@ function uniqueNonEmpty(values) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
+function v1OutputDownloadUrl(outputId) {
+  const clean = String(outputId || "").trim();
+  return clean ? `/v1/outputs/${encodeURIComponent(clean)}/download` : "";
+}
+
+function v1ExplicitDownloadUrl(item) {
+  const outputId = item?.id || item?.output_id;
+  return (
+    uniqueNonEmpty([item?.download_url, item?.url])
+      .find((url) => /\/v1\/outputs\/[^/?#]+\/download(?:[?#]|$)/.test(url)) ||
+    v1OutputDownloadUrl(outputId)
+  );
+}
+
 function v2OutputDownloadUrl(outputId) {
   const clean = String(outputId || "").trim();
   return clean ? v2MediaUrl(`/api/v2/outputs/${encodeURIComponent(clean)}/download`) : "";
+}
+
+function v2ExplicitDownloadUrl(item) {
+  const metadata = item?.metadata || {};
+  const outputId = item?.output_id || metadata.output_id;
+  return (
+    uniqueNonEmpty([item?.download_url, metadata.download_url, item?.url, metadata.url])
+      .map((url) => v2MediaUrl(url))
+      .find((url) => /\/outputs\/[^/?#]+\/download(?:[?#]|$)/.test(url)) ||
+    v2OutputDownloadUrl(outputId)
+  );
 }
 
 function v2OutputThumbnailUrl(outputId) {
@@ -5586,6 +5613,7 @@ function v2HistoryImageUrl(item, { thumbnail = true } = {}) {
 function v2OutputImageCandidates(output, { thumbnail = true } = {}) {
   const metadata = output?.metadata || {};
   const outputId = output?.output_id || metadata.output_id;
+  const downloadUrl = v2ExplicitDownloadUrl(output);
   const thumbnailCandidates = thumbnail
     ? [
         output?.thumbnail_url,
@@ -5595,10 +5623,7 @@ function v2OutputImageCandidates(output, { thumbnail = true } = {}) {
     : [];
   return uniqueNonEmpty([
     ...thumbnailCandidates,
-    output?.url,
-    metadata.url,
-    metadata.download_url,
-    v2OutputDownloadUrl(outputId),
+    downloadUrl,
   ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
@@ -5623,6 +5648,7 @@ function v2OutputPreviewCandidates(output) {
 function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
   const metadata = item?.metadata || {};
   const outputId = item?.output_id || metadata.output_id;
+  const downloadUrl = v2ExplicitDownloadUrl(item);
   const thumbnailCandidates = thumbnail
     ? [
         item?.thumbnail_url,
@@ -5632,10 +5658,7 @@ function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
     : [];
   return uniqueNonEmpty([
     ...thumbnailCandidates,
-    item?.url,
-    metadata.url,
-    metadata.download_url,
-    v2OutputDownloadUrl(outputId),
+    downloadUrl,
   ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
@@ -6324,6 +6347,7 @@ function openAccountHistoryLightbox(item, index = 0) {
     id: item.id,
     title: title ? title.slice(0, 34) : `历史图片 ${index + 1}`,
     url: accountHistoryImageUrl(item, { thumbnail: false }),
+    downloadUrl: v1ExplicitDownloadUrl(item),
     thumbnailUrl: accountHistoryImageUrl(item),
     previewUrl: accountHistoryImageUrl(item, { preview: true }),
     format: item.format || "png",
@@ -7201,7 +7225,7 @@ function renderGallery(outputs) {
     provider.className = "output-provider";
     provider.textContent = outputProviderResultText(output, state.currentJob);
     footer.insertBefore(provider, link);
-    bindDownloadLink(link, output.url, `${output.id}.${output.format === "jpeg" ? "jpg" : output.format}`);
+    bindDownloadLink(link, v1ExplicitDownloadUrl(output), `${output.id}.${output.format === "jpeg" ? "jpg" : output.format}`);
     preview.addEventListener("click", () => {
       document.querySelectorAll(".output-card").forEach((item) => item.classList.remove("selected"));
       card.classList.add("selected");
@@ -7217,6 +7241,7 @@ function renderGallery(outputs) {
         id: output.id,
         title: `生成结果 ${index + 1}`,
         url: output.url,
+        downloadUrl: v1ExplicitDownloadUrl(output),
         thumbnailUrl: output.thumbnail_url || output.url,
         previewUrl: output.preview_url || output.thumbnail_url || output.url,
         format: output.format,
@@ -7366,7 +7391,7 @@ function renderHistory(items) {
     id.textContent = item.id;
     const link = document.createElement("a");
     link.className = "download-link";
-    bindDownloadLink(link, item.url, `${item.id}.${item.format === "jpeg" ? "jpg" : item.format}`);
+    bindDownloadLink(link, v1ExplicitDownloadUrl(item), `${item.id}.${item.format === "jpeg" ? "jpg" : item.format}`);
     link.textContent = "下载";
     let deleteButton = null;
     if (historyItemCanDelete(item)) {
@@ -7648,6 +7673,7 @@ function openActiveHeroHistorySlide() {
     id: item.id,
     title: item.title ? item.title.slice(0, 34) : "历史图片",
     url: item.url,
+    downloadUrl: item.downloadUrl || item.url,
     thumbnailUrl: item.thumbnailUrl || item.url,
     previewUrl: item.previewUrl || item.thumbnailUrl || item.url,
     format: item.format,
@@ -7663,6 +7689,7 @@ function normalizeHeroHistoryItem(item, source, index) {
       id: item.output_id || item.id || `v2-history-${index}`,
       title,
       url: v2HistoryImageUrl(item, { thumbnail: false }),
+      downloadUrl: v2ExplicitDownloadUrl(item),
       thumbnailUrl: v2HistoryImageUrl(item),
       previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
       imageCandidates: v2HistoryImageCandidates(item),
@@ -7677,6 +7704,7 @@ function normalizeHeroHistoryItem(item, source, index) {
       id: item.id || `lab-history-${index}`,
       title: item.title || `Alchemy Lab 历史图片 ${index + 1}`,
       url: item.url,
+      downloadUrl: item.url,
       thumbnailUrl: item.thumbnail_url || item.url,
       previewUrl: item.preview_url || item.thumbnail_url || item.url,
       format: item.format || "png",
@@ -7803,6 +7831,7 @@ function selectHistoryItem(item, card) {
     id: item.id,
     title: (item.original_prompt || item.prompt) ? (item.original_prompt || item.prompt).slice(0, 34) : "历史图片",
     url: item.url,
+    downloadUrl: v1ExplicitDownloadUrl(item),
     thumbnailUrl: item.thumbnail_url || item.url,
     previewUrl: item.preview_url || item.thumbnail_url || item.url,
     format: item.format,
@@ -7827,7 +7856,7 @@ function selectHistoryItem(item, card) {
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 
-function openImageLightbox({ id, title, url, thumbnailUrl, previewUrl, format, meta, promptText, actions = [] }) {
+function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewUrl, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
   els.lightboxImage.alt = title || "放大预览图";
   els.lightboxImage.dataset.fullUrl = url || "";
@@ -7850,7 +7879,7 @@ function openImageLightbox({ id, title, url, thumbnailUrl, previewUrl, format, m
   els.lightboxPromptBtn.classList.toggle("available", Boolean(fullPrompt));
   closeLightboxPrompt();
   resetLightboxZoom();
-  bindDownloadLink(els.lightboxDownload, url, `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
+  bindDownloadLink(els.lightboxDownload, downloadUrl || url, `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
   renderLightboxActions([{ label: "分享", tone: "primary", run: shareCurrentLightboxImage }, ...actions]);
   els.imageLightbox.hidden = false;
   document.body.classList.add("modal-open");

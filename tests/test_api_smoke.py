@@ -1836,7 +1836,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260621-preview-speed" in index.text
+    assert "20260622-original-download" in index.text
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
     assert "Alchemy Lab" in index.text
@@ -2110,6 +2110,9 @@ def test_frontend_static_app_is_served():
     assert "applyCoffeeSample" in script.text
     assert "refreshHistory" in script.text
     assert "openImageLightbox" in script.text
+    assert "function v1ExplicitDownloadUrl" in script.text
+    assert "function v2ExplicitDownloadUrl" in script.text
+    assert "bindDownloadLink(els.lightboxDownload, downloadUrl || url" in script.text
     assert "toggleLightboxPrompt" in script.text
     assert "promptTextFromJob" in script.text
     assert "素材视觉理解" in script.text
@@ -2201,6 +2204,9 @@ def test_frontend_static_app_is_served():
     assert "管理员可见全部账户" in script.text
     assert "当前账户与旧版生图记录" in script.text
     assert "生成修改版本" in script.text
+    assert "function v1ExplicitDownloadUrl" in script.text
+    assert "function v2ExplicitDownloadUrl" in script.text
+    assert "bindDownloadLink(els.lightboxDownload, downloadUrl || url" in script.text
     assert "后续接入" not in script.text
 
 
@@ -2214,7 +2220,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260622-mobile-v2-summary" in h5.text
+    assert "20260622-original-download" in h5.text
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
@@ -2901,7 +2907,11 @@ def test_image_history_is_sorted_by_created_time_descending(tmp_path, monkeypatc
     response = client.get("/v1/image/history?session_id=ses_history_order")
 
     assert response.status_code == 200
-    assert [item["id"] for item in response.json()["items"]] == ["out_new", "out_mid", "out_old"]
+    items = response.json()["items"]
+    assert [item["id"] for item in items] == ["out_new", "out_mid", "out_old"]
+    assert items[0]["url"] == "/v1/outputs/out_new/download"
+    assert items[0]["thumbnail_url"] == "/v1/outputs/out_new/thumbnail"
+    assert items[0]["preview_url"] == "/v1/outputs/out_new/preview"
 
 
 def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):

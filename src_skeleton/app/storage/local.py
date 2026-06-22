@@ -161,6 +161,7 @@ class LocalMediaStore:
             record["source"] = "manifest"
             record["thumbnail_url"] = self.thumbnail_url(output_id)
             record["preview_url"] = self.preview_url(output_id)
+            record["url"] = f"/v1/outputs/{output_id}/download"
             existing = records_by_output.get(output_id)
             if existing is None or _record_timestamp(record) >= _record_timestamp(existing):
                 records_by_output[output_id] = record
