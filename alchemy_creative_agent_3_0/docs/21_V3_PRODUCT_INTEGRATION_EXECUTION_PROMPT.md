@@ -1,8 +1,15 @@
-# 19 V3 Product Integration Execution Prompt
+# 21 V3 Product Integration Execution Prompt
 
 This document is the execution bridge for implementing the user-facing Alchemy Creative Agent 3.x product inside `alchemy-media-agent`.
 
 It must be used after the V3 foundation, brand-memory, generation-loop, product-boundary, scenario-platform, and General Creative specifications have been read.
+
+For one-shot execution by Alchemy Dev Agent / Alchemy Dev Lab, also read:
+
+```text
+alchemy_creative_agent_3_0/docs/22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+alchemy_creative_agent_3_0/docs/23_ONE_SHOT_DEV_AGENT_HANDOFF.md
+```
 
 This document does not replace any earlier specification. It tells an implementation agent how to combine them into one continuous delivery run without stopping after an intermediate phase.
 
@@ -75,6 +82,8 @@ alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
 alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+alchemy_creative_agent_3_0/docs/23_ONE_SHOT_DEV_AGENT_HANDOFF.md
 ```
 
 If any document appears to conflict with another, use this precedence:
@@ -89,6 +98,8 @@ If any document appears to conflict with another, use this precedence:
 7. 19 General Creative quick-start preset rules
 8. 20 General Common Scene execution and contract-closure rules
 9. this execution bridge
+10. 22 full-roadmap one-shot continuity rules
+11. 23 Dev Agent handoff entry when running autonomous one-shot delivery
 ```
 
 ---
@@ -312,7 +323,7 @@ Required phase loop:
 11. Prepare GitHub PR without merging automatically.
 ```
 
-Do not mark complete while any current-stage requirement in docs 17, 18, 19, 20, or this document remains unmet.
+Do not mark complete while any current-stage requirement in docs 17, 18, 19, 20, 21, 22, or 23 remains unmet.
 
 ---
 
@@ -331,7 +342,7 @@ Required assertions:
 
 ```text
 V3 does not import V1/V2 runtime modules
-V3 docs 17, 18, 19, 20, and 21 are indexed
+V3 docs 17, 18, 19, 20, 21, 22, and 23 are indexed
 Scenario Hub manifests are registry-driven
 General Creative is executable
 General Common Scene preset resolution is deterministic and schema-safe

@@ -15,11 +15,15 @@ V3.2 Generation Loop MVP
 V3.3 Commercial Poster Rendering
 V3.4 Reference Conditioning Sidecars
 V3.5 Product API and Minimal UX
-V3.6 Scenario Hub and General Creative Product Integration
-V3.7 Vertical Agent Specialization
+V3.6 Scenario Pack Framework and V3 Home UI
+V3.7 General Creative Workspace and Runtime Flow
+V3.8 Future Vertical Agent Specialization
 ```
 
-This document focuses especially on V3.1 and V3.2 because they are the second and third development waves after the foundation.
+This document now defines the complete current-stage delivery route from V3.0
+Foundation through V3.7 General Creative. Older V3.1 / V3.2 worker prompts remain
+useful historical phase prompts, but they must not cause a one-shot run to stop
+before the later required product and UI waves are complete.
 
 ## 2. V3.0 Foundation
 
@@ -539,20 +543,16 @@ node graph
 5. V3 UI entry is independent from V1/V2 UI flows.
 ```
 
-## 8. V3.6 Scenario Hub and General Creative Product Integration
+## 8. V3.6 Scenario Pack Framework and V3 Home UI
 
 ### Goal
 
-Turn the V3 runtime into a user-facing product area inside the shared site shell.
+Expose V3 as a registry-driven scenario hub inside the shared site shell.
 
 This wave is governed by:
 
 ```text
 17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
-18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
-19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
-20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
-21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
 ```
 
 ### Required Product Shape
@@ -562,7 +562,7 @@ shared site shell
   -> 3.0 navigation entry
   -> registry-driven Scenario Hub
   -> five first-screen scenario cards
-  -> General Creative full workspace
+  -> General Creative card marked available
   -> placeholder-only specialized cards
 ```
 
@@ -570,7 +570,7 @@ shared site shell
 
 ```text
 complete:
-  General Creative
+  Scenario Pack registry and V3 home UI
 
 placeholder only:
   ecommerce
@@ -588,28 +588,63 @@ future:
 ```text
 1. Entering 3.0 opens the V3 Scenario Hub.
 2. Scenario cards render from registry/manifest data.
-3. General Creative is active and opens the shared workspace.
+3. General Creative is available and routes to the General Creative workspace entry.
 4. Placeholder cards cannot create jobs or call pack-owned APIs.
-5. General Creative uses DefaultCommercialPack and the existing Central Creative Brain.
-6. Beginner UI hides provider/model/adapter/node-graph concepts.
+5. V1, V2, and Alchemy Lab navigation still load.
+6. No pack-specific vertical workflow is implemented in this wave.
+```
+
+## 9. V3.7 General Creative Workspace and Runtime Flow
+
+### Goal
+
+Make General Creative the first complete, beginner-friendly V3 scenario.
+
+This wave is governed by:
+
+```text
+18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
+21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+23_ONE_SHOT_DEV_AGENT_HANDOFF.md
+```
+
+### Acceptance Criteria
+
+```text
+1. General Creative has one main natural-language input.
+2. Quick-start cards and optional brand/reference inputs work.
+3. Ambiguous requests are expanded into a brief before job creation.
+4. General Creative uses DefaultCommercialPack and the existing Central Creative Brain.
+5. Progress, result, and history areas render honestly.
+6. Beginner UI hides provider/model/adapter/node-graph concepts by default.
 7. V3 APIs remain under /api/v3/creative-agent/*.
 8. V1, V2, and Alchemy Lab smoke paths still load.
 ```
 
-## 9. V3.7 Vertical Agent Specialization
+## 10. V3.8 Future Vertical Agent Specialization
 
 ### Goal
 
-Start implementing real industry-specific sub-agent packs under the V3 framework after Scenario Hub and General Creative are accepted.
+Start implementing real industry-specific sub-agent packs only after Scenario Hub
+and General Creative are accepted.
 
-### Priority Order
+This wave is **not part of the current one-shot acceptance target** unless the
+user explicitly requests dedicated vertical-pack development. Current-stage
+one-shot runs must keep ecommerce, new media, private community, and brand IP as
+placeholder cards only.
+
+### Future Priority Order
 
 ```text
 1. EcommerceAgentFamily
-2. RestaurantAgentFamily
-3. BrandIPAgentFamily
-4. AIMangaDramaAgentFamily
-5. LocalServiceAgentFamily
+2. NewMediaMarketingAgentFamily
+3. PrivateCommunityOperationsAgentFamily
+4. BrandIPOperationsAgentFamily
+5. AIMangaDramaAgentFamily
+6. LocalServiceAgentFamily
 ```
 
 ### Acceptance Criteria
@@ -622,7 +657,7 @@ Start implementing real industry-specific sub-agent packs under the V3 framework
 5. Tests prove default fallback still works.
 ```
 
-## 10. Sequential Execution Rule
+## 11. Sequential Execution Rule
 
 Do not start V3.2 before V3.1 is accepted.
 
@@ -634,9 +669,11 @@ Do not start V3.5 frontend/API integration before V3.2 asset pack contracts are 
 
 Do not start V3.6 Scenario Hub integration before V3.5 API and minimal UX routes are stable.
 
-Do not start V3.7 full vertical packs before V3.6 Scenario Hub and General Creative are accepted.
+Do not start V3.7 General Creative workspace work before the Scenario Pack registry and V3 home UI are stable.
 
-## 11. Development Gate Checklist
+Do not start V3.8 full vertical packs before General Creative proves the shared scenario runtime.
+
+## 12. Development Gate Checklist
 
 Before moving from V3.0 to V3.1:
 
@@ -700,13 +737,23 @@ Before moving from V3.6 to V3.7:
 
 ```text
 Scenario Hub cards render from registry data
-General Creative can create and inspect jobs
+General Creative card opens the workspace entry
 placeholder cards cannot execute jobs
 V1, V2, and Alchemy Lab smoke tests pass
 no pack-specific vertical workflow has leaked into the current stage
 ```
 
-## 12. Strategic Reminder
+Before moving from V3.7 to V3.8:
+
+```text
+General Creative workspace passes
+General Creative intent logic passes
+General Creative job/result/history flow passes
+placeholder cards stay placeholder
+V1, V2, and Alchemy Lab smoke tests pass
+```
+
+## 13. Strategic Reminder
 
 The user experience should remain simple at every stage.
 

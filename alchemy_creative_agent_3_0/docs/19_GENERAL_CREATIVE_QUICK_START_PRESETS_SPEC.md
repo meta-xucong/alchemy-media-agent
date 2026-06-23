@@ -5,7 +5,7 @@ Source mapping: this is the V3 repository placement of the draft
 19 here because documents 17 and 18 are already used for the Scenario Pack
 platform and General Creative product/runtime specifications.
 
-This document completes the **common-scene image-generation entry layer** for the General Creative product defined in document 17.
+This document completes the **common-scene image-generation entry layer** for the General Creative product defined in document 18.
 
 It is an additive companion specification. It does not replace, rename, or fork:
 
@@ -86,8 +86,8 @@ This document is implemented after:
 11_EVALUATION_AND_REFINEMENT_SPEC.md
 12_PROVIDER_INTERFACES.md
 15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECTURE.md
-16_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
-17_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
+18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 ```
 
 It adds only:
@@ -111,13 +111,13 @@ If any requirement appears to conflict, use this order:
 1. 00_ROOT_RULES.md
 2. frozen V3 core schema and provider contracts
 3. existing Central Creative Brain behavior
-4. 16_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
-5. 17_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+4. 17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
+5. 18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 6. this document
 7. future specialization-pack specifications
 ```
 
-This document may clarify document 17. It may not weaken its invariants.
+This document may clarify document 18. It may not weaken its invariants.
 
 ### 1.3 No Product-Version Renaming
 
@@ -259,7 +259,7 @@ Scenario specialization pack
 
 Selecting `campaign_poster` must not populate `optional_template_id`.
 
-The experimental `template_matched` mode remains capability-gated under document 17.
+The experimental `template_matched` mode remains capability-gated under document 18.
 
 ### 3.3 Presets Must Remain Policy-Neutral
 
@@ -565,7 +565,7 @@ Shopify PDP funnel strategy
 
 ### 6.1 Route
 
-The route remains the General Creative route defined in document 17:
+The route remains the General Creative route defined in document 18:
 
 ```text
 /v3/creative-agent/scenarios/general_creative
@@ -734,7 +734,7 @@ result = auto_commercial_series
 
 ### 6.10 Result Workspace
 
-After submission, the result workspace remains exactly the shared General Creative workspace defined in document 17.
+After submission, the result workspace remains exactly the shared General Creative workspace defined in document 18.
 
 Preset-specific changes are limited to:
 
@@ -2038,7 +2038,7 @@ GeneralCreativeDraft
 
 ### 11.2 Required Precedence
 
-This document inserts preset defaults into document 17's existing precedence without changing higher-priority rules:
+This document inserts preset defaults into document 18's existing precedence without changing higher-priority rules:
 
 ```text
 1. safety, rights, legal, and hard product constraints
@@ -2095,7 +2095,7 @@ record preset_default_ignored_due_to_explicit_user_intent
 show summary before or immediately after submission
 ```
 
-If the user explicitly selected `single_asset`, the explicit mode wins and the conflict is recorded according to document 17.
+If the user explicitly selected `single_asset`, the explicit mode wins and the conflict is recorded according to document 18.
 
 ### 11.6 Exact Text Mapping
 
@@ -2109,7 +2109,7 @@ trim only according to existing text-field rules
 never translate automatically
 never paraphrase exact text
 validate maximum length
-allow renderer overflow handling under document 17
+allow renderer overflow handling under document 18
 ```
 
 ### 11.7 Context Mapping
@@ -2678,7 +2678,7 @@ The summary must remain user-safe and editable before submission when the produc
 
 ### 16.8 Existing Components Reused
 
-The following remain owned by document 17:
+The following remain owned by document 18:
 
 ```text
 GeneralModeSelector
@@ -2717,7 +2717,7 @@ preset_field_invalid
 preset_version_stale
 ```
 
-These states compose with document 17's General Creative UI states.
+These states compose with document 18's General Creative UI states.
 
 ### 17.1 Loading
 
@@ -3392,7 +3392,7 @@ Responsibility boundaries are normative.
 ```text
 alchemy_creative_agent_3_0/
   docs/
-    17.1_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+    19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 
   app/
     application/
@@ -3667,7 +3667,7 @@ Document 17.1 is complete only when all statements below are true:
 37. General Creative document-17 actions remain unchanged and reusable.
 38. No V1/V2 runtime dependency is introduced.
 39. No e-commerce, new-media, private-community, or brand-IP strategy leaks into General presets.
-40. README/doc index references document 17.1.
+40. README/doc index references document 19.
 ```
 
 ---
@@ -3775,7 +3775,7 @@ DefaultCommercialPack fallback
 future vertical packs extend rather than fork
 ```
 
-### 27.10 `16_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md`
+### 27.10 `17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md`
 
 Uses:
 
@@ -3788,7 +3788,7 @@ version pinning
 one primary ScenarioPack per job
 ```
 
-### 27.11 `17_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md`
+### 27.11 `18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md`
 
 Extends:
 
@@ -3841,7 +3841,7 @@ specialized preset catalog if needed
 specialized evaluation and output rules through approved extension contracts
 ```
 
-The General catalog must not be expanded with e-commerce-specific rules to avoid implementing document 18 inside document 17.1.
+The General catalog must not be expanded with e-commerce-specific rules; future specialization rules belong in later pack-specific documents, not document 19.
 
 ---
 
@@ -4092,13 +4092,13 @@ After implementation, merge the following delta into the document-17 General Cre
 Add:
 
 ```text
-alchemy_creative_agent_3_0/docs/17.1_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 ```
 
 Recommended placement:
 
 ```text
-immediately after 17_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+immediately after 18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 ```
 
 Do not remove or renumber earlier entries.

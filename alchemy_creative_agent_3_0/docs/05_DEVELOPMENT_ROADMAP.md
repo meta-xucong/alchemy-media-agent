@@ -307,15 +307,84 @@ brand_update.json
 4. Tests cover pack generation.
 ```
 
-## 8. V3.6 Heavy Provider Integration
+## 8. Execution-Order Clarification
+
+This roadmap is the strategic capability map.
+
+For autonomous one-shot execution, use the concrete order in:
+
+```text
+13_STEP_BY_STEP_DELIVERY_PLAN.md
+22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+23_ONE_SHOT_DEV_AGENT_HANDOFF.md
+```
+
+Those documents are the source of truth for phase promotion, non-stop execution,
+and final handoff gates.
+
+## 9. V3.6 Scenario Pack Framework and V3 Home UI
 
 ### Goal
 
-Integrate real advanced providers after core contracts are stable.
+Expose V3 as a simple, registry-driven scenario hub inside the shared product shell.
 
-### Candidate Integrations
+### Required Capabilities
+
+- shared-shell 3.0 navigation entry
+- V3-owned scenario hub
+- five first-screen cards: General Creative, E-Commerce, New Media Marketing, Private Community Operations, Brand IP Operations
+- General Creative is available
+- the other four cards are placeholders
+- recent V3 history area
+
+### Acceptance Criteria
 
 ```text
+1. V1/V2 and Alchemy Lab navigation still work.
+2. Scenario cards come from registry or manifest data.
+3. Placeholder cards do not start dedicated vertical workflows.
+4. UI remains simple for non-technical users.
+```
+
+## 10. V3.7 General Creative Workspace and Runtime Flow
+
+### Goal
+
+Make General Creative the first complete V3 scenario for non-design users.
+
+### Required Capabilities
+
+- one main natural-language input
+- quick scene suggestions
+- optional brand and reference-image inputs
+- progress and result display
+- history
+- advanced settings collapsed by default
+- intent understanding and automatic brief expansion
+- integration with V3 shared creative runtime
+
+### Acceptance Criteria
+
+```text
+1. A beginner can create a commercial visual request from one sentence.
+2. General Creative uses V3-owned runtime contracts.
+3. Future vertical packs can reuse the same scenario framework.
+4. Engineering concepts remain hidden in default UI.
+```
+
+## 11. V3.8+ Future Vertical And Heavy Provider Expansion
+
+### Goal
+
+After General Creative is stable, add specialized vertical packs and optional advanced provider integrations.
+
+### Future Candidate Integrations
+
+```text
+E-Commerce pack
+New Media Marketing pack
+Private Community Operations pack
+Brand IP Operations pack
 ImageRewardProvider
 IPAdapterProvider
 InstantStyleProvider
@@ -326,81 +395,11 @@ DiffusersProvider
 
 ### Integration Rules
 
-- providers must implement V3 interfaces
-- providers must be optional
-- heavy dependencies must not block core tests
-- sidecars are preferred for GPU workflows
-- provider failures must degrade gracefully
-
-### Acceptance Criteria
-
-```text
-1. At least one real scoring provider works.
-2. At least one reference-style provider works.
-3. Provider can be disabled without breaking V3 foundation.
-4. Tests separate core tests from integration tests.
-```
-
-## 9. V3.7 Product API Layer
-
-### Goal
-
-Expose V3 as a simple service API.
-
-### Recommended Endpoints
-
-```text
-POST /v3/creative-jobs
-GET  /v3/creative-jobs/{job_id}
-POST /v3/creative-jobs/{job_id}/generate
-POST /v3/creative-jobs/{job_id}/select
-GET  /v3/brands/{brand_id}
-POST /v3/brands
-```
-
-### API Principle
-
-The API should expose product concepts, not model concepts.
-
-Expose:
-
-```text
-brand
-campaign
-asset series
-platform
-style continuation
-selected result
-```
-
-Do not expose by default:
-
-```text
-sampler
-seed
-adapter scale
-ControlNet type
-LoRA weight
-node graph
-```
-
-## 10. V3.8 Minimal User Interface Later
-
-### Goal
-
-Create a simple natural-language UI after backend flow is stable.
-
-### UI Principle
-
-Default UI should be a chat/input-first production flow:
-
-```text
-Input request
-→ show generated asset series
-→ allow select / regenerate / continue style
-```
-
-No professional design UI is required in V3 foundation.
+- vertical packs must extend V3 contracts instead of forking the runtime;
+- providers must implement V3 interfaces;
+- heavy dependencies must be optional;
+- core tests must pass without GPU dependencies;
+- provider failures must degrade gracefully.
 
 ## 11. Milestone Summary
 
@@ -411,9 +410,9 @@ V3.2  Candidate Scoring + Auto Refine Loop
 V3.3  Layout Engine + External Text Rendering
 V3.4  Reference Conditioning Provider Interfaces
 V3.5  Commercial Asset Pack
-V3.6  Heavy Provider Integrations
-V3.7  Product API Layer
-V3.8  Minimal User Interface
+V3.6  Scenario Pack Framework and V3 Home UI
+V3.7  General Creative Workspace and Runtime Flow
+V3.8+ Future vertical packs and optional heavy provider integrations
 ```
 
 ## 12. Recommended First Codex Task
