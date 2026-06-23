@@ -218,6 +218,7 @@ class ComparisonCard(BaseModel):
     status: str
     image_url: str | None = None
     thumbnail_url: str | None = None
+    preview_url: str | None = None
     prompt: str
     quality: dict[str, Any] = Field(default_factory=dict)
     reference: dict[str, Any] = Field(default_factory=dict)
@@ -280,6 +281,7 @@ class LabHistoryItem(BaseModel):
     reference_warnings: list[str] = Field(default_factory=list)
     url: str
     thumbnail_url: str | None = None
+    preview_url: str | None = None
     format: str = "png"
     width: int | None = None
     height: int | None = None
@@ -709,6 +711,7 @@ def comparison_board(session: ExplorationSession) -> ComparisonBoard:
                     status=variant.status,
                     image_url=variant.asset.get("url") if variant.asset else None,
                     thumbnail_url=variant.asset.get("thumbnail_url") if variant.asset else None,
+                    preview_url=variant.asset.get("preview_url") if variant.asset else None,
                     prompt=prompt.final_prompt if prompt else "",
                     quality=quality_summary(prompt.prompt_metadata) if prompt else {},
                     reference=_reference_summary_for_prompt(prompt),
@@ -1395,6 +1398,7 @@ def _variant_from_job(variant: GenerationVariant, job: GenerationJob, *, attempt
                     "job_id": job.id,
                     "url": output.url,
                     "thumbnail_url": output.thumbnail_url,
+                    "preview_url": output.preview_url,
                     "width": output.width,
                     "height": output.height,
                     "format": output.format,
@@ -1493,6 +1497,7 @@ def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any], *,
                 "session_id": job.session_id,
                 "url": output.url,
                 "thumbnail_url": output.thumbnail_url or output.url,
+                "preview_url": output.preview_url or media_store.preview_url(output.id),
                 "format": output.format,
                 "width": output.width,
                 "height": output.height,
@@ -1600,6 +1605,7 @@ def _lab_history_item_from_record(record: dict[str, Any]) -> LabHistoryItem | No
         reference_warnings=[str(item) for item in (data.get("reference_warnings") or []) if str(item).strip()],
         url=str(record.get("url") or ""),
         thumbnail_url=record.get("thumbnail_url") or record.get("url"),
+        preview_url=record.get("preview_url") or media_store.preview_url(str(record.get("id") or "")),
         format=str(record.get("format") or "png"),
         width=_int_or_none(record.get("width")),
         height=_int_or_none(record.get("height")),

@@ -1291,6 +1291,12 @@
             "null"
           ]
         },
+        "preview_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prompt": {
           "type": "string"
         },

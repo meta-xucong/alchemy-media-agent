@@ -1074,9 +1074,11 @@ function renderLabHistory(items) {
     const title = item.title || item.style_name || "Rare Style Explorer";
     const detailText = historyDetailText(item.idea || "未记录画面方向", metaText);
     const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
+    const thumbnailUrl = item.thumbnail_url || item.url || "";
+    const previewUrl = item.preview_url || thumbnailUrl;
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
-        <img src="${escapeHtml(item.thumbnail_url || item.url || "")}" alt="${escapeHtml(title)}" loading="eager" decoding="async" />
+        <img alt="${escapeHtml(title)}" loading="eager" decoding="async" />
       </button>
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
@@ -1091,6 +1093,11 @@ function renderLabHistory(items) {
         </div>
       </div>
     `;
+    bindProgressiveGridImage(article.querySelector(".lab-history-preview img"), {
+      thumbnailUrl,
+      previewUrl,
+      emptyAlt: title,
+    });
     els.labHistoryGrid.appendChild(article);
   });
 }
@@ -1297,9 +1304,9 @@ async function handleLabReferenceFiles(event) {
       const uploaded = await uploadLabReferenceFile(file);
       labState.referenceAssets = [...labState.referenceAssets, uploaded];
       successCount += 1;
-      renderLabReferenceState(`已上传 ${successCount}/${files.length} 张参考图。`);
+      renderLabReferenceState(`本次已上传 ${successCount}/${files.length} 张，当前共 ${labState.referenceAssets.length} 张。`);
     }
-    updateLabNotice(`已添加 ${successCount} 张参考图，会在所选稀有风格上做约束增强。`, "success");
+    updateLabNotice(`已追加 ${successCount} 张参考图，当前共 ${labState.referenceAssets.length} 张；会在所选稀有风格上做约束增强。`, "success");
   } catch (error) {
     updateLabNotice(`参考图上传失败：${friendlyError(error)}`, "error");
     renderLabReferenceState(`上传失败：${friendlyError(error)}`);
@@ -2279,7 +2286,14 @@ function handleSimpleFileSelection(version) {
   if (imageFiles.length !== files.length) {
     updateSimpleNotice(version, "已跳过非图片文件。", "warning");
   }
-  simpleModeState[version].files = imageFiles;
+  if (imageFiles.length) {
+    simpleModeState[version].files = [...(simpleModeState[version].files || []), ...imageFiles];
+    updateSimpleNotice(version, `已追加 ${imageFiles.length} 张图片，当前共 ${simpleModeState[version].files.length} 张。`, "info");
+  } else if (!files.length) {
+    updateSimpleNotice(version, "没有选择新图片。", "info");
+  } else {
+    updateSimpleNotice(version, `未添加有效图片，已保留当前 ${simpleModeState[version].files.length} 张。`, "warning");
+  }
   renderSimpleFileList(version);
   if (refs.input) refs.input.value = "";
 }
@@ -5743,6 +5757,30 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
   preloader.src = display;
 }
 
+function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", emptyAlt = "图片暂不可用" } = {}) {
+  if (!image) return;
+  const thumbnail = String(thumbnailUrl || "").trim();
+  const preview = String(previewUrl || "").trim();
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  image.dataset.progressiveGridToken = token;
+  bindImageWithFallback(image, uniqueNonEmpty([thumbnail, preview]), { emptyAlt });
+  if (!preview || preview === thumbnail) return;
+  image.classList.add("is-loading-full");
+  const preloader = new Image();
+  preloader.decoding = "async";
+  preloader.onload = () => {
+    if (image.dataset.progressiveGridToken !== token) return;
+    image.classList.remove("is-loading-full");
+    image.src = preview;
+  };
+  preloader.onerror = () => {
+    if (image.dataset.progressiveGridToken === token) {
+      image.classList.remove("is-loading-full");
+    }
+  };
+  preloader.src = preview;
+}
+
 function v2ReviewLabel(decision) {
   if (decision === "pass") return "已通过";
   if (decision === "needs_review") return "待复核";
@@ -6489,8 +6527,9 @@ async function handleV2Asset() {
     updateV2Notice("V2 上传素材目前只支持图片，已跳过非图片文件。", "warning");
   }
   if (!imageFiles.length) {
-    clearV2Asset({ keepNotice: true });
     if (els.v2AssetInput) els.v2AssetInput.value = "";
+    renderV2AssetPanel();
+    updateV2Notice(v2State.uploadedAssets.length ? `未添加有效图片，已保留当前 ${v2State.uploadedAssets.length} 张素材。` : "没有可上传的图片素材。", "warning");
     return;
   }
   const role = v2PrimaryAssetRole();
@@ -6506,7 +6545,7 @@ async function handleV2Asset() {
     }
     v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded];
     renderV2AssetPanel();
-    updateV2Notice(`V2 已分析 ${uploaded.length} 张素材；生成时会交给 Claude 中枢按当前用途绑定。`, "success");
+    updateV2Notice(`V2 已追加 ${uploaded.length} 张素材，当前共 ${v2State.uploadedAssets.length} 张；生成时会交给 Claude 中枢按当前用途绑定。`, "success");
   } catch (error) {
     if (els.v2AssetState) els.v2AssetState.textContent = "失败";
     renderV2AssetPanel();
@@ -6697,10 +6736,9 @@ async function handleAsset() {
   }
   if (!imageFiles.length) {
     els.assetInput.value = "";
-    els.assetName.textContent = "支持多图，单次最多 6 张";
     els.assetState.textContent = "拒绝";
-    resetAssetPreview();
     renderAssetPanel();
+    showNotice(state.assets.length ? `未添加有效图片，已保留当前 ${state.assets.length} 张素材。` : "没有可上传的图片素材。", "warning");
     return;
   }
   state.assetMode = "advanced";
@@ -6716,7 +6754,7 @@ async function handleAsset() {
     state.assetIds = state.assets.map((asset) => asset.asset_id);
     renderAssetPanel();
     els.assetState.textContent = "高级";
-    showNotice(`已上传 ${uploaded.length} 张素材；生成时会作为多图参考传入。`, "success");
+    showNotice(`已追加 ${uploaded.length} 张素材，当前共 ${state.assets.length} 张；生成时会作为多图参考传入。`, "success");
   } catch (error) {
     els.assetState.textContent = "失败";
     renderAssetPanel();

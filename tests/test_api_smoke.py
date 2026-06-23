@@ -1870,7 +1870,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260622-native-download-v1" in index.text
+    assert "20260623-asset-append-v1" in index.text
     assert index.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
@@ -2067,6 +2067,7 @@ def test_frontend_static_app_is_served():
     assert "返回实验室" in index.text
     assert "function loadLabHistory" in script.text
     assert "function renderLabHistory" in script.text
+    assert "function bindProgressiveGridImage" in script.text
     assert 'className = "v2-history-card lab-history-card"' in script.text
     assert "data-lab-history-card" in script.text
     assert "/api/lab/history" in script.text
@@ -2083,6 +2084,12 @@ def test_frontend_static_app_is_served():
     assert "function handleLabReferenceFiles" in script.text
     assert "function uploadLabReferenceFile" in script.text
     assert "function labReferencePayload" in script.text
+    assert "labState.referenceAssets = [...labState.referenceAssets, uploaded]" in script.text
+    assert "state.assets = [...state.assets, ...uploaded]" in script.text
+    assert "v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded]" in script.text
+    assert "simpleModeState[version].files = [...(simpleModeState[version].files || []), ...imageFiles]" in script.text
+    assert "const previewUrl = item.preview_url || thumbnailUrl" in script.text
+    assert 'bindProgressiveGridImage(article.querySelector(".lab-history-preview img")' in script.text
     assert "/api/lab/uploads" in script.text
     assert "/api/v2/uploads" not in script.text
     assert "reference_assets: labReferencePayload()" in script.text
@@ -2267,7 +2274,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260622-mobile-native-download-v2" in h5.text
+    assert "20260623-asset-append-v1" in h5.text
     assert h5.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
@@ -2395,6 +2402,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "Alchemy Lab History" in h5.text
     assert "function loadLabHistory" in mobile_script.text
     assert "function renderLabHistory" in mobile_script.text
+    assert "function bindProgressiveGridImage" in mobile_script.text
     assert "/api/lab/history" in mobile_script.text
     assert "function loadLabStyles" in mobile_script.text
     assert "function openLabModule" in mobile_script.text
@@ -2418,6 +2426,12 @@ def test_mobile_h5_app_is_served_independently():
     assert "function handleLabReferenceFiles" in mobile_script.text
     assert "function uploadLabReferenceFile" in mobile_script.text
     assert "function labReferencePayload" in mobile_script.text
+    assert "labState.referenceAssets = [...labState.referenceAssets, uploaded]" in mobile_script.text
+    assert "state.assets = [...state.assets, ...uploaded]" in mobile_script.text
+    assert "v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded]" in mobile_script.text
+    assert "simpleModeState[version].files = [...(simpleModeState[version].files || []), ...imageFiles]" in mobile_script.text
+    assert "const previewUrl = item.preview_url || thumbnailUrl" in mobile_script.text
+    assert 'bindProgressiveGridImage(article.querySelector(".lab-history-preview img")' in mobile_script.text
     assert "/api/lab/uploads" in mobile_script.text
     assert "/api/v2/uploads" not in mobile_script.text
     assert "reference_assets: labReferencePayload()" in mobile_script.text
