@@ -2,6 +2,17 @@
 
 Use this prompt when assigning the first Alchemy Creative Agent 3.0 implementation task to Codex.
 
+This document is intentionally scoped to the **Foundation** milestone only.
+If the requested task is to build the user-facing 3.0 product, Scenario Hub,
+General Creative workspace, or shared-shell integration, do not stop after this
+prompt. Read and follow:
+
+```text
+alchemy_creative_agent_3_0/docs/17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
+alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+alchemy_creative_agent_3_0/docs/19_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+```
+
 ---
 
 ## TASK: Implement Independent Alchemy Creative Agent 3.0 Foundation
