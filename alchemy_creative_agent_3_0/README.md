@@ -155,12 +155,15 @@ alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
 alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+alchemy_creative_agent_3_0/docs/23_ONE_SHOT_DEV_AGENT_HANDOFF.md
 ```
 
 Implementation agents must not use the foundation prompt alone when the goal is
 to build the user-facing 3.0 product. For Scenario Hub, General Creative UI, and
-shared-shell integration work, read documents 17, 18, 19, 20, and 21 after the
-foundation documents.
+shared-shell integration work, read documents 17 through 23 after the foundation
+documents. Document 23 is the preferred one-shot entry for Alchemy Dev Agent /
+Alchemy Dev Lab.
 
 ## Implementation Waves
 
@@ -183,11 +186,14 @@ V3.4 Reference Conditioning Sidecars
 V3.5 Product API and Minimal UX
   Simple natural-language product API and user-facing flow.
 
-V3.6 Scenario Hub and General Creative Product Integration
-  Registry-driven 3.0 home, five first-screen scenario cards, General Creative full workspace, and placeholder boundaries for future specialization packs.
+V3.6 Scenario Pack Framework and V3 Home UI
+  Shared-shell 3.0 navigation entry, registry-driven scenario hub, General Creative available card, and placeholder cards for later vertical packs.
 
-V3.7 Future Specialization Packs
-  Detailed ecommerce, new-media, private-community, brand-IP, AI manga-drama, and other pack-specific workflows after their own accepted specifications.
+V3.7 General Creative Workspace and Runtime Flow
+  Beginner-friendly General Creative workspace, intent logic, result/history flow, and reusable application runtime for future specialization packs.
+
+V3.8+ Future Specialization Packs
+  Detailed ecommerce, new-media, private-community, brand-IP, AI manga-drama, and other pack-specific workflows only after their own accepted specifications.
 ```
 
 ## High-Level Architecture

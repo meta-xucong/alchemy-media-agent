@@ -13,6 +13,8 @@ alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
 alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
+alchemy_creative_agent_3_0/docs/23_ONE_SHOT_DEV_AGENT_HANDOFF.md
 ```
 
 ---
@@ -51,11 +53,18 @@ alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECT
 alchemy_creative_agent_3_0/docs/16_V3_FOUNDATION_EXECUTION_GUARDRAILS.md
 ```
 
-Phase 2 / Phase 3 prompts are for later and should not be implemented in this task:
+When this file is used by itself as a Foundation-only worker prompt, Phase 2 /
+Phase 3 prompts are for later and should not be implemented in that bounded
+Foundation task:
 
 ```text
 alchemy_creative_agent_3_0/docs/14_CODEX_TASK_PROMPTS_PHASE_2_AND_3.md
 ```
+
+In full-roadmap / one-shot mode, this Foundation-local restriction must not
+suppress later required phases. The controller must follow
+`22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md` and
+`23_ONE_SHOT_DEV_AGENT_HANDOFF.md` before deciding the complete scope.
 
 ## Objective
 
