@@ -550,7 +550,9 @@ This wave is governed by:
 ```text
 17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
 18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
-19_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
+21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
 ```
 
 ### Required Product Shape
@@ -688,7 +690,7 @@ Before moving from V3.5 to V3.6:
 V3 route namespace passes
 V3 UI entry is independent
 V3BalanceAdapter boundary is tested
-docs 17, 18, and 19 are indexed
+docs 17, 18, 19, 20, and 21 are indexed
 Scenario Hub registry contract is accepted
 General Creative product/runtime contract is accepted
 placeholder card boundary is accepted

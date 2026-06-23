@@ -152,12 +152,14 @@ Scenario platform and product integration docs:
 ```text
 alchemy_creative_agent_3_0/docs/17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
 alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
-alchemy_creative_agent_3_0/docs/19_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
 ```
 
 Implementation agents must not use the foundation prompt alone when the goal is
 to build the user-facing 3.0 product. For Scenario Hub, General Creative UI, and
-shared-shell integration work, read documents 17, 18, and 19 after the
+shared-shell integration work, read documents 17, 18, 19, 20, and 21 after the
 foundation documents.
 
 ## Implementation Waves

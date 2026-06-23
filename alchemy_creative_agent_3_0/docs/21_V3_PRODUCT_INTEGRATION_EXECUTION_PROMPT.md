@@ -72,7 +72,9 @@ alchemy_creative_agent_3_0/docs/15_PRODUCT_BOUNDARY_AND_VERTICAL_AGENT_ARCHITECT
 alchemy_creative_agent_3_0/docs/16_V3_FOUNDATION_EXECUTION_GUARDRAILS.md
 alchemy_creative_agent_3_0/docs/17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
 alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
-alchemy_creative_agent_3_0/docs/19_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
 ```
 
 If any document appears to conflict with another, use this precedence:
@@ -84,7 +86,9 @@ If any document appears to conflict with another, use this precedence:
 4. 15 product boundary rules
 5. 17 scenario-platform rules
 6. 18 General Creative product/runtime rules
-7. this execution bridge
+7. 19 General Creative quick-start preset rules
+8. 20 General Common Scene execution and contract-closure rules
+9. this execution bridge
 ```
 
 ---
@@ -308,7 +312,7 @@ Required phase loop:
 11. Prepare GitHub PR without merging automatically.
 ```
 
-Do not mark complete while any current-stage requirement in docs 17, 18, or this document remains unmet.
+Do not mark complete while any current-stage requirement in docs 17, 18, 19, 20, or this document remains unmet.
 
 ---
 
@@ -327,9 +331,10 @@ Required assertions:
 
 ```text
 V3 does not import V1/V2 runtime modules
-V3 docs 17, 18, and 19 are indexed
+V3 docs 17, 18, 19, 20, and 21 are indexed
 Scenario Hub manifests are registry-driven
 General Creative is executable
+General Common Scene preset resolution is deterministic and schema-safe
 placeholder cards are not executable
 V3 API routes are V3-owned
 V1/V2/Alchemy Lab smoke paths still load
