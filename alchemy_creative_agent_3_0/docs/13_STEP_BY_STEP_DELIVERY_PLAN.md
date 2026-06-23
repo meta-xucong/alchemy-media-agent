@@ -15,7 +15,8 @@ V3.2 Generation Loop MVP
 V3.3 Commercial Poster Rendering
 V3.4 Reference Conditioning Sidecars
 V3.5 Product API and Minimal UX
-V3.6 Vertical Agent Specialization
+V3.6 Scenario Hub and General Creative Product Integration
+V3.7 Vertical Agent Specialization
 ```
 
 This document focuses especially on V3.1 and V3.2 because they are the second and third development waves after the foundation.
@@ -538,11 +539,68 @@ node graph
 5. V3 UI entry is independent from V1/V2 UI flows.
 ```
 
-## 8. V3.6 Vertical Agent Specialization
+## 8. V3.6 Scenario Hub and General Creative Product Integration
 
 ### Goal
 
-Start implementing real industry-specific sub-agent packs under the V3 framework.
+Turn the V3 runtime into a user-facing product area inside the shared site shell.
+
+This wave is governed by:
+
+```text
+17_SCENARIO_PACK_PLATFORM_EXTENSION_SPEC.md
+18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
+19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
+20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
+21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+```
+
+### Required Product Shape
+
+```text
+shared site shell
+  -> 3.0 navigation entry
+  -> registry-driven Scenario Hub
+  -> five first-screen scenario cards
+  -> General Creative full workspace
+  -> placeholder-only specialized cards
+```
+
+### Current-Stage Boundary
+
+```text
+complete:
+  General Creative
+
+placeholder only:
+  ecommerce
+  new_media_marketing
+  private_community_operations
+  brand_ip_operations
+
+future:
+  AI manga-drama
+  detailed pack-specific workflows
+```
+
+### Acceptance Criteria
+
+```text
+1. Entering 3.0 opens the V3 Scenario Hub.
+2. Scenario cards render from registry/manifest data.
+3. General Creative is active and opens the shared workspace.
+4. Placeholder cards cannot create jobs or call pack-owned APIs.
+5. General Creative uses DefaultCommercialPack and the existing Central Creative Brain.
+6. Beginner UI hides provider/model/adapter/node-graph concepts.
+7. V3 APIs remain under /api/v3/creative-agent/*.
+8. V1, V2, and Alchemy Lab smoke paths still load.
+```
+
+## 9. V3.7 Vertical Agent Specialization
+
+### Goal
+
+Start implementing real industry-specific sub-agent packs under the V3 framework after Scenario Hub and General Creative are accepted.
 
 ### Priority Order
 
@@ -564,7 +622,7 @@ Start implementing real industry-specific sub-agent packs under the V3 framework
 5. Tests prove default fallback still works.
 ```
 
-## 9. Sequential Execution Rule
+## 10. Sequential Execution Rule
 
 Do not start V3.2 before V3.1 is accepted.
 
@@ -574,9 +632,11 @@ Do not start V3.4 heavy providers before V3 provider interfaces are stable.
 
 Do not start V3.5 frontend/API integration before V3.2 asset pack contracts are stable.
 
-Do not start V3.6 full vertical packs before the vertical registry and default pack are stable.
+Do not start V3.6 Scenario Hub integration before V3.5 API and minimal UX routes are stable.
 
-## 10. Development Gate Checklist
+Do not start V3.7 full vertical packs before V3.6 Scenario Hub and General Creative are accepted.
+
+## 11. Development Gate Checklist
 
 Before moving from V3.0 to V3.1:
 
@@ -630,9 +690,23 @@ Before moving from V3.5 to V3.6:
 V3 route namespace passes
 V3 UI entry is independent
 V3BalanceAdapter boundary is tested
+docs 17, 18, 19, 20, and 21 are indexed
+Scenario Hub registry contract is accepted
+General Creative product/runtime contract is accepted
+placeholder card boundary is accepted
 ```
 
-## 11. Strategic Reminder
+Before moving from V3.6 to V3.7:
+
+```text
+Scenario Hub cards render from registry data
+General Creative can create and inspect jobs
+placeholder cards cannot execute jobs
+V1, V2, and Alchemy Lab smoke tests pass
+no pack-specific vertical workflow has leaked into the current stage
+```
+
+## 12. Strategic Reminder
 
 The user experience should remain simple at every stage.
 

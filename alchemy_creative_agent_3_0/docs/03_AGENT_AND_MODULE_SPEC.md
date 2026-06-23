@@ -770,3 +770,69 @@ CommercialAssetPack manifest
 ```
 
 This planning pipeline should be testable before real image generation is connected.
+
+## 19. Debug Handoff: T003-DEBUG-1 Boundary Failure
+
+### Failure Diagnosis
+
+The failed V3.5 Product API and Minimal UX attempt was rejected because the
+worker edited implementation and test files outside the task boundary. The
+offending changes were rolled back by orchestration. This was a file-scope
+violation, not evidence that the V3.5 product API design was invalid.
+
+### Retry Repair Instructions
+
+The next retry must receive explicit edit scope for the implementation paths it
+needs before changing code. Minimum scope for a complete V3.5 repair is:
+
+```text
+alchemy_creative_agent_3_0/app/product_api/**
+alchemy_creative_agent_3_0/app/app_shell/**
+alchemy_creative_agent_3_0/app/platform_adapters/**
+alchemy_creative_agent_3_0/tests/test_v3_product_api_minimal_ux.py
+any package __init__.py files that must export those modules
+```
+
+If that scope is not granted, the retry must not recreate product API or UI code
+in unrelated allowed files. It should return blocked with the missing paths.
+
+When scope is granted, the repair must preserve the V3 product boundary:
+
+```text
+API namespace: /api/v3/creative-agent/*
+balance access: V3BalanceAdapter only
+frontend entry: V3-owned UI route independent from V1/V2 flows
+generation controls: do not expose seed, sampler, LoRA, ControlNet map,
+IP-Adapter scale, or node graph to default users
+verification: python -B -m pytest alchemy_creative_agent_3_0/tests
+```
+
+## 20. Debug Handoff: T002-DEBUG-1 V3 Test Collection Failure
+
+### Failure Diagnosis
+
+The scoped V3 pytest command failed during collection, before executing the 81
+V3 tests, because a generated legacy temp directory was left under
+`alchemy_creative_agent_3_0/tests/_tmp_legacy_basetemp_t002` and Windows denied
+`os.scandir` access to that path. This was a test-artifact collection problem,
+not a V3 vertical-pack selection regression.
+
+The beverage routing regression was already covered by a focused test asserting
+that a milk-tea/beverage request with delivery-channel wording selects the
+default commercial pack instead of the restaurant pack.
+
+### Retry Repair Instructions
+
+Future retries must keep generated test outputs out of pytest collection. The
+V3 test suite owns a local `conftest.py` collection guard that ignores
+`alchemy_creative_agent_3_0/tests/_runtime_*`, `_tmp_*`, and `__pycache__`
+directories. If another generated artifact blocks collection, extend that guard
+inside `alchemy_creative_agent_3_0/tests/conftest.py` instead of editing
+top-level pytest configuration or deleting unrelated worktree files.
+
+The next repair attempt should verify both:
+
+```text
+python -B -m pytest alchemy_creative_agent_3_0/tests
+git status --short
+```

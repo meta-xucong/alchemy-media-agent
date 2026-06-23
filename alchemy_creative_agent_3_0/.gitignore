@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+data/brand_memory/brands/*.json
+tests/_runtime_*/
+tests/_tmp_*/
