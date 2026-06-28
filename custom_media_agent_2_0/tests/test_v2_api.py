@@ -4315,6 +4315,88 @@ def test_uploaded_style_reference_with_food_copy_qr_auto_becomes_content_source(
     assert "INFORMATION INTEGRITY LOCK" not in prompt
 
 
+def test_template_food_replacement_uses_uploaded_images_as_slot_subjects() -> None:
+    client = fresh_client()
+    asset_ids = [
+        upload_test_asset(client, role="style_reference", color=(40 + index * 25, 120, 180))
+        for index in range(6)
+    ]
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "Use the selected template. Replace the template food photos with the six uploaded dish photos. "
+                "Keep the template composition, layout rhythm, lighting, and hierarchy. No QR code is needed."
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "constraint_strength": "strong",
+                }
+                for asset_id in asset_ids
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    relationship = variables["task_relationship_model"]
+    assert relationship["primary_relationship"] == "replace_template_food_subject"
+    assert relationship["template_slot_replacement"] is True
+    assert relationship["content_extraction"] is False
+    bindings = variables["asset_binding_plan"]["bindings"]
+    assert {binding["role"] for binding in bindings} == {"subject_reference"}
+    assert {binding["binding_slot"] for binding in bindings} == {"food_subject_slots"}
+    assert {binding["fusion_mode"] for binding in bindings} == {"template_slot_replacement"}
+    assert all(binding["provider_input_required"] is True for binding in bindings)
+    provider_plan = variables["provider_input_plan"]
+    assert provider_plan["reference_image_asset_ids"] == asset_ids
+    assert provider_plan["reference_image_count"] == 6
+    assert "template_slot_replacement" in provider_plan["fusion_modes"]
+    assert "composite_content_source" not in provider_plan["fusion_modes"]
+    assert variables["asset_frame_strategy"]["mode"] == "template_frame_primary"
+    assert variables["asset_frame_strategy"]["content_extraction"] is False
+    assert variables["information_integrity_contract"]["active"] is False
+    prompt = run["prompt_plan"]["prompt"]
+    assert "TASK RELATIONSHIP" in prompt
+    assert "UPLOADED CONTENT SOURCE" not in prompt
+
+
+def test_uploaded_source_poster_still_uses_composite_content_extraction() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="style_reference", color=(180, 220, 240))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "Extract the food items, copy text, prices, and offer facts from the uploaded source poster. "
+                "Do not copy the source poster layout; adapt the extracted content into the selected template."
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [{"asset_id": asset_id, "role": "style_reference", "constraint_strength": "strong"}],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    assert variables["task_relationship_model"]["primary_relationship"] == "extract_composite_content"
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["role"] == "subject_reference"
+    assert binding["binding_slot"] == "semantic_content"
+    assert binding["fusion_mode"] == "composite_content_source"
+    assert variables["asset_frame_strategy"]["content_extraction"] is True
+    assert "composite_content_source" in variables["provider_input_plan"]["fusion_modes"]
+    assert "CONTENT EXTRACTION LOCK" in run["prompt_plan"]["prompt"]
+
+
 def test_v2_template_style_reference_strong_is_sent_to_provider_without_overriding_template_frame() -> None:
     client = fresh_client()
     asset_id = upload_test_asset(client, role="style_reference", color=(180, 220, 240))

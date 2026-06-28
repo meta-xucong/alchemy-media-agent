@@ -70,6 +70,8 @@ ROLE_ALLOWED_OVERRIDES = {
     "color_reference": ["compatible product palette", "compatible accent colors"],
     "negative_reference": ["negative visual exclusions"],
 }
+TEMPLATE_REPLACEMENT_RELATIONSHIPS = {"replace_template_subject", "replace_template_food_subject"}
+TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE = "template_slot_replacement"
 QR_INTENT_PATTERN = re.compile(
     "(二维码|二維碼|qr\\s*code|qr-code|qrcode|qr码|qr碼|scan\\s*code|扫码|掃碼|小程序码|小程序碼)",
     re.IGNORECASE,
@@ -91,20 +93,34 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
     uploaded_assets = [item for item in uploaded_assets if item is not None]
     brief_by_id = {item.asset_id: _brief_for(item) for item in uploaded_assets}
     template_lock = _template_lock_contract(request.template_case_id)
-    binding_plan = _binding_plan(asset_inputs, brief_by_id, template_lock, user_prompt=request.user_prompt)
     uploaded_asset_contexts = [
         _asset_for_context(asset, brief_by_id.get(asset.asset_id), inputs_by_id.get(asset.asset_id, []))
         for asset in uploaded_assets
     ]
+    task_relationship_model = _task_relationship_model(
+        user_prompt=request.user_prompt,
+        uploaded_assets=uploaded_asset_contexts,
+        asset_inputs=asset_inputs,
+        template_locked=template_lock is not None,
+    )
+    binding_plan = _binding_plan(
+        asset_inputs,
+        brief_by_id,
+        template_lock,
+        user_prompt=request.user_prompt,
+        task_relationship_model=task_relationship_model,
+    )
     asset_frame_strategy = _asset_frame_strategy(
         user_prompt=request.user_prompt,
         uploaded_assets=uploaded_asset_contexts,
         binding_plan=binding_plan,
         template_locked=template_lock is not None,
+        task_relationship_model=task_relationship_model,
     )
     return {
         "user_prompt": request.user_prompt,
         "uploaded_assets": uploaded_asset_contexts,
+        "task_relationship_model": task_relationship_model,
         "template_lock_contract": template_lock.model_dump(mode="json") if template_lock else None,
         "asset_binding_plan": binding_plan.model_dump(mode="json"),
         "asset_frame_strategy": asset_frame_strategy,
@@ -138,6 +154,19 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         parts.append(
             "TEMPLATE LOCK: the selected case is the highest-priority visual template. "
             "Preserve its composition, spatial hierarchy, lighting, background density, mood, layout structure, and visual rhythm."
+        )
+    relationship = _relationship_from_context(asset_context)
+    if _task_relationship_replaces_template_subject(relationship):
+        target_label = _relationship_target_label(relationship)
+        parts.append(
+            "TASK RELATIONSHIP: uploaded reference images are concrete replacement subjects for "
+            f"{target_label} in the selected template. Replace the template's original slot content with the uploaded subjects while preserving the template frame. "
+            "Do not treat these uploads as a source poster, layout reference, generic style signal, or composite-content sheet."
+        )
+    elif _task_relationship_extracts_content(relationship):
+        parts.append(
+            "TASK RELATIONSHIP: uploaded images are source evidence for semantic content extraction. "
+            "Extract only requested content, copy, product/food facts, and explicitly requested source QR details into the selected frame."
         )
     frame_strategy = asset_context.get("asset_frame_strategy") if isinstance(asset_context.get("asset_frame_strategy"), dict) else {}
     if frame_strategy.get("mode") == "uploaded_frame_primary":
@@ -255,17 +284,210 @@ def provider_input_images(binding_plan: AssetBindingPlan, brief_by_id: dict[str,
     return list(images_by_asset_id.values())
 
 
+def _task_relationship_model(
+    *,
+    user_prompt: str,
+    uploaded_assets: list[dict[str, Any]],
+    asset_inputs: list[CreativeRunAssetInput],
+    template_locked: bool,
+) -> dict[str, Any]:
+    asset_ids = _strategy_asset_ids(uploaded_assets)
+    text = _relationship_source_text(
+        user_prompt=user_prompt,
+        uploaded_assets=uploaded_assets,
+        asset_inputs=asset_inputs,
+    )
+    has_uploads = bool(asset_ids)
+    explicit_extraction = _relationship_explicit_extraction_requested(text) or _relationship_content_evidence_requested(text)
+    if explicit_extraction and _hard_single_subject_requested(text) and not _layout_rejection_requested(text):
+        explicit_extraction = False
+    replacement_requested = _relationship_replacement_requested(text)
+    food_requested = _relationship_food_requested(text)
+    subject_requested = food_requested or _relationship_subject_requested(text)
+    primary_relationship = "no_uploaded_assets"
+    target_surface = None
+    target_label = None
+    uploaded_role = "none"
+    if has_uploads and template_locked and replacement_requested and subject_requested and not explicit_extraction:
+        primary_relationship = "replace_template_food_subject" if food_requested else "replace_template_subject"
+        target_surface = "food_subject_slots" if food_requested else "main_subject_slot"
+        target_label = "template food/product image slots" if food_requested else "template main subject slot"
+        uploaded_role = "concrete_replacement_subjects"
+    elif has_uploads and explicit_extraction:
+        primary_relationship = "extract_composite_content"
+        target_surface = "semantic_content_slots"
+        target_label = "template semantic content slots"
+        uploaded_role = "source_evidence"
+    elif has_uploads and template_locked:
+        primary_relationship = "fill_template_slots"
+        target_surface = "replaceable_template_slots"
+        target_label = "template replaceable slots"
+        uploaded_role = "slot_variables"
+    elif has_uploads:
+        primary_relationship = "free_reference"
+        target_surface = "generated_image"
+        target_label = "generated image subject/style slots"
+        uploaded_role = "creative_evidence"
+
+    relationship = {
+        "primary_relationship": primary_relationship,
+        "frame_owner": "selected_template" if template_locked else "selected_or_retrieved_case",
+        "uploaded_asset_role": uploaded_role,
+        "target_surface": target_surface,
+        "target_label": target_label,
+        "uploaded_asset_count": len(asset_ids),
+        "uploaded_asset_ids": asset_ids,
+        "replacement_requested": replacement_requested,
+        "explicit_extraction_requested": explicit_extraction,
+        "food_or_product_subject_requested": food_requested,
+        "subject_requested": subject_requested,
+        "content_extraction": primary_relationship == "extract_composite_content",
+        "template_slot_replacement": primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS,
+        "provider_input_priority": "hard" if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS else "normal",
+        "review_expectations": _task_relationship_review_expectations(primary_relationship),
+        "prompt_directive": _task_relationship_prompt_directive(primary_relationship, target_label),
+    }
+    if asset_ids:
+        relationship["asset_relationships"] = [
+            {
+                "asset_id": asset_id,
+                "relationship": primary_relationship,
+                "target_surface": target_surface,
+                "target_label": target_label,
+            }
+            for asset_id in asset_ids[:8]
+        ]
+    return relationship
+
+
+def _relationship_source_text(
+    *,
+    user_prompt: str,
+    uploaded_assets: list[dict[str, Any]],
+    asset_inputs: list[CreativeRunAssetInput],
+) -> str:
+    parts: list[str] = [str(user_prompt or "")]
+    for item in asset_inputs:
+        parts.extend([str(item.role or ""), str(item.notes or "")])
+    for asset in uploaded_assets:
+        if not isinstance(asset, dict):
+            continue
+        parts.extend([str(asset.get("filename") or ""), str(asset.get("role") or ""), str(asset.get("intended_use") or "")])
+        brief = asset.get("brief") if isinstance(asset.get("brief"), dict) else {}
+        parts.extend(
+            [
+                str(brief.get("visual_summary") or ""),
+                " ".join(str(value) for value in (brief.get("identity_requirements") or [])[:4]),
+                " ".join(str(value) for value in (brief.get("style_signals") or [])[:4]),
+            ]
+        )
+    return " ".join(parts).lower()
+
+
+def _relationship_explicit_extraction_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(提取|摘取|抽取|截取|拆出|只取|只提取|只作为内容|只作内容|内容证据|extract|content\s+only|source\s+content|copy\s+text|take\s+the\s+copy)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _relationship_content_evidence_requested(text: str) -> bool:
+    non_subject_content = bool(
+        re.search(
+            r"(文案|文字|标题|副标题|价格|优惠|套餐|规则|购买|菜单|周卡|copy|text|headline|subtitle|price|offer|promotion|menu|source\s+poster)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    qr_content = (not _qr_explicitly_excluded(text)) and _qr_requested_in_text(text)
+    return (non_subject_content or qr_content) and _uploaded_content_source_requested(text)
+
+
+def _relationship_replacement_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(替换|换成|换掉|替掉|取代|replace|swap|substitute)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _relationship_food_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(食物|菜品|菜图|餐品|餐食|饭|三明治|牛肉|肥牛|虾|三文鱼|意面|碗|food|dish|meal|menu\s+item|product\s+photo|food\s+photo)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _relationship_subject_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(主体|主图|产品|商品|人物|照片|图片|素材|main\s+subject|subject|product|uploaded\s+(image|asset|photo|reference))",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _task_relationship_review_expectations(primary_relationship: str) -> list[str]:
+    if primary_relationship == "replace_template_food_subject":
+        return [
+            "uploaded_replacement_subjects_visible",
+            "template_food_slots_replaced",
+            "selected_template_frame_preserved",
+            "no_uploaded_source_layout_copy",
+        ]
+    if primary_relationship == "replace_template_subject":
+        return [
+            "uploaded_replacement_subject_visible",
+            "template_subject_slot_replaced",
+            "selected_template_frame_preserved",
+            "no_uploaded_source_layout_copy",
+        ]
+    if primary_relationship == "extract_composite_content":
+        return [
+            "uploaded_content_evidence_used",
+            "uploaded_source_layout_not_copied",
+            "selected_template_frame_preserved",
+        ]
+    return []
+
+
+def _task_relationship_prompt_directive(primary_relationship: str, target_label: str | None) -> str:
+    target = target_label or "the requested slots"
+    if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS:
+        return (
+            f"Use uploaded reference images as concrete replacement subjects for {target}. "
+            "Preserve their visible subject identity and complete content while keeping the template composition, hierarchy, lighting, and layout rhythm."
+        )
+    if primary_relationship == "extract_composite_content":
+        return (
+            f"Use uploaded images as semantic source evidence for {target}. "
+            "Extract requested content only; do not copy the uploaded layout or frame."
+        )
+    return ""
+
+
 def _asset_frame_strategy(
     *,
     user_prompt: str,
     uploaded_assets: list[dict[str, Any]],
     binding_plan: AssetBindingPlan,
     template_locked: bool,
+    task_relationship_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     bindings = [item.model_dump(mode="json") for item in binding_plan.bindings]
     text = _frame_strategy_text(user_prompt=user_prompt, uploaded_assets=uploaded_assets, bindings=bindings)
     layout_rejected = _layout_rejection_requested(text)
-    content_extraction = _content_extraction_requested(text, bindings)
+    replacement_relationship = _task_relationship_replaces_template_subject(task_relationship_model)
+    content_extraction = False if replacement_relationship else _content_extraction_requested(text, bindings)
     continuation_frame_requested = _continuation_frame_requested(text, bindings) and not layout_rejected
     uploaded_frame_requested = (
         _uploaded_frame_requested(text, bindings) or continuation_frame_requested
@@ -276,6 +498,7 @@ def _asset_frame_strategy(
         bindings=bindings,
         content_extraction=content_extraction,
         uploaded_frame_requested=uploaded_frame_requested,
+        task_relationship_model=task_relationship_model,
     )
     if template_locked:
         return {
@@ -317,6 +540,49 @@ def _asset_frame_strategy(
             if content_extraction
             else "No explicit uploaded-layout override was requested."
         ),
+    }
+
+
+def _relationship_from_context(asset_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(asset_context, dict):
+        return {}
+    relationship = asset_context.get("task_relationship_model")
+    return relationship if isinstance(relationship, dict) else {}
+
+
+def _task_relationship_replaces_template_subject(task_relationship_model: dict[str, Any] | None) -> bool:
+    if not isinstance(task_relationship_model, dict):
+        return False
+    return str(task_relationship_model.get("primary_relationship") or "") in TEMPLATE_REPLACEMENT_RELATIONSHIPS
+
+
+def _task_relationship_extracts_content(task_relationship_model: dict[str, Any] | None) -> bool:
+    if not isinstance(task_relationship_model, dict):
+        return False
+    return str(task_relationship_model.get("primary_relationship") or "") == "extract_composite_content"
+
+
+def _relationship_target_label(task_relationship_model: dict[str, Any] | None) -> str:
+    if not isinstance(task_relationship_model, dict):
+        return "the requested template slots"
+    return str(task_relationship_model.get("target_label") or "the requested template slots")
+
+
+def _compact_task_relationship_model(task_relationship_model: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(task_relationship_model, dict):
+        return {}
+    return {
+        "primary_relationship": task_relationship_model.get("primary_relationship"),
+        "frame_owner": task_relationship_model.get("frame_owner"),
+        "uploaded_asset_role": task_relationship_model.get("uploaded_asset_role"),
+        "target_surface": task_relationship_model.get("target_surface"),
+        "target_label": task_relationship_model.get("target_label"),
+        "uploaded_asset_count": task_relationship_model.get("uploaded_asset_count"),
+        "content_extraction": bool(task_relationship_model.get("content_extraction")),
+        "template_slot_replacement": bool(task_relationship_model.get("template_slot_replacement")),
+        "provider_input_priority": task_relationship_model.get("provider_input_priority"),
+        "review_expectations": (task_relationship_model.get("review_expectations") or [])[:4],
+        "prompt_directive": _compact_strategy_text(str(task_relationship_model.get("prompt_directive") or ""), 260),
     }
 
 
@@ -461,6 +727,7 @@ def _asset_retrieval_hints(
     bindings: list[dict[str, Any]],
     content_extraction: bool,
     uploaded_frame_requested: bool,
+    task_relationship_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     user_intent_text = _user_intent_text(text)
     category_hints: list[str] = []
@@ -492,13 +759,16 @@ def _asset_retrieval_hints(
                 " ".join(str(item) for item in (brief.get("style_signals") or [])[:4]),
             ]
         )
-    intent = (
-        "uploaded frame/layout reference should drive composition; find cases for compatible style polish"
-        if uploaded_frame_requested
-        else "uploaded source supplies content/identity slots; find one fresh visual frame"
-        if content_extraction
-        else "uploaded assets fill identity or style slots; find one compatible visual frame"
-    )
+    if _task_relationship_replaces_template_subject(task_relationship_model):
+        intent = "uploaded assets supply concrete replacement subjects for selected template slots; keep one template-compatible visual frame"
+    else:
+        intent = (
+            "uploaded frame/layout reference should drive composition; find cases for compatible style polish"
+            if uploaded_frame_requested
+            else "uploaded source supplies content/identity slots; find one fresh visual frame"
+            if content_extraction
+            else "uploaded assets fill identity or style slots; find one compatible visual frame"
+        )
     return {
         "query_terms": _compact_strategy_text(" ".join([intent, *asset_terms, *role_terms, *fusion_terms]), 760),
         "category_filters": _dedupe(category_hints),
@@ -599,6 +869,7 @@ def _binding_plan(
     template_lock: TemplateLockContract | None,
     *,
     user_prompt: str = "",
+    task_relationship_model: dict[str, Any] | None = None,
 ) -> AssetBindingPlan:
     bindings: list[AssetBinding] = []
     conflicts: list[dict[str, Any]] = []
@@ -616,6 +887,7 @@ def _binding_plan(
             notes=item.notes,
             brief=brief,
             template_locked=template_lock is not None,
+            task_relationship_model=task_relationship_model,
         )
         binding_input = item.model_copy(update={"role": role, "constraint_strength": strength})
         brief = _brief_for_binding(brief, binding_input)
@@ -626,6 +898,7 @@ def _binding_plan(
             user_prompt=user_prompt,
             notes=item.notes,
             template_locked=template_lock is not None,
+            task_relationship_model=task_relationship_model,
         )
         provider_required = _provider_input_required_for_binding(
             role=role,
@@ -681,7 +954,7 @@ def _binding_plan(
                 review_expectations=list(fusion_policy.get("review_expectations") or []),
             )
         )
-    provider_plan = _provider_input_plan(bindings)
+    provider_plan = _provider_input_plan(bindings, task_relationship_model=task_relationship_model)
     return AssetBindingPlan(
         plan_id=new_id("abp"),
         template_lock_contract_id=template_lock.contract_id if template_lock else None,
@@ -713,6 +986,13 @@ def _prompt_instruction(
     placement = fusion_policy.get("placement_intent") if isinstance(fusion_policy.get("placement_intent"), dict) else {}
     target_label = placement.get("target_label") or fusion_policy.get("target_surface")
     subject_rule = "Replace the template's original subject with the uploaded subject while preserving the selected template's visual frame."
+    if role == "subject_reference" and fusion_mode == TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE:
+        target = target_label or "the selected template subject slot"
+        subject_rule = (
+            f"Use the uploaded image as a concrete replacement subject for {target}. "
+            "Preserve the uploaded subject's visible identity, proportions, and complete content; map it into the template's existing slot geometry. "
+            "Do not crop it into arbitrary fragments, add new container frames, treat it as a style reference, or copy the uploaded image's source layout."
+        )
     if role == "subject_reference" and fusion_mode == "composite_content_source":
         qr_intent = bool(fusion_policy.get("qr_intent"))
         content_targets = (
@@ -752,7 +1032,11 @@ def _prompt_instruction(
     return f"{prefix} {role_rule}{fusion_text} Reference strength: {strength}. Asset brief: {base} Identity requirements: {identity}. Style signals: {style}.{extra}"
 
 
-def _provider_input_plan(bindings: list[AssetBinding]) -> dict[str, Any]:
+def _provider_input_plan(
+    bindings: list[AssetBinding],
+    *,
+    task_relationship_model: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     reference_ids = _dedupe([item.asset_id for item in bindings if item.provider_input_required])
     operation = "image_edit_with_reference_images" if reference_ids else "generate"
     placement_targets = [
@@ -776,6 +1060,7 @@ def _provider_input_plan(bindings: list[AssetBinding]) -> dict[str, Any]:
         "fusion_modes": _dedupe([item.fusion_mode for item in bindings if item.fusion_mode]),
         "placement_targets": placement_targets,
         "review_expectations": _dedupe([expectation for item in bindings for expectation in item.review_expectations]),
+        "task_relationship_model": _compact_task_relationship_model(task_relationship_model),
         "provider_contract": (
             "Uploaded references that the user expects to influence the result must be sent to capable providers as input images. "
             "Provider visibility does not make the uploaded image the frame owner; template and asset-frame strategy still control visual priority."
@@ -878,8 +1163,21 @@ def _role_for_prompt_intent(
     notes: str | None,
     brief: AssetBrief,
     template_locked: bool,
+    task_relationship_model: dict[str, Any] | None = None,
 ) -> tuple[str, ConstraintStrength, str | None]:
     source_text, _ = _intent_source_text(user_prompt=user_prompt, notes=notes, brief=brief)
+    if _task_relationship_replaces_template_subject(task_relationship_model):
+        if role in {"logo_reference", "face_reference", "background_reference", "negative_reference"}:
+            return role, strength, None
+        upgraded_strength: ConstraintStrength = "required" if strength == "soft" else strength
+        target_label = _relationship_target_label(task_relationship_model)
+        reason = (
+            "user prompt asks uploaded images to replace selected-template subject slots; "
+            f"treat the uploaded asset as a concrete replacement subject for {target_label}, not as style or composite content evidence"
+        )
+        if role != "subject_reference":
+            return "subject_reference", upgraded_strength, reason
+        return role, upgraded_strength, reason
     if not _uploaded_content_source_requested(source_text):
         return role, strength, None
     if role in {"logo_reference", "face_reference", "background_reference", "negative_reference"}:
@@ -906,10 +1204,23 @@ def _fusion_policy(
     user_prompt: str,
     notes: str | None,
     template_locked: bool,
+    task_relationship_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_text, source = _intent_source_text(user_prompt=user_prompt, notes=notes, brief=brief)
-    placement = _placement_intent(role=role, text=source_text, source=source, template_locked=template_locked)
-    fusion_mode = _fusion_mode(role=role, placement=placement, text=source_text, template_locked=template_locked)
+    placement = _placement_intent(
+        role=role,
+        text=source_text,
+        source=source,
+        template_locked=template_locked,
+        task_relationship_model=task_relationship_model,
+    )
+    fusion_mode = _fusion_mode(
+        role=role,
+        placement=placement,
+        text=source_text,
+        template_locked=template_locked,
+        task_relationship_model=task_relationship_model,
+    )
     qr_intent = _qr_requested_in_text(source_text)
     provider_input_required = role in HARD_REFERENCE_ROLES or strength == "required"
     if fusion_mode in {
@@ -917,6 +1228,7 @@ def _fusion_policy(
         "logo_canvas_brand_mark",
         "logo_template_slot",
         "subject_identity",
+        TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE,
         "composite_content_source",
         "face_identity",
         "background_identity",
@@ -930,7 +1242,13 @@ def _fusion_policy(
     )
     return {
         "fusion_mode": fusion_mode,
-        "binding_slot": "semantic_content" if fusion_mode == "composite_content_source" else None,
+        "binding_slot": (
+            "semantic_content"
+            if fusion_mode == "composite_content_source"
+            else placement.get("target_surface")
+            if fusion_mode == TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
+            else None
+        ),
         "placement_intent": placement,
         "target_surface": placement.get("target_surface"),
         "provider_input_required": provider_input_required,
@@ -949,7 +1267,29 @@ def _intent_source_text(*, user_prompt: str, notes: str | None, brief: AssetBrie
     return (brief.visual_summary or "").lower(), "asset_brief"
 
 
-def _placement_intent(*, role: str, text: str, source: str, template_locked: bool) -> dict[str, Any]:
+def _placement_intent(
+    *,
+    role: str,
+    text: str,
+    source: str,
+    template_locked: bool,
+    task_relationship_model: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if role == "subject_reference" and _task_relationship_replaces_template_subject(task_relationship_model):
+        target_surface = str(task_relationship_model.get("target_surface") or "main_subject_slot") if isinstance(task_relationship_model, dict) else "main_subject_slot"
+        target_label = _relationship_target_label(task_relationship_model)
+        return {
+            "mode": TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE,
+            "target_surface": target_surface,
+            "target_label": target_label,
+            "source": "task_relationship_model",
+            "relationship": str(task_relationship_model.get("primary_relationship") or "") if isinstance(task_relationship_model, dict) else "",
+            "asset_count": task_relationship_model.get("uploaded_asset_count") if isinstance(task_relationship_model, dict) else None,
+            "instruction": (
+                f"Use uploaded reference images as concrete replacement subjects for {target_label}; "
+                "replace the template's original slot content without inheriting uploaded image layout."
+            ),
+        }
     if role == "subject_reference" and _composite_source_requested(text):
         qr_intent = _qr_requested_in_text(text)
         return {
@@ -1035,7 +1375,14 @@ def _placement_intent(*, role: str, text: str, source: str, template_locked: boo
     }
 
 
-def _fusion_mode(*, role: str, placement: dict[str, Any], text: str, template_locked: bool) -> str:
+def _fusion_mode(
+    *,
+    role: str,
+    placement: dict[str, Any],
+    text: str,
+    template_locked: bool,
+    task_relationship_model: dict[str, Any] | None = None,
+) -> str:
     mode = placement.get("mode")
     if role == "logo_reference":
         if _typographic_brand_text_only(text):
@@ -1046,6 +1393,8 @@ def _fusion_mode(*, role: str, placement: dict[str, Any], text: str, template_lo
             return "logo_canvas_brand_mark"
         return "logo_template_slot" if template_locked else "logo_brand_mark"
     if role == "subject_reference":
+        if mode == TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE or _task_relationship_replaces_template_subject(task_relationship_model):
+            return TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
         if mode == "content_evidence" or _composite_source_requested(text):
             return "composite_content_source"
         return "subject_identity"
@@ -1325,6 +1674,15 @@ def _review_expectations(*, role: str, fusion_mode: str, placement: dict[str, An
                 "uploaded_source_layout_not_copied",
                 "uploaded_information_complete",
                 "business_offer_policy_preserved",
+            ]
+        )
+    elif fusion_mode == TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE:
+        expectations.extend(
+            [
+                "uploaded_replacement_subject_visible",
+                "template_subject_slot_replaced",
+                "complete_uploaded_subject_preserved",
+                "no_uploaded_source_layout_copy",
             ]
         )
     elif fusion_mode == "continuation_frame":

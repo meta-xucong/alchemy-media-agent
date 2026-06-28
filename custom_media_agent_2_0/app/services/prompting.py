@@ -181,6 +181,7 @@ def compose_prompt_plan(
             "revision_source": output.get("revision_source"),
             "template_lock_enabled": bool((asset_context or {}).get("template_lock_contract")),
             "template_lock_contract": (asset_context or {}).get("template_lock_contract"),
+            "task_relationship_model": (asset_context or {}).get("task_relationship_model"),
             "asset_frame_strategy": (asset_context or {}).get("asset_frame_strategy"),
             "visual_grammar_lock_enabled": bool(visual_grammar_contract),
             "visual_grammar_contract": visual_grammar_contract,

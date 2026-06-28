@@ -80,6 +80,7 @@ QR_EXCLUSION_PATTERN = re.compile(
     "(二维码|二維碼|qr\\s*code|qr-code|qrcode|scan\\s*code|扫码|掃碼)",
     re.IGNORECASE,
 )
+TEMPLATE_REPLACEMENT_RELATIONSHIPS = {"replace_template_subject", "replace_template_food_subject"}
 
 
 def build_visual_grammar_contract(
@@ -98,6 +99,7 @@ def build_visual_grammar_contract(
     visual_signals = build_case_visual_signals(primary)
     anchor_directive = _anchor_directive(primary)
     source_layout_risk = _source_layout_risk(user_prompt=user_prompt, asset_context=asset_context)
+    task_relationship_model = _task_relationship_model(asset_context)
     information_integrity = _information_integrity_contract(
         user_prompt=user_prompt,
         asset_context=asset_context,
@@ -124,6 +126,7 @@ def build_visual_grammar_contract(
         "replaceable_semantic_content": REPLACEABLE_SEMANTIC_ELEMENTS,
         "anchor_directive": anchor_directive,
         "visual_signal_brief": visual_signals.brief,
+        "task_relationship_model": task_relationship_model,
         "source_layout_risk": source_layout_risk,
         "information_integrity": information_integrity,
         "asset_frame_strategy": asset_frame_strategy,
@@ -161,6 +164,7 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     title = _safe_title(str(contract.get("primary_anchor_title") or "selected visual reference"))
     anchor = _compact_text(str(contract.get("anchor_directive") or contract.get("visual_signal_brief") or ""), 900)
     source_layout_risk = contract.get("source_layout_risk") if isinstance(contract.get("source_layout_risk"), dict) else {}
+    task_relationship_model = contract.get("task_relationship_model") if isinstance(contract.get("task_relationship_model"), dict) else {}
     aux_titles = [
         _safe_title(str(item))
         for item in (contract.get("auxiliary_case_titles") or [])
@@ -228,6 +232,14 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     if critical_asset_rules:
         parts.insert(insert_index, "Critical uploaded-asset placement rules: " + " ".join(critical_asset_rules))
         insert_index += 1
+    if _task_relationship_replaces_template_subject(task_relationship_model):
+        target_label = str(task_relationship_model.get("target_label") or "the selected template subject slots")
+        parts.insert(
+            insert_index,
+            "Task relationship lock: uploaded images are concrete replacement subjects for "
+            f"{target_label}; keep the visual grammar frame, replace its original slot content, and do not recast the uploads as source-layout evidence.",
+        )
+        insert_index += 1
     if anchor:
         parts.insert(insert_index, "Reusable visual grammar from the anchor: " + anchor + ".")
     information_integrity = contract.get("information_integrity") if isinstance(contract.get("information_integrity"), dict) else {}
@@ -260,7 +272,7 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
         )
     if aux_titles:
         parts.append("Auxiliary cases may contribute only compatible local cues, not the main composition: " + ", ".join(aux_titles) + ".")
-    if source_layout_risk.get("detected"):
+    if source_layout_risk.get("detected") and not _task_relationship_replaces_template_subject(task_relationship_model):
         if mode == "uploaded_frame_visual_grammar":
             parts.append(
                 "Uploaded-frame intent confirmed: the uploaded source may be a finished layout, but the user explicitly asked to preserve its frame. "
@@ -402,6 +414,8 @@ def _information_integrity_contract(
     qr_intent = _qr_intent_detected(user_prompt=user_prompt, asset_context=asset_context)
     uploaded_frame_primary = _asset_frame_strategy(asset_context).get("mode") == "uploaded_frame_primary"
     composite_source = "composite_content_source" in fusion_modes
+    task_relationship_model = _task_relationship_model(asset_context)
+    replacement_relationship = _task_relationship_replaces_template_subject(task_relationship_model)
     explicit_retention = bool(
         re.search(
             r"(完整保留|全部保留|信息.*完整|不要丢|不要省略|保留.*文案|保留.*优惠|保留.*价格|保留.*政策|complete information|preserve all|do not omit)",
@@ -409,7 +423,7 @@ def _information_integrity_contract(
             flags=re.IGNORECASE,
         )
     )
-    active = bool(composite_source or explicit_retention or (source_layout_risk.get("detected") and len(hits) >= 2))
+    active = False if replacement_relationship else bool(composite_source or explicit_retention or (source_layout_risk.get("detected") and len(hits) >= 2))
     return {
         "active": active,
         "priority": "hard" if explicit_retention else "strong",
@@ -451,6 +465,10 @@ def _critical_asset_rules(asset_context: dict[str, Any] | None) -> list[str]:
         label = placement.get("target_label") or item.get("target_surface") or "the requested slot"
         if fusion == "logo_product_surface":
             rules.append(f"Uploaded logo must appear on {label} as a real scene-surface mark, never as a footer, corner badge, watermark, or sticker.")
+        elif fusion == "template_slot_replacement":
+            rules.append(
+                f"Uploaded subject image is a concrete replacement for {label}; preserve its visible subject and fit it into the existing template slot without adding a new source-layout frame."
+            )
         elif fusion == "composite_content_source":
             rules.append(
                 "Uploaded composite/menu/poster image supplies content evidence only; extract requested food/product, copy, offer facts, and other user-requested business details without inheriting the source layout."
@@ -458,6 +476,19 @@ def _critical_asset_rules(asset_context: dict[str, Any] | None) -> list[str]:
         elif item.get("provider_input_required") and item.get("role") in {"subject_reference", "face_reference", "background_reference"}:
             rules.append(f"Uploaded {item.get('role')} remains a hard reference for {label}, adapted inside the visual grammar.")
     return rules[:4]
+
+
+def _task_relationship_model(asset_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(asset_context, dict):
+        return {}
+    relationship = asset_context.get("task_relationship_model")
+    return relationship if isinstance(relationship, dict) else {}
+
+
+def _task_relationship_replaces_template_subject(task_relationship_model: dict[str, Any] | None) -> bool:
+    if not isinstance(task_relationship_model, dict):
+        return False
+    return str(task_relationship_model.get("primary_relationship") or "") in TEMPLATE_REPLACEMENT_RELATIONSHIPS
 
 
 def _compact_anchor_value(value: Any) -> str:

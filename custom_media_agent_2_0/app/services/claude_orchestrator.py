@@ -87,6 +87,7 @@ _CLAUDE_STAGE_LABELS = {
 _MULTIMODAL_SOURCE_ROLES = {"subject_reference", "logo_reference", "face_reference", "background_reference"}
 _MULTIMODAL_FUSION_MODES = {
     "subject_identity",
+    "template_slot_replacement",
     "logo_product_surface",
     "logo_canvas_brand_mark",
     "logo_template_slot",
@@ -1473,9 +1474,11 @@ def _build_checkpoint_stage_prompt(
     context = _read_json(workspace / "context.json") or {}
     fallback = _read_json(workspace / "fallback_decision.json") or {}
     template_lock_contract = _read_json(workspace / "template_lock_contract.json") or {}
+    task_relationship_model = _read_json(workspace / "task_relationship_model.json") or {}
     asset_binding_policy = _read_json(workspace / "asset_binding_policy.json") or {}
     visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
+    compact_task_relationship = _compact_task_relationship_model(task_relationship_model)
     template_case_id = (context.get("request") or {}).get("template_case_id")
     prompt_transform_profile = context.get("prompt_transform_profile") if isinstance(context.get("prompt_transform_profile"), dict) else {}
     compact_cases = _compact_inline_cases(
@@ -1545,6 +1548,8 @@ def _build_checkpoint_stage_prompt(
         "output_limits": output_limits,
         "json_skeleton": _checkpoint_json_skeleton(stage_name),
     }
+    if compact_task_relationship:
+        payload["task_relationship_model"] = compact_task_relationship
     if stage_name.startswith("generation_decision"):
         payload["visible_output_budget"] = {
             "final_prompt_chars": settings.claude_final_prompt_max_chars,
@@ -2533,6 +2538,7 @@ def _build_workspace(
     _write_json(workspace / "candidate_cases.json", [item.model_dump(mode="json") for item in candidate_cases])
     _write_json(workspace / "candidate_case_details.json", [_case_detail_for_claude(item) for item in candidate_case_details])
     _write_json(workspace / "uploaded_assets.json", asset_context.get("uploaded_assets", []))
+    _write_json(workspace / "task_relationship_model.json", asset_context.get("task_relationship_model") or {})
     _write_json(workspace / "template_lock_contract.json", asset_context.get("template_lock_contract") or {})
     _write_json(workspace / "asset_binding_policy.json", asset_context.get("asset_binding_plan") or {})
     _write_json(workspace / "visual_grammar_contract.json", visual_grammar_contract or {})
@@ -2557,6 +2563,7 @@ def _build_workspace(
                 "- 如果手选原型包含 typography、notes、cards、labels、feature sheet 或 infographic，negative_prompt 不要禁止 text；只禁止错误文字、乱码、品牌 logo、水印和签名。",
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
                 "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
+                "- If task_relationship_model.json says primary_relationship=replace_template_food_subject or replace_template_subject, uploaded images are concrete replacement subjects for template slots; do not downgrade them to style signals or composite_content_source.",
                 "- asset_binding_policy.json 中的 fusion_mode、placement_intent、target_surface 和 review_expectations 是硬素材意图约束；尤其是 Logo/主体/人脸/背景，不得被你改写成泛泛风格参考。",
                 "- 如果上传图是成品海报、菜单、周卡、信息表、截图，或 fusion_mode=composite_content_source，只提取语义内容和硬引用；不得继承其整体网格、背景和版式；只有用户明确要求或源图确有二维码时才保留二维码/扫码位。",
                 "- 如果视觉语法需要大主图、主视觉场景、信息带或留白区，而上传素材没有对应图片，你必须自动生成符合用户主题的虚拟内容补齐。",
@@ -2641,6 +2648,7 @@ def _build_file_tool_prompt() -> str:
     return "\n".join(
         [
             "请阅读当前目录内的 MISSION.md、context.json、candidate_cases.json、candidate_case_details.json、fallback_decision.json、OUTPUT_CONTRACT.json、decision_template.json。",
+            "If task_relationship_model.json exists, read it before choosing prompt strategy; it defines whether uploads replace template slots, supply semantic content, or only serve as references.",
             "如果存在 uploaded_assets.json、template_lock_contract.json、asset_binding_policy.json、visual_grammar_contract.json，也必须读取。它们定义上传图视觉摘要、模板锁合同、素材绑定 slot 和视觉语法锁。",
             "先独立判断用户真正想要的图片目标、审美方向、用途和风险，再从候选案例中选择最适合启发提示词的案例。",
             "candidate_cases.json 是轻量索引，candidate_case_details.json 包含可复用的 prompt atoms、视觉特征、visual_signal_brief 和截断后的原始提示词。",
@@ -2651,6 +2659,7 @@ def _build_file_tool_prompt() -> str:
             "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
             "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、明确要求或源图确有的二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
+            "If task_relationship_model.primary_relationship is replace_template_food_subject or replace_template_subject, final_prompt must frame uploaded images as replacement subjects for existing template slots, not as a new layout, style reference, or composite content sheet.",
             "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度；不得为了通用 CTA 凭空添加二维码或扫码占位。",
             "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
             "若 Logo 的 fusion_mode=logo_product_surface，final_prompt 必须要求 uploaded reference image 中的 Logo 被自然印刷/刺绣/贴附到目标物体表面，并明确禁止被放成海报下方、角标、水印或独立贴片。",
@@ -2670,6 +2679,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     context = _read_json(workspace / "context.json") or {}
     fallback = _read_json(workspace / "fallback_decision.json") or {}
     asset_binding_policy = _read_json(workspace / "asset_binding_policy.json") or {}
+    task_relationship_model = _read_json(workspace / "task_relationship_model.json") or {}
     template_lock_contract = _read_json(workspace / "template_lock_contract.json") or {}
     visual_grammar_contract = _read_json(workspace / "visual_grammar_contract.json") or {}
     uploaded_assets = _read_json_list(workspace / "uploaded_assets.json")
@@ -2687,6 +2697,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             "Template mode: selected_case_ids=[template_case_id] only. No-template mode: choose one primary grammar anchor, not an average hybrid. Obey "
             "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
             "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
+            "If task_relationship_model says replace_template_food_subject or replace_template_subject, uploads are replacement subjects for existing template slots. "
             f"If anchor needs a hero/key visual and uploads lack it, synthesize suitable virtual content. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
             f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
             f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying. "
@@ -2705,6 +2716,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
         },
         "template_lock_contract": _compact_template_lock(template_lock_contract),
         "visual_grammar_contract": _compact_visual_grammar_contract(visual_grammar_contract),
+        "task_relationship_model": _compact_task_relationship_model(task_relationship_model),
         "uploaded_assets": _compact_uploaded_assets(uploaded_assets),
         "asset_binding_policy": _compact_asset_binding_policy(asset_binding_policy),
         "candidate_cases": _compact_inline_cases(
@@ -2844,6 +2856,24 @@ def _compact_visual_grammar_contract(raw: Any) -> dict[str, Any]:
             "reason": _truncate(_text_value(asset_frame_strategy.get("reason")), 110),
         },
         "policy": _truncate(_text_value(raw.get("conflict_policy")), 180),
+    }
+
+
+def _compact_task_relationship_model(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    return {
+        "primary_relationship": raw.get("primary_relationship"),
+        "frame_owner": raw.get("frame_owner"),
+        "uploaded_asset_role": raw.get("uploaded_asset_role"),
+        "target_surface": raw.get("target_surface"),
+        "target_label": raw.get("target_label"),
+        "asset_count": raw.get("uploaded_asset_count"),
+        "content_extraction": bool(raw.get("content_extraction")),
+        "template_slot_replacement": bool(raw.get("template_slot_replacement")),
+        "provider_input_priority": raw.get("provider_input_priority"),
+        "review": (raw.get("review_expectations") or [])[:3],
+        "directive": _truncate(_text_value(raw.get("prompt_directive")), 180),
     }
 
 
