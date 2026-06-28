@@ -161,7 +161,9 @@ alchemy_creative_agent_3_0/docs/18_GENERAL_CREATIVE_PRODUCT_AND_RUNTIME_SPEC.md
 alchemy_creative_agent_3_0/docs/19_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md
 alchemy_creative_agent_3_0/docs/20_GENERAL_COMMON_SCENE_EXECUTION_AND_CONTRACT_CLOSURE_SPEC.md
 alchemy_creative_agent_3_0/docs/21_V3_PRODUCT_INTEGRATION_EXECUTION_PROMPT.md
+alchemy_creative_agent_3_0/docs/22_FULL_ROADMAP_ONE_SHOT_EXECUTION_SPEC.md
 alchemy_creative_agent_3_0/docs/22_ONE_SHOT_DEV_AGENT_HANDOFF.md
+alchemy_creative_agent_3_0/docs/23_ONE_SHOT_DEV_AGENT_HANDOFF.md
 alchemy_creative_agent_3_0/docs/23_V3_FOUNDATION_GAP_AUDIT_AND_COMPLETION_SPEC.md
 alchemy_creative_agent_3_0/docs/24_V3_SHARED_CAPABILITY_MODULES_FROM_V1_V2_SPEC.md
 alchemy_creative_agent_3_0/docs/25_GENERAL_CREATIVE_DOC_DELTA_FOR_SHARED_CAPABILITIES.md
@@ -175,11 +177,13 @@ alchemy_creative_agent_3_0/docs/31_V3_PRODUCTIZED_MODULE_WORKSPACES_AND_CAPABILI
 
 Implementation agents must not use the foundation prompt alone when the goal is
 to build the user-facing 3.0 product. For Scenario Hub, General Creative UI, and
-shared-shell integration work, read documents 17, 18, 19, 20, 21, 22, and 27
-after the foundation documents. Document 22 is the one-shot handoff entry for
-Alchemy Dev Agent / Alchemy Dev Lab execution. Document 27 is the commercial
-frontend shell and page specification; it supersedes the minimal UI contract as
-the implementation target for real user-facing pages.
+shared-shell integration work, read documents 17 through 23 after the foundation
+documents, then read documents 27, 30, and 31 for the current commercial
+frontend and productized-workspace target. The full-roadmap one-shot document
+and handoff documents are execution bridges for Alchemy Dev Agent / Alchemy Dev
+Lab. Document 27 is the commercial frontend shell and page specification; it
+supersedes the minimal UI contract as the implementation target for real
+user-facing pages.
 
 For E-Commerce and production-closure work, read documents 23, 24, 25, 26, 27,
 and 28 before
@@ -210,8 +214,8 @@ V3.4 Reference Conditioning Sidecars
 V3.5 Product API and Minimal UX
   Simple natural-language product API and user-facing flow.
 
-V3.6 Scenario Hub and General Creative Product Integration
-  Registry-driven 3.0 home, five first-screen scenario cards, General Creative full workspace, and placeholder boundaries for future specialization packs.
+V3.6 Scenario Pack Framework and V3 Home UI
+  Shared-shell 3.0 navigation entry, registry-driven scenario hub, General Creative available card, and placeholder cards for later vertical packs.
 
 V3.6A Foundation Gap Completion
   Complete the Scenario Pack platform, Scenario Runtime, scenario-aware product contracts, and richer job lifecycle records described in document 23.

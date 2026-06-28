@@ -71,9 +71,14 @@ def review_output(output: ImageOutput, job: ImageJob) -> ImageReviewDecision:
         if information_integrity.get("active"):
             notes.append("Information Integrity Lock active; business-critical poster/menu content should be preserved.")
             risks.append("information_dense_content_may_be_incomplete")
-            directives.append(
-                "Verify source item imagery, names, key copy, prices, counts, purchase offers, delivery/add-on/gift rules, CTA, and QR are retained or equivalently condensed."
-            )
+            if information_integrity.get("qr_intent"):
+                directives.append(
+                    "Verify source item imagery, names, key copy, prices, counts, purchase offers, delivery/add-on/gift rules, requested CTA/contact, and real source QR are retained or equivalently condensed."
+                )
+            else:
+                directives.append(
+                    "Verify source item imagery, names, key copy, prices, counts, purchase offers, delivery/add-on/gift rules, and requested CTA/contact are retained or equivalently condensed; flag invented QR codes or empty scan placeholders."
+                )
     if provider_input_plan.get("requires_image_reference"):
         reference_count = int(provider_input_plan.get("reference_image_count") or 0)
         notes.append(f"Provider input image plan requires {reference_count} uploaded reference image(s).")

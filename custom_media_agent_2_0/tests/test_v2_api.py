@@ -3388,6 +3388,23 @@ def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:
         asyncio.run(openai_image_provider._call_openai_image_operation(never_returns))
 
 
+def test_openai_image_timeout_error_is_retryable_with_detail() -> None:
+    object.__setattr__(settings, "openai_image_timeout_seconds", 240.0)
+
+    error = openai_image_provider._openai_error(
+        TimeoutError(),
+        provider="openai_gpt_image",
+        operation="images.edit",
+        index=0,
+    )
+
+    assert error.retryable is True
+    assert "timed out after 240 seconds" in str(error)
+    assert error.detail["retryable"] is True
+    assert error.detail["timeout_seconds"] == 240.0
+    assert error.detail["operation"] == "images.edit"
+
+
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     client = fresh_client()
     response = client.post(
@@ -3452,6 +3469,79 @@ def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["queued"] == 1
     assert queue_worker_service.process_next_task_once(UpstreamBalanceRuntime(), "test-worker") is False
+
+
+def test_creative_run_async_retry_exhaustion_fails_snapshot() -> None:
+    client = fresh_client()
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+    )
+    queued = response.json()
+
+    class RetryableImageRuntime:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            now = utc_now()
+            prompt_plan = ImagePromptPlan(
+                plan_id="plan_retryable_timeout",
+                mode="smart_enhance",
+                prompt="Create a premium skincare product hero image.",
+            )
+            job = ImageJob(
+                job_id="job_retryable_timeout",
+                run_id=run_id,
+                status="failed",
+                provider_id="openai_gpt_image",
+                model="gpt-image-2",
+                prompt_plan=prompt_plan,
+                outputs=[],
+                error={
+                    "error_code": "provider_runtime_error",
+                    "message": "OpenAI image request timed out after 240 seconds.",
+                    "detail": {"retry_after_seconds": 1},
+                    "provider": "openai_gpt_image",
+                    "retryable": True,
+                    "native_v2": True,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            return CreativeRun(
+                run_id=run_id,
+                status="failed",
+                mode="smart_enhance",
+                intent_summary="premium skincare product hero image",
+                prompt_plan=prompt_plan,
+                generation_jobs=[job],
+                trace_id="trace_retryable_timeout",
+                next_actions=["OpenAI image request timed out after 240 seconds."],
+                created_at=now,
+                updated_at=now,
+            )
+
+    assert queue_worker_service.process_next_task_once(RetryableImageRuntime(), "test-worker") is True
+    first = client.get(f"/api/v2/creative/runs/{queued['run_id']}").json()
+    assert first["status"] == "generating"
+    assert first["generation_jobs"][0]["status"] == "queued"
+    assert "自动重试" in first["next_actions"][0]
+
+    with task_queue_service._connect() as conn:
+        conn.execute("UPDATE v2_tasks SET not_before = NULL WHERE run_id = ?", (queued["run_id"],))
+
+    assert queue_worker_service.process_next_task_once(RetryableImageRuntime(), "test-worker") is True
+    final = client.get(f"/api/v2/creative/runs/{queued['run_id']}").json()
+    assert final["status"] == "failed"
+    assert final["generation_jobs"][0]["status"] == "failed"
+    assert final["generation_jobs"][0]["error"]["retryable"] is True
+    assert "已停止自动重试" in final["next_actions"][0]
+    assert "保留在队列" not in final["next_actions"][0]
+
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["failed"] == 1
+    assert queue_status["counts"].get("queued", 0) == 0
 
 
 def test_creative_run_async_result_survives_repository_reset() -> None:
@@ -4016,6 +4106,94 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert "copied source menu grid" in run["prompt_plan"]["negative_prompt"]
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
+
+
+def test_content_extraction_without_qr_intent_blocks_phantom_qr_slots() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(190, 220, 210))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "Extract the uploaded image food content, key copy, offer details, and price information "
+                "into the selected template poster. Do not copy the uploaded layout."
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "Finished menu poster source; extract content and copy only.",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["fusion_mode"] == "composite_content_source"
+    assert binding["placement_intent"]["target_label"] == "content, copy, food, or business information slots"
+    assert binding["placement_intent"]["qr_intent"] is False
+    assert "Do not add QR codes" in binding["prompt_instruction"]
+    assert variables["information_integrity_contract"]["active"] is True
+    assert variables["information_integrity_contract"]["qr_intent"] is False
+    assert variables["information_integrity_contract"]["qr_policy"] == "do_not_invent_qr_or_scan_placeholder"
+    assert not any("QR code" in field for field in variables["information_integrity_contract"]["critical_fields"])
+    prompt = run["prompt_plan"]["prompt"]
+    assert "Food-to-copy and offer-to-product correspondence" in prompt
+    assert "QR/CTA correspondence" not in prompt
+    assert "Do not invent QR codes" in prompt
+    assert "empty scan cards" in prompt
+    negative_prompt = run["prompt_plan"]["negative_prompt"]
+    assert "empty QR placeholder" in negative_prompt
+    assert "missing requested or source QR" not in negative_prompt
+
+
+def test_prompt_explicit_height_width_infers_output_size_and_blocks_qr() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "品牌：河野轻厨\n"
+                "IP：蓝色河马\n"
+                "标题：周月卡30天不重样漂亮饭\n"
+                "副标题：适合儿童，成人的低糖低脂低油健康餐 198元5次卡，1456元40次卡\n"
+                "菜品参考图片名称：干煸肥牛佛卡夏三明治，番茄烩牛肉滑蛋杂粮碗，韩式肥牛拌饭，三文鱼能量碗，香煎鲜虾花园碗，泰式罗望子辣炒牛肉意面\n"
+                "尺寸：高度180*宽度80\n"
+                "备注：不需要二维码"
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    params = run["prompt_plan"]["provider_parameters"]
+    assert params["size"] == "1024x2304"
+    assert run["prompt_plan"]["user_variables"]["aspect_lock"] == {
+        "mode": "manual",
+        "locked": True,
+        "source": "user_prompt.size",
+        "value": "1024x2304",
+        "aspect_ratio": "4:9",
+        "prompt_instruction": "Required output aspect ratio: 4:9.",
+    }
+    prompt = run["prompt_plan"]["prompt"]
+    assert "Required output aspect ratio: 4:9." in prompt
+    assert "Do not invent QR codes" in prompt
+    negative_prompt = run["prompt_plan"]["negative_prompt"]
+    assert "empty QR placeholder" in negative_prompt
+    output = run["generation_jobs"][0]["outputs"][0]
+    with Image.open(Path(output["metadata"]["storage_path"])) as generated_image:
+        assert generated_image.size == (1024, 2304)
 
 
 def test_template_content_correspondence_keeps_full_anchor_skeleton_primary() -> None:

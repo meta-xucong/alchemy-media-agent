@@ -1520,7 +1520,7 @@ def _build_checkpoint_stage_prompt(
             f"Hard visible output cap: total JSON <= {output_limits['total_json_chars']} characters; obey each field cap in output_limits. "
             "Follow visual_grammar_contract when present: grammar controls composition/hierarchy/mood/layout; user controls semantic content. "
             "If visual_grammar_contract.mode=uploaded_frame_visual_grammar, the uploaded reference controls the layout/composition frame and retrieved cases only polish compatible style. "
-            "If visual_grammar_contract.info.active, keep key poster/menu info; use larger canvas/modules instead of dropping offers, prices, rules, QR, CTA, or item imagery. "
+            "If visual_grammar_contract.info.active, keep poster/menu facts; use larger canvas/modules instead of dropping offers, prices, rules, requested CTA/QR, or items. "
             "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
             "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
             "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers. "
@@ -1560,7 +1560,7 @@ def _build_checkpoint_stage_prompt(
             "do not re-read or re-analyze the full source material. Emit one provider-ready JSON package only. "
             "First char {, last char }. No analysis/prose/markdown. "
             f"Total JSON <= {output_limits['total_json_chars']} chars; final_prompt <= {output_limits['final_prompt_chars']} chars. "
-            "Preserve template frame, information integrity, QR/CTA placement, and provider count from checkpoints/fallback."
+            "Preserve template frame, information integrity, requested CTA/contact placement, explicit/source QR placement only when QR intent exists, and provider count from checkpoints/fallback."
         )
     if "ultra_micro" in stage_name and not uploaded_assets and not template_case_id:
         payload.pop("template_lock_contract", None)
@@ -2558,7 +2558,7 @@ def _build_workspace(
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
                 "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
                 "- asset_binding_policy.json 中的 fusion_mode、placement_intent、target_surface 和 review_expectations 是硬素材意图约束；尤其是 Logo/主体/人脸/背景，不得被你改写成泛泛风格参考。",
-                "- 如果上传图是成品海报、菜单、周卡、信息表、截图，或 fusion_mode=composite_content_source，只提取语义内容和硬引用；不得继承其整体网格、背景和版式。",
+                "- 如果上传图是成品海报、菜单、周卡、信息表、截图，或 fusion_mode=composite_content_source，只提取语义内容和硬引用；不得继承其整体网格、背景和版式；只有用户明确要求或源图确有二维码时才保留二维码/扫码位。",
                 "- 如果视觉语法需要大主图、主视觉场景、信息带或留白区，而上传素材没有对应图片，你必须自动生成符合用户主题的虚拟内容补齐。",
                 "- 如果 Logo 的 fusion_mode 是 logo_product_surface，必须把上传 Logo 作为真实参考图融入目标物体表面；不得输出为海报角标、页脚、水印、边框贴片或自行虚构的新 Logo。",
                 "- 如果上传图是主体、Logo、人脸或必须背景，请在 final_prompt 中把它称为 uploaded reference image，并要求 provider 使用图片输入；不要只把硬约束降级为文字描述。",
@@ -2649,9 +2649,9 @@ def _build_file_tool_prompt() -> str:
             "有手选原型时，不要改选其他案例作为主风格；只能在手选原型基础上融合用户主体和兼容的补充要求。",
             "有手选原型时，必须迁移原型的视觉语法：主体框架、构图重心、空间层级、背景密度、排版/注释处理、主视觉强度和设计语言；不要把海报/信息图/多卡片原型改写成普通单人肖像。",
             "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
-            "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、二维码或小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
+            "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、明确要求或源图确有的二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
-            "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度。",
+            "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度；不得为了通用 CTA 凭空添加二维码或扫码占位。",
             "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
             "若 Logo 的 fusion_mode=logo_product_surface，final_prompt 必须要求 uploaded reference image 中的 Logo 被自然印刷/刺绣/贴附到目标物体表面，并明确禁止被放成海报下方、角标、水印或独立贴片。",
             "无手选原型时，可以灵活适配上传图和召回案例，但必须保留一个主视觉语法锚点；硬素材约束仍需要通过 provider input images 保真。",

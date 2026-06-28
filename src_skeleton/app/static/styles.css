@@ -2268,17 +2268,16 @@ button.v2-template-preview {
 
 .v2-asset-panel {
   grid-column: 1 / -1;
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
   grid-template-areas:
-    "head"
-    "clear"
-    "preview"
-    "file"
-    "roles"
-    "controls"
-    "list"
-    "hint";
+    "head head"
+    "preview file"
+    "preview roles"
+    "preview controls"
+    "list list"
+    "hint hint";
   gap: 10px 14px;
   margin-top: 0;
   padding: 14px;
@@ -2295,14 +2294,37 @@ button.v2-template-preview {
   grid-area: head;
   align-self: center;
   min-width: 0;
-  justify-content: flex-start;
+}
+
+.v2-asset-head {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-asset-head-actions {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.v2-asset-panel button,
+.v2-asset-panel input,
+.v2-asset-panel label,
+.v2-asset-panel select,
+.v2-asset-panel textarea {
+  position: relative;
+  z-index: 1;
 }
 
 .v2-asset-preview {
   grid-area: preview;
   min-height: 0;
-  width: min(100%, 360px);
-  height: 220px;
+  width: 100%;
+  height: 100%;
+  min-height: 256px;
   aspect-ratio: auto;
 }
 
@@ -2310,12 +2332,12 @@ button.v2-template-preview {
   grid-area: file;
   align-self: start;
   width: 100%;
-  min-height: 48px;
+  min-height: 78px;
   display: grid;
-  align-items: stretch;
-  justify-items: stretch;
+  align-content: center;
+  justify-items: start;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 13px 14px;
   border-style: solid;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(250, 242, 226, 0.68)),
@@ -2323,7 +2345,7 @@ button.v2-template-preview {
 }
 
 .v2-file-drop .file-title {
-  width: 100%;
+  width: auto;
   min-width: 0;
   min-height: 34px;
   display: inline-flex;
@@ -2346,7 +2368,7 @@ button.v2-template-preview {
 
 .v2-asset-role-checks {
   grid-area: roles;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 64px), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
 }
@@ -2393,10 +2415,11 @@ button.v2-template-preview {
 }
 
 #v2ClearAssetBtn {
-  grid-area: clear;
+  flex: 0 0 auto;
   align-self: center;
-  justify-self: start;
+  justify-self: end;
   min-width: 112px;
+  white-space: nowrap;
 }
 
 #v2AssetLockHint {
@@ -3542,7 +3565,6 @@ button.v2-live-preview:focus-visible {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "head"
-      "clear"
       "preview"
       "file"
       "roles"
@@ -3562,7 +3584,6 @@ button.v2-live-preview:focus-visible {
   .v2-file-drop,
   .v2-asset-role-checks,
   .v2-asset-mini-grid,
-  #v2ClearAssetBtn,
   #v2AssetLockHint,
   .v2-asset-list {
     width: 100%;
@@ -3631,11 +3652,11 @@ button.v2-live-preview:focus-visible {
     grid-template-columns: 1fr;
     grid-template-areas:
       "head"
-      "clear"
       "preview"
       "file"
       "roles"
       "controls"
+      "list"
       "hint";
   }
 
@@ -3643,9 +3664,8 @@ button.v2-live-preview:focus-visible {
     height: 240px;
   }
 
-  #v2ClearAssetBtn,
   #v2AssetLockHint {
-    justify-self: stretch;
+    justify-self: start;
     text-align: left;
   }
 
@@ -4755,7 +4775,6 @@ input[type="range"] {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "head"
-      "clear"
       "preview"
       "file"
       "roles"
@@ -4771,7 +4790,6 @@ input[type="range"] {
   .v2-file-drop,
   .v2-asset-role-checks,
   .v2-asset-mini-grid,
-  #v2ClearAssetBtn,
   #v2AssetLockHint,
   .v2-asset-list {
     width: 100%;
@@ -6884,6 +6902,19 @@ button.favorite-picker-card {
 
   .advanced-role-checks {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.v2-asset-panel .v2-asset-role-checks {
+  grid-area: roles;
+  grid-column: roles;
+  grid-row: roles;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 760px) {
+  .v2-asset-panel .v2-asset-role-checks {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -346,17 +346,22 @@ async def _outputs_from_openai_response(response, plan, *, index: int, operation
 def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
     message = str(exc)
     retryable = _is_retryable_openai_error(exc)
+    detail_message = message[:1000]
+    if isinstance(exc, TimeoutError):
+        detail_message = f"OpenAI image request timed out after {settings.openai_image_timeout_seconds:g} seconds."
     detail = {
         "error_type": type(exc).__name__,
-        "message": message[:1000],
+        "message": detail_message,
         "operation": operation,
         "request_index": index,
         "retryable": retryable,
     }
+    if isinstance(exc, TimeoutError):
+        detail["timeout_seconds"] = settings.openai_image_timeout_seconds
     if _is_rate_limit(exc):
         return V2ImageProviderRateLimitError("OpenAI image request is rate limited.", provider=provider, detail=detail)
     return V2ImageProviderRuntimeError(
-        "OpenAI image request failed.",
+        detail_message if isinstance(exc, TimeoutError) else "OpenAI image request failed.",
         provider=provider,
         detail=detail,
         retryable=retryable,
@@ -394,6 +399,8 @@ def _openai_transient_retry_delay(attempt: int, exc: Exception) -> float:
 
 
 def _is_retryable_openai_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
     status_code = getattr(exc, "status_code", None)
     if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
         return True

@@ -25,7 +25,7 @@ REPLACEABLE_SEMANTIC_ELEMENTS = [
     "product_or_food_content",
     "brand_or_campaign_copy",
     "logo",
-    "qr_code",
+    "requested_or_source_qr_code",
     "minor_props",
     "business_offer",
 ]
@@ -65,9 +65,21 @@ CRITICAL_INFORMATION_FIELDS = [
     "item names and descriptive copy",
     "prices, counts, dates, calories, and numeric claims",
     "packages, discounts, purchase rules, delivery rules, gifts, and add-on policies",
-    "QR code, CTA, contact, and scan instructions",
+    "requested CTA, contact, and purchase instructions",
     "legal or operational notes that affect purchase decisions",
 ]
+QR_CRITICAL_INFORMATION_FIELD = "source QR code or scan instructions explicitly requested or detected in uploaded assets"
+
+QR_INTENT_PATTERN = re.compile(
+    "(二维码|二維碼|qr\\s*code|qr-code|qrcode|qr码|qr碼|scan\\s*code|扫码|掃碼|小程序码|小程序碼)",
+    re.IGNORECASE,
+)
+QR_EXCLUSION_PATTERN = re.compile(
+    "(不要|不需要|无需|無需|禁止|去掉|移除|不要展示|不要出现|不出现|without|no|do\\s+not\\s+include|do\\s+not\\s+show)"
+    ".{0,24}"
+    "(二维码|二維碼|qr\\s*code|qr-code|qrcode|scan\\s*code|扫码|掃碼)",
+    re.IGNORECASE,
+)
 
 
 def build_visual_grammar_contract(
@@ -185,7 +197,7 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
         lead,
         strength,
         (
-            "User semantic content controls the actual subject, product, food, brand, copy, QR code, offer, and business meaning: "
+            "User semantic content controls the actual subject, product, food, brand, copy, offer, requested CTA/contact, and business meaning: "
             + _compact_text(_semantic_prompt_summary(user_prompt), 420)
             + "."
         ),
@@ -221,12 +233,29 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     information_integrity = contract.get("information_integrity") if isinstance(contract.get("information_integrity"), dict) else {}
     if information_integrity.get("active"):
         fields = ", ".join(str(item) for item in (information_integrity.get("critical_fields") or [])[:6])
+        qr_intent = bool(information_integrity.get("qr_intent"))
+        extracted_details = (
+            "extracted copy, food imagery, source QR, and offer facts"
+            if qr_intent
+            else "extracted copy, food imagery, and offer facts"
+        )
+        correspondence = (
+            "Food-to-copy, offer-to-product, and QR/CTA correspondence must be preserved as semantic pairings inside the template's existing modules; "
+            if qr_intent
+            else "Food-to-copy and offer-to-product correspondence must be preserved as semantic pairings inside the template's existing modules; "
+        )
+        qr_policy = (
+            "Preserve QR or scan-code content only from a real uploaded/source QR or an explicit user QR request; never invent a replacement QR. "
+            if qr_intent
+            else "Do not invent QR codes, scan-code modules, QR placeholders, empty scan cards, or decorative square code areas; this overrides any selected-template or reference cue that contains a QR-safe area, scan card, or code block. "
+        )
         parts.append(
             "CONTENT EXTRACTION LOCK: this task uses an uploaded poster/menu/flyer as source material. "
             f"Extract the user-requested content categories where present: {fields}. "
-            "Keep the selected visual grammar as the frame owner; condense, curate, and reposition extracted copy, food imagery, QR, or offer facts into the template's own information hierarchy. "
-            "Food-to-copy, offer-to-product, and QR/CTA correspondence must be preserved as semantic pairings inside the template's existing modules; "
-            "this pairing requirement must not stretch the canvas, add a new menu grid, change the selected template composition, or make the uploaded source frame dominant. "
+            f"Keep the selected visual grammar as the frame owner; condense, curate, and reposition {extracted_details} into the template's own information hierarchy. "
+            + correspondence
+            + qr_policy
+            + "this pairing requirement must not stretch the canvas, add a new menu grid, change the selected template composition, or make the uploaded source frame dominant. "
             "Do not preserve the uploaded source's full menu grid, weekly-card structure, footer policy block, background color field, or original information architecture merely because those facts were visible."
         )
     if aux_titles:
@@ -370,6 +399,7 @@ def _information_integrity_contract(
         text_parts.extend(str(item) for item in detected_text[:8])
     text = " ".join(text_parts).lower()
     hits = [marker for marker in INFO_DENSE_MARKERS if marker in text]
+    qr_intent = _qr_intent_detected(user_prompt=user_prompt, asset_context=asset_context)
     uploaded_frame_primary = _asset_frame_strategy(asset_context).get("mode") == "uploaded_frame_primary"
     composite_source = "composite_content_source" in fusion_modes
     explicit_retention = bool(
@@ -385,7 +415,9 @@ def _information_integrity_contract(
         "priority": "hard" if explicit_retention else "strong",
         "scope": "commercial_poster_information_integrity",
         "triggers": hits[:10],
-        "critical_fields": CRITICAL_INFORMATION_FIELDS,
+        "critical_fields": _critical_information_fields(qr_intent=qr_intent),
+        "qr_intent": qr_intent,
+        "qr_policy": "preserve_real_source_qr_only" if qr_intent else "do_not_invent_qr_or_scan_placeholder",
         "layout_policy": (
             "Preserve facts and commercial meaning inside the uploaded layout/composition frame; refresh only incompatible visual details."
             if uploaded_frame_primary
@@ -396,8 +428,13 @@ def _information_integrity_contract(
             "Prefer concise template-native content modules over copying the source poster's complete information architecture."
         ),
         "correspondence_policy": (
-            "Preserve requested food/copy/QR relationships as semantic pairings inside the selected template modules; "
-            "do not let correspondence or completeness requests change the locked frame."
+            "Preserve requested food/copy and offer/product relationships as semantic pairings inside the selected template modules; "
+            + (
+                "preserve QR relationships only when a real source QR or explicit QR request exists; "
+                if qr_intent
+                else "do not add QR/scan placeholders for generic CTA needs; "
+            )
+            + "do not let correspondence or completeness requests change the locked frame."
         ),
     }
 
@@ -416,7 +453,7 @@ def _critical_asset_rules(asset_context: dict[str, Any] | None) -> list[str]:
             rules.append(f"Uploaded logo must appear on {label} as a real scene-surface mark, never as a footer, corner badge, watermark, or sticker.")
         elif fusion == "composite_content_source":
             rules.append(
-                "Uploaded composite/menu/poster image supplies content evidence only; extract requested food/product, copy, QR, or offer facts and rebuild them inside the selected visual grammar without inheriting the source layout."
+                "Uploaded composite/menu/poster image supplies content evidence only; extract requested food/product, copy, offer facts, and other user-requested business details without inheriting the source layout."
             )
         elif item.get("provider_input_required") and item.get("role") in {"subject_reference", "face_reference", "background_reference"}:
             rules.append(f"Uploaded {item.get('role')} remains a hard reference for {label}, adapted inside the visual grammar.")
@@ -470,3 +507,48 @@ def _dedupe(items) -> list[str]:
         seen.add(key)
         unique.append(clean)
     return unique
+
+
+def _critical_information_fields(*, qr_intent: bool) -> list[str]:
+    fields = list(CRITICAL_INFORMATION_FIELDS)
+    if qr_intent:
+        fields.insert(4, QR_CRITICAL_INFORMATION_FIELD)
+    return fields
+
+
+def _qr_intent_detected(*, user_prompt: str, asset_context: dict[str, Any] | None) -> bool:
+    if _qr_explicitly_excluded(user_prompt):
+        return False
+    if _qr_text_requested(user_prompt):
+        return True
+    for asset in (asset_context or {}).get("uploaded_assets", []) or []:
+        if not isinstance(asset, dict):
+            continue
+        parts = [
+            asset.get("filename"),
+            asset.get("intended_use"),
+        ]
+        brief = asset.get("brief") if isinstance(asset.get("brief"), dict) else {}
+        parts.extend(
+            [
+                brief.get("visual_summary"),
+                brief.get("identity_requirements"),
+                brief.get("detected_text"),
+            ]
+        )
+        if _qr_text_requested(" ".join(str(item or "") for item in parts)):
+            return True
+    return False
+
+
+def _qr_explicitly_excluded(value: str) -> bool:
+    return bool(QR_EXCLUSION_PATTERN.search(str(value or "")))
+
+
+def _qr_text_requested(value: Any) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    if _qr_explicitly_excluded(text):
+        return False
+    return bool(QR_INTENT_PATTERN.search(text))

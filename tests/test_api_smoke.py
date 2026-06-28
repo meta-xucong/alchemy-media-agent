@@ -1870,7 +1870,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260623-asset-append-v1" in index.text
+    assert "20260627-v2-upload-polish" in index.text
     assert index.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
