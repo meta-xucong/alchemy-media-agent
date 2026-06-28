@@ -45,8 +45,13 @@ class CentralCreativeBrain:
         self.generation_router = GenerationRouter()
         self.vertical_registry = vertical_registry or VerticalAgentRegistry()
 
-    def run_creative_planning(self, user_input: str, optional_brand_id: str | None = None) -> PlanningResult:
-        context = self._create_base_context(user_input, optional_brand_id)
+    def run_creative_planning(
+        self,
+        user_input: str,
+        optional_brand_id: str | None = None,
+        runtime_metadata: dict | None = None,
+    ) -> PlanningResult:
+        context = self._create_base_context(user_input, optional_brand_id, runtime_metadata=runtime_metadata)
         job = context.creative_job
         brand_profile = context.brand_profile
         selected_pack = context.selected_vertical_pack
@@ -134,12 +139,15 @@ class CentralCreativeBrain:
         optional_brand_id: str | None = None,
         mock_profile: str = "balanced",
         apply_memory_update: bool = False,
+        provider_strategy: ProviderStrategy = ProviderStrategy.MOCK_GENERATION,
+        runtime_metadata: dict | None = None,
     ) -> PlanningResult:
-        context = self._create_base_context(user_input, optional_brand_id)
+        context = self._create_base_context(user_input, optional_brand_id, runtime_metadata=runtime_metadata)
         job = context.creative_job
         brand_profile = context.brand_profile
         selected_pack = context.selected_vertical_pack
         pack_warnings: list[str] = []
+        use_mock_generation = provider_strategy == ProviderStrategy.MOCK_GENERATION
 
         for asset in context.series_plan.assets:
             layout_plan = self.layout_agent.create_layout_plan(
@@ -161,11 +169,20 @@ class CentralCreativeBrain:
                 asset,
                 brand_profile,
                 prompt,
-                provider_strategy=ProviderStrategy.MOCK_GENERATION,
+                provider_strategy=provider_strategy,
                 layout_plan=layout_plan,
                 creative_plan=context.creative_plan,
             ).output
-            generation_plan.metadata = {**generation_plan.metadata, "mock_profile": mock_profile}
+            generation_plan.metadata = {
+                **generation_plan.metadata,
+                "mock_profile": mock_profile,
+                "job_id": job.job_id,
+                "quality_mode": context.metadata.get("quality_mode", "standard"),
+                "uploaded_assets": context.metadata.get("uploaded_assets", []),
+            }
+            if not use_mock_generation:
+                generation_plan.candidate_count = 1
+                generation_plan.max_refine_rounds = 0
             context.layout_plans.append(layout_plan)
             context.prompt_compilations.append(prompt)
             context.condition_plans.append(condition_plan)
@@ -205,7 +222,7 @@ class CentralCreativeBrain:
             memory_update.new_reference_assets = [
                 ReferenceAsset(
                     asset_id=f"ref_{candidate.candidate_id}",
-                    asset_type="accepted_mock_candidate",
+                    asset_type="accepted_mock_candidate" if candidate.is_mock else "accepted_generated_candidate",
                     source="v3_generation_loop",
                     purpose="style continuation reference proposal",
                     style_tags=list(dict.fromkeys(context.commercial_brief.visual_tone + context.creative_plan.color_strategy)),
@@ -273,13 +290,39 @@ class CentralCreativeBrain:
             },
         )
 
-    def _create_base_context(self, user_input: str, optional_brand_id: str | None) -> PipelineContext:
+    def _create_base_context(
+        self,
+        user_input: str,
+        optional_brand_id: str | None,
+        runtime_metadata: dict | None = None,
+    ) -> PipelineContext:
         context = PipelineContext(
             user_input=user_input,
             optional_brand_id=optional_brand_id,
-            metadata={"source_agent": "CentralCreativeBrain", "rules_version": RULE_VERSION},
+            metadata={
+                "source_agent": "CentralCreativeBrain",
+                "rules_version": RULE_VERSION,
+                **(runtime_metadata or {}),
+            },
         )
         job = self.intent_agent.create_job(user_input, optional_brand_id=optional_brand_id).output
+        job.metadata = {
+            **job.metadata,
+            **{
+                key: value
+                for key, value in context.metadata.items()
+                if key
+                in {
+                    "scenario_id",
+                    "scenario_mode_id",
+                    "scenario_preset_id",
+                    "scenario_parameters",
+                    "platform_profile",
+                    "product_profile",
+                    "uploaded_asset_ids",
+                }
+            },
+        }
         brief = self.commercial_strategy_agent.create_brief(job).output
         selected_pack = self.vertical_registry.select_pack(job, brief)
         job.metadata["selected_vertical_pack"] = selected_pack.name
@@ -322,6 +365,10 @@ class CentralCreativeBrain:
                 metadata={
                     "refine_round": refine_round,
                     "mock_profile": generation_plan.metadata.get("mock_profile", "balanced"),
+                    "job_id": context.creative_job.job_id if context.creative_job else generation_plan.metadata.get("job_id"),
+                    "quality_mode": generation_plan.metadata.get("quality_mode", "standard"),
+                    "uploaded_assets": generation_plan.metadata.get("uploaded_assets", []),
+                    "provider_strategy": generation_plan.provider_strategy.value,
                 },
             )
             response = self.generation_router.generate(request)

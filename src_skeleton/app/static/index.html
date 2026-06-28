@@ -51,6 +51,7 @@
               </button>
             </div>
           </div>
+          <button class="tab" data-tab="v3" type="button" role="tab" aria-selected="false">生图 V3.0 特调 Agent</button>
           <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频（DEMO）</button>
         </nav>
 
@@ -1293,6 +1294,243 @@
               </div>
               <div id="labHistoryGrid" class="lab-history-grid empty-v2-list" aria-live="polite"></div>
             </section>
+          </div>
+        </section>
+
+        <section id="v3Tab" class="module-panel" data-panel="v3" role="tabpanel" hidden>
+          <div class="module-stack v3-workbench" data-v3-active-scenario="general_creative">
+            <div id="v3HomeView" class="v3-home-view">
+              <section class="panel flow-section v3-hero-panel v3-home-panel">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">Alchemy Creative Agent 3.0</p>
+                    <h3>选择你要做的图</h3>
+                    <p class="section-subcopy">先选一个特调 Agent。进入后再上传图片、写一句需求，V3 会自己完成理解、规划和套图整理。</p>
+                  </div>
+                  <div class="v3-hero-actions">
+                    <span id="v3ShellState" class="state-pill">V3 独立运行</span>
+                    <a class="button compact ghost" href="/creative-agent-v3" data-v3-route-link>打开 V3 首页</a>
+                  </div>
+                </div>
+
+                <div id="v3ScenarioGrid" class="v3-scenario-grid" aria-label="V3 Agent 选择">
+                  <button id="v3ScenarioGeneral" class="v3-scenario-card active" data-v3-scenario="general_creative" type="button" aria-pressed="true">
+                    <span>通用创意</span>
+                    <strong>传图 + 一句话出商业图</strong>
+                    <small>海报、封面、活动图、品牌视觉、产品感主图都可以从这里开始。</small>
+                  </button>
+                  <button class="v3-scenario-card" data-v3-scenario="ecommerce" type="button" aria-pressed="false">
+                    <span>电商特调</span>
+                    <strong>上传商品图，一键生成套图</strong>
+                    <small>适合主图、卖点图、场景图、信任背书图和导出清单。</small>
+                  </button>
+                  <button class="v3-scenario-card locked" data-v3-scenario="new_media" data-v3-placeholder="true" type="button" aria-pressed="false" aria-disabled="true" disabled>
+                    <span>新媒体投放</span>
+                    <strong>封面与素材矩阵</strong>
+                    <small>面向账号内容、广告钩子和素材批量化，后续开放。</small>
+                  </button>
+                  <button class="v3-scenario-card locked" data-v3-scenario="private_domain" data-v3-placeholder="true" type="button" aria-pressed="false" aria-disabled="true" disabled>
+                    <span>私域运营</span>
+                    <strong>社群转化图片</strong>
+                    <small>面向朋友圈、社群活动和转化物料，后续开放。</small>
+                  </button>
+                  <button class="v3-scenario-card locked" data-v3-scenario="brand_ip" data-v3-placeholder="true" aria-pressed="false" aria-disabled="true" type="button" disabled>
+                    <span>品牌 IP</span>
+                    <strong>长期视觉资产</strong>
+                    <small>面向品牌角色、系列记忆和风格延续，后续开放。</small>
+                  </button>
+                </div>
+              </section>
+
+              <section class="panel flow-section v3-history-panel">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">V3 History</p>
+                    <h3>最近生成</h3>
+                    <p class="section-subcopy">这里只显示 V3 自己创建的任务。点开可以继续查看规划、结果和导出信息。</p>
+                  </div>
+                  <div class="v3-hero-actions">
+                    <span id="v3HistoryCount" class="state-pill">0</span>
+                    <button id="v3RefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
+                  </div>
+                </div>
+                <div id="v3HistoryList" class="v3-history-list empty-v3-list" aria-live="polite">还没有 V3 生成记录</div>
+              </section>
+            </div>
+
+            <div id="v3WorkspaceView" class="v3-workspace-view" hidden>
+              <section class="panel flow-section v3-workspace-header">
+                <div class="panel-head section-title">
+                  <div>
+                    <p id="v3ComposerEyebrow" class="eyebrow">01 / 通用创意</p>
+                    <h3 id="v3WorkspaceTitle">通用创意 Agent</h3>
+                    <p id="v3WorkspaceIntro" class="section-subcopy">写一句需求，可选上传参考图，V3 会自动组织成可执行的商业视觉方案。</p>
+                  </div>
+                  <div class="v3-hero-actions">
+                    <button id="v3BackHomeBtn" class="button compact ghost" type="button">返回 V3 首页</button>
+                    <span id="v3JobStatus" class="state-pill">待创建</span>
+                  </div>
+                </div>
+              </section>
+
+              <div class="v3-workspace-grid">
+                <div class="module-stack">
+                  <section class="panel flow-section v3-composer-panel">
+                    <div id="v3GeneralPresetRow" class="v3-preset-row v3-general-presets" aria-label="通用创意快速目标">
+                      <button class="v3-preset-card active" data-v3-preset="campaign_poster" data-v3-preset-scope="general_creative" type="button" aria-pressed="true">
+                        <span>活动海报</span>
+                        <small>适合首屏主视觉</small>
+                      </button>
+                      <button class="v3-preset-card" data-v3-preset="social_cover" data-v3-preset-scope="general_creative" type="button" aria-pressed="false">
+                        <span>社媒封面</span>
+                        <small>适合内容分发</small>
+                      </button>
+                      <button class="v3-preset-card" data-v3-preset="product_style_hero" data-v3-preset-scope="general_creative" type="button" aria-pressed="false">
+                        <span>产品感主图</span>
+                        <small>不启用电商规则</small>
+                      </button>
+                    </div>
+
+                    <div id="v3EcommercePresetRow" class="v3-preset-row v3-ecommerce-presets" aria-label="电商特调快速目标" hidden>
+                      <button class="v3-preset-card" data-v3-preset="one_click_product_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                        <span>一键电商套图</span>
+                        <small>上传商品图，再写一句需求</small>
+                      </button>
+                      <button class="v3-preset-card" data-v3-preset="marketplace_listing_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                        <span>平台上架套图</span>
+                        <small>主图、卖点、场景、信任背书</small>
+                      </button>
+                      <button class="v3-preset-card" data-v3-preset="style_recreation_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                        <span>参考风格复用</span>
+                        <small>借鉴画面结构，不复制内容</small>
+                      </button>
+                    </div>
+
+                    <label class="field v3-prompt-field">
+                      <span id="v3PromptLabel">你想要什么图</span>
+                      <textarea id="v3PromptInput" rows="5" placeholder="例如：上传一张饮料产品图，生成一组清爽高级的夏季新品宣传图，适合小红书封面和店铺活动页"></textarea>
+                      <small id="v3PromptHint" class="v3-field-hint">写一句自然语言即可，不需要写复杂 Prompt。</small>
+                    </label>
+
+                    <div class="v3-input-grid">
+                      <label class="file-drop v3-file-drop" for="v3AssetInput">
+                        <input id="v3AssetInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                        <span id="v3AssetTitle" class="file-title">上传图片</span>
+                        <span id="v3AssetSummary" class="file-meta">可选，商品、风格、构图、Logo 都可以放这里</span>
+                      </label>
+                      <div id="v3AssetList" class="v3-asset-list empty-v3-list">还没有上传图片</div>
+                    </div>
+
+                    <div class="v3-brand-grid">
+                      <label class="field">
+                        <span id="v3BrandNameLabel">品牌或项目名</span>
+                        <input id="v3BrandNameInput" type="text" maxlength="80" placeholder="可选，例如：Mint Lab" />
+                      </label>
+                      <label class="field">
+                        <span id="v3BrandToneLabel">希望的感觉</span>
+                        <input id="v3BrandToneInput" type="text" maxlength="120" placeholder="可选，例如：清爽、克制、明亮、有品质感" />
+                      </label>
+                    </div>
+
+                    <div id="v3EcommerceFields" class="v3-ecommerce-fields" hidden>
+                      <div class="v3-brand-grid">
+                        <label class="field">
+                          <span>目标平台</span>
+                          <select id="v3EcommercePlatformInput">
+                            <option value="generic">通用电商</option>
+                            <option value="amazon_us">Amazon US</option>
+                            <option value="shopify">Shopify</option>
+                            <option value="tiktok_shop">TikTok Shop</option>
+                            <option value="taobao">淘宝 / 天猫</option>
+                            <option value="jd">京东</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>目标市场</span>
+                          <input id="v3EcommerceMarketInput" type="text" maxlength="40" placeholder="可选，例如：美国 / 日本 / 中国" />
+                        </label>
+                      </div>
+                      <details id="v3EcommerceAdvanced" class="v3-optional-details">
+                        <summary>
+                          <span>补充商品信息（可选）</span>
+                          <small>不填也能生成；填了会更稳</small>
+                        </summary>
+                        <label class="field">
+                          <span>产品参数 / 必须保留事实</span>
+                          <textarea id="v3EcommerceSpecsInput" rows="3" placeholder="可选：材质、颜色、尺寸、功能、套装数量、不能改错的事实"></textarea>
+                        </label>
+                        <div class="v3-brand-grid">
+                          <label class="field">
+                            <span>关键词 / 词根</span>
+                            <input id="v3EcommerceKeywordsInput" type="text" maxlength="220" placeholder="可选，用逗号分隔" />
+                          </label>
+                          <label class="field">
+                            <span>竞品 / 风格参考</span>
+                            <input id="v3EcommerceCompetitorInput" type="text" maxlength="220" placeholder="可选，描述你喜欢或想避开的画面规律" />
+                          </label>
+                        </div>
+                        <label class="field">
+                          <span>需要谨慎的宣传说法</span>
+                          <input id="v3EcommerceClaimsInput" type="text" maxlength="220" placeholder="可选，例如：100%、认证、专利、医疗效果等" />
+                        </label>
+                      </details>
+                    </div>
+
+                    <div id="v3NoticeBar" class="notice-bar" role="status" aria-live="polite">请选择 V3 首页里的 Agent，然后开始生成。</div>
+
+                    <div class="composer-actions v3-action-row">
+                      <button id="v3CreateJobBtn" class="button primary" type="button">生成创意图</button>
+                      <button id="v3GenerateBtn" class="button secondary" type="button" disabled>重新生成创意图</button>
+                      <button id="v3SelectBtn" class="button secondary" type="button" disabled>选中结果</button>
+                      <button id="v3ResetBtn" class="button ghost" type="button">清空</button>
+                    </div>
+                  </section>
+
+                  <section class="gallery-wrap flow-section v3-results-panel">
+                    <div class="panel-head section-title">
+                      <div>
+                        <p class="eyebrow">02 / 结果</p>
+                        <h3 id="v3ResultTitle">生成结果</h3>
+                      </div>
+                      <span id="v3JobId" class="state-pill" hidden>-</span>
+                    </div>
+                    <div id="v3ResultBoard" class="v3-result-board empty-v3-board" aria-live="polite">
+                      生成后的图片会显示在这里。
+                    </div>
+                  </section>
+                </div>
+
+                <aside class="module-stack v3-side-stack">
+                  <section class="panel flow-section v3-brain-panel">
+                    <div class="mini-head">
+                      <h4 id="v3SummaryTitle">这次 V3 帮你完成了</h4>
+                      <span id="v3SummaryPill" class="mini-pill">自动完成</span>
+                    </div>
+                    <p id="v3SummaryIntro" class="micro-copy">复杂判断由 V3 自动处理，这里只显示你能直接理解的成果。</p>
+                    <div id="v3CapabilityList" class="v3-capability-list">
+                      <span>理解你的目标</span>
+                      <span>识别上传图片用途</span>
+                      <span>整理画面风格</span>
+                      <span>保护文字与事实</span>
+                      <span>检查候选质量</span>
+                    </div>
+                    <div id="v3ClosureList" class="v3-closure-list" aria-live="polite" hidden></div>
+                    <div id="v3WarningList" class="v3-warning-list" aria-live="polite" hidden></div>
+                    <p id="v3SummaryFootnote" class="micro-copy">你只需要看图和选择结果。</p>
+                  </section>
+
+                  <section id="v3CommercePanel" class="panel flow-section v3-commerce-panel" hidden>
+                    <div class="mini-head">
+                      <h4>套图规划</h4>
+                      <span class="mini-pill">电商专属</span>
+                    </div>
+                    <p id="v3CommerceIntro">电商特调会把商品图拆成主图、卖点图、场景图、细节图和信任图。</p>
+                    <div id="v3EcommercePlanList" class="v3-commerce-plan-list" hidden></div>
+                    <div id="v3EcommerceExportList" class="v3-commerce-export-list" hidden></div>
+                  </section>
+                </aside>
+              </div>
+            </div>
           </div>
         </section>
 

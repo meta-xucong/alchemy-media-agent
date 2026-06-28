@@ -1,8 +1,14 @@
-# 19 V3 Product Integration Execution Prompt
+# 21 V3 Product Integration Execution Prompt
 
 This document is the execution bridge for implementing the user-facing Alchemy Creative Agent 3.x product inside `alchemy-media-agent`.
 
 It must be used after the V3 foundation, brand-memory, generation-loop, product-boundary, scenario-platform, and General Creative specifications have been read.
+
+For one-shot execution by Alchemy Dev Agent / Alchemy Dev Lab, also read:
+
+```text
+alchemy_creative_agent_3_0/docs/22_ONE_SHOT_DEV_AGENT_HANDOFF.md
+```
 
 This document does not replace any earlier specification. It tells an implementation agent how to combine them into one continuous delivery run without stopping after an intermediate phase.
 

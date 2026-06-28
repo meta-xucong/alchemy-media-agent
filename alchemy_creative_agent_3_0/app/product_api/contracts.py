@@ -7,46 +7,10 @@ from typing import Any
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from ..public_api_guardrails import reject_low_level_controls
+from ..scenario_packs import ScenarioSelection
 from ..schemas import BrandProfile, IndustryCategory, Platform
 from ..schemas.models import V3BaseModel
-
-
-LOW_LEVEL_GENERATION_CONTROL_KEYS = {
-    "seed",
-    "sampler",
-    "lora",
-    "lora_weight",
-    "controlnet",
-    "controlnet_type",
-    "control_net",
-    "control_net_type",
-    "adapter_scale",
-    "ip_adapter_scale",
-    "node_graph",
-}
-
-
-def _normalise_public_key(key: str) -> str:
-    return key.strip().lower().replace("-", "_").replace(" ", "_")
-
-
-def _low_level_control_paths(value: Any, prefix: str = "") -> list[str]:
-    if isinstance(value, dict):
-        paths: list[str] = []
-        for raw_key, raw_value in value.items():
-            key = str(raw_key)
-            path = f"{prefix}.{key}" if prefix else key
-            if _normalise_public_key(key) in LOW_LEVEL_GENERATION_CONTROL_KEYS:
-                paths.append(path)
-            paths.extend(_low_level_control_paths(raw_value, path))
-        return paths
-    if isinstance(value, list):
-        paths = []
-        for index, item in enumerate(value):
-            path = f"{prefix}[{index}]" if prefix else f"[{index}]"
-            paths.extend(_low_level_control_paths(item, path))
-        return paths
-    return []
 
 
 class ProductApiBase(V3BaseModel):
@@ -57,12 +21,7 @@ class ProductApiBase(V3BaseModel):
     @model_validator(mode="before")
     @classmethod
     def low_level_generation_controls_are_not_public_api(cls, data: Any) -> Any:
-        blocked_paths = _low_level_control_paths(data)
-        if blocked_paths:
-            raise ValueError(
-                "low-level generation controls are not part of the V3 product API: "
-                + ", ".join(sorted(blocked_paths))
-            )
+        reject_low_level_controls(data)
         return data
 
 
@@ -88,6 +47,9 @@ class CreateCreativeJobRequest(ProductApiBase):
     brand_id: str | None = None
     continue_style_from_brand_id: str | None = None
     campaign: CampaignRequest | None = None
+    scenario_selection: ScenarioSelection | None = None
+    uploaded_asset_ids: list[str] = Field(default_factory=list)
+    product_profile: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("user_input")
@@ -96,6 +58,14 @@ class CreateCreativeJobRequest(ProductApiBase):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("user_input is required")
+        return cleaned
+
+    @field_validator("uploaded_asset_ids")
+    @classmethod
+    def uploaded_asset_ids_must_not_be_empty_strings(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("uploaded_asset_ids must not contain empty strings")
         return cleaned
 
     @property
@@ -123,6 +93,67 @@ class SelectResultRequest(ProductApiBase):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class V3AssetUploadStatusValue(StrEnum):
+    UPLOAD_REQUESTED = "upload_requested"
+    STORED = "stored"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class V3AssetUploadCreateRequest(ProductApiBase):
+    filename: str
+    mime_type: str
+    size_bytes: int = Field(ge=0)
+    role: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("filename")
+    @classmethod
+    def filename_must_not_be_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("filename is required")
+        return cleaned
+
+    @field_validator("mime_type")
+    @classmethod
+    def mime_type_must_not_be_empty(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not cleaned:
+            raise ValueError("mime_type is required")
+        return cleaned
+
+
+class V3AssetContentUploadRequest(ProductApiBase):
+    content_base64: str
+    mime_type: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content_base64")
+    @classmethod
+    def content_base64_must_not_be_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("content_base64 is required")
+        return cleaned
+
+
+class V3UploadedAssetRecord(V3BaseModel):
+    asset_id: str
+    filename: str
+    mime_type: str
+    size_bytes: int = 0
+    role: str | None = None
+    status: V3AssetUploadStatusValue
+    upload_url: str | None = None
+    content_url: str | None = None
+    file_path: str | None = None
+    error: dict[str, Any] | None = None
+    created_at: str
+    updated_at: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class CreateBrandRequest(ProductApiBase):
     brand_id: str | None = None
     brand_name: str | None = None
@@ -145,6 +176,10 @@ class AssetSeriesItem(V3BaseModel):
     status: str
     selected_candidate_id: str | None = None
     preview_uri: str | None = None
+    output_id: str | None = None
+    download_url: str | None = None
+    preview_url: str | None = None
+    thumbnail_url: str | None = None
     editable_text_layer_count: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -154,6 +189,10 @@ class CandidateSummary(V3BaseModel):
     asset_id: str
     platform: Platform
     preview_uri: str | None = None
+    output_id: str | None = None
+    download_url: str | None = None
+    preview_url: str | None = None
+    thumbnail_url: str | None = None
     overall_score: float | None = None
     recommendation: str | None = None
     selected: bool = False
@@ -170,12 +209,66 @@ class CampaignSummary(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ScenarioSummary(V3BaseModel):
+    scenario_id: str
+    display_name: str
+    status: str
+    can_create_jobs: bool
+    selected_mode_id: str | None = None
+    selected_preset_id: str | None = None
+    route_hint: str | None = None
+    ui_card: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class StyleContinuationSummary(V3BaseModel):
     enabled: bool = False
     source_brand_id: str | None = None
     visual_tone: list[str] = Field(default_factory=list)
     color_palette: list[str] = Field(default_factory=list)
     reference_asset_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GeneralCreativeCapabilitySummary(V3BaseModel):
+    enabled: bool = False
+    scenario_id: str = "general_creative"
+    selected_mode_id: str | None = None
+    selected_preset_id: str | None = None
+    user_controls: list[str] = Field(default_factory=list)
+    reference_understanding: list[str] = Field(default_factory=list)
+    reference_bindings: list[str] = Field(default_factory=list)
+    visual_grammar: list[str] = Field(default_factory=list)
+    information_integrity: list[str] = Field(default_factory=list)
+    review_hints: list[str] = Field(default_factory=list)
+    history_continuation: list[str] = Field(default_factory=list)
+    closure_checks: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EcommerceCapabilitySummary(V3BaseModel):
+    enabled: bool = False
+    scenario_id: str = "ecommerce"
+    selected_mode_id: str | None = None
+    selected_preset_id: str | None = None
+    platform: str = "generic"
+    market: str = "global"
+    product_truth: dict[str, Any] = Field(default_factory=dict)
+    target_audience: list[str] = Field(default_factory=list)
+    buying_motivations: list[str] = Field(default_factory=list)
+    pain_points: list[str] = Field(default_factory=list)
+    trust_drivers: list[str] = Field(default_factory=list)
+    selling_points: list[str] = Field(default_factory=list)
+    keyword_intent_map: list[dict[str, str]] = Field(default_factory=list)
+    competitor_patterns: list[str] = Field(default_factory=list)
+    visual_strategy: list[str] = Field(default_factory=list)
+    image_recipes: list[dict[str, Any]] = Field(default_factory=list)
+    critic_checks: list[dict[str, Any]] = Field(default_factory=list)
+    export_package: dict[str, Any] = Field(default_factory=dict)
+    closure_checks: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -197,14 +290,42 @@ class ProductJobStatus(V3BaseModel):
     planning_result_id: str | None = None
     generation_result_id: str | None = None
     asset_pack_id: str | None = None
+    scenario: ScenarioSummary | None = None
     campaign: CampaignSummary | None = None
     asset_series: list[AssetSeriesItem] = Field(default_factory=list)
     candidates: list[CandidateSummary] = Field(default_factory=list)
     style_continuation: StyleContinuationSummary | None = None
+    general_creative: GeneralCreativeCapabilitySummary | None = None
+    ecommerce: EcommerceCapabilitySummary | None = None
     selected_result: SelectedResult | None = None
     balance_estimate: dict[str, Any] = Field(default_factory=dict)
     routes: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class V3JobHistoryItem(V3BaseModel):
+    job_id: str
+    status: ProductJobStatusValue
+    scenario_id: str | None = None
+    scenario_label: str | None = None
+    selected_preset_id: str | None = None
+    user_input: str
+    asset_count: int = 0
+    candidate_count: int = 0
+    selected_asset_count: int = 0
+    created_at: str
+    updated_at: str
+    route: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class V3JobHistoryResponse(V3BaseModel):
+    api_namespace: str
+    route: str
+    total: int
+    limit: int
+    items: list[V3JobHistoryItem] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -224,3 +345,23 @@ class SelectionResponse(V3BaseModel):
     job_status: ProductJobStatus
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class V3ExportPackageResponse(V3BaseModel):
+    job_id: str
+    status: ProductJobStatusValue
+    api_namespace: str
+    scenario_id: str | None = None
+    package_id: str | None = None
+    export_package: dict[str, Any] = Field(default_factory=dict)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    download_route: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class V3ExportDownloadPayload(V3BaseModel):
+    filename: str
+    content_type: str = "application/json"
+    content: str
+    response: V3ExportPackageResponse

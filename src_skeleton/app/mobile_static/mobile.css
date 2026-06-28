@@ -203,6 +203,13 @@ p {
   text-align: center;
 }
 
+.tab.v3-link-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .header-status {
   display: grid;
   grid-template-columns: 1fr 1fr;

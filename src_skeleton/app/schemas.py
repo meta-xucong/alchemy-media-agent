@@ -461,6 +461,7 @@ class RuntimeProviderSettingsRequest(BaseModel):
     anthropic_base_url: str | None = Field(default=None, max_length=512)
     gemini_image_api_key: str | None = Field(default=None, max_length=4096)
     gemini_image_base_url: str | None = Field(default=None, max_length=512)
+    gemini_image_generation_enabled: bool | None = None
     lab_llm_provider: Literal["openai", "kimi", "doubao"] | None = None
     lab_llm_model: str | None = Field(default=None, min_length=1, max_length=160)
     lab_openai_api_key: str | None = Field(default=None, max_length=4096)
@@ -493,6 +494,7 @@ class RuntimeProviderSettingsResponse(BaseModel):
     anthropic_api_key_configured: bool
     gemini_image_base_url: str | None = None
     gemini_image_api_key_configured: bool
+    gemini_image_generation_enabled: bool
     lab_llm_provider: str
     lab_llm_model: str
     lab_openai_base_url: str | None = None

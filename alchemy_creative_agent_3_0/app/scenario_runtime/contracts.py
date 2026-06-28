@@ -1,0 +1,68 @@
+"""Contracts for the V3 Scenario Runtime."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Any
+
+from pydantic import ConfigDict, Field, field_validator, model_validator
+
+from ..public_api_guardrails import reject_low_level_controls
+from ..scenario_packs import ScenarioPackResolution, ScenarioSelection
+from ..shared_capabilities import CapabilityRunResult, UploadedAssetInfo
+from ..schemas import PlanningResult
+from ..schemas.models import V3BaseModel
+
+
+class ScenarioRuntimeStatus(StrEnum):
+    PLANNED = "planned"
+    GENERATED = "generated"
+    BLOCKED = "blocked"
+
+
+class ScenarioRuntimeRequest(V3BaseModel):
+    """Product-level request consumed by ScenarioRuntime."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    user_input: str
+    optional_brand_id: str | None = None
+    scenario_selection: ScenarioSelection | None = None
+    uploaded_asset_ids: list[str] = Field(default_factory=list)
+    uploaded_assets: list[UploadedAssetInfo] = Field(default_factory=list)
+    product_profile: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def runtime_request_is_product_level(cls, data: Any) -> Any:
+        reject_low_level_controls(data)
+        return data
+
+    @field_validator("user_input")
+    @classmethod
+    def user_input_must_not_be_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("user_input is required")
+        return cleaned
+
+    @field_validator("uploaded_asset_ids")
+    @classmethod
+    def uploaded_asset_ids_must_not_be_empty_strings(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("uploaded_asset_ids must not contain empty strings")
+        return cleaned
+
+
+class ScenarioRuntimeResult(V3BaseModel):
+    """ScenarioRuntime output before product API response shaping."""
+
+    status: ScenarioRuntimeStatus
+    scenario_resolution: ScenarioPackResolution
+    capability_run: CapabilityRunResult | None = None
+    planning_result: PlanningResult | None = None
+    generation_result: PlanningResult | None = None
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)

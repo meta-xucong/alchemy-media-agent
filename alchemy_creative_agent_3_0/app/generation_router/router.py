@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from .providers import GenerationProvider, GenerationRequest, GenerationResponse, MockGenerationProvider, PlanningOnlyGenerationProvider
+from .providers import (
+    GenerationProvider,
+    GenerationRequest,
+    GenerationResponse,
+    MockGenerationProvider,
+    PlanningOnlyGenerationProvider,
+    ProductionImageGenerationProvider,
+)
 from ..schemas import ProviderStrategy
 
 
@@ -12,6 +19,8 @@ class GenerationRouter:
         self.providers: dict[ProviderStrategy, GenerationProvider] = {
             ProviderStrategy.PLANNING_ONLY: PlanningOnlyGenerationProvider(),
             ProviderStrategy.MOCK_GENERATION: MockGenerationProvider(),
+            ProviderStrategy.DEFAULT_IMAGE_PROVIDER: ProductionImageGenerationProvider(),
+            ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER: ProductionImageGenerationProvider(),
         }
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:

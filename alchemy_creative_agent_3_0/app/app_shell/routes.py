@@ -4,6 +4,8 @@ API_NAMESPACE = "/api/v3/creative-agent"
 PRODUCT_API_NAMESPACE = "/v3"
 
 ROUTE_CONTRACTS = {
+    "scenario_hub": f"{API_NAMESPACE}/scenarios",
+    "history": f"{API_NAMESPACE}/history",
     "create_job": f"{API_NAMESPACE}/jobs",
     "get_job": f"{API_NAMESPACE}/jobs/{{job_id}}",
     "generate": f"{API_NAMESPACE}/jobs/{{job_id}}/generate",

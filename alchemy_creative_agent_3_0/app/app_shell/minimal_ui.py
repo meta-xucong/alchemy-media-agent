@@ -7,6 +7,7 @@ from typing import Any
 
 from .navigation import get_navigation_entry
 from .routes import API_NAMESPACE, get_route_contracts
+from .scenario_hub import get_scenario_hub_contract
 
 
 def get_minimal_ui_contract() -> dict[str, Any]:
@@ -16,6 +17,7 @@ def get_minimal_ui_contract() -> dict[str, Any]:
         "app_root_id": "alchemy-creative-agent-v3",
         "entry_route": nav["route"],
         "api_namespace": API_NAMESPACE,
+        "scenario_hub": get_scenario_hub_contract(),
         "default_flow": [
             "input_request",
             "show_asset_series_status",
@@ -24,6 +26,7 @@ def get_minimal_ui_contract() -> dict[str, Any]:
             "continue_style_from_brand",
         ],
         "semantic_controls": [
+            {"element": "select", "name": "scenario_id", "label": "Scenario"},
             {"element": "form", "name": "Create creative job", "method": "POST", "action": routes["create_job"]},
             {"element": "textarea", "name": "user_input", "label": "Creative request"},
             {"element": "input", "name": "brand_id", "label": "Brand ID"},
@@ -47,6 +50,18 @@ def render_minimal_job_view(status: dict[str, Any] | None = None) -> str:
     """Render deterministic semantic HTML for browser probes and future adapters."""
 
     status = status or {}
+    scenario_hub = get_scenario_hub_contract()
+    scenario = status.get("scenario") or {}
+    selected_scenario_id = str(scenario.get("scenario_id") or scenario_hub["default_scenario_id"])
+    scenario_options = "\n".join(
+        (
+            f'<option value="{escape(str(card["scenario_id"]))}"'
+            f'{" selected" if str(card["scenario_id"]) == selected_scenario_id else ""}'
+            f' data-status="{escape(str(card["status"]))}">'
+            f'{escape(str(card["display_name"]))}</option>'
+        )
+        for card in scenario_hub["scenario_cards"]
+    )
     job_status = escape(str(status.get("status", "ready")))
     job_id = escape(str(status.get("job_id", "")))
     balance = status.get("balance_estimate", {})
@@ -78,6 +93,8 @@ def render_minimal_job_view(status: dict[str, Any] | None = None) -> str:
 
     return f"""<main id="alchemy-creative-agent-v3" data-api-namespace="{API_NAMESPACE}">
   <form aria-label="Create creative job" method="post" action="{get_route_contracts()["create_job"]}">
+    <label for="v3-scenario-id">Scenario</label>
+    <select id="v3-scenario-id" name="scenario_id">{scenario_options}</select>
     <label for="v3-user-input">Creative request</label>
     <textarea id="v3-user-input" name="user_input" required></textarea>
     <label for="v3-brand-id">Brand ID</label>

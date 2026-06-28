@@ -19,6 +19,7 @@ const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
   lab: "探索各种创意玩法",
+  v3: "场景特调、共享能力与中枢大脑协同，把简单需求变成可用的商业套图。",
   video: "coming soon",
   account: "账户资金、生成历史与消耗记录集中查看。",
 };
@@ -56,6 +57,8 @@ const localPortalHomeUrl = "http://127.0.0.1:18080/";
 const productionPortalHomeUrl = "https://aiself.vip/";
 const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
 const v2MediaDisplayBase = window.ALCHEMY_V2_MEDIA_BASE || (isLocalAlchemyHost() ? "http://127.0.0.1:8020/api/v2" : v2ApiBase);
+const v3ApiBase = window.ALCHEMY_V3_API_BASE || `${window.location.origin}/api/v3/creative-agent`;
+const v3HistoryStorageKey = "alchemy_v3_job_history_v1";
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
@@ -279,6 +282,27 @@ const labState = {
   navOpen: false,
 };
 
+const v3State = {
+  loaded: false,
+  loading: false,
+  view: "home",
+  scenarios: [],
+  selectedScenario: "general_creative",
+  selectedPreset: "campaign_poster",
+  files: [],
+  uploadedAssets: [],
+  currentJob: null,
+  selectedResult: null,
+  history: [],
+  historyLoaded: false,
+  historyLoading: false,
+  uploadFingerprints: {},
+  presetByScenario: {
+    general_creative: "campaign_poster",
+    ecommerce: "one_click_product_set",
+  },
+};
+
 const veyraState = {
   account: null,
   history: [],
@@ -444,6 +468,58 @@ const els = {
   labHistoryCount: document.querySelector("#labHistoryCount"),
   labRefreshHistoryBtn: document.querySelector("#labRefreshHistoryBtn"),
   labHistoryGrid: document.querySelector("#labHistoryGrid"),
+  v3HomeView: document.querySelector("#v3HomeView"),
+  v3WorkspaceView: document.querySelector("#v3WorkspaceView"),
+  v3ScenarioGrid: document.querySelector("#v3ScenarioGrid"),
+  v3ShellState: document.querySelector("#v3ShellState"),
+  v3HistoryCount: document.querySelector("#v3HistoryCount"),
+  v3RefreshHistoryBtn: document.querySelector("#v3RefreshHistoryBtn"),
+  v3HistoryList: document.querySelector("#v3HistoryList"),
+  v3BackHomeBtn: document.querySelector("#v3BackHomeBtn"),
+  v3WorkspaceTitle: document.querySelector("#v3WorkspaceTitle"),
+  v3WorkspaceIntro: document.querySelector("#v3WorkspaceIntro"),
+  v3ComposerEyebrow: document.querySelector("#v3ComposerEyebrow"),
+  v3GeneralPresetRow: document.querySelector("#v3GeneralPresetRow"),
+  v3EcommercePresetRow: document.querySelector("#v3EcommercePresetRow"),
+  v3PromptLabel: document.querySelector("#v3PromptLabel"),
+  v3PromptHint: document.querySelector("#v3PromptHint"),
+  v3PromptInput: document.querySelector("#v3PromptInput"),
+  v3AssetInput: document.querySelector("#v3AssetInput"),
+  v3AssetTitle: document.querySelector("#v3AssetTitle"),
+  v3AssetSummary: document.querySelector("#v3AssetSummary"),
+  v3AssetList: document.querySelector("#v3AssetList"),
+  v3BrandNameLabel: document.querySelector("#v3BrandNameLabel"),
+  v3BrandNameInput: document.querySelector("#v3BrandNameInput"),
+  v3BrandToneLabel: document.querySelector("#v3BrandToneLabel"),
+  v3BrandToneInput: document.querySelector("#v3BrandToneInput"),
+  v3EcommerceFields: document.querySelector("#v3EcommerceFields"),
+  v3EcommerceAdvanced: document.querySelector("#v3EcommerceAdvanced"),
+  v3EcommercePlatformInput: document.querySelector("#v3EcommercePlatformInput"),
+  v3EcommerceMarketInput: document.querySelector("#v3EcommerceMarketInput"),
+  v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
+  v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
+  v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
+  v3EcommerceClaimsInput: document.querySelector("#v3EcommerceClaimsInput"),
+  v3EcommercePlanList: document.querySelector("#v3EcommercePlanList"),
+  v3EcommerceExportList: document.querySelector("#v3EcommerceExportList"),
+  v3NoticeBar: document.querySelector("#v3NoticeBar"),
+  v3CreateJobBtn: document.querySelector("#v3CreateJobBtn"),
+  v3GenerateBtn: document.querySelector("#v3GenerateBtn"),
+  v3SelectBtn: document.querySelector("#v3SelectBtn"),
+  v3ResetBtn: document.querySelector("#v3ResetBtn"),
+  v3JobStatus: document.querySelector("#v3JobStatus"),
+  v3JobId: document.querySelector("#v3JobId"),
+  v3ResultTitle: document.querySelector("#v3ResultTitle"),
+  v3ResultBoard: document.querySelector("#v3ResultBoard"),
+  v3SummaryTitle: document.querySelector("#v3SummaryTitle"),
+  v3SummaryPill: document.querySelector("#v3SummaryPill"),
+  v3SummaryIntro: document.querySelector("#v3SummaryIntro"),
+  v3SummaryFootnote: document.querySelector("#v3SummaryFootnote"),
+  v3CapabilityList: document.querySelector("#v3CapabilityList"),
+  v3ClosureList: document.querySelector("#v3ClosureList"),
+  v3WarningList: document.querySelector("#v3WarningList"),
+  v3CommercePanel: document.querySelector("#v3CommercePanel"),
+  v3CommerceIntro: document.querySelector("#v3CommerceIntro"),
   veyraAccountState: document.querySelector("#veyraAccountState"),
   veyraAccountEmail: document.querySelector("#veyraAccountEmail"),
   veyraAccountBalance: document.querySelector("#veyraAccountBalance"),
@@ -900,6 +976,20 @@ function bindControls() {
   if (els.labHistoryGrid) els.labHistoryGrid.addEventListener("click", handleLabHistoryClick);
   if (els.labGenerateBtn) els.labGenerateBtn.addEventListener("click", runLabExploration);
   if (els.labResetBtn) els.labResetBtn.addEventListener("click", resetLabExplorer);
+  document.querySelectorAll("[data-v3-scenario]").forEach((button) => {
+    button.addEventListener("click", () => handleV3ScenarioClick(button));
+  });
+  document.querySelectorAll("[data-v3-preset]").forEach((button) => {
+    button.addEventListener("click", () => setV3Preset(button.dataset.v3Preset || "campaign_poster"));
+  });
+  if (els.v3BackHomeBtn) els.v3BackHomeBtn.addEventListener("click", () => openV3Home());
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.addEventListener("click", () => loadV3History({ silent: false, force: true }));
+  if (els.v3HistoryList) els.v3HistoryList.addEventListener("click", handleV3HistoryClick);
+  if (els.v3AssetInput) els.v3AssetInput.addEventListener("change", handleV3AssetFiles);
+  if (els.v3CreateJobBtn) els.v3CreateJobBtn.addEventListener("click", createV3Job);
+  if (els.v3GenerateBtn) els.v3GenerateBtn.addEventListener("click", generateV3Job);
+  if (els.v3SelectBtn) els.v3SelectBtn.addEventListener("click", selectV3Job);
+  if (els.v3ResetBtn) els.v3ResetBtn.addEventListener("click", resetV3Workspace);
   bindProviderAutosave();
   els.newSessionBtn.addEventListener("click", startNewSession);
   els.smokeBtn.addEventListener("click", openSampleGuide);
@@ -971,6 +1061,9 @@ function switchTab(tabName) {
     renderLabModuleState();
     renderHeroHistory(labState.history, { source: "lab" });
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
+  } else if (tabName === "v3") {
+    initV3Shell().catch((error) => updateV3Notice(`V3 场景加载失败：${friendlyError(error)}`, "warning"));
+    renderHeroHistory([], { source: "v3" });
   } else if (tabName === "account") {
     renderHeroHistory(v2State.history, { source: "v2" });
     loadVeyraAccountPanel({ silent: true }).catch((error) => {
@@ -1213,13 +1306,30 @@ function normalizeModuleRouteToken(value) {
     .toLowerCase();
   if (["rare-style-explorer", "rare_style_explorer"].includes(token)) return "rare-style-explorer";
   if (["lab", "alchemy-lab", "alchemy_lab"].includes(token)) return "lab";
+  if (["v3", "3.0", "creative-agent-v3", "creative_agent_v3"].includes(token)) return "v3";
   if (["image", "v1", "v2", "video", "account"].includes(token)) return token === "v1" ? "image" : token;
   return "";
 }
 
 function initialModuleRoute() {
+  const pathToken = window.location.pathname.replace(/^\/+/, "").replace(/\/+$/, "").toLowerCase();
+  if (pathToken === "creative-agent-v3" || pathToken.startsWith("creative-agent-v3/")) return "v3";
   const params = new URLSearchParams(window.location.search);
   return normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+}
+
+function initialV3ScenarioFromPath() {
+  const pathToken = window.location.pathname.replace(/^\/+/, "").replace(/\/+$/, "").toLowerCase();
+  if (!pathToken.startsWith("creative-agent-v3/")) return "";
+  const scenarioToken = pathToken.split("/")[1] || "";
+  const scenarioMap = {
+    general: "general_creative",
+    ecommerce: "ecommerce",
+    "new-media": "new_media",
+    "private-domain": "private_domain",
+    "brand-ip": "brand_ip",
+  };
+  return scenarioMap[scenarioToken] || "";
 }
 
 function panelExists(tabName) {
@@ -1238,9 +1348,1096 @@ function restoreInitialModuleRoute() {
     setLabNavOpen(false);
     return;
   }
+  if (route === "v3") {
+    switchTab("v3");
+    const scenarioFromPath = initialV3ScenarioFromPath();
+    if (scenarioFromPath) {
+      openV3ScenarioWorkspace(scenarioFromPath, { fromRoute: true });
+    } else {
+      openV3Home({ silent: true });
+    }
+    return;
+  }
   if (route && panelExists(route)) {
     switchTab(route);
   }
+}
+
+async function initV3Shell({ force = false } = {}) {
+  if (v3State.loading || (v3State.loaded && !force)) {
+    renderV3ViewState();
+    renderV3ScenarioState();
+    renderV3History();
+    renderV3Job(v3State.currentJob);
+    return;
+  }
+  v3State.loading = true;
+  renderV3ViewState();
+  updateV3Notice("正在读取 V3 Agent。", "info");
+  try {
+    const hub = await request(`${v3ApiBase}/scenarios`);
+    v3State.scenarios = Array.isArray(hub.scenario_cards) ? hub.scenario_cards : [];
+    v3State.loaded = true;
+    await loadV3History({ silent: true, force: true });
+    renderV3ViewState();
+    renderV3ScenarioState();
+    renderV3Job(v3State.currentJob);
+    updateV3Notice("V3 已就绪。", "success");
+  } finally {
+    v3State.loading = false;
+    renderV3ScenarioState();
+  }
+}
+
+function handleV3ScenarioClick(button) {
+  const scenarioId = button.dataset.v3Scenario || "general_creative";
+  if (button.dataset.v3Placeholder === "true" || !v3ScenarioCanCreate(scenarioId)) {
+    setV3Scenario(scenarioId);
+    openV3Home({ silent: true });
+    showGlobalToast(`${v3ScenarioLabel(scenarioId)} 还未开放，先从通用创意或电商特调开始。`, "warning");
+    return;
+  }
+  openV3ScenarioWorkspace(scenarioId);
+}
+
+function openV3Home({ silent = false } = {}) {
+  v3State.view = "home";
+  renderV3ViewState();
+  renderV3ScenarioState();
+  renderV3History();
+  if (!v3State.historyLoaded && !v3State.historyLoading) {
+    loadV3History({ silent: true }).catch((error) => {
+      if (!silent) showGlobalToast(`V3 历史加载失败：${friendlyError(error)}`, "warning");
+    });
+  }
+}
+
+function openV3ScenarioWorkspace(scenarioId = "general_creative", { fromRoute = false, fromHistory = false } = {}) {
+  const requested = scenarioId || "general_creative";
+  if (!v3ScenarioCanCreate(requested)) {
+    setV3Scenario(requested, { fromRoute });
+    openV3Home({ silent: true });
+    showGlobalToast(`${v3ScenarioLabel(requested)} 还未开放。`, "warning");
+    return;
+  }
+  v3State.view = "workspace";
+  setV3Scenario(requested, { fromRoute });
+  renderV3ViewState();
+  renderV3Job(v3State.currentJob);
+  if (!fromHistory) {
+    updateV3Notice(v3ScenarioNotice(requested), "info");
+  }
+}
+
+function renderV3ViewState() {
+  const isWorkspace = v3State.view === "workspace";
+  if (els.v3HomeView) els.v3HomeView.hidden = isWorkspace;
+  if (els.v3WorkspaceView) els.v3WorkspaceView.hidden = !isWorkspace;
+}
+
+function v3ScenarioCanCreate(scenarioId) {
+  if (["general_creative", "ecommerce"].includes(scenarioId)) return true;
+  return v3State.scenarios.some((item) => item.scenario_id === scenarioId && item.can_create_jobs);
+}
+
+function v3DefaultPresetForScenario(scenarioId) {
+  const defaults = {
+    general_creative: "campaign_poster",
+    ecommerce: "one_click_product_set",
+  };
+  return defaults[scenarioId] || "campaign_poster";
+}
+
+function v3ScenarioNotice(scenarioId) {
+  if (scenarioId === "ecommerce") {
+    return "电商特调已就绪：上传商品图，写一句需求，就能生成可用套图。";
+  }
+  return "通用创意已就绪：写一句需求，可选上传参考图，就能生成创意图。";
+}
+
+function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
+  const ecommerce = scenarioId === "ecommerce";
+  if (ecommerce) {
+    return {
+      eyebrow: "01 / 电商特调",
+      title: "电商特调 Agent",
+      intro: "适合商品主图、卖点图、详情页配图。上传商品图，写一句需求即可生成套图。",
+      promptLabel: "这套商品图想怎么做",
+      promptPlaceholder: "例如：基于这款饮品，生成清爽高端的电商主图和详情页套图，适合夏季新品上架",
+      promptHint: "先写一句简单需求；商品参数、关键词和参考风格都可以后面补。",
+      assetTitle: "上传商品图",
+      assetEmpty: "建议先上传商品图",
+      assetSummaryEmpty: "建议上传商品实拍图；也可以补充风格图、包装图或店铺视觉",
+      assetSummaryWithCount: (count) => `${count} 张商品/参考图已加入`,
+      brandNameLabel: "品牌或店铺名",
+      brandToneLabel: "店铺希望的感觉",
+      resultTitle: "电商套图",
+      emptyResult: "生成后的商品主图、卖点图和场景图会显示在这里。",
+      pendingResult: "套图正在准备，稍后会显示图片。",
+      createLabel: "生成电商套图",
+      generateLabel: "重新生成套图",
+      selectLabel: "选中套图",
+      busyLabel: "生成套图中...",
+      readyNotice: "当前是电商特调 Agent。",
+      planningNotice: "V3 正在理解商品和使用场景，并生成可用套图。",
+      generatedNotice: "电商套图已生成，可以查看和下载。",
+      summaryIntro: "V3 会把商品图拆成主图、卖点图、场景图和信任图。",
+      summaryFootnote: "重点看图片是否能直接上架或做详情页。",
+      summaryPill: "电商专属",
+    };
+  }
+  return {
+    eyebrow: "01 / 通用创意",
+    title: "通用创意 Agent",
+    intro: "适合海报、封面、活动图、品牌视觉。写一句需求，V3 会自动整理画面方向并出图。",
+    promptLabel: "你想要什么图",
+    promptPlaceholder: "例如：做一张适合小红书的新品宣传图，清爽、高级，有留白",
+    promptHint: "不用写复杂 Prompt，说清用途、风格和想保留的重点即可。",
+    assetTitle: "上传参考图",
+    assetEmpty: "还没有参考图",
+    assetSummaryEmpty: "可选，风格、构图、Logo、产品或参考画面都可以放这里",
+    assetSummaryWithCount: (count) => `${count} 张参考图已加入`,
+    brandNameLabel: "品牌或项目名",
+    brandToneLabel: "希望的感觉",
+    resultTitle: "创意图结果",
+    emptyResult: "生成后的创意图会显示在这里。",
+    pendingResult: "图片正在准备，稍后会显示结果。",
+    createLabel: "生成创意图",
+    generateLabel: "重新生成创意图",
+    selectLabel: "选中结果",
+    busyLabel: "生成创意图中...",
+    readyNotice: "当前是通用创意 Agent。",
+    planningNotice: "V3 正在理解需求并生成可用创意图。",
+    generatedNotice: "创意图已生成，可以查看和下载。",
+    summaryIntro: "V3 会把你的需求整理成清晰的画面方向。",
+    summaryFootnote: "重点看图片是否符合你想要的感觉。",
+    summaryPill: "自动完成",
+  };
+}
+
+function setV3Scenario(scenarioId, { fromRoute = false } = {}) {
+  const requested = scenarioId || "general_creative";
+  v3State.selectedScenario = requested;
+  v3State.selectedPreset = v3State.presetByScenario[requested] || v3DefaultPresetForScenario(requested);
+  renderV3ScenarioState();
+  if (requested === "general_creative") {
+    updateV3Notice(v3ScenarioWorkspaceCopy(requested).readyNotice, "info");
+    return;
+  }
+  if (requested === "ecommerce") {
+    updateV3Notice(v3ScenarioWorkspaceCopy(requested).readyNotice, "info");
+    return;
+  }
+  const label = v3ScenarioLabel(requested);
+  updateV3Notice(`${label} 还未开放；当前只展示入口，不会创建任务。`, fromRoute ? "warning" : "info");
+}
+
+function renderV3ScenarioState() {
+  const selected = v3State.selectedScenario || "general_creative";
+  const copy = v3ScenarioWorkspaceCopy(selected);
+  const root = document.querySelector(".v3-workbench");
+  if (root) root.dataset.v3ActiveScenario = selected;
+  document.querySelectorAll("[data-v3-scenario]").forEach((button) => {
+    const active = button.dataset.v3Scenario === selected;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const canCreate = v3ScenarioCanCreate(selected);
+  if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading;
+  if (els.v3GenerateBtn) els.v3GenerateBtn.disabled = !canCreate || !v3State.currentJob || v3State.currentJob.status === "blocked";
+  if (els.v3SelectBtn) els.v3SelectBtn.disabled = !canCreate || !v3State.currentJob || !Array.isArray(v3State.currentJob.candidates) || !v3State.currentJob.candidates.length;
+  if (els.v3ShellState) {
+    const activeCount = Math.max(2, v3State.scenarios.filter((item) => item.can_create_jobs).length || 0);
+    els.v3ShellState.textContent = `${activeCount} 个 Agent 可用`;
+  }
+  if (els.v3ComposerEyebrow) els.v3ComposerEyebrow.textContent = copy.eyebrow;
+  if (els.v3WorkspaceTitle) els.v3WorkspaceTitle.textContent = copy.title;
+  if (els.v3WorkspaceIntro) els.v3WorkspaceIntro.textContent = copy.intro;
+  if (els.v3PromptLabel) els.v3PromptLabel.textContent = copy.promptLabel;
+  if (els.v3PromptInput) els.v3PromptInput.placeholder = copy.promptPlaceholder;
+  if (els.v3PromptHint) els.v3PromptHint.textContent = copy.promptHint;
+  if (els.v3AssetTitle) els.v3AssetTitle.textContent = copy.assetTitle;
+  if (els.v3BrandNameLabel) els.v3BrandNameLabel.textContent = copy.brandNameLabel;
+  if (els.v3BrandToneLabel) els.v3BrandToneLabel.textContent = copy.brandToneLabel;
+  if (els.v3ResultTitle) els.v3ResultTitle.textContent = copy.resultTitle;
+  if (els.v3SummaryIntro) els.v3SummaryIntro.textContent = copy.summaryIntro;
+  if (els.v3SummaryFootnote) els.v3SummaryFootnote.textContent = copy.summaryFootnote;
+  if (els.v3SummaryPill) els.v3SummaryPill.textContent = copy.summaryPill;
+  if (els.v3EcommerceFields) els.v3EcommerceFields.hidden = selected !== "ecommerce";
+  if (els.v3EcommerceAdvanced && selected !== "ecommerce") els.v3EcommerceAdvanced.open = false;
+  if (els.v3CommercePanel) els.v3CommercePanel.hidden = selected !== "ecommerce";
+  if (els.v3GeneralPresetRow) els.v3GeneralPresetRow.hidden = selected !== "general_creative";
+  if (els.v3EcommercePresetRow) els.v3EcommercePresetRow.hidden = selected !== "ecommerce";
+  if (els.v3CreateJobBtn && !v3State.loading) els.v3CreateJobBtn.textContent = copy.createLabel;
+  if (els.v3GenerateBtn) els.v3GenerateBtn.textContent = copy.generateLabel;
+  if (els.v3SelectBtn) els.v3SelectBtn.textContent = copy.selectLabel;
+  document.querySelectorAll("[data-v3-preset-scope]").forEach((button) => {
+    button.hidden = button.dataset.v3PresetScope !== selected;
+  });
+  renderV3Assets();
+  if (!v3State.currentJob) {
+    if (selected === "ecommerce") {
+      renderV3EcommerceSummary(null);
+    } else {
+      renderV3GeneralSummary(null);
+    }
+  }
+  setV3Preset(v3State.selectedPreset);
+}
+
+function setV3Preset(presetId) {
+  v3State.selectedPreset = presetId || "campaign_poster";
+  v3State.presetByScenario[v3State.selectedScenario || "general_creative"] = v3State.selectedPreset;
+  document.querySelectorAll("[data-v3-preset]").forEach((button) => {
+    const active = button.dataset.v3Preset === v3State.selectedPreset;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+async function loadV3History({ silent = false, force = false } = {}) {
+  if (v3State.historyLoading || (v3State.historyLoaded && !force)) {
+    renderV3History();
+    return;
+  }
+  v3State.historyLoading = true;
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
+  const localItems = readV3LocalHistory();
+  try {
+    const payload = await request(`${v3ApiBase}/history?limit=24`);
+    const apiItems = Array.isArray(payload.items) ? payload.items : [];
+    v3State.history = mergeV3HistoryItems(apiItems, localItems);
+    v3State.historyLoaded = true;
+    writeV3LocalHistory(v3State.history);
+    renderV3History();
+  } catch (error) {
+    v3State.history = mergeV3HistoryItems(localItems, []);
+    v3State.historyLoaded = true;
+    renderV3History();
+    if (!silent) showGlobalToast(`V3 历史加载失败，已显示本地记录：${friendlyError(error)}`, "warning");
+  } finally {
+    v3State.historyLoading = false;
+    if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
+  }
+}
+
+function readV3LocalHistory() {
+  try {
+    const raw = localStorage.getItem(v3HistoryStorageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => item && item.job_id) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeV3LocalHistory(items) {
+  try {
+    localStorage.setItem(v3HistoryStorageKey, JSON.stringify(items.slice(0, 24)));
+  } catch {
+    // Local history is a convenience cache; failing to persist must not block V3.
+  }
+}
+
+function mergeV3HistoryItems(primaryItems, fallbackItems) {
+  const byId = new Map();
+  [...fallbackItems, ...primaryItems].forEach((item) => {
+    if (!item?.job_id) return;
+    const existing = byId.get(item.job_id) || {};
+    byId.set(item.job_id, { ...existing, ...item });
+  });
+  return Array.from(byId.values()).sort((a, b) => v3HistoryTime(b) - v3HistoryTime(a)).slice(0, 24);
+}
+
+function v3HistoryTime(item) {
+  return Date.parse(item?.updated_at || item?.created_at || "") || 0;
+}
+
+function saveV3HistorySnapshot(job) {
+  const item = v3HistorySnapshotFromJob(job);
+  if (!item) return;
+  v3State.history = mergeV3HistoryItems([item], v3State.history);
+  v3State.historyLoaded = true;
+  writeV3LocalHistory(v3State.history);
+  renderV3History();
+}
+
+function v3HistorySnapshotFromJob(job) {
+  if (!job?.job_id) return null;
+  const existing = v3State.history.find((item) => item.job_id === job.job_id) || {};
+  const scenarioId = job.scenario?.scenario_id || existing.scenario_id || v3State.selectedScenario || "general_creative";
+  const now = new Date().toISOString();
+  return {
+    job_id: job.job_id,
+    status: job.status || existing.status || "planned",
+    scenario_id: scenarioId,
+    scenario_label: job.scenario?.display_name || existing.scenario_label || v3ScenarioLabel(scenarioId),
+    selected_preset_id: job.scenario?.selected_preset_id || existing.selected_preset_id || v3State.selectedPreset,
+    user_input: existing.user_input || (els.v3PromptInput?.value || "").trim() || "V3 任务",
+    asset_count: Array.isArray(job.asset_series) ? job.asset_series.length : existing.asset_count || 0,
+    candidate_count: Array.isArray(job.candidates) ? job.candidates.length : existing.candidate_count || 0,
+    selected_asset_count: Array.isArray(job.selected_result?.selected_asset_ids) ? job.selected_result.selected_asset_ids.length : existing.selected_asset_count || 0,
+    planning_result_id: job.planning_result_id || existing.planning_result_id || null,
+    generation_result_id: job.generation_result_id || existing.generation_result_id || null,
+    asset_pack_id: job.asset_pack_id || existing.asset_pack_id || null,
+    asset_series: Array.isArray(job.asset_series) ? job.asset_series : existing.asset_series || [],
+    candidates: Array.isArray(job.candidates) ? job.candidates : existing.candidates || [],
+    selected_result: job.selected_result || existing.selected_result || null,
+    ecommerce: job.ecommerce || existing.ecommerce || null,
+    general_creative: job.general_creative || existing.general_creative || null,
+    warnings: Array.isArray(job.warnings) ? job.warnings : existing.warnings || [],
+    routes: job.routes || existing.routes || {},
+    balance_estimate: job.balance_estimate || existing.balance_estimate || {},
+    created_at: existing.created_at || now,
+    updated_at: now,
+    route: v3HistoryRouteForScenario(scenarioId),
+    metadata: {
+      ...(existing.metadata || {}),
+      v3_history_owned: true,
+      imports_v1_v2_runtime: false,
+      imports_lab_runtime: false,
+    },
+  };
+}
+
+function v3HistoryRouteForScenario(scenarioId) {
+  const tokens = {
+    general_creative: "general",
+    ecommerce: "ecommerce",
+    new_media: "new-media",
+    private_domain: "private-domain",
+    brand_ip: "brand-ip",
+  };
+  return tokens[scenarioId] ? `/creative-agent-v3/${tokens[scenarioId]}` : "/creative-agent-v3";
+}
+
+function renderV3History() {
+  if (!els.v3HistoryList) return;
+  const items = [...v3State.history].sort((a, b) => v3HistoryTime(b) - v3HistoryTime(a));
+  if (els.v3HistoryCount) els.v3HistoryCount.textContent = String(items.length);
+  els.v3HistoryList.innerHTML = "";
+  els.v3HistoryList.classList.toggle("empty-v3-list", items.length === 0);
+  if (!items.length) {
+    els.v3HistoryList.textContent = "还没有 V3 生成记录";
+    return;
+  }
+  items.slice(0, 12).forEach((item) => {
+    const card = document.createElement("button");
+    card.className = "v3-history-card";
+    card.type = "button";
+    card.dataset.v3HistoryJob = item.job_id;
+    card.innerHTML = `
+      <div class="v3-history-meta">
+        <span>${escapeHtml(item.scenario_label || v3ScenarioLabel(item.scenario_id))}</span>
+        <span>${escapeHtml(v3StatusLabel(item.status))}</span>
+      </div>
+      <strong>${escapeHtml(v3ShortText(item.user_input || "V3 任务", 52))}</strong>
+      <p>${escapeHtml(v3HistoryDetailText(item))}</p>
+      <div class="v3-history-meta">
+        <span>${escapeHtml(formatDate(item.updated_at || item.created_at))}</span>
+        <span>继续查看</span>
+      </div>
+    `;
+    els.v3HistoryList.appendChild(card);
+  });
+}
+
+function v3HistoryDetailText(item) {
+  const parts = [];
+  if (Number(item.asset_count || 0)) parts.push(`${item.asset_count} 个规划项`);
+  if (Number(item.candidate_count || 0)) parts.push(`${item.candidate_count} 个候选`);
+  if (Number(item.selected_asset_count || 0)) parts.push(`${item.selected_asset_count} 个已选`);
+  return parts.length ? parts.join(" · ") : "点开后继续查看这个 V3 任务";
+}
+
+function v3ShortText(value, maxLength = 60) {
+  const text = String(value || "").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
+function handleV3HistoryClick(event) {
+  const card = event.target.closest("[data-v3-history-job]");
+  if (!card) return;
+  openV3HistoryJob(card.dataset.v3HistoryJob);
+}
+
+async function openV3HistoryJob(jobId) {
+  if (!jobId) return;
+  const summary = v3State.history.find((item) => item.job_id === jobId);
+  const scenarioId = summary?.scenario_id || "general_creative";
+  openV3ScenarioWorkspace(scenarioId, { fromHistory: true });
+  if (els.v3PromptInput && summary?.user_input) els.v3PromptInput.value = summary.user_input;
+  updateV3Notice("正在打开 V3 历史任务。", "info");
+  try {
+    const fetchedJob = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    if (fetchedJob.status === "not_found") {
+      throw new Error("这个任务只保留了本地摘要，服务端记录已不可用。");
+    }
+    const job = v3MergeHistorySnapshotIntoJob(fetchedJob, summary);
+    v3State.currentJob = job;
+    v3State.selectedResult = job.selected_result || null;
+    setV3Scenario(job.scenario?.scenario_id || scenarioId);
+    renderV3ViewState();
+    renderV3Job(job);
+    saveV3HistorySnapshot(job);
+    updateV3Notice("已打开 V3 历史任务。", "success");
+  } catch (error) {
+    const restoredJob = v3JobFromHistorySnapshot(summary);
+    if (restoredJob) {
+      v3State.currentJob = restoredJob;
+      v3State.selectedResult = restoredJob.selected_result || null;
+      setV3Scenario(restoredJob.scenario?.scenario_id || scenarioId);
+      renderV3ViewState();
+      renderV3Job(restoredJob);
+      updateV3Notice("已从本地历史快照恢复生成图片。", "success");
+      return;
+    }
+    v3State.currentJob = null;
+    v3State.selectedResult = null;
+    renderV3Job(null);
+    updateV3Notice(`只能显示本地历史摘要：${friendlyError(error)}`, "warning");
+  }
+}
+
+function v3MergeHistorySnapshotIntoJob(job, summary) {
+  if (!summary || v3HistorySnapshotHasRenderableResult(job)) return job;
+  if (!v3HistorySnapshotHasRenderableResult(summary)) return job;
+  return {
+    ...job,
+    status: summary.status || job.status,
+    asset_series: Array.isArray(summary.asset_series) ? summary.asset_series : job.asset_series,
+    candidates: Array.isArray(summary.candidates) ? summary.candidates : job.candidates,
+    selected_result: summary.selected_result || job.selected_result,
+    ecommerce: summary.ecommerce || job.ecommerce,
+    general_creative: summary.general_creative || job.general_creative,
+    warnings: Array.isArray(summary.warnings) ? summary.warnings : job.warnings,
+    metadata: { ...(job.metadata || {}), restored_render_data_from_history_snapshot: true },
+  };
+}
+
+function v3JobFromHistorySnapshot(summary) {
+  if (!summary || !v3HistorySnapshotHasRenderableResult(summary)) return null;
+  return {
+    job_id: summary.job_id,
+    status: summary.status || "generated",
+    scenario: {
+      scenario_id: summary.scenario_id || "general_creative",
+      display_name: summary.scenario_label || v3ScenarioLabel(summary.scenario_id),
+      selected_preset_id: summary.selected_preset_id || null,
+      can_create_jobs: true,
+      status: "active",
+    },
+    planning_result_id: summary.planning_result_id || null,
+    generation_result_id: summary.generation_result_id || null,
+    asset_pack_id: summary.asset_pack_id || null,
+    asset_series: Array.isArray(summary.asset_series) ? summary.asset_series : [],
+    candidates: Array.isArray(summary.candidates) ? summary.candidates : [],
+    selected_result: summary.selected_result || null,
+    ecommerce: summary.ecommerce || null,
+    general_creative: summary.general_creative || null,
+    balance_estimate: summary.balance_estimate || {},
+    routes: summary.routes || {},
+    warnings: Array.isArray(summary.warnings) ? summary.warnings : [],
+    metadata: { ...(summary.metadata || {}), restored_from_history_snapshot: true },
+  };
+}
+
+function v3HistorySnapshotHasRenderableResult(item) {
+  return v3HasRenderableV3Items(item?.candidates) || v3HasRenderableV3Items(item?.asset_series);
+}
+
+function v3HasRenderableV3Items(items) {
+  return Array.isArray(items) && items.some((item) => v3OutputImageCandidates(item).length > 0);
+}
+
+function handleV3AssetFiles(event) {
+  const files = Array.from(event.target.files || []).filter((file) => /^image\//.test(file.type || ""));
+  v3State.files = files.slice(0, 8);
+  v3State.uploadedAssets = [];
+  v3State.uploadFingerprints = {};
+  renderV3Assets();
+  updateV3Notice(v3State.files.length ? `已添加 ${v3State.files.length} 张参考图，V3 会自动判断用途。` : "参考图已清空。", "info");
+}
+
+function renderV3Assets() {
+  if (!els.v3AssetList) return;
+  const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
+  if (els.v3AssetSummary) {
+    els.v3AssetSummary.textContent = v3State.files.length ? copy.assetSummaryWithCount(v3State.files.length) : copy.assetSummaryEmpty;
+  }
+  els.v3AssetList.innerHTML = "";
+  els.v3AssetList.classList.toggle("empty-v3-list", v3State.files.length === 0);
+  if (!v3State.files.length) {
+    els.v3AssetList.textContent = copy.assetEmpty;
+    return;
+  }
+  v3State.files.forEach((file, index) => {
+    const row = document.createElement("div");
+    row.className = "v3-asset-row";
+    row.innerHTML = `
+      <strong>${escapeHtml(file.name || `参考图 ${index + 1}`)}</strong>
+      <span>${escapeHtml(v3FileSizeText(file.size))}</span>
+    `;
+    els.v3AssetList.appendChild(row);
+  });
+}
+
+function v3FileSizeText(size) {
+  const bytes = Number(size || 0);
+  if (!bytes) return "-";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function v3CsvList(value) {
+  return String(value || "")
+    .split(/[,，;；\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function v3FileFingerprint(file) {
+  return `${file.name || "asset"}|${file.size || 0}|${file.lastModified || 0}`;
+}
+
+function v3FileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      resolve(value.includes(",") ? value.split(",").pop() : value);
+    };
+    reader.onerror = () => reject(reader.error || new Error("File read failed."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadV3Files() {
+  if (!v3State.files.length) {
+    v3State.uploadedAssets = [];
+    v3State.uploadFingerprints = {};
+    return [];
+  }
+  const uploaded = [];
+  const cache = { ...v3State.uploadFingerprints };
+  for (const file of v3State.files) {
+    const fingerprint = v3FileFingerprint(file);
+    if (cache[fingerprint]) {
+      uploaded.push(cache[fingerprint]);
+      continue;
+    }
+    updateV3Notice(`正在上传 ${file.name || "参考图"}...`, "info");
+    const created = await request(`${v3ApiBase}/uploads`, {
+      method: "POST",
+      body: {
+        filename: file.name || "reference.png",
+        mime_type: file.type || "image/png",
+        size_bytes: file.size || 0,
+        role: v3State.selectedScenario === "ecommerce" ? "product_reference" : "unknown_reference",
+        metadata: {
+          frontend_surface: "commercial_v3_shell",
+          frontend_fingerprint: fingerprint,
+        },
+      },
+    });
+    const contentBase64 = await v3FileToBase64(file);
+    await request(created.upload_url || `${v3ApiBase}/uploads/${encodeURIComponent(created.asset_id)}/content`, {
+      method: "PUT",
+      body: {
+        content_base64: contentBase64,
+        mime_type: file.type || created.mime_type || "image/png",
+      },
+    });
+    const ready = await request(`${v3ApiBase}/uploads/${encodeURIComponent(created.asset_id)}/complete`, { method: "POST" });
+    cache[fingerprint] = ready;
+    uploaded.push(ready);
+  }
+  v3State.uploadFingerprints = cache;
+  v3State.uploadedAssets = uploaded;
+  renderV3Assets();
+  return uploaded;
+}
+
+function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
+  const userInput = (els.v3PromptInput?.value || "").trim();
+  if (!userInput) {
+    throw new Error("请先输入简单需求。");
+  }
+  if (!["general_creative", "ecommerce"].includes(v3State.selectedScenario)) {
+    throw new Error(`${v3ScenarioLabel(v3State.selectedScenario)} 还未激活，暂不能创建任务。`);
+  }
+  const brandName = (els.v3BrandNameInput?.value || "").trim();
+  const brandTone = (els.v3BrandToneInput?.value || "").trim();
+  const productProfile = {};
+  if (brandName) productProfile.brand_or_project_name = brandName;
+  if (brandTone) productProfile.visual_tone = brandTone;
+  if (uploadedAssets.length) {
+    productProfile.reference_files = uploadedAssets.map((asset) => ({
+      asset_id: asset.asset_id,
+      name: asset.filename,
+      type: asset.mime_type,
+      size: asset.size_bytes,
+      role: asset.role,
+      content_url: asset.content_url,
+    }));
+  }
+  const isEcommerce = v3State.selectedScenario === "ecommerce";
+  const ecommerceParameters = {};
+  if (isEcommerce) {
+    const platform = (els.v3EcommercePlatformInput?.value || "generic").trim();
+    const market = (els.v3EcommerceMarketInput?.value || "").trim();
+    const specs = (els.v3EcommerceSpecsInput?.value || "").trim();
+    const keywords = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
+    const competitorRefs = v3CsvList(els.v3EcommerceCompetitorInput?.value || "");
+    const claims = v3CsvList(els.v3EcommerceClaimsInput?.value || "");
+    productProfile.product_specs = specs ? v3CsvList(specs) : [];
+    if (platform) productProfile.platform = platform;
+    if (market) productProfile.market = market;
+    if (keywords.length) productProfile.keywords = keywords;
+    if (competitorRefs.length) productProfile.competitor_references = competitorRefs;
+    if (claims.length) productProfile.claims = claims;
+    ecommerceParameters.platform = platform;
+    if (market) ecommerceParameters.market = market;
+    if (keywords.length) ecommerceParameters.keywords = keywords;
+    if (competitorRefs.length) ecommerceParameters.competitor_references = competitorRefs;
+  }
+  return {
+    user_input: userInput,
+    scenario_selection: {
+      scenario_id: v3State.selectedScenario || "general_creative",
+      mode_id: v3State.selectedPreset || (isEcommerce ? "one_click_product_set" : "campaign_poster"),
+      preset_id: v3State.selectedPreset || (isEcommerce ? "one_click_product_set" : "campaign_poster"),
+      platform_profile: isEcommerce ? (els.v3EcommercePlatformInput?.value || "generic") : undefined,
+      parameters: ecommerceParameters,
+    },
+    uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id),
+    product_profile: productProfile,
+    metadata: {
+      frontend_surface: "commercial_v3_shell",
+      interaction_style: "card_module",
+    },
+  };
+}
+
+async function createV3Job() {
+  try {
+    const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
+    setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
+    const uploadedAssets = await uploadV3Files();
+    const payload = buildV3JobPayload(uploadedAssets);
+    updateV3Notice(copy.planningNotice, "info");
+    const created = await request(`${v3ApiBase}/jobs`, { method: "POST", body: payload });
+    v3State.currentJob = created;
+    v3State.selectedResult = null;
+    renderV3Job(created);
+    saveV3HistorySnapshot(created);
+    if (created.status !== "blocked") {
+      updateV3Notice("V3 已理解需求，正在出图。", "info");
+      const generated = await request(`${v3ApiBase}/jobs/${encodeURIComponent(created.job_id)}/generate`, {
+        method: "POST",
+        body: { quality_mode: "standard", metadata: { frontend_surface: "commercial_v3_shell", require_real_images: true } },
+      });
+      v3State.currentJob = generated;
+      renderV3Job(generated);
+      saveV3HistorySnapshot(generated);
+      updateV3Notice(generated.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice, generated.status === "blocked" ? "warning" : "success");
+      return;
+    }
+    updateV3Notice(created.status === "blocked" ? "当前场景未开放生成，请切回通用创意。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
+  } catch (error) {
+    updateV3Notice(`V3 生成失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+async function generateV3Job() {
+  if (!v3State.currentJob?.job_id) {
+    updateV3Notice("请先创建 V3 生成任务。", "warning");
+    return;
+  }
+  try {
+    const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
+    setV3Busy(true, copy.busyLabel);
+    updateV3Notice("V3 正在出图。", "info");
+    const generated = await request(`${v3ApiBase}/jobs/${encodeURIComponent(v3State.currentJob.job_id)}/generate`, {
+      method: "POST",
+      body: { quality_mode: "standard", metadata: { frontend_surface: "commercial_v3_shell", require_real_images: true } },
+    });
+    v3State.currentJob = generated;
+    renderV3Job(generated);
+    saveV3HistorySnapshot(generated);
+    updateV3Notice(copy.generatedNotice, "success");
+  } catch (error) {
+    updateV3Notice(`V3 生成失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+async function selectV3Job() {
+  if (!v3State.currentJob?.job_id) {
+    updateV3Notice("还没有可选择的 V3 任务。", "warning");
+    return;
+  }
+  try {
+    setV3Busy(true, "选择中...");
+    const selected = await request(`${v3ApiBase}/jobs/${encodeURIComponent(v3State.currentJob.job_id)}/select`, {
+      method: "POST",
+      body: { apply_memory_update: true, metadata: { frontend_surface: "commercial_v3_shell" } },
+    });
+    v3State.selectedResult = selected;
+    if (selected.job_status) v3State.currentJob = selected.job_status;
+    renderV3Job(v3State.currentJob);
+    saveV3HistorySnapshot(v3State.currentJob);
+    updateV3Notice("已选中结果。", "success");
+  } catch (error) {
+    updateV3Notice(`V3 选择失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function resetV3Workspace() {
+  const currentScenario = v3State.selectedScenario || "general_creative";
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  v3State.files = [];
+  v3State.uploadedAssets = [];
+  v3State.uploadFingerprints = {};
+  if (els.v3PromptInput) els.v3PromptInput.value = "";
+  if (els.v3AssetInput) els.v3AssetInput.value = "";
+  if (els.v3BrandNameInput) els.v3BrandNameInput.value = "";
+  if (els.v3BrandToneInput) els.v3BrandToneInput.value = "";
+  if (els.v3EcommercePlatformInput) els.v3EcommercePlatformInput.value = "generic";
+  if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
+  if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
+  if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
+  if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
+  if (els.v3EcommerceClaimsInput) els.v3EcommerceClaimsInput.value = "";
+  setV3Scenario(currentScenario);
+  setV3Preset(v3State.presetByScenario[currentScenario] || v3DefaultPresetForScenario(currentScenario));
+  renderV3Assets();
+  renderV3Job(null);
+  updateV3Notice("当前工作台已清空。", "success");
+}
+
+function setV3Busy(isBusy, label = "") {
+  v3State.loading = Boolean(isBusy);
+  const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
+  if (els.v3CreateJobBtn) els.v3CreateJobBtn.textContent = isBusy ? (label || copy.busyLabel) : copy.createLabel;
+  renderV3ScenarioState();
+}
+
+function renderV3Job(job) {
+  if (els.v3JobStatus) els.v3JobStatus.textContent = job ? v3StatusLabel(job.status) : "待创建";
+  if (els.v3JobId) els.v3JobId.textContent = job?.job_id ? shortOutputId(job.job_id) : "-";
+  renderV3ResultBoard(job);
+  const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
+  if (job?.ecommerce || scenarioId === "ecommerce") {
+    renderV3EcommerceSummary(job?.ecommerce || null);
+  } else {
+    renderV3GeneralSummary(job?.general_creative || null);
+  }
+  renderV3ScenarioState();
+}
+
+function renderV3GeneralSummary(summary) {
+  const entries = ["已理解这张图的使用场景"];
+  if (!summary) {
+    entries.push("会整理画面风格和氛围", "会参考你上传的图片", "会检查生成结果是否符合需求");
+  } else {
+    if (summary.reference_understanding?.length || summary.reference_bindings?.length) entries.push("已参考你上传的图片");
+    if (summary.visual_grammar?.length) entries.push("已整理画面风格和构图方向");
+    if (summary.information_integrity?.length) entries.push("已保护需要保留的文字或主体");
+    if (summary.history_continuation?.length) entries.push("已参考历史里的风格方向");
+    if (summary.review_hints?.length || summary.closure_checks?.length) entries.push("已检查生成结果是否贴近需求");
+  }
+  renderV3OutcomeItems(entries);
+  renderV3ClosureChecks([]);
+  renderV3Warnings(summary?.warnings || []);
+  renderV3EcommercePlanList(null);
+  renderV3EcommerceExportList(null);
+}
+
+function renderV3EcommerceSummary(summary) {
+  const entries = [
+    "已识别商品主体和必须保留的信息",
+    "已把套图拆成主图、卖点图、场景图和信任图",
+    "已为每张图安排不同用途",
+    "已避免乱加文字、徽章和未经确认的宣传说法",
+  ];
+  const sellingPoints = Array.isArray(summary?.selling_points) ? summary.selling_points.filter(Boolean).slice(0, 2) : [];
+  if (sellingPoints.length) entries.push(`重点卖点：${sellingPoints.join(" / ")}`);
+  const trustDrivers = Array.isArray(summary?.trust_drivers) ? summary.trust_drivers.filter(Boolean).slice(0, 2) : [];
+  if (trustDrivers.length) entries.push(`已考虑信任背书：${trustDrivers.join(" / ")}`);
+  renderV3OutcomeItems(entries);
+  renderV3ClosureChecks([]);
+  renderV3Warnings(summary?.warnings || []);
+  renderV3EcommercePlanList(summary);
+  renderV3EcommerceExportList(summary);
+}
+
+function renderV3OutcomeItems(entries) {
+  if (!els.v3CapabilityList) return;
+  els.v3CapabilityList.innerHTML = "";
+  uniqueNonEmpty(entries).slice(0, 7).forEach((item) => {
+    const chip = document.createElement("span");
+    chip.textContent = item;
+    els.v3CapabilityList.appendChild(chip);
+  });
+}
+
+function renderV3EcommercePlanList(summary) {
+  if (!els.v3EcommercePlanList) return;
+  const recipes = Array.isArray(summary?.image_recipes) ? summary.image_recipes : [];
+  els.v3EcommercePlanList.innerHTML = "";
+  if (!recipes.length) {
+    els.v3EcommercePlanList.hidden = true;
+    return;
+  }
+  els.v3EcommercePlanList.hidden = false;
+  recipes.slice(0, 6).forEach((recipe, index) => {
+    const row = document.createElement("div");
+    row.className = "v3-commerce-plan-row";
+    const slotLabel = v3EcommerceSlotLabel(recipe.slot || "") || `套图 ${index + 1}`;
+    const purpose = recipe.selling_point || v3CommercePurposeLabel(recipe.business_goal) || recipe.visual_scene || "用于展示商品卖点";
+    row.innerHTML = `
+      <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
+      <span>${escapeHtml(purpose)}</span>
+    `;
+    els.v3EcommercePlanList.appendChild(row);
+  });
+}
+
+function renderV3EcommerceExportList(summary) {
+  if (!els.v3EcommerceExportList) return;
+  els.v3EcommerceExportList.innerHTML = "";
+  els.v3EcommerceExportList.hidden = true;
+}
+
+function renderV3ClosureChecks(checks) {
+  if (!els.v3ClosureList) return;
+  els.v3ClosureList.innerHTML = "";
+  els.v3ClosureList.hidden = true;
+}
+
+function renderV3Warnings(warnings) {
+  if (!els.v3WarningList) return;
+  const items = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  els.v3WarningList.hidden = items.length === 0;
+  els.v3WarningList.innerHTML = "";
+  items.slice(0, 4).forEach((item) => {
+    const line = document.createElement("div");
+    line.textContent = v3PlainWarningText(item);
+    els.v3WarningList.appendChild(line);
+  });
+}
+
+function v3PlainWarningText(item) {
+  const text = String(item || "").trim();
+  const lower = text.toLowerCase();
+  if (lower.includes("provider") || lower.includes("api key") || lower.includes("base url") || lower.includes("model")) {
+    return "图片生成配置暂时不可用，请检查后台配置或稍后再试。";
+  }
+  if (lower.includes("claim") || lower.includes("unsupported")) {
+    return "有些宣传说法需要确认后再放进图片。";
+  }
+  return text;
+}
+
+function renderV3ResultBoard(job) {
+  if (!els.v3ResultBoard) return;
+  const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
+  const copy = v3ScenarioWorkspaceCopy(scenarioId);
+  const assets = Array.isArray(job?.asset_series) ? job.asset_series : [];
+  const candidates = Array.isArray(job?.candidates) ? job.candidates : [];
+  const recipes = Array.isArray(job?.ecommerce?.image_recipes) ? job.ecommerce.image_recipes : [];
+  const warnings = Array.isArray(job?.warnings) ? job.warnings : [];
+  els.v3ResultBoard.innerHTML = "";
+  els.v3ResultBoard.classList.toggle("empty-v3-board", !job);
+  if (!job) {
+    els.v3ResultBoard.textContent = copy.emptyResult;
+    return;
+  }
+  const items = candidates.length ? candidates : recipes.length ? recipes : assets;
+  if (!items.length) {
+    els.v3ResultBoard.classList.add("empty-v3-board");
+    els.v3ResultBoard.textContent = warnings[0] ? v3PlainWarningText(warnings[0]) : copy.pendingResult;
+    return;
+  }
+  els.v3ResultBoard.classList.remove("empty-v3-board");
+  items.slice(0, 8).forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "v3-result-card";
+    const metadata = item.metadata || {};
+    const assetMetadata = metadata.asset_metadata || {};
+    const recipe = v3EcommerceRecipeForItem(item);
+    const slot = item.slot || metadata.ecommerce_slot || assetMetadata.ecommerce_slot || recipe.slot || "";
+    const title = v3EcommerceSlotLabel(slot) || item.asset_id || item.candidate_id || `candidate_${index + 1}`;
+    const purpose = recipe.visual_scene || item.purpose || item.recommendation || "商业视觉资产";
+    const cardPurpose = recipe.selling_point || assetMetadata.ecommerce_selling_point || item.selling_point || item.purpose || item.recommendation || (scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示");
+    const overlayText = item.overlay_text || recipe.overlay_text || "";
+    const status = item.status || (item.selected ? "selected" : job.status);
+    const imageCandidates = v3OutputImageCandidates(item);
+    const downloadUrl = v3OutputDownloadUrl(item);
+    const hasRealImage = imageCandidates.length > 0;
+    card.innerHTML = `
+      ${
+        hasRealImage
+          ? `<button class="v3-result-preview" type="button" data-v3-preview="${escapeHtml(String(index))}" aria-label="预览生成图"><img alt="${escapeHtml(v3ReadableTitle(title))}" /></button>`
+          : `<div class="v3-result-placeholder"><span>${escapeHtml(job.status === "generated" ? "准备中" : "已规划")}</span></div>`
+      }
+      <div class="v3-card-head">
+        <strong>${escapeHtml(v3ReadableTitle(title))}</strong>
+        <span class="mini-pill">${escapeHtml(v3StatusLabel(status))}</span>
+      </div>
+      <p>${escapeHtml(cardPurpose)}</p>
+      ${purpose && purpose !== cardPurpose ? `<p class="v3-result-scene">${escapeHtml(purpose)}</p>` : ""}
+      ${overlayText ? `<p class="v3-overlay-copy">${escapeHtml(overlayText)}</p>` : ""}
+      <div class="v3-result-meta">
+        ${item.overall_score ? `<span>${Math.round(Number(item.overall_score) * 100)}%</span>` : ""}
+        ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
+      </div>
+    `;
+    const image = card.querySelector(".v3-result-preview img");
+    if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "V3 generated image unavailable" });
+    const preview = card.querySelector(".v3-result-preview");
+    if (preview) {
+      preview.addEventListener("click", () => {
+        openImageLightbox({
+          id: item.output_id || metadata.output_id || item.candidate_id || item.asset_id || `v3_${index + 1}`,
+          title: v3ReadableTitle(title),
+          url: v3MediaUrl(downloadUrl || item.preview_url || metadata.preview_url || item.preview_uri),
+          downloadUrl: v3MediaUrl(downloadUrl || item.download_url || metadata.download_url || item.preview_uri),
+          thumbnailUrl: v3MediaUrl(item.thumbnail_url || metadata.thumbnail_url || item.preview_uri),
+          previewUrl: v3MediaUrl(item.preview_url || metadata.preview_url || item.preview_uri),
+          format: metadata.format || "png",
+          meta: `${v3ScenarioLabel(job?.scenario?.scenario_id)} - ${v3StatusLabel(status)}`,
+          promptText: "",
+        });
+      });
+    }
+    els.v3ResultBoard.appendChild(card);
+  });
+}
+
+function v3OutputImageCandidates(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
+    item?.preview_url,
+    metadata.preview_url,
+    item?.preview_uri,
+    metadata.preview_uri,
+    item?.download_url,
+    metadata.download_url,
+    item?.url,
+    metadata.url,
+  ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl);
+}
+
+function v3OutputDownloadUrl(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.download_url,
+    metadata.download_url,
+    item?.url,
+    metadata.url,
+  ]).find((url) => !String(url).startsWith("mock://")) || "";
+}
+
+function v3MediaUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (value.startsWith("/api/v3/creative-agent")) {
+    return `${v3ApiBase}${value.slice("/api/v3/creative-agent".length)}`;
+  }
+  return value;
+}
+
+function updateV3Notice(message, type = "info") {
+  if (!els.v3NoticeBar) return;
+  els.v3NoticeBar.textContent = message;
+  els.v3NoticeBar.className = `notice-bar ${type === "info" ? "" : type}`.trim();
+}
+
+function v3ReadableTitle(value) {
+  return String(value || "").replace(/^asset_/, "").replace(/^candidate_/, "候选 ").replace(/[_-]+/g, " ");
+}
+
+function v3EcommerceRecipeForItem(item) {
+  const metadata = item?.metadata || {};
+  const assetMetadata = metadata.asset_metadata || {};
+  return item?.ecommerce_recipe || metadata.ecommerce_recipe || assetMetadata.ecommerce_recipe || {};
+}
+
+function v3EcommerceSlotLabel(slot) {
+  const labels = {
+    main_image: "电商主图",
+    hero_image: "商品首图",
+    feature_image_1: "卖点图 1",
+    feature_image_2: "卖点图 2",
+    benefit_image: "利益点图",
+    benefit_hook: "广告钩子图",
+    detail_image: "细节证明图",
+    scenario_image: "场景图",
+    size_spec_image: "尺寸规格图",
+    trust_image: "信任背书图",
+    trust_comparison_image: "对比信任图",
+    ad_cover: "投放封面",
+    store_banner: "店铺横幅",
+    collection_cover: "合集封面",
+  };
+  return labels[slot] || "";
+}
+
+function v3CommercePurposeLabel(goal) {
+  const labels = {
+    click: "吸引点击",
+    understand: "帮助买家快速看懂",
+    desire: "突出购买理由",
+    trust: "增强信任感",
+    compare: "帮助对比选择",
+    remember: "加深商品记忆",
+    support: "辅助下单转化",
+  };
+  return labels[goal] || goal;
+}
+
+function v3StatusLabel(status) {
+  const labels = {
+    planned: "已规划",
+    generated: "已生成",
+    selected: "已选择",
+    blocked: "未开放",
+    failed: "失败",
+    not_found: "未找到",
+    ready: "就绪",
+  };
+  return labels[status] || status || "待创建";
+}
+
+function v3ClosureStatusLabel(status) {
+  const labels = {
+    done: "已完成",
+    attention: "需复核",
+    pending: "待处理",
+    not_applicable: "无需处理",
+  };
+  return labels[status] || status || "待处理";
+}
+
+function v3ScenarioLabel(scenarioId) {
+  const labels = {
+    general_creative: "通用创意",
+    ecommerce: "电商特调",
+    new_media: "新媒体投放",
+    private_domain: "私域运营",
+    brand_ip: "品牌 IP",
+  };
+  return labels[scenarioId] || "V3 场景";
 }
 
 function setLabStyleLibraryOpen(open) {

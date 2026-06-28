@@ -1,7 +1,14 @@
 """V3 generation routing package."""
 
 from .candidates import candidate_ids, has_hard_failure, rank_evaluated_candidates, select_best_candidate
-from .providers import GenerationProvider, GenerationRequest, GenerationResponse, MockGenerationProvider, PlanningOnlyGenerationProvider
+from .providers import (
+    GenerationProvider,
+    GenerationRequest,
+    GenerationResponse,
+    MockGenerationProvider,
+    PlanningOnlyGenerationProvider,
+    ProductionImageGenerationProvider,
+)
 from .router import GenerationRouter
 
 __all__ = [
@@ -11,6 +18,7 @@ __all__ = [
     "GenerationRouter",
     "MockGenerationProvider",
     "PlanningOnlyGenerationProvider",
+    "ProductionImageGenerationProvider",
     "candidate_ids",
     "has_hard_failure",
     "rank_evaluated_candidates",

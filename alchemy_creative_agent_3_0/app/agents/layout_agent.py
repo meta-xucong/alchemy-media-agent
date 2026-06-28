@@ -70,6 +70,7 @@ class LayoutAgent(BaseAgent):
                 explicit_headline=explicit_text.headline,
                 explicit_cta=explicit_text.cta,
                 layout_preference_used=brand_profile.layout_preference,
+                asset_metadata=dict(asset.metadata),
             ),
         )
         return AgentResult(output=layout, reasoning_summary="Created platform layout with external text regions.")

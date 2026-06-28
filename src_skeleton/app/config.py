@@ -202,6 +202,7 @@ def update_runtime_settings(
     anthropic_base_url: str | None = None,
     gemini_image_api_key: str | None = None,
     gemini_image_base_url: str | None = None,
+    gemini_image_generation_enabled: bool | None = None,
     lab_openai_api_key: str | None = None,
     lab_kimi_api_key: str | None = None,
     lab_doubao_vision_api_key: str | None = None,
@@ -283,6 +284,10 @@ def update_runtime_settings(
         settings.gemini_image_api_key = gemini_image_api_key.strip()
     if gemini_image_base_url is not None:
         settings.gemini_image_base_url = gemini_image_base_url.strip() or None
+    if gemini_image_generation_enabled is not None:
+        settings.gemini_image_generation_enabled = bool(gemini_image_generation_enabled)
+        if settings.gemini_image_generation_enabled and settings.default_image_provider == "gemini_image":
+            settings.default_image_model = settings.gemini_image_model
     if lab_openai_api_key:
         settings.lab_openai_api_key = lab_openai_api_key.strip()
     if lab_kimi_api_key:
@@ -304,6 +309,7 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         "DOUBAO_IMAGE_BASE_URL": settings.doubao_image_base_url or "",
         "GEMINI_IMAGE_MODEL": settings.gemini_image_model,
         "GEMINI_IMAGE_BASE_URL": settings.gemini_image_base_url or "",
+        "GEMINI_IMAGE_GENERATION_ENABLED": "true" if settings.gemini_image_generation_enabled else "false",
         "DEFAULT_LLM_PROVIDER": settings.default_llm_provider,
         "DEFAULT_LLM_MODEL": settings.default_llm_model,
         "BACKUP_LLM_PROVIDER": settings.backup_llm_provider,

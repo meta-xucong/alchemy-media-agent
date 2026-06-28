@@ -4,6 +4,7 @@ from io import BytesIO
 from datetime import datetime, timezone
 import hashlib
 import httpx
+import json
 import logging
 import os
 from html import escape
@@ -14,7 +15,10 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
@@ -83,6 +87,8 @@ IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
+v3_route_handlers = V3ProductRouteHandlers()
+v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")
 
@@ -102,6 +108,15 @@ def mobile_frontend_app(request: Request):
     if gate:
         return gate
     return FileResponse(MOBILE_STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
+
+
+@app.get("/creative-agent-v3")
+@app.get("/creative-agent-v3/{path:path}")
+def v3_frontend_app(request: Request):
+    gate = _veyra_page_gate(request, target="alchemy-v3")
+    if gate:
+        return gate
+    return FileResponse(STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
 
 
 @app.get("/admin/billing")
@@ -190,6 +205,173 @@ def image_share_poster(
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
+
+
+async def _v3_json_payload(request: Request) -> dict:
+    raw_body = await request.body()
+    if not raw_body:
+        return {}
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_v3_json", "message": "V3 request body must be valid JSON."},
+        )
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_v3_payload", "message": "V3 request body must be a JSON object."},
+        )
+    return payload
+
+
+def _run_v3_handler(handler, *args):
+    try:
+        return handler(*args)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_v3_request", "message": str(exc)},
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_v3_request", "message": str(exc)},
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "v3_resource_not_found", "message": str(exc).strip("'")},
+        )
+
+
+@app.get("/api/v3/creative-agent/scenarios")
+def v3_scenarios_endpoint(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_scenarios)
+
+
+@app.get("/api/v3/creative-agent/history")
+def v3_history_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_history, limit)
+
+
+@app.post("/api/v3/creative-agent/uploads")
+async def v3_create_upload_endpoint(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_uploads, payload)
+
+
+@app.put("/api/v3/creative-agent/uploads/{asset_id}/content")
+async def v3_put_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.put_upload_content, asset_id, payload)
+
+
+@app.post("/api/v3/creative-agent/uploads/{asset_id}/complete")
+def v3_complete_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.post_upload_complete, asset_id)
+
+
+@app.get("/api/v3/creative-agent/uploads/{asset_id}")
+def v3_get_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_upload, asset_id)
+
+
+@app.get("/api/v3/creative-agent/uploads/{asset_id}/content")
+def v3_get_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    content = v3_route_handlers.service.read_uploaded_asset_content(asset_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail={"code": "v3_asset_content_not_found", "message": "Uploaded asset content not found."})
+    data, media_type = content
+    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/v3/creative-agent/outputs/{output_id}/download")
+def v3_output_download_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    resolved = v3_output_store.file_for_variant(output_id, "download")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output not found."})
+    path, media_type, filename = resolved
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=filename,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@app.get("/api/v3/creative-agent/outputs/{output_id}/preview")
+def v3_output_preview_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    resolved = v3_output_store.file_for_variant(output_id, "preview")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output preview not found."})
+    path, media_type, _filename = resolved
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/v3/creative-agent/outputs/{output_id}/thumbnail")
+def v3_output_thumbnail_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    resolved = v3_output_store.file_for_variant(output_id, "thumbnail")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output thumbnail not found."})
+    path, media_type, _filename = resolved
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/v3/creative-agent/jobs")
+async def v3_create_job_endpoint(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_jobs, payload)
+
+
+@app.get("/api/v3/creative-agent/jobs/{job_id}")
+def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_job, job_id)
+
+
+@app.get("/api/v3/creative-agent/jobs/{job_id}/export")
+def v3_export_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_job_export, job_id)
+
+
+@app.get("/api/v3/creative-agent/jobs/{job_id}/export/download")
+def v3_export_job_download_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = _run_v3_handler(v3_route_handlers.get_job_export_download, job_id)
+    filename = quote(payload.get("filename") or f"v3_export_{job_id}.json")
+    return Response(
+        content=payload.get("content") or "{}",
+        media_type=payload.get("content_type") or "application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/v3/creative-agent/jobs/{job_id}/generate")
+async def v3_generate_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_generate, job_id, payload)
+
+
+@app.post("/api/v3/creative-agent/jobs/{job_id}/select")
+async def v3_select_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_select, job_id, payload)
 
 
 @app.get("/api/lab/modules")
@@ -931,6 +1113,7 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Requ
         anthropic_base_url=body.anthropic_base_url,
         gemini_image_api_key=body.gemini_image_api_key,
         gemini_image_base_url=body.gemini_image_base_url,
+        gemini_image_generation_enabled=body.gemini_image_generation_enabled,
         lab_llm_provider=body.lab_llm_provider,
         lab_llm_model=body.lab_llm_model,
         lab_openai_api_key=body.lab_openai_api_key,
@@ -1618,6 +1801,7 @@ def _runtime_provider_settings_response(runtime_persistence_warning: str | None 
         anthropic_api_key_configured=bool(settings.anthropic_api_key or settings.anthropic_auth_token),
         gemini_image_base_url=settings.gemini_image_base_url,
         gemini_image_api_key_configured=bool(settings.gemini_image_api_key),
+        gemini_image_generation_enabled=bool(settings.gemini_image_generation_enabled),
         lab_llm_provider=settings.lab_llm_provider,
         lab_llm_model=settings.lab_llm_model,
         lab_openai_base_url=settings.lab_openai_base_url,

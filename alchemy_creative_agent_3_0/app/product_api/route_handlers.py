@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..app_shell import get_scenario_hub_contract
 from .service import V3ProductApiService
 
 
@@ -19,11 +20,44 @@ class V3ProductRouteHandlers:
     def post_creative_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.post_jobs(payload)
 
+    def post_uploads(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.service.create_uploaded_asset(payload).model_dump(mode="json")
+
+    def put_upload_content(self, asset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        record = self.service.store_uploaded_asset_content(asset_id, payload)
+        if record is None:
+            raise KeyError("uploaded asset not found")
+        return record.model_dump(mode="json")
+
+    def post_upload_complete(self, asset_id: str) -> dict[str, Any]:
+        record = self.service.complete_uploaded_asset(asset_id)
+        if record is None:
+            raise KeyError("uploaded asset not found")
+        return record.model_dump(mode="json")
+
+    def get_upload(self, asset_id: str) -> dict[str, Any]:
+        record = self.service.get_uploaded_asset(asset_id)
+        if record is None:
+            raise KeyError("uploaded asset not found")
+        return record.model_dump(mode="json")
+
+    def get_scenarios(self) -> dict[str, Any]:
+        return get_scenario_hub_contract()
+
+    def get_history(self, limit: int = 20) -> dict[str, Any]:
+        return self.service.list_history(limit=limit).model_dump(mode="json")
+
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self.service.get_job(job_id).model_dump(mode="json")
 
     def get_creative_job(self, job_id: str) -> dict[str, Any]:
         return self.get_job(job_id)
+
+    def get_job_export(self, job_id: str) -> dict[str, Any]:
+        return self.service.export_job(job_id).model_dump(mode="json")
+
+    def get_job_export_download(self, job_id: str) -> dict[str, Any]:
+        return self.service.export_job_download(job_id).model_dump(mode="json")
 
     def post_generate(self, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.service.generate_job(job_id, payload or {}).model_dump(mode="json")

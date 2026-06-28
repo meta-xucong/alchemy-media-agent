@@ -1,7 +1,11 @@
 """Ecommerce vertical pack specialization."""
 
+from typing import Any
+
 from .base import VerticalAgentPack
-from ..schemas import AssetType, Platform
+from ..creative_core.rules import stable_id
+from ..scenario_packs.ecommerce import EcommerceScenarioPackPlanner
+from ..schemas import AssetSpec, AssetType, IndustryCategory, Platform
 
 
 class EcommerceAgentFamily(VerticalAgentPack):
@@ -11,6 +15,8 @@ class EcommerceAgentFamily(VerticalAgentPack):
 
     def match(self, creative_job, commercial_brief=None) -> float:
         score = 0.8 if self._industry_value(commercial_brief) in self.supported_industries else 0.0
+        if creative_job and str(creative_job.metadata.get("scenario_id") or "") == "ecommerce":
+            score = max(score, 1.0)
         text = self._job_text(creative_job)
         if self._contains_any(
             text,
@@ -46,26 +52,44 @@ class EcommerceAgentFamily(VerticalAgentPack):
         brief = context.commercial_brief
         if brief is None:
             return brief
+        scenario_locked = self._is_ecommerce_scenario(context)
+        updates = {
+            "target_audience": brief.target_audience or "platform shoppers comparing product value quickly",
+            "commercial_hooks": self._append_unique(
+                brief.commercial_hooks,
+                ["product clarity", "feature proof", "platform conversion"],
+            ),
+            "selling_points": self._append_unique(
+                brief.selling_points,
+                ["clear product hero", "visible feature benefits"],
+            ),
+            "visual_tone": self._append_unique(brief.visual_tone, ["product_focused", "clean", "conversion_ready"]),
+            "copy_strategy": "short feature-led product copy with clear benefit labels and purchase cue",
+            "platform_notes": {
+                **brief.platform_notes,
+                "vertical_pack": self.name,
+                "ecommerce_rule": "prioritize main image clarity, SKU consistency, and feature callout space",
+                "scenario_id": context.metadata.get("scenario_id"),
+                "platform_profile": context.metadata.get("platform_profile"),
+            },
+            "metadata": self._metadata(
+                brief.metadata,
+                "commercial_brief",
+                priorities=["product_clarity", "feature_labels"],
+                scenario_locked=scenario_locked,
+            ),
+        }
+        if scenario_locked:
+            updates.update(
+                {
+                    "industry": IndustryCategory.ECOMMERCE_PRODUCT,
+                    "scenario": "new_product_promotion",
+                    "business_goal": "convert platform shoppers with a ready-to-use product image set",
+                    "target_platforms": self._target_platforms_for_context(context, brief.target_platforms),
+                }
+            )
         return brief.model_copy(
-            update={
-                "target_audience": brief.target_audience or "platform shoppers comparing product value quickly",
-                "commercial_hooks": self._append_unique(
-                    brief.commercial_hooks,
-                    ["product clarity", "feature proof", "platform conversion"],
-                ),
-                "selling_points": self._append_unique(
-                    brief.selling_points,
-                    ["clear product hero", "visible feature benefits"],
-                ),
-                "visual_tone": self._append_unique(brief.visual_tone, ["product_focused", "clean", "conversion_ready"]),
-                "copy_strategy": "short feature-led product copy with clear benefit labels and purchase cue",
-                "platform_notes": {
-                    **brief.platform_notes,
-                    "vertical_pack": self.name,
-                    "ecommerce_rule": "prioritize main image clarity, SKU consistency, and feature callout space",
-                },
-                "metadata": self._metadata(brief.metadata, "commercial_brief", priorities=["product_clarity", "feature_labels"]),
-            }
+            update=updates
         )
 
     def refine_creative_plan(self, context):
@@ -95,6 +119,76 @@ class EcommerceAgentFamily(VerticalAgentPack):
         series = context.series_plan
         if series is None:
             return series
+        pack_output = self._scenario_pack_output(context)
+        if pack_output is not None and pack_output.recipes:
+            platform = self._platform_for_marketplace(pack_output.marketplace_profile.platform)
+            assets: list[AssetSpec] = []
+            for index, recipe in enumerate(pack_output.recipes):
+                base_asset = series.assets[min(index, len(series.assets) - 1)] if series.assets else None
+                asset_type = self._asset_type_for_slot(recipe.slot)
+                recipe_payload = recipe.model_dump(mode="json")
+                marketplace_payload = pack_output.marketplace_profile.model_dump(mode="json")
+                product_truth_payload = pack_output.product_truth.model_dump(mode="json")
+                assets.append(
+                    AssetSpec(
+                        asset_id=stable_id("asset", series.job_id, "ecommerce", recipe.slot, index),
+                        asset_type=asset_type,
+                        platform=platform,
+                        aspect_ratio=self._aspect_ratio_for_slot(
+                            recipe.slot,
+                            dict(pack_output.marketplace_profile.canvas_rules),
+                            base_asset.aspect_ratio if base_asset else "1:1",
+                        ),
+                        purpose=self._purpose_for_recipe(recipe),
+                        priority=index + 1,
+                        requires_text_overlay=bool(recipe.overlay_text),
+                        requires_brand_consistency=True,
+                        metadata={
+                            **self._metadata(
+                                dict(base_asset.metadata) if base_asset else {},
+                                "asset_spec",
+                                asset_role=asset_type.value,
+                                ecommerce_recipe=recipe_payload,
+                                ecommerce_slot=recipe.slot,
+                                ecommerce_slot_index=index + 1,
+                                ecommerce_business_goal=recipe.business_goal,
+                                ecommerce_selling_point=recipe.selling_point,
+                                ecommerce_buyer_intent=recipe.buyer_intent,
+                                ecommerce_visual_scene=recipe.visual_scene,
+                                marketplace_profile=marketplace_payload,
+                                product_truth=product_truth_payload,
+                                generated_from_ecommerce_recipe=True,
+                            ),
+                            "ecommerce_recipe": recipe_payload,
+                            "ecommerce_slot": recipe.slot,
+                            "ecommerce_slot_index": index + 1,
+                            "ecommerce_business_goal": recipe.business_goal,
+                            "ecommerce_selling_point": recipe.selling_point,
+                            "ecommerce_buyer_intent": recipe.buyer_intent,
+                            "ecommerce_visual_scene": recipe.visual_scene,
+                            "marketplace_profile": marketplace_payload,
+                            "product_truth": product_truth_payload,
+                            "generated_from_ecommerce_recipe": True,
+                        },
+                    )
+                )
+            return series.model_copy(
+                update={
+                    "assets": assets,
+                    "series_strategy": (
+                        "ecommerce one-click product image set: main image, benefit/detail proof, "
+                        "scenario context, trust/comparison support, and optional traffic cover"
+                    ),
+                    "metadata": self._metadata(
+                        series.metadata,
+                        "series_plan",
+                        asset_count=len(assets),
+                        ecommerce_recipe_series=True,
+                        ecommerce_recipe_count=len(pack_output.recipes),
+                        marketplace_profile=pack_output.marketplace_profile.model_dump(mode="json"),
+                    ),
+                }
+            )
         assets = []
         for index, asset in enumerate(series.assets):
             asset_type = asset.asset_type
@@ -124,12 +218,17 @@ class EcommerceAgentFamily(VerticalAgentPack):
     def refine_layout_plan(self, context, layout_plan):
         if layout_plan is None:
             return layout_plan
+        asset_metadata = layout_plan.metadata.get("asset_metadata", {})
+        recipe = asset_metadata.get("ecommerce_recipe") if isinstance(asset_metadata, dict) else None
+        slot = str(asset_metadata.get("ecommerce_slot") or (recipe.get("slot") if isinstance(recipe, dict) else "") or "")
+        product_box = self._product_box_for_slot(slot)
+        hierarchy = self._visual_hierarchy_for_slot(slot)
         product_area = layout_plan.product_area.model_copy(
             update={
-                "position": "center_product_hero",
+                "position": self._product_position_for_slot(slot),
                 "priority": 1,
-                "relative_box": {"x": 0.16, "y": 0.22, "w": 0.68, "h": 0.50},
-                "notes": "large unobstructed product hero with visible shape, material, and scale",
+                "relative_box": product_box,
+                "notes": self._product_area_notes_for_slot(slot, recipe),
                 "metadata": self._metadata(layout_plan.product_area.metadata, "layout_region", region="product_area"),
             }
         )
@@ -139,10 +238,15 @@ class EcommerceAgentFamily(VerticalAgentPack):
         return layout_plan.model_copy(
             update={
                 "product_area": product_area,
-                "visual_hierarchy": ["product_hero", "feature_benefit", "price_or_cta", "brand_mark"],
+                "visual_hierarchy": hierarchy,
                 "reserved_text_regions": reserved_regions,
-                "background_strategy": "clean ecommerce background with low clutter and space for feature labels",
-                "metadata": self._metadata(layout_plan.metadata, "layout_plan", layout_bias="product_hero"),
+                "background_strategy": self._background_strategy_for_slot(slot, recipe),
+                "metadata": self._metadata(
+                    layout_plan.metadata,
+                    "layout_plan",
+                    layout_bias="product_hero",
+                    ecommerce_slot=slot or None,
+                ),
             }
         )
 
@@ -182,3 +286,104 @@ class EcommerceAgentFamily(VerticalAgentPack):
             "layout_score_delta": 0.02,
             "weighted_priorities": ["product_visibility", "feature_label_space", "platform_conversion"],
         }
+
+    def _is_ecommerce_scenario(self, context) -> bool:
+        job_metadata = context.creative_job.metadata if context.creative_job else {}
+        return str(context.metadata.get("scenario_id") or job_metadata.get("scenario_id") or "") == "ecommerce"
+
+    def _scenario_pack_output(self, context):
+        if not self._is_ecommerce_scenario(context):
+            return None
+        parameters = dict(context.metadata.get("scenario_parameters") or {})
+        planner = EcommerceScenarioPackPlanner()
+        return planner.plan(
+            user_input=context.user_input,
+            product_profile=dict(context.metadata.get("product_profile") or {}),
+            uploaded_asset_ids=list(context.metadata.get("uploaded_asset_ids") or []),
+            scenario_parameters=parameters,
+            platform_profile=context.metadata.get("platform_profile"),
+            job_key=context.creative_job.job_id if context.creative_job else context.user_input,
+        )
+
+    def _target_platforms_for_context(self, context, fallback: list[Platform]) -> list[Platform]:
+        parameters = dict(context.metadata.get("scenario_parameters") or {})
+        raw = str(context.metadata.get("platform_profile") or parameters.get("platform") or parameters.get("marketplace") or "")
+        platform = self._platform_for_marketplace(raw)
+        return [platform] if platform else fallback
+
+    def _platform_for_marketplace(self, value: str | None) -> Platform:
+        normalized = str(value or "").lower()
+        if normalized in {"taobao", "tmall"}:
+            return Platform.TAOBAO
+        if normalized in {"jd", "jingdong"}:
+            return Platform.JD
+        if normalized in {"tiktok_shop", "tiktok"}:
+            return Platform.DOUYIN
+        return Platform.ECOMMERCE_GENERIC
+
+    def _asset_type_for_slot(self, slot: str) -> AssetType:
+        if slot in {"main_image", "hero_image"}:
+            return AssetType.ECOMMERCE_MAIN_IMAGE
+        if slot in {"ad_cover", "store_banner", "collection_cover"}:
+            return AssetType.CAMPAIGN_BANNER
+        return AssetType.PRODUCT_DETAIL_BANNER
+
+    def _aspect_ratio_for_slot(self, slot: str, canvas_rules: dict[str, Any], fallback: str) -> str:
+        primary = str(canvas_rules.get("primary_aspect_ratio") or fallback or "1:1")
+        secondary = str(canvas_rules.get("secondary_aspect_ratio") or primary)
+        if slot in {"main_image", "hero_image"}:
+            return primary
+        if slot in {"ad_cover", "store_banner", "collection_cover"}:
+            return secondary
+        return primary if primary in {"1:1", "4:5"} else secondary
+
+    def _purpose_for_recipe(self, recipe) -> str:
+        return f"{recipe.slot}: {recipe.business_goal} via {recipe.selling_point}"
+
+    def _product_position_for_slot(self, slot: str) -> str:
+        if slot == "detail_image":
+            return "macro_detail_product_anchor"
+        if slot == "scenario_image":
+            return "scene_integrated_product_anchor"
+        if slot in {"size_spec_image", "trust_comparison_image"}:
+            return "center_product_with_comparison_space"
+        return "center_product_hero"
+
+    def _product_box_for_slot(self, slot: str) -> dict[str, float]:
+        if slot == "detail_image":
+            return {"x": 0.12, "y": 0.18, "w": 0.76, "h": 0.60}
+        if slot == "scenario_image":
+            return {"x": 0.18, "y": 0.22, "w": 0.56, "h": 0.48}
+        if slot in {"size_spec_image", "trust_comparison_image"}:
+            return {"x": 0.12, "y": 0.22, "w": 0.58, "h": 0.48}
+        return {"x": 0.16, "y": 0.22, "w": 0.68, "h": 0.50}
+
+    def _visual_hierarchy_for_slot(self, slot: str) -> list[str]:
+        if slot == "detail_image":
+            return ["product_detail", "proof_area", "external_label_space", "brand_mark"]
+        if slot == "scenario_image":
+            return ["use_scene", "product_identity", "benefit_context", "brand_mark"]
+        if slot in {"size_spec_image", "trust_comparison_image"}:
+            return ["product_identity", "comparison_space", "trust_cue", "brand_mark"]
+        if slot in {"ad_cover", "store_banner", "collection_cover"}:
+            return ["traffic_hook_visual", "product_family", "external_headline_space", "brand_mark"]
+        return ["product_hero", "benefit_space", "external_label_space", "brand_mark"]
+
+    def _product_area_notes_for_slot(self, slot: str, recipe: dict[str, Any] | None) -> str:
+        scene = recipe.get("visual_scene") if isinstance(recipe, dict) else None
+        selling_point = recipe.get("selling_point") if isinstance(recipe, dict) else None
+        return "large unobstructed product hero; " + "; ".join(
+            part for part in [str(scene or "").strip(), f"selling point: {selling_point}" if selling_point else ""] if part
+        )
+
+    def _background_strategy_for_slot(self, slot: str, recipe: dict[str, Any] | None) -> str:
+        scene = recipe.get("visual_scene") if isinstance(recipe, dict) else None
+        if slot == "scenario_image":
+            return f"realistic clean usage scene; {scene}; keep product identity central"
+        if slot == "detail_image":
+            return f"premium macro/detail background; {scene}; leave clean proof-label space"
+        if slot in {"size_spec_image", "trust_comparison_image"}:
+            return f"clean comparison-ready ecommerce background; {scene}; leave blank external annotation lanes"
+        if slot in {"ad_cover", "store_banner", "collection_cover"}:
+            return f"traffic-ready branded ecommerce background; {scene}; keep blank headline area"
+        return f"clean ecommerce background with low clutter and no rendered text; {scene or 'product-first hero'}"
