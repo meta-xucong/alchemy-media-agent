@@ -58,6 +58,7 @@ cd D:\AI\AlchemyOS\custom_media_agent_2_0
 ## Design Docs
 
 - [Claude Checkpoint Orchestrator](docs/claude_checkpoint_orchestrator.md): staged Claude Code orchestration plan for automatic checkpoint compression and continuation without skipping Claude.
+- [Central Brain Task Intent Model](docs/central_brain_task_intent_model.md): pre-implementation design for making Claude understand uploaded-asset/template task relationships before local asset binding hardens prompt policy.
 
 ## MVP Scope
 
