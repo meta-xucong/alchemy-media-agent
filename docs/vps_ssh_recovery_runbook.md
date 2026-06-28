@@ -141,5 +141,7 @@ Writing to /root/.ssh/authorized_keys - wb: [600] 0 bytes
 ## GitHub Actions 注意事项
 
 - `Deploy VPS` 使用仓库 secret `VPS_SSH_KEY_B64` 或 `VPS_SSH_KEY`。
-- 临时部署 key 可以短期写入 `VPS_SSH_KEY_B64`，但部署完成后必须删除该临时 secret。
-- 正常状态下应依赖原 `VPS_SSH_KEY`，并保证 VPS 的 `/root/.ssh/authorized_keys` 包含原公钥。
+- 如果 Actions 在 `Prepare SSH` 阶段报 `Load key "/home/runner/.ssh/id_ed25519": error in libcrypto`，说明 runner 写出的私钥不是 OpenSSH 可解析格式；常见原因是多行 `VPS_SSH_KEY` 在 secret 写入或读取时换行被破坏。
+- 更稳的做法是把同一把原私钥转成单行 base64，写入 `VPS_SSH_KEY_B64`。workflow 会优先读取 `VPS_SSH_KEY_B64`，再 `base64 -d` 还原私钥。
+- `VPS_SSH_KEY_B64` 可以是原 key 的长期 Actions secret，也可以是临时部署 key 的短期 secret；如果是临时 key，部署完成后必须删除该临时 secret 并清理 VPS 上对应公钥。
+- 无论 GitHub secret 用 `VPS_SSH_KEY_B64` 还是 `VPS_SSH_KEY`，VPS 的 `/root/.ssh/authorized_keys` 都必须包含匹配的公钥。
