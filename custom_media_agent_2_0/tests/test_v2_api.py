@@ -4018,6 +4018,94 @@ def test_finished_menu_source_is_content_evidence_under_template_lock() -> None:
     assert "information_dense_content_may_be_incomplete" in review["detected_risks"]
 
 
+def test_content_extraction_without_qr_intent_blocks_phantom_qr_slots() -> None:
+    client = fresh_client()
+    asset_id = upload_test_asset(client, role="subject_reference", color=(190, 220, 210))
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "Extract the uploaded image food content, key copy, offer details, and price information "
+                "into the selected template poster. Do not copy the uploaded layout."
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "subject_reference",
+                    "constraint_strength": "required",
+                    "notes": "Finished menu poster source; extract content and copy only.",
+                }
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    binding = variables["asset_binding_plan"]["bindings"][0]
+    assert binding["fusion_mode"] == "composite_content_source"
+    assert binding["placement_intent"]["target_label"] == "content, copy, food, or business information slots"
+    assert binding["placement_intent"]["qr_intent"] is False
+    assert "Do not add QR codes" in binding["prompt_instruction"]
+    assert variables["information_integrity_contract"]["active"] is True
+    assert variables["information_integrity_contract"]["qr_intent"] is False
+    assert variables["information_integrity_contract"]["qr_policy"] == "do_not_invent_qr_or_scan_placeholder"
+    assert not any("QR code" in field for field in variables["information_integrity_contract"]["critical_fields"])
+    prompt = run["prompt_plan"]["prompt"]
+    assert "Food-to-copy and offer-to-product correspondence" in prompt
+    assert "QR/CTA correspondence" not in prompt
+    assert "Do not invent QR codes" in prompt
+    assert "empty scan cards" in prompt
+    negative_prompt = run["prompt_plan"]["negative_prompt"]
+    assert "empty QR placeholder" in negative_prompt
+    assert "missing requested or source QR" not in negative_prompt
+
+
+def test_prompt_explicit_height_width_infers_output_size_and_blocks_qr() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "品牌：河野轻厨\n"
+                "IP：蓝色河马\n"
+                "标题：周月卡30天不重样漂亮饭\n"
+                "副标题：适合儿童，成人的低糖低脂低油健康餐 198元5次卡，1456元40次卡\n"
+                "菜品参考图片名称：干煸肥牛佛卡夏三明治，番茄烩牛肉滑蛋杂粮碗，韩式肥牛拌饭，三文鱼能量碗，香煎鲜虾花园碗，泰式罗望子辣炒牛肉意面\n"
+                "尺寸：高度180*宽度80\n"
+                "备注：不需要二维码"
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    params = run["prompt_plan"]["provider_parameters"]
+    assert params["size"] == "1024x2304"
+    assert run["prompt_plan"]["user_variables"]["aspect_lock"] == {
+        "mode": "manual",
+        "locked": True,
+        "source": "user_prompt.size",
+        "value": "1024x2304",
+        "aspect_ratio": "4:9",
+        "prompt_instruction": "Required output aspect ratio: 4:9.",
+    }
+    prompt = run["prompt_plan"]["prompt"]
+    assert "Required output aspect ratio: 4:9." in prompt
+    assert "Do not invent QR codes" in prompt
+    negative_prompt = run["prompt_plan"]["negative_prompt"]
+    assert "empty QR placeholder" in negative_prompt
+    output = run["generation_jobs"][0]["outputs"][0]
+    with Image.open(Path(output["metadata"]["storage_path"])) as generated_image:
+        assert generated_image.size == (1024, 2304)
+
+
 def test_template_content_correspondence_keeps_full_anchor_skeleton_primary() -> None:
     template = make_prompt_case(
         "test_recipe_correspondence_template",

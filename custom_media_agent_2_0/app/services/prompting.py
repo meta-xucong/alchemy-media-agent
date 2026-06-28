@@ -24,6 +24,20 @@ A4_LANDSCAPE_SIZE = "3392x2400"
 PORTRAIT_SIZE = "1024x1536"
 LANDSCAPE_SIZE = "1536x1024"
 SQUARE_SIZE = "1024x1024"
+MIN_CUSTOM_SIZE_SIDE = 1024
+MAX_CUSTOM_SIZE_SIDE = 3840
+QR_EXCLUSION_PATTERN = re.compile(
+    "(不要|不需要|无需|無需|禁止|去掉|移除|不要展示|不要出现|不出现|without|no|do\\s+not\\s+include|do\\s+not\\s+show)"
+    ".{0,24}"
+    "(二维码|二維碼|qr\\s*code|qr-code|qrcode|scan\\s*code|扫码|掃碼)",
+    re.IGNORECASE,
+)
+QR_EXCLUSION_TERMS = [
+    "invented QR code",
+    "unrequested scan code",
+    "empty QR placeholder",
+    "decorative QR card",
+]
 
 
 def summarize_intent(user_prompt: str) -> str:
@@ -64,6 +78,8 @@ def compose_prompt_plan(
         prompt = _apply_template_anchor(prompt, user_prompt=user_prompt, template=primary)
     prompt = _apply_asset_context_guard(prompt, asset_context=asset_context)
     prompt = apply_visual_grammar_lock(prompt, contract=visual_grammar_contract, user_prompt=user_prompt)
+    qr_excluded = _qr_explicitly_excluded(user_prompt)
+    prompt = _append_qr_exclusion_instruction(prompt, qr_excluded=qr_excluded)
     information_integrity = (
         visual_grammar_contract.get("information_integrity")
         if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
@@ -81,24 +97,43 @@ def compose_prompt_plan(
     if mode == "template_customize" and primary and _template_allows_text_elements(primary, user_prompt=user_prompt):
         negative_prompt = _remove_negative_terms(negative_prompt, {"text"})
     if information_integrity.get("active"):
+        information_negative_terms = [
+            "missing requested source content",
+            "missing requested CTA or contact details",
+            "copied source menu grid",
+            "copied source poster layout",
+            "source layout overriding selected template",
+        ]
+        if information_integrity.get("qr_intent"):
+            information_negative_terms.append("missing requested or source QR")
+        else:
+            information_negative_terms.extend(QR_EXCLUSION_TERMS)
         negative_prompt = _merge_negative_prompt(
             negative_prompt,
-            [
-                "missing requested source content",
-                "missing requested QR or CTA",
-                "copied source menu grid",
-                "copied source poster layout",
-                "source layout overriding selected template",
-            ],
+            information_negative_terms,
         )
+    if qr_excluded:
+        negative_prompt = _merge_negative_prompt(negative_prompt, QR_EXCLUSION_TERMS)
     provider_parameters = _build_provider_parameters(
         output,
         orchestrator_decision,
         visual_grammar_contract=visual_grammar_contract,
     )
     requested_output = requested_output or {}
-    provider_parameters = _apply_prompt_size_inference(provider_parameters, user_prompt=user_prompt, requested_output=requested_output)
+    inferred_prompt_size = _infer_prompt_size_for_parameters(
+        provider_parameters,
+        user_prompt=user_prompt,
+        requested_output=requested_output,
+    )
+    provider_parameters = _apply_prompt_size_inference(
+        provider_parameters,
+        user_prompt=user_prompt,
+        requested_output=requested_output,
+        inferred_size=inferred_prompt_size,
+    )
     aspect_lock = _aspect_lock_from_requested_output(requested_output)
+    if not aspect_lock.get("locked") and inferred_prompt_size:
+        aspect_lock = _aspect_lock_from_value(inferred_prompt_size, source="user_prompt.size")
     prompt_transform_request = _prompt_transform_request_from_output(requested_output or {})
     provider_parameters = _apply_aspect_lock(provider_parameters, aspect_lock)
     prompt = _append_aspect_lock_instruction(prompt, aspect_lock)
@@ -286,10 +321,22 @@ def _build_provider_parameters(
     return params
 
 
-def _apply_prompt_size_inference(params: dict, *, user_prompt: str, requested_output: dict) -> dict:
+def _infer_prompt_size_for_parameters(params: dict, *, user_prompt: str, requested_output: dict) -> str | None:
+    if _has_manual_dimension(requested_output) or _has_dimension(params):
+        return None
+    return _infer_size_from_prompt(user_prompt)
+
+
+def _apply_prompt_size_inference(
+    params: dict,
+    *,
+    user_prompt: str,
+    requested_output: dict,
+    inferred_size: str | None = None,
+) -> dict:
     if _has_manual_dimension(requested_output) or _has_dimension(params):
         return params
-    inferred = _infer_size_from_prompt(user_prompt)
+    inferred = inferred_size or _infer_size_from_prompt(user_prompt)
     if not inferred:
         return params
     next_params = dict(params)
@@ -311,6 +358,9 @@ def _has_dimension(params: dict) -> bool:
 
 def _infer_size_from_prompt(prompt: str) -> str | None:
     prompt_text = prompt or ""
+    explicit_size = _explicit_size_from_prompt(prompt_text)
+    if explicit_size:
+        return explicit_size
     if _mentions_a4(prompt_text):
         if _mentions_landscape(prompt_text):
             return A4_LANDSCAPE_SIZE
@@ -322,6 +372,59 @@ def _infer_size_from_prompt(prompt: str) -> str | None:
     if _mentions_landscape(prompt_text):
         return LANDSCAPE_SIZE
     return None
+
+
+def _explicit_size_from_prompt(prompt: str) -> str | None:
+    dimensions = _explicit_dimensions_from_prompt(prompt)
+    if not dimensions:
+        return None
+    width, height = dimensions
+    return _normalize_custom_size(width, height)
+
+
+def _explicit_dimensions_from_prompt(prompt: str) -> tuple[int, int] | None:
+    text = str(prompt or "")
+    if not text:
+        return None
+    width_words = r"(?:宽度|宽|畫寬|画宽|width|w)"
+    height_words = r"(?:高度|高|畫高|画高|height|h)"
+    number = r"([1-9]\d{1,4})"
+    unit = r"(?:\s*(?:px|像素|cm|厘米|mm|毫米))?"
+    separators = r"(?:\s*[*xX×乘,，/\\| ]+\s*)"
+    patterns = [
+        rf"{width_words}\s*[:：=]?\s*{number}{unit}{separators}{height_words}\s*[:：=]?\s*{number}{unit}",
+        rf"{height_words}\s*[:：=]?\s*{number}{unit}{separators}{width_words}\s*[:：=]?\s*{number}{unit}",
+    ]
+    for index, pattern in enumerate(patterns):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        first = int(match.group(1))
+        second = int(match.group(2))
+        return (first, second) if index == 0 else (second, first)
+    generic = re.search(
+        rf"(?:尺寸|画幅|畫幅|size|dimension)\s*[:：=]?\s*{number}{unit}{separators}{number}{unit}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if generic:
+        return int(generic.group(1)), int(generic.group(2))
+    return None
+
+
+def _normalize_custom_size(width: int, height: int) -> str | None:
+    if width <= 0 or height <= 0:
+        return None
+    width_f = float(width)
+    height_f = float(height)
+    scale = 1.0
+    if width_f < MIN_CUSTOM_SIZE_SIDE or height_f < MIN_CUSTOM_SIZE_SIDE:
+        scale = max(MIN_CUSTOM_SIZE_SIDE / width_f, MIN_CUSTOM_SIZE_SIDE / height_f)
+    if max(width_f * scale, height_f * scale) > MAX_CUSTOM_SIZE_SIDE:
+        scale = MAX_CUSTOM_SIZE_SIDE / max(width_f, height_f)
+    normalized_width = max(1, int(round(width_f * scale)))
+    normalized_height = max(1, int(round(height_f * scale)))
+    return f"{normalized_width}x{normalized_height}"
 
 
 def _mentions_a4(prompt: str) -> bool:
@@ -373,11 +476,15 @@ def _aspect_lock_from_requested_output(requested_output: dict) -> dict[str, obje
             "aspect_ratio": "",
             "prompt_instruction": "",
         }
+    return _aspect_lock_from_value(locked_value, source="output.size" if size else "output.aspect_ratio")
+
+
+def _aspect_lock_from_value(locked_value: str, *, source: str) -> dict[str, object]:
     ratio = _ratio_from_dimension_or_ratio(locked_value)
     return {
         "mode": "manual",
         "locked": True,
-        "source": "output.size" if size else "output.aspect_ratio",
+        "source": source,
         "value": locked_value,
         "aspect_ratio": ratio,
         "prompt_instruction": f"Required output aspect ratio: {ratio}." if ratio else "",
@@ -414,7 +521,7 @@ def _apply_aspect_lock(params: dict, aspect_lock: dict[str, object]) -> dict:
     value = str(aspect_lock.get("value") or "").strip()
     source = str(aspect_lock.get("source") or "")
     if value:
-        if source == "output.size":
+        if source.endswith(".size"):
             next_params["size"] = value
         else:
             next_params["aspect_ratio"] = value
@@ -431,11 +538,28 @@ def _append_aspect_lock_instruction(prompt: str, aspect_lock: dict[str, object])
     return f"{prompt_text}\n\n{instruction}" if prompt_text else instruction
 
 
+def _append_qr_exclusion_instruction(prompt: str, *, qr_excluded: bool) -> str:
+    if not qr_excluded:
+        return prompt
+    instruction = (
+        "Hard QR exclusion: do not include QR codes, scan-code modules, QR placeholders, empty scan cards, "
+        "or decorative square code areas. This overrides any selected-template or reference cue that contains a QR-safe area, scan card, or code block."
+    )
+    prompt_text = str(prompt or "").rstrip()
+    if instruction in prompt_text:
+        return prompt_text
+    return f"{prompt_text}\n\n{instruction}" if prompt_text else instruction
+
+
 def _clean_dimension_value(value: object) -> str:
     text = str(value or "").strip()
     if not text or text.lower() in {"auto", "default", "none", "null"}:
         return ""
     return text
+
+
+def _qr_explicitly_excluded(value: str) -> bool:
+    return bool(QR_EXCLUSION_PATTERN.search(str(value or "")))
 
 
 def _ratio_from_dimension_or_ratio(value: str) -> str:

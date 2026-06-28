@@ -70,6 +70,16 @@ ROLE_ALLOWED_OVERRIDES = {
     "color_reference": ["compatible product palette", "compatible accent colors"],
     "negative_reference": ["negative visual exclusions"],
 }
+QR_INTENT_PATTERN = re.compile(
+    "(二维码|二維碼|qr\\s*code|qr-code|qrcode|qr码|qr碼|scan\\s*code|扫码|掃碼|小程序码|小程序碼)",
+    re.IGNORECASE,
+)
+QR_EXCLUSION_PATTERN = re.compile(
+    "(不要|不需要|无需|無需|禁止|去掉|移除|不要展示|不要出现|不出现|without|no|do\\s+not\\s+include|do\\s+not\\s+show)"
+    ".{0,24}"
+    "(二维码|二維碼|qr\\s*code|qr-code|qrcode|scan\\s*code|扫码|掃碼)",
+    re.IGNORECASE,
+)
 
 
 def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
@@ -93,6 +103,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         template_locked=template_lock is not None,
     )
     return {
+        "user_prompt": request.user_prompt,
         "uploaded_assets": uploaded_asset_contexts,
         "template_lock_contract": template_lock.model_dump(mode="json") if template_lock else None,
         "asset_binding_plan": binding_plan.model_dump(mode="json"),
@@ -148,12 +159,23 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         and frame_strategy.get("mode") in {"template_frame_primary", "case_frame_primary"}
     ):
         frame_source = "the selected template" if frame_strategy.get("mode") == "template_frame_primary" else "retrieved cases"
+        qr_intent = _asset_context_qr_intent(asset_context)
+        extraction_targets = (
+            "Extract semantic content, product/food identity, copy, source QR, and offer details; "
+            if qr_intent
+            else "Extract semantic content, product/food identity, copy, offer details, and other requested business facts; "
+        )
+        correspondence = (
+            "If the user asks to keep text-food, offer-product, or QR-copy correspondence, preserve those relationships only as semantic pairings inside the frame owner's existing modules; "
+            if qr_intent
+            else "Preserve requested text-food and offer-product correspondence only as semantic pairings inside the frame owner's existing modules; do not infer a QR or scan-code module from generic CTA/poster structure; "
+        )
         parts.append(
             "UPLOADED CONTENT SOURCE: use uploaded poster/menu/screenshot-like assets as content evidence and hard references only. "
-            "Extract semantic content, product/food identity, copy, QR, and offer details; "
-            f"use {frame_source} for the new visual frame. "
-            "If the user asks to keep text-food, offer-product, or QR-copy correspondence, preserve those relationships only as semantic pairings inside the frame owner's existing modules; "
-            "do not expand, re-grid, or recompose the selected frame to mirror the source image."
+            + extraction_targets
+            + f"use {frame_source} for the new visual frame. "
+            + correspondence
+            + "do not expand, re-grid, or recompose the selected frame to mirror the source image."
         )
     provider_plan = asset_context.get("provider_input_plan") if isinstance(asset_context.get("provider_input_plan"), dict) else {}
     if provider_plan.get("reference_image_count"):
@@ -332,6 +354,38 @@ def _frame_strategy_text(
             ]
         )
     return " ".join(parts).lower()
+
+
+def _asset_context_qr_intent(asset_context: dict[str, Any]) -> bool:
+    if _qr_explicitly_excluded(asset_context.get("user_prompt")):
+        return False
+    parts: list[Any] = [asset_context.get("user_prompt")]
+    for asset in asset_context.get("uploaded_assets", []) or []:
+        if not isinstance(asset, dict):
+            continue
+        parts.extend([asset.get("filename"), asset.get("intended_use")])
+        brief = asset.get("brief") if isinstance(asset.get("brief"), dict) else {}
+        parts.extend(
+            [
+                brief.get("visual_summary"),
+                brief.get("identity_requirements"),
+                brief.get("detected_text"),
+            ]
+        )
+    return _qr_requested_in_text(" ".join(str(item or "") for item in parts))
+
+
+def _qr_explicitly_excluded(value: Any) -> bool:
+    return bool(QR_EXCLUSION_PATTERN.search(str(value or "")))
+
+
+def _qr_requested_in_text(value: Any) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    if _qr_explicitly_excluded(text):
+        return False
+    return bool(QR_INTENT_PATTERN.search(text))
 
 
 def _uploaded_frame_requested(text: str, bindings: list[dict[str, Any]]) -> bool:
@@ -660,10 +714,22 @@ def _prompt_instruction(
     target_label = placement.get("target_label") or fusion_policy.get("target_surface")
     subject_rule = "Replace the template's original subject with the uploaded subject while preserving the selected template's visual frame."
     if role == "subject_reference" and fusion_mode == "composite_content_source":
+        qr_intent = bool(fusion_policy.get("qr_intent"))
+        content_targets = (
+            "the user-requested food/product evidence, copy, source QR, logo, or business facts"
+            if qr_intent
+            else "the user-requested food/product evidence, copy, logo, or business facts"
+        )
+        qr_policy = (
+            "Preserve QR or scan-code details only from a real uploaded/source QR or explicit user QR request. "
+            if qr_intent
+            else "Do not add QR codes, scan-code blocks, blank QR placeholders, or decorative code areas. "
+        )
         subject_rule = (
             "Treat the uploaded image as a source of extractable content, not as the visual frame. "
-            "Extract only the user-requested food/product evidence, copy, QR, logo, or business facts, then rebuild those elements inside the selected visual grammar. "
-            "Do not copy its whole poster/menu/screenshot layout, grid, background, density, original information architecture, or visual rhythm."
+            f"Extract only {content_targets}, then rebuild those elements inside the selected visual grammar. "
+            + qr_policy
+            + "Do not copy its whole poster/menu/screenshot layout, grid, background, density, original information architecture, or visual rhythm."
         )
     role_rule = {
         "subject_reference": subject_rule,
@@ -819,11 +885,13 @@ def _role_for_prompt_intent(
     if role in {"logo_reference", "face_reference", "background_reference", "negative_reference"}:
         return role, strength, None
     upgraded_strength: ConstraintStrength = "required" if strength == "soft" else strength
+    qr_intent = _qr_requested_in_text(source_text)
+    content_label = "content/copy/QR" if qr_intent else "content/copy"
     reason = (
-        "user prompt asks to migrate uploaded image content/copy/QR into the selected template frame; "
+        f"user prompt asks to migrate uploaded image {content_label} into the selected template frame; "
         "treat the uploaded asset as semantic content evidence, not as the frame"
         if template_locked
-        else "user prompt asks to extract uploaded image content/copy/QR into a new visual frame"
+        else f"user prompt asks to extract uploaded image {content_label} into a new visual frame"
     )
     if role != "subject_reference":
         return "subject_reference", upgraded_strength, reason
@@ -842,6 +910,7 @@ def _fusion_policy(
     source_text, source = _intent_source_text(user_prompt=user_prompt, notes=notes, brief=brief)
     placement = _placement_intent(role=role, text=source_text, source=source, template_locked=template_locked)
     fusion_mode = _fusion_mode(role=role, placement=placement, text=source_text, template_locked=template_locked)
+    qr_intent = _qr_requested_in_text(source_text)
     provider_input_required = role in HARD_REFERENCE_ROLES or strength == "required"
     if fusion_mode in {
         "logo_product_surface",
@@ -866,6 +935,7 @@ def _fusion_policy(
         "target_surface": placement.get("target_surface"),
         "provider_input_required": provider_input_required,
         "review_expectations": review_expectations,
+        "qr_intent": qr_intent,
     }
 
 
@@ -881,10 +951,16 @@ def _intent_source_text(*, user_prompt: str, notes: str | None, brief: AssetBrie
 
 def _placement_intent(*, role: str, text: str, source: str, template_locked: bool) -> dict[str, Any]:
     if role == "subject_reference" and _composite_source_requested(text):
+        qr_intent = _qr_requested_in_text(text)
         return {
             "mode": "content_evidence",
             "target_surface": "semantic_content_slots",
-            "target_label": "内容、文案、二维码、菜品或业务信息槽",
+            "qr_intent": qr_intent,
+            "target_label": (
+                "content, copy, source QR, food, or business information slots"
+                if qr_intent
+                else "content, copy, food, or business information slots"
+            ),
             "source": source,
             "instruction": (
                 "Use the uploaded image as source evidence for replaceable content slots, not as the composition or layout frame."
