@@ -49,10 +49,17 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str = "v2
         run = asyncio.run(_preflight_veyra_balance(request, record.run_id)) or asyncio.run(runtime.complete_queued_run(request, record.run_id))
         retry_directive = _queued_run_retry_directive(run)
         if retry_directive:
+            exhausted = retry_directive.consume_attempt and record.attempts >= record.max_attempts
+            snapshot = (
+                _retry_exhausted_run_snapshot(run, retry_directive.message)
+                if exhausted
+                else _waiting_run_snapshot(run, retry_directive.message)
+            )
+            message = snapshot.next_actions[0] if snapshot.next_actions else retry_directive.message
             task_queue.retry_task(
                 record.task_id,
-                retry_directive.message,
-                _waiting_run_snapshot(run, retry_directive.message),
+                message,
+                snapshot,
                 retry_delay_seconds=retry_directive.retry_delay_seconds,
                 consume_attempt=retry_directive.consume_attempt,
             )
@@ -191,6 +198,26 @@ def _waiting_run_snapshot(run: CreativeRun, message: str) -> CreativeRun:
             "updated_at": now,
         }
     )
+
+
+def _retry_exhausted_run_snapshot(run: CreativeRun, retry_message: str) -> CreativeRun:
+    now = utc_now()
+    final_message = _retry_exhausted_message(retry_message)
+    return run.model_copy(
+        update={
+            "status": "failed",
+            "next_actions": [final_message],
+            "updated_at": now,
+        }
+    )
+
+
+def _retry_exhausted_message(retry_message: str) -> str:
+    reason = retry_message
+    marker = "原因："
+    if marker in reason:
+        reason = reason.split(marker, 1)[1].strip()
+    return f"图像上游连续重试后仍不可用，任务已停止自动重试。{('最后原因：' + reason) if reason else ''}"
 
 
 def _retry_after_seconds(detail: dict, default_seconds: float) -> float:

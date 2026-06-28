@@ -3388,6 +3388,23 @@ def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:
         asyncio.run(openai_image_provider._call_openai_image_operation(never_returns))
 
 
+def test_openai_image_timeout_error_is_retryable_with_detail() -> None:
+    object.__setattr__(settings, "openai_image_timeout_seconds", 240.0)
+
+    error = openai_image_provider._openai_error(
+        TimeoutError(),
+        provider="openai_gpt_image",
+        operation="images.edit",
+        index=0,
+    )
+
+    assert error.retryable is True
+    assert "timed out after 240 seconds" in str(error)
+    assert error.detail["retryable"] is True
+    assert error.detail["timeout_seconds"] == 240.0
+    assert error.detail["operation"] == "images.edit"
+
+
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     client = fresh_client()
     response = client.post(
@@ -3452,6 +3469,79 @@ def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["queued"] == 1
     assert queue_worker_service.process_next_task_once(UpstreamBalanceRuntime(), "test-worker") is False
+
+
+def test_creative_run_async_retry_exhaustion_fails_snapshot() -> None:
+    client = fresh_client()
+    response = client.post(
+        "/api/v2/creative/runs/async",
+        json={
+            "user_prompt": "Create a premium skincare product hero image for ecommerce with soft studio lighting.",
+            "output": {"aspect_ratio": "4:5", "count": 1},
+        },
+    )
+    queued = response.json()
+
+    class RetryableImageRuntime:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            now = utc_now()
+            prompt_plan = ImagePromptPlan(
+                plan_id="plan_retryable_timeout",
+                mode="smart_enhance",
+                prompt="Create a premium skincare product hero image.",
+            )
+            job = ImageJob(
+                job_id="job_retryable_timeout",
+                run_id=run_id,
+                status="failed",
+                provider_id="openai_gpt_image",
+                model="gpt-image-2",
+                prompt_plan=prompt_plan,
+                outputs=[],
+                error={
+                    "error_code": "provider_runtime_error",
+                    "message": "OpenAI image request timed out after 240 seconds.",
+                    "detail": {"retry_after_seconds": 1},
+                    "provider": "openai_gpt_image",
+                    "retryable": True,
+                    "native_v2": True,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            return CreativeRun(
+                run_id=run_id,
+                status="failed",
+                mode="smart_enhance",
+                intent_summary="premium skincare product hero image",
+                prompt_plan=prompt_plan,
+                generation_jobs=[job],
+                trace_id="trace_retryable_timeout",
+                next_actions=["OpenAI image request timed out after 240 seconds."],
+                created_at=now,
+                updated_at=now,
+            )
+
+    assert queue_worker_service.process_next_task_once(RetryableImageRuntime(), "test-worker") is True
+    first = client.get(f"/api/v2/creative/runs/{queued['run_id']}").json()
+    assert first["status"] == "generating"
+    assert first["generation_jobs"][0]["status"] == "queued"
+    assert "自动重试" in first["next_actions"][0]
+
+    with task_queue_service._connect() as conn:
+        conn.execute("UPDATE v2_tasks SET not_before = NULL WHERE run_id = ?", (queued["run_id"],))
+
+    assert queue_worker_service.process_next_task_once(RetryableImageRuntime(), "test-worker") is True
+    final = client.get(f"/api/v2/creative/runs/{queued['run_id']}").json()
+    assert final["status"] == "failed"
+    assert final["generation_jobs"][0]["status"] == "failed"
+    assert final["generation_jobs"][0]["error"]["retryable"] is True
+    assert "已停止自动重试" in final["next_actions"][0]
+    assert "保留在队列" not in final["next_actions"][0]
+
+    queue_status = client.get("/api/v2/task-queue/status").json()
+    assert queue_status["counts"]["failed"] == 1
+    assert queue_status["counts"].get("queued", 0) == 0
 
 
 def test_creative_run_async_result_survives_repository_reset() -> None:
