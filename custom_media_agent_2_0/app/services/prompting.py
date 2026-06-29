@@ -202,6 +202,7 @@ def compose_prompt_plan(
             "template_lock_contract": (asset_context or {}).get("template_lock_contract"),
             "task_relationship_model": (asset_context or {}).get("task_relationship_model"),
             "asset_frame_strategy": (asset_context or {}).get("asset_frame_strategy"),
+            "template_visual_grammar_plan": (asset_context or {}).get("template_visual_grammar_plan"),
             "visual_grammar_lock_enabled": bool(visual_grammar_contract),
             "visual_grammar_contract": visual_grammar_contract,
             "information_integrity_lock_enabled": bool(information_integrity.get("active")),
@@ -337,6 +338,9 @@ def _build_provider_parameters(
     for key in ("aspect_ratio", "size"):
         if params.get(key) in {"", "auto", "default", None}:
             params.pop(key, None)
+    output_size = _size_from_width_height(params)
+    if output_size and not _has_dimension(params):
+        params["size"] = output_size
     params["count"] = max(1, min(count, 8))
     params["quality"] = params.get("quality", "high")
     return params
@@ -370,7 +374,23 @@ def _has_manual_dimension(value: dict) -> bool:
         raw = value.get(key)
         if _clean_dimension_value(raw):
             return True
-    return False
+    return bool(_size_from_width_height(value))
+
+
+def _size_from_width_height(value: dict) -> str | None:
+    width = _positive_int(value.get("width"))
+    height = _positive_int(value.get("height"))
+    if width is None or height is None:
+        return None
+    return _normalize_custom_size(width, height)
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(float(str(value).strip()))
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _has_dimension(params: dict) -> bool:
@@ -403,7 +423,7 @@ def _explicit_size_from_prompt(prompt: str) -> str | None:
     return _normalize_custom_size(width, height)
 
 
-def _explicit_dimensions_from_prompt(prompt: str) -> tuple[int, int] | None:
+def _legacy_explicit_dimensions_from_prompt(prompt: str) -> tuple[int, int] | None:
     text = str(prompt or "")
     if not text:
         return None
@@ -425,6 +445,92 @@ def _explicit_dimensions_from_prompt(prompt: str) -> tuple[int, int] | None:
         return (first, second) if index == 0 else (second, first)
     generic = re.search(
         rf"(?:尺寸|画幅|畫幅|size|dimension)\s*[:：=]?\s*{number}{unit}{separators}{number}{unit}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if generic:
+        return int(generic.group(1)), int(generic.group(2))
+    return None
+
+
+def _explicit_dimensions_from_prompt(prompt: str) -> tuple[int, int] | None:
+    text = str(prompt or "")
+    if not text:
+        return None
+    labeled = _labeled_dimensions_from_text(text)
+    if labeled:
+        return labeled
+    generic = _generic_dimensions_from_text(text)
+    if generic:
+        return generic
+    return _legacy_explicit_dimensions_from_prompt(text)
+
+
+def _labeled_dimensions_from_text(text: str) -> tuple[int, int] | None:
+    number = r"(?P<value>[1-9]\d{1,4})"
+    unit = r"(?:\s*(?:px|pixel|pixels|\u50cf\u7d20|cm|\u5398\u7c73|mm|\u6beb\u7c73))?"
+    width_labels = (
+        r"\u5bbd\u5ea6|\u5bbd|\u756b\u5bbd|\u753b\u5bbd|"
+        r"(?<![A-Za-z])width(?![A-Za-z])|(?<![A-Za-z])w(?![A-Za-z])"
+    )
+    height_labels = (
+        r"\u9ad8\u5ea6|\u9ad8|\u756b\u9ad8|\u753b\u9ad8|"
+        r"(?<![A-Za-z])height(?![A-Za-z])|(?<![A-Za-z])h(?![A-Za-z])"
+    )
+    label_before_value = re.compile(
+        rf"(?P<label>{width_labels}|{height_labels})\s*[:\uff1a=]?\s*{number}{unit}",
+        flags=re.IGNORECASE,
+    )
+    value_before_label = re.compile(
+        rf"{number}{unit}\s*(?P<label>{width_labels}|{height_labels})",
+        flags=re.IGNORECASE,
+    )
+    hits: list[tuple[int, str, int]] = []
+    for pattern in (label_before_value, value_before_label):
+        for match in pattern.finditer(text):
+            label = str(match.group("label") or "").lower()
+            kind = "height" if _is_height_label(label) else "width"
+            hits.append((match.start(), kind, int(match.group("value"))))
+    hits.sort(key=lambda item: item[0])
+    best: tuple[int, int] | None = None
+    best_span: int | None = None
+    for index, first in enumerate(hits):
+        for second in hits[index + 1 :]:
+            if first[1] == second[1]:
+                continue
+            span = second[0] - first[0]
+            if span > 80:
+                continue
+            width = first[2] if first[1] == "width" else second[2]
+            height = first[2] if first[1] == "height" else second[2]
+            if best_span is None or span < best_span:
+                best = (width, height)
+                best_span = span
+            break
+    return best
+
+
+def _is_height_label(label: str) -> bool:
+    return label in {
+        "\u9ad8",
+        "\u9ad8\u5ea6",
+        "\u756b\u9ad8",
+        "\u753b\u9ad8",
+        "height",
+        "h",
+    }
+
+
+def _generic_dimensions_from_text(text: str) -> tuple[int, int] | None:
+    size_labels = (
+        r"\u5c3a\u5bf8|\u753b\u5e45|\u756b\u5e45|\u753b\u5e03|\u756b\u5e03\u5c3a\u5bf8|"
+        r"size|dimension|dimensions|canvas"
+    )
+    number = r"([1-9]\d{1,4})"
+    unit = r"(?:\s*(?:px|pixel|pixels|\u50cf\u7d20|cm|\u5398\u7c73|mm|\u6beb\u7c73))?"
+    separators = r"(?:\s*(?:[*xX\u00d7\u4e58:/\uff1a\uff0f\\|\-]|by)\s*)"
+    generic = re.search(
+        rf"(?:{size_labels})\s*[:\uff1a=]?\s*.{{0,16}}?{number}{unit}{separators}{number}{unit}",
         text,
         flags=re.IGNORECASE,
     )
@@ -488,6 +594,10 @@ def _aspect_lock_from_requested_output(requested_output: dict) -> dict[str, obje
     size = _clean_dimension_value(raw_size)
     aspect = _clean_dimension_value(raw_aspect)
     locked_value = size or aspect
+    if not locked_value:
+        inferred_size = _size_from_width_height(requested_output)
+        if inferred_size:
+            return _aspect_lock_from_value(inferred_size, source="output.size")
     if not locked_value:
         return {
             "mode": "auto",

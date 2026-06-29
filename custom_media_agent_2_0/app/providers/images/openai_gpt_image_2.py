@@ -414,6 +414,8 @@ def _is_retryable_openai_error(exc: Exception) -> bool:
         "internal server error",
         "server error",
         "temporarily unavailable",
+        "connection error",
+        "api connection error",
         "connection reset",
         "connection aborted",
         "timeout",

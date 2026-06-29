@@ -1381,6 +1381,146 @@ def test_checkpoint_orchestrator_runs_all_stages_and_compresses_output(monkeypat
     assert run["generation_jobs"][0]["provider_id"] == "mock_image"
 
 
+def test_checkpoint_task_intent_visual_grammar_plan_survives_compression(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", True)
+    asset_ids = [
+        upload_test_asset(client, role="style_reference", color=(90 + index * 30, 150, 120))
+        for index in range(2)
+    ]
+    calls: list[str] = []
+
+    monkeypatch.setattr(claude_orchestrator_service, "_resolve_claude_command", lambda: ["claude"])
+
+    def fake_stage_json(*, command, workspace, stage_name, prompt, schema, **kwargs):
+        calls.append(stage_name)
+        payload = json.loads(prompt.split("\n", 1)[1])
+        fallback = json.loads((workspace / "fallback_decision.json").read_text(encoding="utf-8"))
+        template_id = fallback["selected_case_ids"][0]
+        if stage_name.startswith("intent"):
+            assert "task_intent" in payload["json_skeleton"]
+            return {
+                "stage": "intent",
+                "mode": "template_customize",
+                "primary_subject": "healthy meal poster with uploaded dish photos",
+                "scene_goal": "premium recipe infographic adapted to Chinese food-card campaign copy",
+                "must_keep": ["selected template controls frame", "uploaded dishes remain complete"],
+                "must_avoid": ["equal-size catalog grid", "random QR area"],
+                "asset_requirements": [{"relationship": "replace_template_food_subject", "count": 2}],
+                "task_intent": {
+                    "primary_relationship": "replace_template_food_subject",
+                    "target_surface": "food_subject_slots",
+                    "target_label": "template food/product content slots",
+                    "uploaded_asset_role": "slot_replacement_subject",
+                    "fusion_mode": "template_slot_replacement",
+                    "template_slot_replacement": True,
+                    "provider_input_required": True,
+                    "visible_text_language": "Simplified Chinese",
+                    "visible_text_policy": "use Chinese campaign copy and do not inherit English placeholder labels",
+                    "prompt_directive": "Use uploaded dish photos as concrete replacement food subjects inside the template.",
+                },
+                "risk_notes": [],
+                "confidence": 0.9,
+            }
+        if stage_name.startswith("visual_strategy"):
+            assert "template_frame_plan" in payload["json_skeleton"]
+            assert "asset_materialization_plan" in payload["json_skeleton"]
+            assert "module_narrative_plan" in payload["json_skeleton"]
+            assert "module_completion_plan" in payload["json_skeleton"]
+            assert "asset_slot_plan" in payload["output_contract"]
+            assert payload["candidate_cases"]
+            assert "raw_visual_skeleton" in payload["candidate_cases"][0]
+            return {
+                "stage": "visual_strategy",
+                "selected_case_ids": [template_id],
+                "composition": "premium recipe infographic with large hero food area and supporting modules",
+                "lighting": "warm natural premium food light",
+                "palette": "cream, gold, fresh greens",
+                "spatial_hierarchy": "hero/background food dominates; uploaded dishes occupy varied smaller modules",
+                "template_lock_notes": "selected template frame must remain recognizable",
+                "asset_fusion_notes": "uploaded dishes fill food/photo slots without becoming the frame",
+                "template_frame_plan": "preserve hero area, title system, ingredient/process strips, and bottom information rhythm",
+                "asset_slot_plan": [
+                    {
+                        "slot": "hero/background",
+                        "purpose": "generated healthy light-meal anchor",
+                        "scale": "largest",
+                        "rule": "not sourced from uploaded dish modules",
+                    },
+                    {
+                        "slot": "uploaded dishes",
+                        "purpose": "complete replacement food photos",
+                        "scale": "varied secondary",
+                        "rule": "stagger within template modules, not equal cards",
+                    },
+                ],
+                "asset_materialization_plan": "reinterpret uploaded dish photos as template-native food photography rather than source photo frames or pasted photo-card surfaces",
+                "virtual_content_plan": "generate a premium light-meal hero/background because uploads are module replacements",
+                "typography_plan": "preserve refined recipe-poster hierarchy with smaller Chinese copy",
+                "module_narrative_plan": "preserve recipe poster narrative: hero, ingredient/process evidence, benefit notes, and offer rhythm",
+                "module_completion_plan": "assign each retained poster module a clear food, copy, or rhythm role so omitted elements are absorbed into the layout",
+                "template_fidelity_gates": [
+                    "hero-plus-information template remains recognizable",
+                    "not an equal-card meal catalog",
+                ],
+                "confidence": 0.92,
+            }
+        return {
+            "mode": "template_customize",
+            "selected_case_ids": [template_id],
+            "final_prompt": "Premium Chinese healthy meal recipe poster using selected template hierarchy.",
+            "negative_prompt": "random QR area, equal-size catalog grid",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Compressed from intent and visual strategy checkpoints.",
+            "confidence": 0.91,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_stage_json)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "把上传的两张食物图放进选定模板，背景大图自己生成轻食，文字用中文，高级感，"
+                "不要二维码，不要做成普通等大菜单。"
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {"asset_id": asset_id, "role": "style_reference", "constraint_strength": "strong"}
+                for asset_id in asset_ids
+            ],
+            "output": {"count": 1},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    variables = run["prompt_plan"]["user_variables"]
+    prompt = run["prompt_plan"]["prompt"]
+    assert calls == ["intent", "visual_strategy", "generation_decision"]
+    assert run["orchestrator_decision"]["task_intent"]["primary_relationship"] == "replace_template_food_subject"
+    assert variables["provider_input_plan"]["reference_image_count"] == 2
+    assert {
+        item["relationship"]
+        for item in variables["task_relationship_model"]["asset_relationships"]
+    } == {"replace_template_food_subject"}
+    first_binding = variables["asset_binding_plan"]["bindings"][0]
+    assert first_binding["placement_intent"]["mode"] == "template_slot_replacement"
+    assert first_binding["placement_intent"]["target_surface"] == "food_subject_slots"
+    assert variables["template_visual_grammar_plan"]["template_frame_directive"].startswith("preserve hero area")
+    assert variables["template_visual_grammar_plan"]["slot_plan"][1]["rule"] == "stagger within template modules, not equal cards"
+    assert variables["template_visual_grammar_plan"]["layout_completion_directive"].startswith("assign each retained")
+    assert variables["template_visual_grammar_plan"]["asset_materialization_directive"].startswith("reinterpret uploaded")
+    assert variables["template_visual_grammar_plan"]["module_narrative_directive"].startswith("preserve recipe")
+    assert "TEMPLATE VISUAL GRAMMAR TRANSFER" in prompt
+    assert "generate a premium light-meal hero/background" in prompt
+    assert "Asset materialization" in prompt
+    assert "Module narrative" in prompt
+    assert "Module completion" in prompt
+    assert "preserve refined recipe-poster hierarchy" in prompt
+    assert "not an equal-card meal catalog" in prompt
+
+
 def test_creative_run_exposes_claude_progress_summary(monkeypatch) -> None:
     client = fresh_client()
     object.__setattr__(settings, "claude_orchestrator_enabled", True)
@@ -3463,6 +3603,25 @@ def test_openai_image_timeout_error_is_retryable_with_detail() -> None:
     assert error.detail["operation"] == "images.edit"
 
 
+def test_openai_image_connection_error_is_retryable_with_detail() -> None:
+    class APIConnectionError(Exception):
+        pass
+
+    error = openai_image_provider._openai_error(
+        APIConnectionError("Connection error."),
+        provider="openai_gpt_image",
+        operation="images.edit",
+        index=0,
+    )
+
+    assert error.retryable is True
+    assert str(error) == "OpenAI image request failed."
+    assert error.detail["error_type"] == "APIConnectionError"
+    assert error.detail["message"] == "Connection error."
+    assert error.detail["retryable"] is True
+    assert error.detail["operation"] == "images.edit"
+
+
 def test_creative_run_async_upstream_balance_failure_waits_in_queue() -> None:
     client = fresh_client()
     response = client.post(
@@ -4254,6 +4413,67 @@ def test_prompt_explicit_height_width_infers_output_size_and_blocks_qr() -> None
         assert generated_image.size == (1024, 2304)
 
 
+def test_real_chinese_prompt_height_width_infers_output_size() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": (
+                "品牌：河野轻厨\n"
+                "标题：周月卡30天不重样漂亮饭\n"
+                "尺寸：高度180*宽度80\n"
+                "备注：不需要二维码"
+            ),
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["prompt_plan"]["provider_parameters"]["size"] == "1024x2304"
+    assert run["prompt_plan"]["user_variables"]["aspect_lock"] == {
+        "mode": "manual",
+        "locked": True,
+        "source": "user_prompt.size",
+        "value": "1024x2304",
+        "aspect_ratio": "4:9",
+        "prompt_instruction": "Required output aspect ratio: 4:9.",
+    }
+    output = run["generation_jobs"][0]["outputs"][0]
+    with Image.open(Path(output["metadata"]["storage_path"])) as generated_image:
+        assert generated_image.size == (1024, 2304)
+
+
+def test_output_width_height_normalizes_to_size_and_aspect_lock() -> None:
+    client = fresh_client()
+
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "生成一张健康餐海报",
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "output": {"count": 1, "provider_hint": "mock_image", "width": 80, "height": 180},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["prompt_plan"]["provider_parameters"]["size"] == "1024x2304"
+    assert run["prompt_plan"]["user_variables"]["aspect_lock"] == {
+        "mode": "manual",
+        "locked": True,
+        "source": "output.size",
+        "value": "1024x2304",
+        "aspect_ratio": "4:9",
+        "prompt_instruction": "Required output aspect ratio: 4:9.",
+    }
+    output = run["generation_jobs"][0]["outputs"][0]
+    with Image.open(Path(output["metadata"]["storage_path"])) as generated_image:
+        assert generated_image.size == (1024, 2304)
+
+
 def test_template_content_correspondence_keeps_full_anchor_skeleton_primary() -> None:
     template = make_prompt_case(
         "test_recipe_correspondence_template",
@@ -4456,13 +4676,13 @@ def test_claude_task_intent_overrides_chinese_food_template_replacement_bindings
                 "compatible healthy-light-meal hero background image. Use refined smaller Simplified Chinese copy "
                 "for the brand, IP, title, subtitle, and price information."
             ),
-            "negative_prompt": "white placeholder boxes, random QR placeholder, English recipe labels",
+            "negative_prompt": "random QR placeholder, English recipe labels",
             "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
             "prompt_rationale": "The uploaded images are dish replacements, while the selected template owns the layout.",
             "task_intent": {
                 "primary_relationship": "replace_template_food_subject",
                 "target_surface": "food_subject_slots",
-                "target_label": "template food/photo modules",
+                "target_label": "template food/product content slots",
                 "uploaded_asset_role": "slot_replacement_subject",
                 "fusion_mode": "template_slot_replacement",
                 "content_extraction": False,
@@ -4474,15 +4694,65 @@ def test_claude_task_intent_overrides_chinese_food_template_replacement_bindings
                     "labels or placeholder template text"
                 ),
                 "prompt_directive": (
-                    "All 6 uploaded food references must appear as distinct complete visible dish/photo modules; "
-                    "do not collapse them into one hero dish, discard later uploads, crop them into fragments, or "
-                    "place them inside white placeholder boxes."
+                    "All 6 uploaded food references must remain identifiable as complete food subjects, while Claude "
+                    "maps them into template-native hero support, ingredient evidence, process/serving, benefit, or offer modules."
                 ),
-                "negative_prompt_additions": ["English template copy", "white placeholder food cards"],
+                "template_frame_directive": (
+                    "Preserve the selected premium recipe infographic frame: large hero food area, title system, "
+                    "ingredient/process modules, bottom tips, warm refined background, and information hierarchy."
+                ),
+                "visual_hierarchy_directive": (
+                    "Keep one large generated healthy light-meal hero/background visual and smaller supporting food "
+                    "modules; do not flatten the poster into a plain two-column catalog."
+                ),
+                "asset_distribution_directive": (
+                    "Map all six uploaded foods into template-native food/photo/process slots with varied relative "
+                    "scale and staggered rhythm, not equal-size product cards."
+                ),
+                "asset_materialization_directive": (
+                    "Re-express uploaded food references as template-native premium food photography subjects, "
+                    "preserving dish identity without inheriting source photo frames or pasted photo-card surfaces."
+                ),
+                "virtual_content_directive": (
+                    "Generate a compatible premium light-meal hero/background food image because the uploaded photos "
+                    "are replacement modules, not the template's large hero anchor."
+                ),
+                "typography_directive": (
+                    "Use refined small Simplified Chinese typographic hierarchy inspired by the template; do not use "
+                    "English placeholder recipe labels."
+                ),
+                "module_narrative_directive": (
+                    "Preserve the recipe/process poster narrative by mapping uploaded dishes into hero support, "
+                    "ingredient evidence, process/serving moments, benefits, and offer rhythm."
+                ),
+                "layout_completion_directive": (
+                    "Every retained recipe-poster module must have a clear food, copy, icon, texture, or spacing role; "
+                    "when a user-unwanted element is omitted, its spatial role is rebalanced into the surrounding visual rhythm."
+                ),
+                "slot_plan": [
+                    {
+                        "slot": "hero/background food",
+                        "purpose": "generated light-meal anchor",
+                        "scale": "largest",
+                        "rule": "match template hero presence",
+                    },
+                    {
+                        "slot": "uploaded food modules",
+                        "purpose": "six complete dishes",
+                        "scale": "varied secondary",
+                        "rule": "stagger within recipe-poster modules",
+                    },
+                ],
+                "template_fidelity_gates": [
+                    "recipe infographic frame remains recognizable",
+                    "not an equal-card catalog grid",
+                    "premium typography hierarchy is preserved",
+                ],
+                "negative_prompt_additions": ["English template copy"],
                 "review_expectations": [
                     "uploaded_replacement_subjects_visible",
                     "template_food_slots_replaced",
-                    "no_white_placeholder_boxes",
+                    "layout_modules_feel_complete",
                 ],
                 "rationale": "The user asks to replace the template food photos, not extract a source poster layout.",
             },
@@ -4523,7 +4793,37 @@ def test_claude_task_intent_overrides_chinese_food_template_replacement_bindings
     assert variables["provider_input_plan"]["reference_image_asset_ids"] == asset_ids
     assert variables["provider_input_plan"]["reference_image_count"] == 6
     assert variables["provider_input_plan"]["fusion_modes"] == ["template_slot_replacement"]
+    assert {
+        item["relationship"]
+        for item in relationship["asset_relationships"]
+    } == {"replace_template_food_subject"}
+    first_binding = variables["asset_binding_plan"]["bindings"][0]
+    assert first_binding["placement_intent"] == {
+        "mode": "template_slot_replacement",
+        "target_surface": "food_subject_slots",
+        "target_label": "template food/product content slots",
+        "source": "orchestrator_task_intent",
+        "instruction": (
+            "All 6 uploaded food references must remain identifiable as complete food subjects, while Claude "
+            "maps them into template-native hero support, ingredient evidence, process/serving, benefit, or offer modules."
+        ),
+    }
     assert variables["orchestrator_task_intent"]["primary_relationship"] == "replace_template_food_subject"
+    assert variables["template_visual_grammar_plan"]["virtual_content_directive"].startswith(
+        "Generate a compatible premium light-meal hero"
+    )
+    assert variables["template_visual_grammar_plan"]["layout_completion_directive"].startswith(
+        "Every retained recipe-poster module"
+    )
+    assert variables["template_visual_grammar_plan"]["asset_materialization_directive"].startswith(
+        "Re-express uploaded food references"
+    )
+    assert variables["template_visual_grammar_plan"]["module_narrative_directive"].startswith(
+        "Preserve the recipe/process poster narrative"
+    )
+    assert variables["task_relationship_model"]["template_visual_grammar_plan"]["asset_distribution_directive"].startswith(
+        "Map all six uploaded foods"
+    )
     assert plan["provider_parameters"]["size"] == "1024x2304"
     assert variables["aspect_lock"] == {
         "mode": "manual",
@@ -4535,7 +4835,17 @@ def test_claude_task_intent_overrides_chinese_food_template_replacement_bindings
     }
     assert variables["language_lock"]["locked"] is True
     assert variables["language_lock"]["language"] == "Simplified Chinese"
-    assert "All 6 uploaded food references must appear as distinct complete visible dish/photo modules" in plan["prompt"]
+    assert "distinct food/product intentions" in plan["prompt"]
+    assert "pasted source frames" in plan["prompt"]
+    assert "TEMPLATE VISUAL GRAMMAR TRANSFER" in plan["prompt"]
+    assert "large hero food area" in plan["prompt"]
+    assert "varied relative scale" in plan["prompt"]
+    assert "not equal-size product cards" in plan["prompt"]
+    assert "refined small Simplified Chinese typographic hierarchy" in plan["prompt"]
+    assert "Module completion" in plan["prompt"]
+    assert "Asset materialization" in plan["prompt"]
+    assert "Module narrative" in plan["prompt"]
+    assert "Module completion" in plan["prompt"]
     assert "Visible text language lock: use Simplified Chinese" in plan["prompt"]
     assert "UPLOADED CONTENT SOURCE" not in plan["prompt"]
     assert "English template copy" in plan["negative_prompt"]

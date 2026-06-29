@@ -347,6 +347,16 @@ class OrchestratorTaskIntent(BaseModel):
     visible_text_language: str | None = None
     visible_text_policy: str | None = None
     prompt_directive: str | None = None
+    template_frame_directive: str | None = None
+    visual_hierarchy_directive: str | None = None
+    asset_distribution_directive: str | None = None
+    asset_materialization_directive: str | None = None
+    virtual_content_directive: str | None = None
+    typography_directive: str | None = None
+    module_narrative_directive: str | None = None
+    layout_completion_directive: str | None = None
+    slot_plan: list[dict[str, Any]] = Field(default_factory=list)
+    template_fidelity_gates: list[str] = Field(default_factory=list)
     negative_prompt_additions: list[str] = Field(default_factory=list)
     review_expectations: list[str] = Field(default_factory=list)
     rationale: str | None = None

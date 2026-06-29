@@ -61,7 +61,7 @@ _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v11_task_intent"
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v12_template_visual_grammar"
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
@@ -191,6 +191,18 @@ CLAUDE_VISUAL_STRATEGY_SCHEMA: dict[str, Any] = {
         "spatial_hierarchy": {"type": "string", "maxLength": 220},
         "template_lock_notes": {"type": "string", "maxLength": 220},
         "asset_fusion_notes": {"type": "string", "maxLength": 220},
+        "template_frame_plan": {"type": "string", "maxLength": 280},
+        "asset_slot_plan": {"type": "array", "items": {"type": "object"}, "maxItems": 8},
+        "asset_materialization_plan": {"type": "string", "maxLength": 240},
+        "virtual_content_plan": {"type": "string", "maxLength": 220},
+        "typography_plan": {"type": "string", "maxLength": 220},
+        "module_narrative_plan": {"type": "string", "maxLength": 240},
+        "module_completion_plan": {"type": "string", "maxLength": 240},
+        "template_fidelity_gates": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 100},
+            "maxItems": 6,
+        },
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
     "required": [
@@ -1529,6 +1541,8 @@ def _build_checkpoint_stage_prompt(
             "If visual_grammar_contract.info.active, keep poster/menu facts; use larger canvas/modules instead of dropping offers, prices, rules, requested CTA/QR, or items. "
             "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
             "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
+            "When a selected template is present, preserve its visual grammar as a frame/slot/virtual-content/typography plan, not merely its palette; "
+            "do not flatten a hero-plus-information template into an equal-card catalog unless that is the template's own structure. "
             "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers. "
             f"Prompt transform mode: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
             f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
@@ -1553,6 +1567,18 @@ def _build_checkpoint_stage_prompt(
     }
     if compact_task_relationship:
         payload["task_relationship_model"] = compact_task_relationship
+    if not template_case_id:
+        payload["rules"] = payload["rules"].replace(
+            "When a selected template is present, preserve its visual grammar as a frame/slot/virtual-content/typography plan, not merely its palette; "
+            "do not flatten a hero-plus-information template into an equal-card catalog unless that is the template's own structure. ",
+            "",
+        )
+    if stage_name.startswith("intent") and not template_case_id and not uploaded_assets:
+        payload["json_skeleton"].pop("task_intent", None)
+        payload["output_contract"] = (
+            "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
+            "asset_requirements, risk_notes, confidence."
+        )
     if stage_name.startswith("generation_decision"):
         payload["visible_output_budget"] = {
             "final_prompt_chars": settings.claude_final_prompt_max_chars,
@@ -1569,6 +1595,7 @@ def _build_checkpoint_stage_prompt(
             "First char {, last char }. No analysis/prose/markdown. "
             f"Total JSON <= {output_limits['total_json_chars']} chars; final_prompt <= {output_limits['final_prompt_chars']} chars. "
             "Preserve template frame, information integrity, requested CTA/contact placement, explicit/source QR placement only when QR intent exists, and provider count from checkpoints/fallback."
+            " Preserve the compressed template_frame_plan, asset_slot_plan, asset_materialization_plan, virtual_content_plan, typography_plan, module_narrative_plan, module_completion_plan, and template_fidelity_gates from checkpoints."
         )
     if "ultra_micro" in stage_name and not uploaded_assets and not template_case_id:
         payload.pop("template_lock_contract", None)
@@ -1586,6 +1613,32 @@ def _build_checkpoint_stage_prompt(
             f"Total JSON <= {output_limits['total_json_chars']} chars; obey output_limits. "
             "Use only request, fallback, and checkpoints; no case comparison, ids, URLs, APIs, or source markers."
         )
+        if stage_name.startswith("visual_strategy"):
+            payload["output_contract"] = (
+                "Object keys: stage, selected_case_ids, composition, lighting, palette, "
+                "spatial_hierarchy, template_lock_notes, asset_fusion_notes, confidence."
+            )
+            payload["output_limits"] = {
+                "total_json_chars": 1000,
+                "selected_case_ids": 2,
+                "composition_chars": 140,
+                "lighting_chars": 90,
+                "palette_chars": 90,
+                "spatial_hierarchy_chars": 100,
+                "template_lock_notes_chars": 90,
+                "asset_fusion_notes_chars": 90,
+            }
+            for key in [
+                "template_frame_plan",
+                "asset_slot_plan",
+                "asset_materialization_plan",
+                "virtual_content_plan",
+                "typography_plan",
+                "module_narrative_plan",
+                "module_completion_plan",
+                "template_fidelity_gates",
+            ]:
+                payload["json_skeleton"].pop(key, None)
     elif not visual_grammar_contract:
         payload.pop("visual_grammar_contract", None)
     if stage_name.startswith("generation_decision"):
@@ -1602,12 +1655,13 @@ def _checkpoint_output_contract(stage_name: str) -> str:
     if stage_name.startswith("intent"):
         return (
             "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
-            "asset_requirements, risk_notes, confidence. Short strings; arrays<=6."
+            "asset_requirements, task_intent, risk_notes, confidence. Short strings; arrays<=6."
         )
     if stage_name.startswith("visual_strategy"):
         return (
             "Object keys: stage, selected_case_ids, composition, lighting, palette, "
-            "spatial_hierarchy, template_lock_notes, asset_fusion_notes, confidence. One strategy only."
+            "spatial_hierarchy, template_lock_notes, asset_fusion_notes, template_frame_plan, "
+            "asset_slot_plan, asset_materialization_plan, virtual_content_plan, typography_plan, module_narrative_plan, module_completion_plan, template_fidelity_gates, confidence. One strategy only."
         )
     return (
         "Object keys: mode, selected_case_ids, final_prompt, negative_prompt, provider_parameters, "
@@ -1627,7 +1681,7 @@ def _checkpoint_output_limits(stage_name: str) -> dict[str, Any]:
         }
     if stage_name.startswith("visual_strategy"):
         return {
-            "total_json_chars": 1200,
+            "total_json_chars": 1700,
             "selected_case_ids_items": 1 if "micro" in stage_name else 2,
             "composition_chars": 170,
             "lighting_chars": 90,
@@ -1635,6 +1689,15 @@ def _checkpoint_output_limits(stage_name: str) -> dict[str, Any]:
             "spatial_hierarchy_chars": 150,
             "template_lock_notes_chars": 130,
             "asset_fusion_notes_chars": 150,
+            "template_frame_plan_chars": 170,
+            "asset_slot_plan_items": 6,
+            "asset_slot_plan_item_chars": 80,
+            "asset_materialization_plan_chars": 130,
+            "virtual_content_plan_chars": 130,
+            "typography_plan_chars": 130,
+            "module_narrative_plan_chars": 130,
+            "module_completion_plan_chars": 130,
+            "template_fidelity_gate_chars": 80,
         }
     return {
         "total_json_chars": 1800,
@@ -1655,6 +1718,10 @@ def _checkpoint_json_skeleton(stage_name: str) -> dict[str, Any]:
             "must_keep": ["..."],
             "must_avoid": ["..."],
             "asset_requirements": [],
+            "task_intent": {
+                "primary_relationship": "free_reference",
+                "prompt_directive": "...",
+            },
             "risk_notes": [],
             "confidence": 0.8,
         }
@@ -1668,6 +1735,14 @@ def _checkpoint_json_skeleton(stage_name: str) -> dict[str, Any]:
             "spatial_hierarchy": "...",
             "template_lock_notes": "...",
             "asset_fusion_notes": "...",
+            "template_frame_plan": "...",
+            "asset_slot_plan": [],
+            "asset_materialization_plan": "...",
+            "virtual_content_plan": "...",
+            "typography_plan": "...",
+            "module_narrative_plan": "...",
+            "module_completion_plan": "...",
+            "template_fidelity_gates": ["..."],
             "confidence": 0.8,
         }
     return {
@@ -1713,6 +1788,12 @@ def _checkpoint_visual_case(item: dict[str, Any], *, tight: bool) -> dict[str, A
         "style_tags": (item.get("style_tags") or [])[: (1 if tight else 2)],
         "use_case_tags": (item.get("use_case_tags") or [])[:1],
         "visual_brief": _truncate(_text_value(visual.get("brief")), 70 if tight else 90),
+        "raw_visual_skeleton": _truncate(_text_value(item.get("raw_visual_skeleton")), 150 if tight else 240),
+        "reusable_principles": [
+            _truncate(_text_value(value), 70 if tight else 90)
+            for value in (visual.get("reusable_principles") or [])[: (2 if tight else 4)]
+            if _text_value(value)
+        ],
     }
 
 
@@ -1729,6 +1810,9 @@ def _compact_generation_checkpoints(checkpoints: dict[str, Any] | None) -> dict[
             "must_keep": [_truncate(_text_value(item), 80) for item in (intent.get("must_keep") or [])[:6] if _text_value(item)],
             "must_avoid": [_truncate(_text_value(item), 70) for item in (intent.get("must_avoid") or [])[:4] if _text_value(item)],
         }
+        task_intent = _compact_task_relationship_model(intent.get("task_intent"))
+        if task_intent:
+            compact["intent"]["task_intent"] = task_intent
     visual = checkpoints.get("visual_strategy")
     if isinstance(visual, dict):
         compact["visual_strategy"] = {
@@ -1739,6 +1823,18 @@ def _compact_generation_checkpoints(checkpoints: dict[str, Any] | None) -> dict[
             "spatial_hierarchy": _truncate(_text_value(visual.get("spatial_hierarchy")), 180),
             "template_lock_notes": _truncate(_text_value(visual.get("template_lock_notes")), 120),
             "asset_fusion_notes": _truncate(_text_value(visual.get("asset_fusion_notes")), 120),
+            "template_frame_plan": _truncate(_text_value(visual.get("template_frame_plan")), 180),
+            "asset_slot_plan": _compact_asset_slot_plan(visual.get("asset_slot_plan"), limit=6),
+            "asset_materialization_plan": _truncate(_text_value(visual.get("asset_materialization_plan")), 140),
+            "virtual_content_plan": _truncate(_text_value(visual.get("virtual_content_plan")), 140),
+            "typography_plan": _truncate(_text_value(visual.get("typography_plan")), 140),
+            "module_narrative_plan": _truncate(_text_value(visual.get("module_narrative_plan")), 140),
+            "module_completion_plan": _truncate(_text_value(visual.get("module_completion_plan")), 140),
+            "template_fidelity_gates": [
+                _truncate(_text_value(item), 80)
+                for item in (visual.get("template_fidelity_gates") or [])[:5]
+                if _text_value(item)
+            ],
         }
     return compact
 
@@ -1747,17 +1843,20 @@ def _checkpoint_stage_instruction(stage_name: str) -> str:
     if stage_name.startswith("intent"):
         return (
             "Understand the user's concrete image goal. Output subject, scene goal, must_keep, must_avoid, "
-            "asset requirements, risk notes, and confidence. Do not choose final wording yet."
+            "asset requirements, task_intent, risk notes, and confidence. Do not choose final wording yet."
         )
     if stage_name.startswith("visual_strategy") and "ultra_micro" in stage_name:
         return (
             "From the intent checkpoint only, decide one compact visual strategy: composition, lighting, palette, "
-            "and spatial hierarchy. Do not compare cases, list alternatives, or write the final image prompt yet."
+            "spatial hierarchy, template frame plan, asset slot plan, virtual content, and typography. "
+            "Preserve the selected template's visual grammar; do not turn a non-catalog template into an equal-card catalog. "
+            "Do not compare cases, list alternatives, or write the final image prompt yet."
         )
     if stage_name.startswith("visual_strategy"):
         return (
             "Choose the reusable visual strategy: selected cases, composition, lighting, palette, hierarchy, "
-            "template lock notes, and asset fusion notes. Do not write the final image prompt yet."
+            "template lock notes, asset fusion notes, template frame plan, asset slot plan, virtual content plan, "
+            "typography plan, and template fidelity gates. Do not write the final image prompt yet."
         )
     return (
         "Using prior checkpoints, output the final concise image prompt package for the provider. "
@@ -1787,8 +1886,9 @@ def _compress_checkpoint_decision(
     negative_prompt = _text_value(raw.get("negative_prompt"))
     rationale = _text_value(raw.get("prompt_rationale")) or _text_value(visual_strategy.get("composition"))
     provider_parameters = raw.get("provider_parameters") if isinstance(raw.get("provider_parameters"), dict) else {}
+    task_intent = _task_intent_from_checkpoints(raw=raw, intent=intent, visual_strategy=visual_strategy)
 
-    return {
+    compressed = {
         "mode": raw.get("mode") if raw.get("mode") in {"template_customize", "smart_enhance", "revision", "batch"} else fallback.mode,
         "selected_case_ids": selected_case_ids,
         "final_prompt": _truncate(final_prompt, settings.claude_final_prompt_max_chars),
@@ -1797,6 +1897,9 @@ def _compress_checkpoint_decision(
         "prompt_rationale": _truncate(rationale, settings.claude_rationale_max_chars),
         "confidence": _bounded_float(raw.get("confidence"), _bounded_float(visual_strategy.get("confidence"), 0.78)),
     }
+    if task_intent:
+        compressed["task_intent"] = task_intent
+    return compressed
 
 
 def _visual_strategy_from_partial(
@@ -1830,8 +1933,76 @@ def _visual_strategy_from_partial(
         "spatial_hierarchy": "Selected template frame first; uploaded hard-reference subject fills the replaceable subject slot.",
         "template_lock_notes": "Selected template remains the locked frame when present.",
         "asset_fusion_notes": "Hard uploaded identities remain provider input images and must not be reduced to text-only prompts.",
+        "template_frame_plan": "Preserve the selected template's original visual grammar, including hero presence, information-module rhythm, background density, and layout hierarchy.",
+        "asset_slot_plan": [],
+        "asset_materialization_plan": "Treat uploaded images as concrete subject materials to be re-expressed in the selected template's native photography and module system, not as source frames.",
+        "virtual_content_plan": "Generate missing template-native hero or background anchor content when the uploaded references do not supply it.",
+        "typography_plan": "Preserve the selected template's typography discipline while using the user's requested visible language and copy.",
+        "module_narrative_plan": "Map retained modules into the selected template's native narrative sequence instead of an even gallery or catalog.",
+        "module_completion_plan": "Every retained template module must have a clear visual or information role; omitted user-unwanted elements are absorbed into the surrounding layout rather than leaving unresolved reserved areas.",
+        "template_fidelity_gates": [
+            "selected template frame remains recognizable",
+            "uploaded assets fill slots without overriding layout rhythm",
+        ],
         "confidence": _bounded_float(raw_decision.get("confidence"), _bounded_float(intent.get("confidence"), 0.72)),
     }
+
+
+def _task_intent_from_checkpoints(
+    *,
+    raw: dict[str, Any],
+    intent: dict[str, Any],
+    visual_strategy: dict[str, Any],
+) -> dict[str, Any]:
+    source = raw.get("task_intent") if isinstance(raw.get("task_intent"), dict) else {}
+    if not source:
+        source = intent.get("task_intent") if isinstance(intent.get("task_intent"), dict) else {}
+    has_template_visual_plan = any(
+        _text_value(visual_strategy.get(key))
+        for key in [
+            "template_frame_plan",
+            "asset_materialization_plan",
+            "virtual_content_plan",
+            "typography_plan",
+            "module_narrative_plan",
+            "module_completion_plan",
+        ]
+    ) or bool(visual_strategy.get("asset_slot_plan")) or bool(visual_strategy.get("template_fidelity_gates"))
+    if not source and not has_template_visual_plan:
+        return {}
+    payload = dict(source) if isinstance(source, dict) else {}
+    field_map = {
+        "template_frame_directive": "template_frame_plan",
+        "visual_hierarchy_directive": "spatial_hierarchy",
+        "asset_materialization_directive": "asset_materialization_plan",
+        "virtual_content_directive": "virtual_content_plan",
+        "typography_directive": "typography_plan",
+        "module_narrative_directive": "module_narrative_plan",
+        "layout_completion_directive": "module_completion_plan",
+    }
+    for target_key, visual_key in field_map.items():
+        value = _text_value(payload.get(target_key)) or _text_value(visual_strategy.get(visual_key))
+        if value:
+            payload[target_key] = _truncate(value, 260)
+    if not _text_value(payload.get("asset_distribution_directive")):
+        slot_text = _slot_plan_text(visual_strategy.get("asset_slot_plan"))
+        fallback = _text_value(visual_strategy.get("asset_fusion_notes"))
+        distribution = slot_text or fallback
+        if distribution:
+            payload["asset_distribution_directive"] = _truncate(distribution, 260)
+    if not payload.get("slot_plan"):
+        slot_plan = _compact_asset_slot_plan(visual_strategy.get("asset_slot_plan"), limit=8)
+        if slot_plan:
+            payload["slot_plan"] = slot_plan
+    if not payload.get("template_fidelity_gates"):
+        gates = [
+            _truncate(_text_value(item), 100)
+            for item in (visual_strategy.get("template_fidelity_gates") or [])[:6]
+            if _text_value(item)
+        ]
+        if gates:
+            payload["template_fidelity_gates"] = gates
+    return payload
 
 
 def _fallback_prompt_from_checkpoints(*, intent: dict[str, Any], visual_strategy: dict[str, Any]) -> str:
@@ -1843,8 +2014,30 @@ def _fallback_prompt_from_checkpoints(*, intent: dict[str, Any], visual_strategy
         _text_value(visual_strategy.get("palette")),
         _text_value(visual_strategy.get("spatial_hierarchy")),
         _text_value(visual_strategy.get("asset_fusion_notes")),
+        _text_value(visual_strategy.get("template_frame_plan")),
+        _slot_plan_text(visual_strategy.get("asset_slot_plan")),
+        _text_value(visual_strategy.get("asset_materialization_plan")),
+        _text_value(visual_strategy.get("virtual_content_plan")),
+        _text_value(visual_strategy.get("typography_plan")),
+        _text_value(visual_strategy.get("module_narrative_plan")),
+        _text_value(visual_strategy.get("module_completion_plan")),
+        ", ".join(_text_value(item) for item in (visual_strategy.get("template_fidelity_gates") or [])[:4] if _text_value(item)),
     ]
     return _sanitize_downstream_prompt(", ".join(piece for piece in pieces if piece))
+
+
+def _slot_plan_text(raw: Any) -> str:
+    items = _compact_asset_slot_plan(raw, limit=6)
+    if not items:
+        return ""
+    fragments: list[str] = []
+    for item in items:
+        parts = [value for value in [item.get("slot"), item.get("purpose"), item.get("scale"), item.get("rule")] if value]
+        if parts:
+            fragments.append(" / ".join(parts))
+    if not fragments:
+        return ""
+    return "asset slot plan: " + "; ".join(fragments)
 
 
 def _invoke_claude_file_mode(
@@ -2264,13 +2457,18 @@ def _normalize_task_intent(raw: Any) -> OrchestratorTaskIntent | None:
     }
     if relationship:
         payload["primary_relationship"] = relationship_aliases.get(relationship, relationship)
-    list_fields = ["negative_prompt_additions", "review_expectations"]
+    list_fields = ["negative_prompt_additions", "review_expectations", "template_fidelity_gates"]
     for key in list_fields:
         value = payload.get(key)
         if isinstance(value, list):
             payload[key] = [_text_value(item) for item in value if _text_value(item)]
         elif value:
             payload[key] = [_text_value(value)]
+    slot_plan = payload.get("slot_plan")
+    if isinstance(slot_plan, list):
+        payload["slot_plan"] = [item for item in slot_plan[:8] if isinstance(item, dict)]
+    elif slot_plan:
+        payload["slot_plan"] = [{"slot": _text_value(slot_plan)}]
     try:
         return OrchestratorTaskIntent.model_validate(payload)
     except Exception:
@@ -2596,8 +2794,11 @@ def _build_workspace(
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
                 "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
                 "- You must output task_intent as your own central-brain understanding of the user's asset/template relationship. Do not merely echo task_relationship_model.json if the user's natural-language intent says otherwise.",
-                "- task_intent.primary_relationship must be one of: replace_template_food_subject, replace_template_subject, extract_composite_content, fill_template_slots, free_reference, no_uploaded_assets. Use replace_template_food_subject when uploaded food photos should replace food/photo modules in the selected template; use extract_composite_content only when uploaded assets are source posters/menus/screenshots whose copy, facts, QR, or business information must be extracted.",
-                "- If task_intent says template-slot replacement, include a prompt_directive that preserves each uploaded replacement image as its own visible module and prevents tiny fragments, white placeholder frames, or collapsing multiple uploads into one hero dish.",
+                "- task_intent.primary_relationship must be one of: replace_template_food_subject, replace_template_subject, extract_composite_content, fill_template_slots, free_reference, no_uploaded_assets. Use replace_template_food_subject when uploaded food photos should replace food/product content in the selected template; use extract_composite_content only when uploaded assets are source posters/menus/screenshots whose copy, facts, QR, or business information must be extracted.",
+                "- If task_intent says template-slot replacement, include a prompt_directive that preserves each uploaded replacement subject as an identifiable template-native contribution and keeps the selected template's module hierarchy intelligible; do not force literal pasted photo frames unless the user asks for a collage/gallery.",
+                "- For template-driven layouts, task_intent.layout_completion_directive should explain how retained modules stay visually/informationally complete when user-unwanted elements are omitted or replaced.",
+                "- For uploaded replacement images, task_intent.asset_materialization_directive should decide whether the upload is re-photographed/adapted as a template-native subject, used as a literal photo surface, or used as source evidence.",
+                "- For selected templates with information/process/story modules, task_intent.module_narrative_directive should map the user's materials into the template's native narrative sequence instead of flattening them into a gallery.",
                 "- If the user's visible copy is in Chinese, task_intent.visible_text_language should say Simplified Chinese and visible_text_policy should forbid inheriting English placeholder recipe labels from the template.",
                 "- If task_relationship_model.json says primary_relationship=replace_template_food_subject or replace_template_subject, uploaded images are concrete replacement subjects for template slots; do not downgrade them to style signals or composite_content_source.",
                 "- asset_binding_policy.json 中的 fusion_mode、placement_intent、target_surface 和 review_expectations 是硬素材意图约束；尤其是 Logo/主体/人脸/背景，不得被你改写成泛泛风格参考。",
@@ -2696,10 +2897,14 @@ def _build_file_tool_prompt() -> str:
             "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、明确要求或源图确有的二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
             "You must output task_intent as the central-brain decision for how uploaded assets relate to the selected template. If task_relationship_model conflicts with the user's plain-language intent, task_intent should correct it.",
-            "For food-photo replacement tasks, set task_intent.primary_relationship=replace_template_food_subject and make every uploaded food photo a distinct visible module. Do not turn them into style references, tiny fragments, or white placeholder boxes.",
+            "For food-photo replacement tasks, set task_intent.primary_relationship=replace_template_food_subject and make every uploaded food photo a distinct visible module inside the selected template hierarchy.",
             "For source-poster/menu/screenshot extraction tasks, set task_intent.primary_relationship=extract_composite_content and extract only the requested facts, copy, real QR, or business content without inheriting the source layout.",
             "Use task_intent.visible_text_language and visible_text_policy to keep visible copy in the user's requested language instead of inheriting template placeholder labels.",
             "If task_relationship_model.primary_relationship is replace_template_food_subject or replace_template_subject, final_prompt must frame uploaded images as replacement subjects for existing template slots, not as a new layout, style reference, or composite content sheet.",
+            "When a selected template is active, task_intent should also include generic visual-grammar transfer fields when relevant: template_frame_directive, visual_hierarchy_directive, asset_distribution_directive, asset_materialization_directive, virtual_content_directive, typography_directive, module_narrative_directive, layout_completion_directive, slot_plan, and template_fidelity_gates.",
+            "For multi-upload replacement tasks, do not merely say every upload is visible; decide how their relative scale and slot roles preserve the selected template's hierarchy. If the template has a hero/background visual and uploads do not supply it, use virtual_content_directive to synthesize it.",
+            "If the selected template is a recipe/process/infographic poster, module_narrative_directive should preserve that narrative grammar: hero, ingredient/process evidence, benefit or serving notes, and closing offer rhythm as appropriate to the user's content.",
+            "If the selected template has a refined typography or information-graphic system, typography_directive must preserve that system while replacing placeholder language with the user's requested visible copy.",
             "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度；不得为了通用 CTA 凭空添加二维码或扫码占位。",
             "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
             "若 Logo 的 fusion_mode=logo_product_surface，final_prompt 必须要求 uploaded reference image 中的 Logo 被自然印刷/刺绣/贴附到目标物体表面，并明确禁止被放成海报下方、角标、水印或独立贴片。",
@@ -2738,6 +2943,8 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
             "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
             "If task_relationship_model says replace_template_food_subject or replace_template_subject, uploads are replacement subjects for existing template slots. "
+            "For selected templates, express frame, asset distribution, virtual content, and typography preservation inside task_intent or final_prompt; "
+            "do not flatten a non-catalog template into equal-size uploaded-asset cards. "
             f"If anchor needs a hero/key visual and uploads lack it, synthesize suitable virtual content. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
             f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
             f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying. "
@@ -2914,7 +3121,36 @@ def _compact_task_relationship_model(raw: Any) -> dict[str, Any]:
         "provider_input_priority": raw.get("provider_input_priority"),
         "review": (raw.get("review_expectations") or [])[:3],
         "directive": _truncate(_text_value(raw.get("prompt_directive")), 180),
+        "frame": _truncate(_text_value(raw.get("template_frame_directive")), 120),
+        "distribution": _truncate(_text_value(raw.get("asset_distribution_directive")), 120),
+        "materialization": _truncate(_text_value(raw.get("asset_materialization_directive")), 120),
+        "virtual": _truncate(_text_value(raw.get("virtual_content_directive")), 100),
+        "typography": _truncate(_text_value(raw.get("typography_directive")), 100),
+        "narrative": _truncate(_text_value(raw.get("module_narrative_directive")), 120),
+        "completion": _truncate(_text_value(raw.get("layout_completion_directive")), 120),
     }
+
+
+def _compact_asset_slot_plan(raw: Any, *, limit: int) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    compact: list[dict[str, str]] = []
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            text = _truncate(_text_value(item), 80)
+            if text:
+                compact.append({"slot": text})
+            continue
+        slot = {
+            "slot": _truncate(_text_value(item.get("slot") or item.get("slot_name") or item.get("role")), 40),
+            "purpose": _truncate(_text_value(item.get("purpose") or item.get("target") or item.get("content")), 60),
+            "scale": _truncate(_text_value(item.get("scale") or item.get("relative_scale") or item.get("size")), 32),
+            "rule": _truncate(_text_value(item.get("rule") or item.get("directive") or item.get("placement")), 80),
+        }
+        cleaned = {key: value for key, value in slot.items() if value}
+        if cleaned:
+            compact.append(cleaned)
+    return compact
 
 
 def _compact_uploaded_assets(raw: list[Any]) -> list[dict[str, Any]]:
@@ -3100,6 +3336,16 @@ def _decision_template(fallback: CreativeOrchestratorDecision) -> dict[str, Any]
             "visible_text_language": "",
             "visible_text_policy": "",
             "prompt_directive": "",
+            "template_frame_directive": "",
+            "visual_hierarchy_directive": "",
+            "asset_distribution_directive": "",
+            "asset_materialization_directive": "",
+            "virtual_content_directive": "",
+            "typography_directive": "",
+            "module_narrative_directive": "",
+            "layout_completion_directive": "",
+            "slot_plan": [],
+            "template_fidelity_gates": [],
             "negative_prompt_additions": [],
             "review_expectations": [],
             "rationale": "",

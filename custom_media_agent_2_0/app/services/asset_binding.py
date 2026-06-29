@@ -163,6 +163,7 @@ def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_in
         target_label,
         uploaded_asset_count=uploaded_count,
     )
+    visual_grammar_plan = _task_intent_visual_grammar_plan(payload)
     relationship.update(
         {
             "primary_relationship": primary_relationship,
@@ -178,6 +179,25 @@ def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_in
             "rationale": str(payload.get("rationale") or "").strip(),
         }
     )
+    asset_ids = [
+        str(asset_id)
+        for asset_id in (relationship.get("uploaded_asset_ids") or [])
+        if str(asset_id or "").strip()
+    ]
+    if asset_ids:
+        relationship["asset_relationships"] = [
+            {
+                "asset_id": asset_id,
+                "relationship": primary_relationship,
+                "target_surface": target_surface,
+                "target_label": target_label,
+                "source": "orchestrator_task_intent",
+            }
+            for asset_id in asset_ids[:8]
+        ]
+    if visual_grammar_plan:
+        relationship["template_visual_grammar_plan"] = visual_grammar_plan
+        updated["template_visual_grammar_plan"] = visual_grammar_plan
     updated["task_relationship_model"] = relationship
     updated["orchestrator_task_intent"] = payload
     _apply_task_intent_to_binding_plan(
@@ -223,6 +243,115 @@ def provider_input_images_from_context(asset_context: dict[str, Any] | None) -> 
     return result
 
 
+def _task_intent_visual_grammar_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    plan: dict[str, Any] = {}
+    fields = {
+        "template_frame_directive": 260,
+        "visual_hierarchy_directive": 220,
+        "asset_distribution_directive": 260,
+        "asset_materialization_directive": 240,
+        "virtual_content_directive": 220,
+        "typography_directive": 220,
+        "module_narrative_directive": 240,
+        "layout_completion_directive": 240,
+    }
+    for key, limit in fields.items():
+        value = _compact_strategy_text(str(payload.get(key) or ""), limit)
+        if value:
+            plan[key] = value
+    slot_plan = _compact_slot_plan(payload.get("slot_plan"), limit=8)
+    if slot_plan:
+        plan["slot_plan"] = slot_plan
+    fidelity_gates = [
+        _compact_strategy_text(str(item), 100)
+        for item in _task_intent_list(payload.get("template_fidelity_gates"))[:6]
+        if _compact_strategy_text(str(item), 100)
+    ]
+    if fidelity_gates:
+        plan["template_fidelity_gates"] = fidelity_gates
+    return plan
+
+
+def _visual_grammar_plan_from_context(asset_context: dict[str, Any]) -> dict[str, Any]:
+    plan = asset_context.get("template_visual_grammar_plan")
+    if isinstance(plan, dict) and plan:
+        return plan
+    relationship = asset_context.get("task_relationship_model") if isinstance(asset_context.get("task_relationship_model"), dict) else {}
+    nested = relationship.get("template_visual_grammar_plan") if isinstance(relationship.get("template_visual_grammar_plan"), dict) else {}
+    return nested if isinstance(nested, dict) else {}
+
+
+def _visual_grammar_plan_prompt_parts(plan: dict[str, Any]) -> list[str]:
+    fragments: list[str] = []
+    mapping = [
+        ("template_frame_directive", "Frame"),
+        ("visual_hierarchy_directive", "Hierarchy"),
+        ("asset_distribution_directive", "Asset distribution"),
+        ("asset_materialization_directive", "Asset materialization"),
+        ("virtual_content_directive", "Virtual content"),
+        ("typography_directive", "Typography"),
+        ("module_narrative_directive", "Module narrative"),
+        ("layout_completion_directive", "Module completion"),
+    ]
+    for key, label in mapping:
+        value = _compact_strategy_text(str(plan.get(key) or ""), 240)
+        if value:
+            fragments.append(f"{label}: {value}")
+    slot_text = _slot_plan_prompt_text(plan.get("slot_plan"))
+    if slot_text:
+        fragments.append(slot_text)
+    gates = [
+        _compact_strategy_text(str(item), 90)
+        for item in (plan.get("template_fidelity_gates") or [])[:5]
+        if _compact_strategy_text(str(item), 90)
+    ]
+    if gates:
+        fragments.append("Fidelity gates: " + "; ".join(gates))
+    if not fragments:
+        return []
+    return [
+        "TEMPLATE VISUAL GRAMMAR TRANSFER: preserve the selected template as a concrete frame, not just a color/style reference.",
+        *fragments,
+    ]
+
+
+def _compact_slot_plan(raw: Any, *, limit: int) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            text = _compact_strategy_text(str(item), 80)
+            if text:
+                result.append({"slot": text})
+            continue
+        compact = {
+            "slot": _compact_strategy_text(str(item.get("slot") or item.get("slot_name") or item.get("role") or ""), 50),
+            "purpose": _compact_strategy_text(str(item.get("purpose") or item.get("target") or item.get("content") or ""), 80),
+            "scale": _compact_strategy_text(str(item.get("scale") or item.get("relative_scale") or item.get("size") or ""), 40),
+            "rule": _compact_strategy_text(str(item.get("rule") or item.get("directive") or item.get("placement") or ""), 100),
+        }
+        compact = {key: value for key, value in compact.items() if value}
+        if compact:
+            result.append(compact)
+    return result
+
+
+def _slot_plan_prompt_text(raw: Any) -> str:
+    slots = _compact_slot_plan(raw, limit=6)
+    if not slots:
+        return ""
+    fragments: list[str] = []
+    for item in slots:
+        parts = [item.get("slot"), item.get("purpose"), item.get("scale"), item.get("rule")]
+        clean = [part for part in parts if part]
+        if clean:
+            fragments.append(" / ".join(clean))
+    if not fragments:
+        return ""
+    return "Slot plan: " + "; ".join(fragments)
+
+
 def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
     if not asset_context:
         return ""
@@ -238,7 +367,7 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
         target_label = _relationship_target_label(relationship)
         uploaded_count = _relationship_uploaded_count(relationship)
         count_rule = (
-            f" All {uploaded_count} uploaded replacement images must appear as distinct visible food/photo modules; do not collapse them into one hero dish or discard later uploads."
+            f" All {uploaded_count} uploaded replacement images must be accounted for as distinct food/product intentions inside the selected template hierarchy; let the central plan decide whether they become hero support, ingredient/process evidence, serving vignettes, or other native modules, preserving recognizable complete subjects without forcing equal-size photo cards or pasted source frames."
             if uploaded_count > 1
             else ""
         )
@@ -291,6 +420,9 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
             + correspondence
             + "do not expand, re-grid, or recompose the selected frame to mirror the source image."
         )
+    visual_plan = _visual_grammar_plan_from_context(asset_context)
+    if visual_plan:
+        parts.extend(_visual_grammar_plan_prompt_parts(visual_plan))
     provider_plan = asset_context.get("provider_input_plan") if isinstance(asset_context.get("provider_input_plan"), dict) else {}
     if provider_plan.get("reference_image_count"):
         parts.append(
@@ -396,7 +528,7 @@ def _task_relationship_model(
     if has_uploads and template_locked and replacement_requested and subject_requested and not explicit_extraction:
         primary_relationship = "replace_template_food_subject" if food_requested else "replace_template_subject"
         target_surface = "food_subject_slots" if food_requested else "main_subject_slot"
-        target_label = "template food/product image slots" if food_requested else "template main subject slot"
+        target_label = "template food/product content slots" if food_requested else "template main subject slot"
         uploaded_role = "concrete_replacement_subjects"
     elif has_uploads and explicit_extraction:
         primary_relationship = "extract_composite_content"
@@ -558,10 +690,11 @@ def _task_relationship_prompt_directive(
     target = target_label or "the requested slots"
     if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS:
         multi_slot = (
-            f" Map all {uploaded_asset_count} uploaded replacement images into distinct visible food/photo modules; "
-            "do not collapse them into one dish, discard later uploads, or use them as tiny cropped fragments."
+            f" Account for all {uploaded_asset_count} uploaded replacement images as distinct food/product intentions inside the template-native hierarchy; "
+            "Claude should decide whether each becomes hero support, ingredient evidence, process/serving vignette, or another native module. "
+            "Preserve each subject's recognizable complete identity without forcing equal-size photo cards, pasted source frames, or tiny cropped fragments."
             if uploaded_asset_count > 1
-            else " Map the uploaded replacement image into one visible subject/photo module."
+            else " Map the uploaded replacement image into a template-native subject contribution."
         )
         return (
             f"Use uploaded reference images as concrete replacement subjects for {target}. "
@@ -704,7 +837,7 @@ def _task_intent_targets(
     fusion_mode = str(payload.get("fusion_mode") or "").strip()
     if primary_relationship == "replace_template_food_subject":
         target_surface = target_surface or "food_subject_slots"
-        target_label = target_label or "template food/product image slots"
+        target_label = target_label or "template food/product content slots"
         uploaded_role = uploaded_role or "slot_replacement_subject"
         fusion_mode = fusion_mode or TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
     elif primary_relationship == "replace_template_subject":
@@ -760,10 +893,12 @@ def _apply_task_intent_to_binding_plan(
             binding["fusion_mode"] = fusion_mode or TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
             binding["target_surface"] = target_surface
             binding["placement_intent"] = {
-                **(binding.get("placement_intent") if isinstance(binding.get("placement_intent"), dict) else {}),
                 "mode": "template_slot_replacement",
+                "target_surface": target_surface,
                 "target_label": target_label,
                 "source": "orchestrator_task_intent",
+                "instruction": prompt_directive
+                or "Use the uploaded image as a concrete replacement subject inside the selected template frame.",
             }
             binding["provider_input_required"] = True
             binding["prompt_instruction"] = prompt_directive
@@ -800,17 +935,29 @@ def _apply_task_intent_to_provider_images(
 ) -> None:
     images = asset_context.get("provider_input_images") if isinstance(asset_context.get("provider_input_images"), list) else []
     images_by_id = {str(item.get("asset_id")): item for item in images if isinstance(item, dict) and item.get("asset_id")}
+    replacement = (fusion_mode or "") == TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
     for image in images:
         if not isinstance(image, dict):
             continue
         image["role"] = "subject_reference"
         image["fusion_mode"] = fusion_mode or image.get("fusion_mode") or "reference"
         image["target_surface"] = target_surface or image.get("target_surface")
-        image["placement_intent"] = {
-            **(image.get("placement_intent") if isinstance(image.get("placement_intent"), dict) else {}),
-            "target_label": target_label,
-            "source": "orchestrator_task_intent",
-        }
+        if replacement:
+            image["placement_intent"] = {
+                "mode": "template_slot_replacement",
+                "target_surface": target_surface,
+                "target_label": target_label,
+                "source": "orchestrator_task_intent",
+                "instruction": prompt_directive
+                or "Use the uploaded image as a concrete replacement subject inside the selected template frame.",
+            }
+        else:
+            image["placement_intent"] = {
+                **(image.get("placement_intent") if isinstance(image.get("placement_intent"), dict) else {}),
+                "target_surface": target_surface or image.get("target_surface"),
+                "target_label": target_label,
+                "source": "orchestrator_task_intent",
+            }
         image["provider_input_required"] = provider_input_required or bool(image.get("provider_input_required"))
         image["prompt_instruction"] = prompt_directive or str(image.get("prompt_instruction") or "")
         image["review_expectations"] = review_expectations or list(image.get("review_expectations") or [])
@@ -891,6 +1038,11 @@ def _apply_task_intent_to_frame_strategy(
 def _compact_task_relationship_model(task_relationship_model: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(task_relationship_model, dict):
         return {}
+    visual_plan = (
+        task_relationship_model.get("template_visual_grammar_plan")
+        if isinstance(task_relationship_model.get("template_visual_grammar_plan"), dict)
+        else {}
+    )
     return {
         "primary_relationship": task_relationship_model.get("primary_relationship"),
         "frame_owner": task_relationship_model.get("frame_owner"),
@@ -903,6 +1055,24 @@ def _compact_task_relationship_model(task_relationship_model: dict[str, Any] | N
         "provider_input_priority": task_relationship_model.get("provider_input_priority"),
         "review_expectations": (task_relationship_model.get("review_expectations") or [])[:4],
         "prompt_directive": _compact_strategy_text(str(task_relationship_model.get("prompt_directive") or ""), 260),
+        "template_visual_grammar_plan": {
+            "frame": _compact_strategy_text(str(visual_plan.get("template_frame_directive") or ""), 160),
+            "hierarchy": _compact_strategy_text(str(visual_plan.get("visual_hierarchy_directive") or ""), 140),
+            "distribution": _compact_strategy_text(str(visual_plan.get("asset_distribution_directive") or ""), 160),
+            "materialization": _compact_strategy_text(str(visual_plan.get("asset_materialization_directive") or ""), 140),
+            "virtual": _compact_strategy_text(str(visual_plan.get("virtual_content_directive") or ""), 120),
+            "typography": _compact_strategy_text(str(visual_plan.get("typography_directive") or ""), 120),
+            "narrative": _compact_strategy_text(str(visual_plan.get("module_narrative_directive") or ""), 140),
+            "completion": _compact_strategy_text(str(visual_plan.get("layout_completion_directive") or ""), 140),
+            "slot_plan": _compact_slot_plan(visual_plan.get("slot_plan"), limit=4),
+            "gates": [
+                _compact_strategy_text(str(item), 80)
+                for item in (visual_plan.get("template_fidelity_gates") or [])[:4]
+                if _compact_strategy_text(str(item), 80)
+            ],
+        }
+        if visual_plan
+        else {},
     }
 
 
@@ -1310,9 +1480,9 @@ def _prompt_instruction(
         target = target_label or "the selected template subject slot"
         subject_rule = (
             f"Use the uploaded image as a concrete replacement subject for {target}. "
-            "Preserve the uploaded subject's visible identity, proportions, and complete content; map it into the template's existing slot geometry. "
-            "If multiple uploaded replacement images are provided, this image must remain one distinct visible dish/photo module in the layout. "
-            "Do not crop it into arbitrary fragments, add new container frames, treat it as a style reference, merge it into another dish, or copy the uploaded image's source layout."
+            "Preserve the uploaded subject's visible identity, proportions, and complete content; re-materialize it inside the template's native visual grammar. "
+            "If multiple uploaded replacement images are provided, this image must remain an identifiable food/product contribution, while Claude decides its native module role. "
+            "Do not crop it into arbitrary fragments, add new source-photo containers, treat it as a style reference, merge it into another dish, or copy the uploaded image's source layout."
         )
     if role == "subject_reference" and fusion_mode == "composite_content_source":
         qr_intent = bool(fusion_policy.get("qr_intent"))

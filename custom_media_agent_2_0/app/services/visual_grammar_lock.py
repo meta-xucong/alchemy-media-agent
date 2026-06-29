@@ -239,7 +239,7 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
         except (TypeError, ValueError):
             uploaded_count = 0
         count_rule = (
-            f" All {uploaded_count} uploaded replacement images must appear as distinct visible food/photo modules; do not collapse them into one hero dish or ignore later uploads."
+            f" All {uploaded_count} uploaded replacement images must be accounted for as distinct food/product intentions inside template-native modules; preserve each subject's recognizable complete identity without forcing equal-size photo cards, pasted source frames, or one merged hero dish."
             if uploaded_count > 1
             else ""
         )
