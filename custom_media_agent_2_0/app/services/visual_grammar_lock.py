@@ -234,10 +234,20 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
         insert_index += 1
     if _task_relationship_replaces_template_subject(task_relationship_model):
         target_label = str(task_relationship_model.get("target_label") or "the selected template subject slots")
+        try:
+            uploaded_count = int(task_relationship_model.get("uploaded_asset_count") or 0)
+        except (TypeError, ValueError):
+            uploaded_count = 0
+        count_rule = (
+            f" All {uploaded_count} uploaded replacement images must appear as distinct visible food/photo modules; do not collapse them into one hero dish or ignore later uploads."
+            if uploaded_count > 1
+            else ""
+        )
         parts.insert(
             insert_index,
             "Task relationship lock: uploaded images are concrete replacement subjects for "
-            f"{target_label}; keep the visual grammar frame, replace its original slot content, and do not recast the uploads as source-layout evidence.",
+            f"{target_label}; keep the visual grammar frame, replace its original slot content, and do not recast the uploads as source-layout evidence."
+            + count_rule,
         )
         insert_index += 1
     if anchor:

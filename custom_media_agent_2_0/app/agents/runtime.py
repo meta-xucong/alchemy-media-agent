@@ -17,7 +17,7 @@ from app.schemas import (
 )
 from app.services.case_intelligence import build_case_profile, get_prompt_case, search_prompt_cases
 from app.services.claude_orchestrator import orchestrate_creative_request
-from app.services.asset_binding import build_asset_context, provider_input_images_from_context
+from app.services.asset_binding import apply_orchestrator_task_intent, build_asset_context, provider_input_images_from_context
 from app.services.generation import create_image_job, create_running_image_job
 from app.services.ids import new_id
 from app.services.prompting import compose_prompt_plan, summarize_intent, summaries_from_cases
@@ -292,6 +292,7 @@ class CreativeManagerRuntime:
                 progress_events=progress_events,
                 progress_summary=progress_summary,
             )
+        asset_context = apply_orchestrator_task_intent(asset_context, orchestrator_decision.task_intent) or asset_context
         mode = orchestrator_decision.mode
         retrieval_plan = orchestrator_decision.case_retrieval_plan
         selected_cases = []

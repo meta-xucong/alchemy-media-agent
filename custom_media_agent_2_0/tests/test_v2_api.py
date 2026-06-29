@@ -2512,6 +2512,64 @@ def test_openai_image_provider_accepts_proxy_image_url_response(monkeypatch) -> 
     assert outputs[0].metadata["response_delivery"] == "url"
 
 
+def test_openai_image_provider_retries_transient_proxy_image_url_timeout(monkeypatch) -> None:
+    png_bytes = b"\x89PNG\r\n\x1a\nproxy-image-after-retry"
+    calls: list[str] = []
+    delays: list[float] = []
+
+    class FakeResponse:
+        content = png_bytes
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            assert url == "https://proxy.example.test/image.png?token=secret"
+            calls.append(url)
+            if len(calls) == 1:
+                raise response_payloads.httpx.ReadTimeout("temporary upstream image fetch timeout")
+            return FakeResponse()
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(response_payloads.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(response_payloads.asyncio, "sleep", fake_sleep)
+    plan = ImagePromptPlan(
+        plan_id="plan_proxy_url_retry_openai_response",
+        mode="template_customize",
+        prompt="Create a product poster.",
+        provider_parameters={"size": "1024x1024", "output_format": "png"},
+    )
+    response = {"output": [{"image_url": "https://proxy.example.test/image.png?token=secret"}]}
+
+    outputs = asyncio.run(
+        openai_image_provider._outputs_from_openai_response(
+            response,
+            plan,
+            index=0,
+            operation="images.edit",
+            reference_count=1,
+        )
+    )
+
+    assert base64.b64decode(outputs[0].b64_json) == png_bytes
+    assert outputs[0].metadata["response_delivery"] == "url_after_retry"
+    assert len(calls) == 2
+    assert delays == [1.5]
+
+
 def test_doubao_image_provider_sends_reference_images_to_proxy_edit_endpoint(monkeypatch) -> None:
     client = fresh_client()
     asset_id = upload_test_asset(client, role="subject_reference", color=(20, 130, 90))
@@ -4365,6 +4423,122 @@ def test_template_food_replacement_uses_uploaded_images_as_slot_subjects() -> No
     prompt = run["prompt_plan"]["prompt"]
     assert "TASK RELATIONSHIP" in prompt
     assert "UPLOADED CONTENT SOURCE" not in prompt
+
+
+def test_claude_task_intent_overrides_chinese_food_template_replacement_bindings(monkeypatch) -> None:
+    client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    asset_ids = [
+        upload_test_asset(client, role="style_reference", color=(40 + index * 25, 120, 180))
+        for index in range(6)
+    ]
+    user_prompt = (
+        "把上传的图片中的食物，设计成Premium Food Recipe Poster Elegant Layout模板的样式。"
+        "替换原模板中的食物照片。每张图片的食物主体都要求完整，合理的展现出来。"
+        "每张图片在海报中的排版要求合理，不允许混乱，擅自裁切。\n"
+        "背景的食物大图，你换成自己生成的轻食图片，整体风格相符。\n\n"
+        "另外附加内容：\n\n"
+        "品牌：河野轻厨\n"
+        "IP：蓝色河马\n"
+        "标题：周月卡30天不重样漂亮饭\n"
+        "副标题：适合儿童，成人的低糖低脂低油健康餐 198元5次卡，1456元40次卡\n"
+        "尺寸：高度180*宽度80\n\n"
+        "文字字号稍小，凸显高级感，品质感"
+    )
+
+    def claude_food_replacement_intent(*, request, fallback, candidate_cases, candidate_case_details):
+        return {
+            "mode": "template_customize",
+            "selected_case_ids": [request.template_case_id],
+            "final_prompt": (
+                "Use the selected premium food recipe poster layout as the frame. Replace the template food-photo "
+                "modules with all six uploaded food reference images as distinct complete dish modules. Generate a "
+                "compatible healthy-light-meal hero background image. Use refined smaller Simplified Chinese copy "
+                "for the brand, IP, title, subtitle, and price information."
+            ),
+            "negative_prompt": "white placeholder boxes, random QR placeholder, English recipe labels",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "The uploaded images are dish replacements, while the selected template owns the layout.",
+            "task_intent": {
+                "primary_relationship": "replace_template_food_subject",
+                "target_surface": "food_subject_slots",
+                "target_label": "template food/photo modules",
+                "uploaded_asset_role": "slot_replacement_subject",
+                "fusion_mode": "template_slot_replacement",
+                "content_extraction": False,
+                "template_slot_replacement": True,
+                "provider_input_required": True,
+                "visible_text_language": "Simplified Chinese",
+                "visible_text_policy": (
+                    "use Simplified Chinese for all visible user-requested copy; do not inherit English recipe "
+                    "labels or placeholder template text"
+                ),
+                "prompt_directive": (
+                    "All 6 uploaded food references must appear as distinct complete visible dish/photo modules; "
+                    "do not collapse them into one hero dish, discard later uploads, crop them into fragments, or "
+                    "place them inside white placeholder boxes."
+                ),
+                "negative_prompt_additions": ["English template copy", "white placeholder food cards"],
+                "review_expectations": [
+                    "uploaded_replacement_subjects_visible",
+                    "template_food_slots_replaced",
+                    "no_white_placeholder_boxes",
+                ],
+                "rationale": "The user asks to replace the template food photos, not extract a source poster layout.",
+            },
+            "generation_directives": {"count": 1, "provider_hint": "mock_image"},
+            "confidence": 0.94,
+        }
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", claude_food_replacement_intent)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": user_prompt,
+            "template_case_id": "case_github_evolinkai_ad_0001",
+            "assets": [
+                {
+                    "asset_id": asset_id,
+                    "role": "style_reference",
+                    "constraint_strength": "strong",
+                }
+                for asset_id in asset_ids
+            ],
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    plan = run["prompt_plan"]
+    variables = plan["user_variables"]
+    relationship = variables["task_relationship_model"]
+    assert run["orchestrator_decision"]["task_intent"]["primary_relationship"] == "replace_template_food_subject"
+    assert relationship["primary_relationship"] == "replace_template_food_subject"
+    assert relationship["source"] == "orchestrator_task_intent"
+    assert relationship["template_slot_replacement"] is True
+    assert relationship["content_extraction"] is False
+    assert relationship["uploaded_asset_count"] == 6
+    assert variables["asset_frame_strategy"]["content_extraction"] is False
+    assert variables["provider_input_plan"]["reference_image_asset_ids"] == asset_ids
+    assert variables["provider_input_plan"]["reference_image_count"] == 6
+    assert variables["provider_input_plan"]["fusion_modes"] == ["template_slot_replacement"]
+    assert variables["orchestrator_task_intent"]["primary_relationship"] == "replace_template_food_subject"
+    assert plan["provider_parameters"]["size"] == "1024x2304"
+    assert variables["aspect_lock"] == {
+        "mode": "manual",
+        "locked": True,
+        "source": "user_prompt.size",
+        "value": "1024x2304",
+        "aspect_ratio": "4:9",
+        "prompt_instruction": "Required output aspect ratio: 4:9.",
+    }
+    assert variables["language_lock"]["locked"] is True
+    assert variables["language_lock"]["language"] == "Simplified Chinese"
+    assert "All 6 uploaded food references must appear as distinct complete visible dish/photo modules" in plan["prompt"]
+    assert "Visible text language lock: use Simplified Chinese" in plan["prompt"]
+    assert "UPLOADED CONTENT SOURCE" not in plan["prompt"]
+    assert "English template copy" in plan["negative_prompt"]
 
 
 def test_uploaded_source_poster_still_uses_composite_content_extraction() -> None:

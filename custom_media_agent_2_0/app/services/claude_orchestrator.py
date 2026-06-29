@@ -19,6 +19,7 @@ from app.schemas import (
     CaseRetrievalPlan,
     CreateCreativeRunRequest,
     CreativeOrchestratorDecision,
+    OrchestratorTaskIntent,
     OrchestratorInvocationRecord,
     OrchestratorStatusResponse,
     PromptCase,
@@ -60,7 +61,7 @@ _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v10_template_anchor_skeleton_lock"
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v11_task_intent"
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
@@ -128,6 +129,7 @@ CLAUDE_DECISION_SCHEMA: dict[str, Any] = {
         "provider_parameters": {"type": "object"},
         "prompt_rationale": {"type": "string"},
         "prompt_directives": {"type": "object"},
+        "task_intent": {"type": "object"},
         "stage_commands": {"type": "array", "items": {"type": "object"}},
         "generation_directives": {"type": "object"},
         "quality_gates": {"type": "object"},
@@ -170,6 +172,7 @@ CLAUDE_INTENT_CHECKPOINT_SCHEMA: dict[str, Any] = {
         "must_keep": {"type": "array", "items": {"type": "string", "maxLength": 100}, "maxItems": 6},
         "must_avoid": {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 6},
         "asset_requirements": {"type": "array", "items": {"type": "object"}, "maxItems": 5},
+        "task_intent": {"type": "object"},
         "risk_notes": {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 4},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
@@ -2234,6 +2237,7 @@ def _normalize_decision(
         provider_parameters=provider_parameters,
         prompt_rationale=prompt_rationale,
         prompt_directives=_normalize_prompt_directives(raw.get("prompt_directives")),
+        task_intent=_normalize_task_intent(raw.get("task_intent")),
         stage_commands=_normalize_stage_commands(raw.get("stage_commands")),
         generation_directives=_apply_request_output_overrides(
             {**generation_directives, **provider_parameters},
@@ -2243,6 +2247,34 @@ def _normalize_decision(
         confidence=_bounded_float(raw.get("confidence"), 0.78 if raw.get("selected_case_ids") else fallback.confidence),
         created_at=utc_now(),
     )
+
+
+def _normalize_task_intent(raw: Any) -> OrchestratorTaskIntent | None:
+    if not isinstance(raw, dict):
+        return None
+    payload = dict(raw)
+    relationship = _text_value(payload.get("primary_relationship") or payload.get("asset_relationship"))
+    relationship_aliases = {
+        "template_food_slot_replacement": "replace_template_food_subject",
+        "template_slot_replacement": "replace_template_subject",
+        "content_extraction": "extract_composite_content",
+        "content_source": "extract_composite_content",
+        "slot_fill": "fill_template_slots",
+        "reference": "free_reference",
+    }
+    if relationship:
+        payload["primary_relationship"] = relationship_aliases.get(relationship, relationship)
+    list_fields = ["negative_prompt_additions", "review_expectations"]
+    for key in list_fields:
+        value = payload.get(key)
+        if isinstance(value, list):
+            payload[key] = [_text_value(item) for item in value if _text_value(item)]
+        elif value:
+            payload[key] = [_text_value(value)]
+    try:
+        return OrchestratorTaskIntent.model_validate(payload)
+    except Exception:
+        return None
 
 
 def _normalize_retrieval_plan(raw: Any, fallback: CaseRetrievalPlan) -> CaseRetrievalPlan:
@@ -2563,6 +2595,10 @@ def _build_workspace(
                 "- 如果手选原型包含 typography、notes、cards、labels、feature sheet 或 infographic，negative_prompt 不要禁止 text；只禁止错误文字、乱码、品牌 logo、水印和签名。",
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
                 "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
+                "- You must output task_intent as your own central-brain understanding of the user's asset/template relationship. Do not merely echo task_relationship_model.json if the user's natural-language intent says otherwise.",
+                "- task_intent.primary_relationship must be one of: replace_template_food_subject, replace_template_subject, extract_composite_content, fill_template_slots, free_reference, no_uploaded_assets. Use replace_template_food_subject when uploaded food photos should replace food/photo modules in the selected template; use extract_composite_content only when uploaded assets are source posters/menus/screenshots whose copy, facts, QR, or business information must be extracted.",
+                "- If task_intent says template-slot replacement, include a prompt_directive that preserves each uploaded replacement image as its own visible module and prevents tiny fragments, white placeholder frames, or collapsing multiple uploads into one hero dish.",
+                "- If the user's visible copy is in Chinese, task_intent.visible_text_language should say Simplified Chinese and visible_text_policy should forbid inheriting English placeholder recipe labels from the template.",
                 "- If task_relationship_model.json says primary_relationship=replace_template_food_subject or replace_template_subject, uploaded images are concrete replacement subjects for template slots; do not downgrade them to style signals or composite_content_source.",
                 "- asset_binding_policy.json 中的 fusion_mode、placement_intent、target_surface 和 review_expectations 是硬素材意图约束；尤其是 Logo/主体/人脸/背景，不得被你改写成泛泛风格参考。",
                 "- 如果上传图是成品海报、菜单、周卡、信息表、截图，或 fusion_mode=composite_content_source，只提取语义内容和硬引用；不得继承其整体网格、背景和版式；只有用户明确要求或源图确有二维码时才保留二维码/扫码位。",
@@ -2659,6 +2695,10 @@ def _build_file_tool_prompt() -> str:
             "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
             "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、明确要求或源图确有的二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
+            "You must output task_intent as the central-brain decision for how uploaded assets relate to the selected template. If task_relationship_model conflicts with the user's plain-language intent, task_intent should correct it.",
+            "For food-photo replacement tasks, set task_intent.primary_relationship=replace_template_food_subject and make every uploaded food photo a distinct visible module. Do not turn them into style references, tiny fragments, or white placeholder boxes.",
+            "For source-poster/menu/screenshot extraction tasks, set task_intent.primary_relationship=extract_composite_content and extract only the requested facts, copy, real QR, or business content without inheriting the source layout.",
+            "Use task_intent.visible_text_language and visible_text_policy to keep visible copy in the user's requested language instead of inheriting template placeholder labels.",
             "If task_relationship_model.primary_relationship is replace_template_food_subject or replace_template_subject, final_prompt must frame uploaded images as replacement subjects for existing template slots, not as a new layout, style reference, or composite content sheet.",
             "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度；不得为了通用 CTA 凭空添加二维码或扫码占位。",
             "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
@@ -3048,6 +3088,21 @@ def _decision_template(fallback: CreativeOrchestratorDecision) -> dict[str, Any]
             "color_palette": "",
             "negative_prompt_additions": [],
             "safety_notes": [],
+        },
+        "task_intent": {
+            "primary_relationship": "free_reference",
+            "target_surface": "",
+            "target_label": "",
+            "fusion_mode": "",
+            "content_extraction": False,
+            "template_slot_replacement": False,
+            "provider_input_required": False,
+            "visible_text_language": "",
+            "visible_text_policy": "",
+            "prompt_directive": "",
+            "negative_prompt_additions": [],
+            "review_expectations": [],
+            "rationale": "",
         },
         "stage_commands": [item.model_dump() for item in fallback.stage_commands],
         "generation_directives": fallback.generation_directives,

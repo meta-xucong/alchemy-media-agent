@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import re
@@ -205,17 +206,35 @@ async def _payload_from_string(
 
 async def _fetch_image_url_as_b64(url: str, *, timeout_seconds: float) -> tuple[str, str | None, str | None, str]:
     timeout = httpx.Timeout(max(1.0, timeout_seconds), connect=min(20.0, max(1.0, timeout_seconds)))
+    last_error: httpx.HTTPError | None = None
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            response = await client.get(url)
-        response.raise_for_status()
+            for attempt in range(1, 4):
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    break
+                except httpx.HTTPError as exc:
+                    last_error = exc
+                    if attempt >= 3:
+                        raise
+                    await asyncio.sleep(min(1.5 * attempt, 4.0))
     except httpx.HTTPError as exc:
         raise V2ImageProviderRuntimeError(
             "Image URL response could not be fetched.",
             provider=None,
-            detail={"url": _redacted_url(url), "error_type": type(exc).__name__, "message": str(exc)[:500]},
+            detail={
+                "url": _redacted_url(url),
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:500],
+                "attempts": 3,
+            },
             retryable=True,
         ) from exc
+    if last_error:
+        delivery_suffix = "_after_retry"
+    else:
+        delivery_suffix = ""
     content = response.content
     if len(content) > _MAX_FETCHED_IMAGE_BYTES:
         raise V2ImageProviderRuntimeError(
@@ -224,7 +243,7 @@ async def _fetch_image_url_as_b64(url: str, *, timeout_seconds: float) -> tuple[
             detail={"url": _redacted_url(url), "byte_count": len(content), "max_bytes": _MAX_FETCHED_IMAGE_BYTES},
         )
     mime_type = _content_type(response.headers.get("content-type")) or _mime_from_magic(content)
-    return base64.b64encode(content).decode("ascii"), mime_type, _format_from_mime(mime_type), "url"
+    return base64.b64encode(content).decode("ascii"), mime_type, _format_from_mime(mime_type), "url" + delivery_suffix
 
 
 def _looks_like_image_base64(value: str) -> bool:

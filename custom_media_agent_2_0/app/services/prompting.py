@@ -80,6 +80,9 @@ def compose_prompt_plan(
     prompt = apply_visual_grammar_lock(prompt, contract=visual_grammar_contract, user_prompt=user_prompt)
     qr_excluded = _qr_explicitly_excluded(user_prompt)
     prompt = _append_qr_exclusion_instruction(prompt, qr_excluded=qr_excluded)
+    task_intent_payload = _task_intent_payload(orchestrator_decision)
+    language_lock = _language_lock_from_task_intent(task_intent_payload)
+    prompt = _append_language_lock_instruction(prompt, language_lock=language_lock)
     information_integrity = (
         visual_grammar_contract.get("information_integrity")
         if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
@@ -94,6 +97,11 @@ def compose_prompt_plan(
             negative_prompt,
             orchestrator_decision.prompt_directives.negative_prompt_additions[:8],
         )
+        if orchestrator_decision.task_intent:
+            negative_prompt = _merge_negative_prompt(
+                negative_prompt,
+                orchestrator_decision.task_intent.negative_prompt_additions[:8],
+            )
     if mode == "template_customize" and primary and _template_allows_text_elements(primary, user_prompt=user_prompt):
         negative_prompt = _remove_negative_terms(negative_prompt, {"text"})
     if information_integrity.get("active"):
@@ -114,6 +122,16 @@ def compose_prompt_plan(
         )
     if qr_excluded:
         negative_prompt = _merge_negative_prompt(negative_prompt, QR_EXCLUSION_TERMS)
+    if language_lock.get("locked"):
+        negative_prompt = _merge_negative_prompt(
+            negative_prompt,
+            [
+                "English template copy",
+                "foreign-language visible text",
+                "untranslated template labels",
+                "placeholder recipe text",
+            ],
+        )
     provider_parameters = _build_provider_parameters(
         output,
         orchestrator_decision,
@@ -176,6 +194,7 @@ def compose_prompt_plan(
             "primary_case_id": primary.case_id if primary else None,
             "orchestrator_decision_id": orchestrator_decision.decision_id if orchestrator_decision else None,
             "orchestrator_provider": orchestrator_decision.provider if orchestrator_decision else None,
+            "orchestrator_task_intent": task_intent_payload,
             "prompt_source": prompt_source,
             "claude_final_prompt_used": prompt_source == "claude_final_prompt",
             "revision_source": output.get("revision_source"),
@@ -188,6 +207,7 @@ def compose_prompt_plan(
             "information_integrity_lock_enabled": bool(information_integrity.get("active")),
             "information_integrity_contract": information_integrity,
             "aspect_lock": aspect_lock,
+            "language_lock": language_lock,
             "prompt_transform_mode": prompt_transform_request.get("transform_mode"),
             "prompt_transform_profile": prompt_transform_request,
             "asset_binding_plan": (asset_context or {}).get("asset_binding_plan"),
@@ -546,6 +566,36 @@ def _append_qr_exclusion_instruction(prompt: str, *, qr_excluded: bool) -> str:
         "Hard QR exclusion: do not include QR codes, scan-code modules, QR placeholders, empty scan cards, "
         "or decorative square code areas. This overrides any selected-template or reference cue that contains a QR-safe area, scan card, or code block."
     )
+    prompt_text = str(prompt or "").rstrip()
+    if instruction in prompt_text:
+        return prompt_text
+    return f"{prompt_text}\n\n{instruction}" if prompt_text else instruction
+
+
+def _task_intent_payload(orchestrator_decision: CreativeOrchestratorDecision | None) -> dict[str, object]:
+    if not orchestrator_decision or not orchestrator_decision.task_intent:
+        return {}
+    return orchestrator_decision.task_intent.model_dump(mode="json", exclude_none=True)
+
+
+def _language_lock_from_task_intent(task_intent: dict[str, object]) -> dict[str, object]:
+    language = str(task_intent.get("visible_text_language") or "").strip()
+    policy = str(task_intent.get("visible_text_policy") or "").strip()
+    if not language and not policy:
+        return {"locked": False, "language": "", "source": "auto", "prompt_instruction": ""}
+    instruction = policy or f"Visible text language lock: use {language} for all visible copy requested by the user."
+    return {
+        "locked": True,
+        "language": language,
+        "source": "orchestrator_task_intent",
+        "prompt_instruction": f"Visible text language lock: {policy}" if policy else instruction,
+    }
+
+
+def _append_language_lock_instruction(prompt: str, *, language_lock: dict[str, object]) -> str:
+    instruction = str(language_lock.get("prompt_instruction") or "").strip()
+    if not instruction:
+        return prompt
     prompt_text = str(prompt or "").rstrip()
     if instruction in prompt_text:
         return prompt_text

@@ -328,6 +328,30 @@ class PromptDirectives(BaseModel):
     safety_notes: list[str] = Field(default_factory=list)
 
 
+class OrchestratorTaskIntent(BaseModel):
+    primary_relationship: Literal[
+        "no_uploaded_assets",
+        "replace_template_subject",
+        "replace_template_food_subject",
+        "extract_composite_content",
+        "fill_template_slots",
+        "free_reference",
+    ] = "free_reference"
+    target_surface: str | None = None
+    target_label: str | None = None
+    uploaded_asset_role: str | None = None
+    fusion_mode: str | None = None
+    content_extraction: bool | None = None
+    template_slot_replacement: bool | None = None
+    provider_input_required: bool | None = None
+    visible_text_language: str | None = None
+    visible_text_policy: str | None = None
+    prompt_directive: str | None = None
+    negative_prompt_additions: list[str] = Field(default_factory=list)
+    review_expectations: list[str] = Field(default_factory=list)
+    rationale: str | None = None
+
+
 class CreativeOrchestratorDecision(BaseModel):
     decision_id: str
     provider: str = "deterministic-fallback"
@@ -339,6 +363,7 @@ class CreativeOrchestratorDecision(BaseModel):
     provider_parameters: dict[str, Any] = Field(default_factory=dict)
     prompt_rationale: str = ""
     prompt_directives: PromptDirectives = Field(default_factory=PromptDirectives)
+    task_intent: OrchestratorTaskIntent | None = None
     stage_commands: list[StageCommand] = Field(default_factory=list)
     generation_directives: dict[str, Any] = Field(default_factory=dict)
     quality_gates: dict[str, Any] = Field(default_factory=dict)

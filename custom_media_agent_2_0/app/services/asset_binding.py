@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from typing import Any
 
@@ -130,6 +131,83 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
     }
 
 
+def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_intent: Any) -> dict[str, Any] | None:
+    payload = _task_intent_payload(task_intent)
+    if not isinstance(asset_context, dict) or not payload:
+        return asset_context
+    primary_relationship = str(payload.get("primary_relationship") or "").strip()
+    if primary_relationship not in {
+        "no_uploaded_assets",
+        "replace_template_subject",
+        "replace_template_food_subject",
+        "extract_composite_content",
+        "fill_template_slots",
+        "free_reference",
+    }:
+        return {**asset_context, "orchestrator_task_intent": payload}
+    updated = deepcopy(asset_context)
+    relationship = _relationship_from_context(updated)
+    uploaded_count = _relationship_uploaded_count(relationship) or len(updated.get("uploaded_assets") or [])
+    target_surface, target_label, uploaded_role, fusion_mode = _task_intent_targets(
+        primary_relationship,
+        payload,
+        relationship,
+    )
+    template_slot_replacement = primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS
+    content_extraction = primary_relationship == "extract_composite_content"
+    review_expectations = _task_intent_list(payload.get("review_expectations")) or _task_relationship_review_expectations(
+        primary_relationship
+    )
+    prompt_directive = str(payload.get("prompt_directive") or "").strip() or _task_relationship_prompt_directive(
+        primary_relationship,
+        target_label,
+        uploaded_asset_count=uploaded_count,
+    )
+    relationship.update(
+        {
+            "primary_relationship": primary_relationship,
+            "uploaded_asset_role": uploaded_role,
+            "target_surface": target_surface,
+            "target_label": target_label,
+            "content_extraction": content_extraction,
+            "template_slot_replacement": template_slot_replacement,
+            "provider_input_priority": "hard" if template_slot_replacement else "normal",
+            "review_expectations": review_expectations,
+            "prompt_directive": prompt_directive,
+            "source": "orchestrator_task_intent",
+            "rationale": str(payload.get("rationale") or "").strip(),
+        }
+    )
+    updated["task_relationship_model"] = relationship
+    updated["orchestrator_task_intent"] = payload
+    _apply_task_intent_to_binding_plan(
+        updated,
+        relationship=relationship,
+        fusion_mode=fusion_mode,
+        target_surface=target_surface,
+        target_label=target_label,
+        prompt_directive=prompt_directive,
+        review_expectations=review_expectations,
+    )
+    if template_slot_replacement or content_extraction:
+        _apply_task_intent_to_provider_images(
+            updated,
+            fusion_mode=fusion_mode,
+            target_surface=target_surface,
+            target_label=target_label,
+            prompt_directive=prompt_directive,
+            review_expectations=review_expectations,
+            provider_input_required=bool(payload.get("provider_input_required")) or template_slot_replacement or content_extraction,
+        )
+    _refresh_provider_input_plan(updated, relationship)
+    _apply_task_intent_to_frame_strategy(
+        updated,
+        template_slot_replacement=template_slot_replacement,
+        content_extraction=content_extraction,
+    )
+    return updated
+
+
 def provider_input_images_from_context(asset_context: dict[str, Any] | None) -> list[ProviderInputImage]:
     if not asset_context:
         return []
@@ -158,10 +236,17 @@ def prompt_asset_context_block(asset_context: dict[str, Any] | None) -> str:
     relationship = _relationship_from_context(asset_context)
     if _task_relationship_replaces_template_subject(relationship):
         target_label = _relationship_target_label(relationship)
+        uploaded_count = _relationship_uploaded_count(relationship)
+        count_rule = (
+            f" All {uploaded_count} uploaded replacement images must appear as distinct visible food/photo modules; do not collapse them into one hero dish or discard later uploads."
+            if uploaded_count > 1
+            else ""
+        )
         parts.append(
             "TASK RELATIONSHIP: uploaded reference images are concrete replacement subjects for "
             f"{target_label} in the selected template. Replace the template's original slot content with the uploaded subjects while preserving the template frame. "
             "Do not treat these uploads as a source poster, layout reference, generic style signal, or composite-content sheet."
+            + count_rule
         )
     elif _task_relationship_extracts_content(relationship):
         parts.append(
@@ -345,7 +430,11 @@ def _task_relationship_model(
         "template_slot_replacement": primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS,
         "provider_input_priority": "hard" if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS else "normal",
         "review_expectations": _task_relationship_review_expectations(primary_relationship),
-        "prompt_directive": _task_relationship_prompt_directive(primary_relationship, target_label),
+        "prompt_directive": _task_relationship_prompt_directive(
+            primary_relationship,
+            target_label,
+            uploaded_asset_count=len(asset_ids),
+        ),
     }
     if asset_ids:
         relationship["asset_relationships"] = [
@@ -460,12 +549,24 @@ def _task_relationship_review_expectations(primary_relationship: str) -> list[st
     return []
 
 
-def _task_relationship_prompt_directive(primary_relationship: str, target_label: str | None) -> str:
+def _task_relationship_prompt_directive(
+    primary_relationship: str,
+    target_label: str | None,
+    *,
+    uploaded_asset_count: int = 0,
+) -> str:
     target = target_label or "the requested slots"
     if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS:
+        multi_slot = (
+            f" Map all {uploaded_asset_count} uploaded replacement images into distinct visible food/photo modules; "
+            "do not collapse them into one dish, discard later uploads, or use them as tiny cropped fragments."
+            if uploaded_asset_count > 1
+            else " Map the uploaded replacement image into one visible subject/photo module."
+        )
         return (
             f"Use uploaded reference images as concrete replacement subjects for {target}. "
             "Preserve their visible subject identity and complete content while keeping the template composition, hierarchy, lighting, and layout rhythm."
+            + multi_slot
         )
     if primary_relationship == "extract_composite_content":
         return (
@@ -566,6 +667,225 @@ def _relationship_target_label(task_relationship_model: dict[str, Any] | None) -
     if not isinstance(task_relationship_model, dict):
         return "the requested template slots"
     return str(task_relationship_model.get("target_label") or "the requested template slots")
+
+
+def _relationship_uploaded_count(task_relationship_model: dict[str, Any] | None) -> int:
+    if not isinstance(task_relationship_model, dict):
+        return 0
+    try:
+        return int(task_relationship_model.get("uploaded_asset_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _task_intent_payload(task_intent: Any) -> dict[str, Any] | None:
+    if task_intent is None:
+        return None
+    if hasattr(task_intent, "model_dump"):
+        try:
+            raw = task_intent.model_dump(mode="json", exclude_none=True)
+        except TypeError:
+            raw = task_intent.model_dump()
+    else:
+        raw = task_intent
+    if not isinstance(raw, dict):
+        return None
+    return {str(key): value for key, value in raw.items() if value is not None}
+
+
+def _task_intent_targets(
+    primary_relationship: str,
+    payload: dict[str, Any],
+    relationship: dict[str, Any],
+) -> tuple[str | None, str | None, str, str]:
+    target_surface = str(payload.get("target_surface") or relationship.get("target_surface") or "").strip() or None
+    target_label = str(payload.get("target_label") or relationship.get("target_label") or "").strip() or None
+    uploaded_role = str(payload.get("uploaded_asset_role") or relationship.get("uploaded_asset_role") or "").strip()
+    fusion_mode = str(payload.get("fusion_mode") or "").strip()
+    if primary_relationship == "replace_template_food_subject":
+        target_surface = target_surface or "food_subject_slots"
+        target_label = target_label or "template food/product image slots"
+        uploaded_role = uploaded_role or "slot_replacement_subject"
+        fusion_mode = fusion_mode or TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
+    elif primary_relationship == "replace_template_subject":
+        target_surface = target_surface or "main_subject_slot"
+        target_label = target_label or "template main subject slot"
+        uploaded_role = uploaded_role or "slot_replacement_subject"
+        fusion_mode = fusion_mode or TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
+    elif primary_relationship == "extract_composite_content":
+        target_surface = target_surface or "semantic_content_slots"
+        target_label = target_label or "template semantic content slots"
+        uploaded_role = uploaded_role or "source_evidence"
+        fusion_mode = fusion_mode or "composite_content_source"
+    elif primary_relationship == "fill_template_slots":
+        target_surface = target_surface or "replaceable_template_slots"
+        target_label = target_label or "template replaceable slots"
+        uploaded_role = uploaded_role or "slot_variables"
+        fusion_mode = fusion_mode or "reference"
+    else:
+        target_surface = target_surface or "generated_image"
+        target_label = target_label or "generated image subject/style slots"
+        uploaded_role = uploaded_role or "creative_evidence"
+        fusion_mode = fusion_mode or "reference"
+    return target_surface, target_label, uploaded_role, fusion_mode
+
+
+def _task_intent_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value:
+        return [str(value).strip()]
+    return []
+
+
+def _apply_task_intent_to_binding_plan(
+    asset_context: dict[str, Any],
+    *,
+    relationship: dict[str, Any],
+    fusion_mode: str,
+    target_surface: str | None,
+    target_label: str | None,
+    prompt_directive: str,
+    review_expectations: list[str],
+) -> None:
+    plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
+    bindings = plan.get("bindings") if isinstance(plan.get("bindings"), list) else []
+    primary_relationship = str(relationship.get("primary_relationship") or "")
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        if primary_relationship in TEMPLATE_REPLACEMENT_RELATIONSHIPS:
+            binding["role"] = "subject_reference"
+            binding["binding_slot"] = target_surface or "main_subject_slot"
+            binding["fusion_mode"] = fusion_mode or TEMPLATE_SLOT_REPLACEMENT_FUSION_MODE
+            binding["target_surface"] = target_surface
+            binding["placement_intent"] = {
+                **(binding.get("placement_intent") if isinstance(binding.get("placement_intent"), dict) else {}),
+                "mode": "template_slot_replacement",
+                "target_label": target_label,
+                "source": "orchestrator_task_intent",
+            }
+            binding["provider_input_required"] = True
+            binding["prompt_instruction"] = prompt_directive
+            binding["review_expectations"] = review_expectations
+            binding["conflict_resolution"] = "central brain task_intent overrides preliminary asset-role guess"
+        elif primary_relationship == "extract_composite_content":
+            binding["role"] = "subject_reference"
+            binding["binding_slot"] = "semantic_content"
+            binding["fusion_mode"] = "composite_content_source"
+            binding["target_surface"] = target_surface or "semantic_content_slots"
+            binding["placement_intent"] = {
+                **(binding.get("placement_intent") if isinstance(binding.get("placement_intent"), dict) else {}),
+                "mode": "semantic_content_extraction",
+                "target_label": target_label,
+                "source": "orchestrator_task_intent",
+            }
+            binding["provider_input_required"] = True
+            binding["prompt_instruction"] = prompt_directive
+            binding["review_expectations"] = review_expectations
+            binding["conflict_resolution"] = "central brain task_intent marks uploaded asset as source content evidence"
+    plan["bindings"] = bindings
+    asset_context["asset_binding_plan"] = plan
+
+
+def _apply_task_intent_to_provider_images(
+    asset_context: dict[str, Any],
+    *,
+    fusion_mode: str,
+    target_surface: str | None,
+    target_label: str | None,
+    prompt_directive: str,
+    review_expectations: list[str],
+    provider_input_required: bool,
+) -> None:
+    images = asset_context.get("provider_input_images") if isinstance(asset_context.get("provider_input_images"), list) else []
+    images_by_id = {str(item.get("asset_id")): item for item in images if isinstance(item, dict) and item.get("asset_id")}
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        image["role"] = "subject_reference"
+        image["fusion_mode"] = fusion_mode or image.get("fusion_mode") or "reference"
+        image["target_surface"] = target_surface or image.get("target_surface")
+        image["placement_intent"] = {
+            **(image.get("placement_intent") if isinstance(image.get("placement_intent"), dict) else {}),
+            "target_label": target_label,
+            "source": "orchestrator_task_intent",
+        }
+        image["provider_input_required"] = provider_input_required or bool(image.get("provider_input_required"))
+        image["prompt_instruction"] = prompt_directive or str(image.get("prompt_instruction") or "")
+        image["review_expectations"] = review_expectations or list(image.get("review_expectations") or [])
+    uploaded_by_id = {
+        str(item.get("asset_id")): item
+        for item in (asset_context.get("uploaded_assets") or [])
+        if isinstance(item, dict) and item.get("asset_id")
+    }
+    plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
+    for binding in plan.get("bindings") or []:
+        if not isinstance(binding, dict) or not binding.get("provider_input_required"):
+            continue
+        asset_id = str(binding.get("asset_id") or "")
+        if not asset_id or asset_id in images_by_id:
+            continue
+        uploaded = uploaded_by_id.get(asset_id) or {}
+        image = {
+            "asset_id": asset_id,
+            "role": binding.get("role") or "subject_reference",
+            "constraint_strength": binding.get("constraint_strength") or "strong",
+            "source_url": uploaded.get("source_url"),
+            "mime_type": uploaded.get("mime_type"),
+            "provider_input_required": True,
+            "prompt_instruction": binding.get("prompt_instruction") or prompt_directive,
+            "fusion_mode": binding.get("fusion_mode") or fusion_mode or "reference",
+            "placement_intent": binding.get("placement_intent") or {},
+            "target_surface": binding.get("target_surface") or target_surface,
+            "review_expectations": binding.get("review_expectations") or review_expectations,
+        }
+        images.append(image)
+        images_by_id[asset_id] = image
+    asset_context["provider_input_images"] = images
+
+
+def _refresh_provider_input_plan(asset_context: dict[str, Any], relationship: dict[str, Any]) -> None:
+    plan = asset_context.get("asset_binding_plan") if isinstance(asset_context.get("asset_binding_plan"), dict) else {}
+    bindings = [
+        AssetBinding.model_validate(item)
+        for item in (plan.get("bindings") or [])
+        if isinstance(item, dict)
+    ]
+    provider_plan = _provider_input_plan(bindings, task_relationship_model=relationship)
+    plan["provider_input_plan"] = provider_plan
+    asset_context["asset_binding_plan"] = plan
+    asset_context["provider_input_plan"] = provider_plan
+
+
+def _apply_task_intent_to_frame_strategy(
+    asset_context: dict[str, Any],
+    *,
+    template_slot_replacement: bool,
+    content_extraction: bool,
+) -> None:
+    strategy = asset_context.get("asset_frame_strategy") if isinstance(asset_context.get("asset_frame_strategy"), dict) else {}
+    if template_slot_replacement:
+        strategy.update(
+            {
+                "mode": "template_frame_primary",
+                "frame_source": "selected_template",
+                "content_extraction": False,
+                "uploaded_layout_may_override_case": False,
+                "source": "orchestrator_task_intent",
+            }
+        )
+    elif content_extraction:
+        strategy.update(
+            {
+                "mode": "template_frame_primary",
+                "frame_source": "selected_template",
+                "content_extraction": True,
+                "uploaded_layout_may_override_case": False,
+                "source": "orchestrator_task_intent",
+            }
+        )
+    asset_context["asset_frame_strategy"] = strategy
 
 
 def _compact_task_relationship_model(task_relationship_model: dict[str, Any] | None) -> dict[str, Any]:
@@ -991,7 +1311,8 @@ def _prompt_instruction(
         subject_rule = (
             f"Use the uploaded image as a concrete replacement subject for {target}. "
             "Preserve the uploaded subject's visible identity, proportions, and complete content; map it into the template's existing slot geometry. "
-            "Do not crop it into arbitrary fragments, add new container frames, treat it as a style reference, or copy the uploaded image's source layout."
+            "If multiple uploaded replacement images are provided, this image must remain one distinct visible dish/photo module in the layout. "
+            "Do not crop it into arbitrary fragments, add new container frames, treat it as a style reference, merge it into another dish, or copy the uploaded image's source layout."
         )
     if role == "subject_reference" and fusion_mode == "composite_content_source":
         qr_intent = bool(fusion_policy.get("qr_intent"))
