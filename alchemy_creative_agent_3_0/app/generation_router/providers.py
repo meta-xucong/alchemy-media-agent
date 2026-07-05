@@ -249,7 +249,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     provider_name = "production_image_generation_provider"
     provider_version = "v3.8b-provider-output-production"
-    max_provider_prompt_chars = 3200
+    # Keep the production path lossless by default. A numeric limit can still be
+    # set by tests or a future provider-specific guard when a hard upstream
+    # limit is proven, but normal local/VPS generation should use the same full
+    # V3-compiled provider prompt.
+    max_provider_prompt_chars: int | None = None
 
     def __init__(self, output_store: Any | None = None) -> None:
         if output_store is None:
@@ -817,9 +821,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             parts.append("Retry repair guidance: " + " ".join(retry_guidance))
         if prompt.negative_prompt:
             parts.append(f"Avoid: {prompt.negative_prompt}")
-        return self._compact_provider_prompt("\n".join(part for part in parts if str(part or "").strip()))
+        return self._provider_prompt_for_delivery("\n".join(part for part in parts if str(part or "").strip()))
 
-    def _compact_provider_prompt(self, raw_prompt: str) -> str:
+    def _provider_prompt_for_delivery(self, raw_prompt: str) -> str:
+        raw_prompt = str(raw_prompt or "").strip()
+        if not raw_prompt:
+            return ""
+        max_chars = self.max_provider_prompt_chars
+        if max_chars is None or max_chars <= 0:
+            return raw_prompt
+        return self._compact_provider_prompt(raw_prompt, max_chars=max_chars)
+
+    def _compact_provider_prompt(self, raw_prompt: str, *, max_chars: int | None = None) -> str:
         lines = self._normalised_unique_prompt_lines(raw_prompt)
         if not lines:
             return ""
@@ -834,7 +847,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             else:
                 body.append(item)
 
-        max_chars = self.max_provider_prompt_chars
+        if max_chars is None:
+            max_chars = self.max_provider_prompt_chars
+        if max_chars is None or max_chars <= 0:
+            return str(raw_prompt or "").strip()
         avoid_budget = min(700, max(450, max_chars // 5))
         selected = self._fit_prompt_lines(
             sorted(body, key=lambda item: (item[0], item[1])),

@@ -331,7 +331,7 @@ def test_production_provider_includes_human_photorealism_guidance(tmp_path, monk
     assert response.provider_metadata["mode_quality_profile"]["mode"] == "selection_candidates"
 
 
-def test_production_provider_compacts_overlong_provider_prompt() -> None:
+def test_production_provider_keeps_full_provider_prompt_by_default() -> None:
     request = _human_generation_request()
     request.prompt_compilation.visual_prompt = " ".join(
         [
@@ -343,7 +343,29 @@ def test_production_provider_compacts_overlong_provider_prompt() -> None:
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert len(final_prompt) <= ProductionImageGenerationProvider.max_provider_prompt_chars
+    assert len(final_prompt) > 3200
+    assert "Visual direction:" in final_prompt
+    assert "Human realism contract" in final_prompt
+    assert "Identity continuity" in final_prompt
+    assert "Avoid:" in final_prompt
+    assert "watermark" in final_prompt
+
+
+def test_production_provider_can_apply_explicit_emergency_prompt_cap() -> None:
+    request = _human_generation_request()
+    request.prompt_compilation.visual_prompt = " ".join(
+        [
+            "East Asian summer beach portrait with natural fair skin, same person identity, premium real camera photography"
+            for _ in range(180)
+        ]
+    )
+    request.prompt_compilation.negative_prompt = "distorted face, watermark, text, " * 80
+    provider = ProductionImageGenerationProvider()
+    provider.max_provider_prompt_chars = 3200
+
+    final_prompt = provider._generation_prompt(request, [])  # noqa: SLF001
+
+    assert len(final_prompt) <= 3200
     assert "Visual direction:" in final_prompt
     assert "Human realism contract" in final_prompt
     assert "Identity continuity" in final_prompt
