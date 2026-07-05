@@ -32,6 +32,7 @@ class SharedCapabilityRegistry:
         from .information_integrity import InformationIntegrityLockModule
         from .output_review import OutputReviewModule
         from .prompt_constraint_compiler import PromptConstraintCompiler
+        from .visual_cluster import VisualCapabilityClusterModule
         from .visual_grammar_lock import VisualGrammarLockModule
 
         return cls(
@@ -44,6 +45,7 @@ class SharedCapabilityRegistry:
                 PromptConstraintCompiler(),
                 OutputReviewModule(),
                 HistoryReferenceModule(),
+                VisualCapabilityClusterModule(),
             ]
         )
 

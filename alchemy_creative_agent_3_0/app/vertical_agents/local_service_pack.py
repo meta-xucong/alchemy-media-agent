@@ -1,6 +1,7 @@
 """Local service vertical pack specialization."""
 
 from .base import VerticalAgentPack
+from ..creative_core.rules import _is_portrait_beauty_context
 from ..schemas import Platform
 
 
@@ -12,7 +13,7 @@ class LocalServiceAgentFamily(VerticalAgentPack):
     def match(self, creative_job, commercial_brief=None) -> float:
         score = 0.8 if self._industry_value(commercial_brief) in self.supported_industries else 0.0
         text = self._job_text(creative_job)
-        if self._contains_any(
+        if not _is_portrait_beauty_context(text) and self._contains_any(
             text,
             ("美甲", "美睫", "美容", "美发", "皮肤管理", "按摩", "到店", "预约", "开业优惠", "nail", "beauty", "salon"),
         ):

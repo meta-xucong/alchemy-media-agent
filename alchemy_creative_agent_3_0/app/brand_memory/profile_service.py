@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .preference_update import should_apply_memory_update
 from .store import BrandProfileStore
+from ..creative_core.prompt_language import product_language_allowed
 from ..creative_core.rules import RULE_VERSION, default_color_palette, stable_id
 from ..schemas import BrandProfile, CommercialBrief, CreativeJob, MemoryUpdate, Platform
 
@@ -50,6 +51,13 @@ class BrandProfileService:
         brief: CommercialBrief,
         warnings: list[str] | None = None,
     ) -> BrandProfile:
+        allow_product_language = product_language_allowed(
+            template_id=job.optional_template_id,
+            scenario_id=job.metadata.get("scenario_id"),
+            industry=brief.industry,
+            user_input=job.raw_user_input,
+            metadata={**brief.metadata, **job.metadata},
+        )
         return BrandProfile(
             brand_id=f"temp_brand_{job.job_id}",
             brand_name=None,
@@ -57,8 +65,16 @@ class BrandProfileService:
             is_temporary=True,
             visual_tone=list(brief.visual_tone),
             color_palette=default_color_palette(brief.industry, brief.visual_tone),
-            layout_preference="center product, top headline, bottom CTA",
-            typography_preference="large readable Chinese commercial typography",
+            layout_preference=(
+                "center product, top headline, bottom CTA"
+                if allow_product_language
+                else "main subject centered with balanced clean space"
+            ),
+            typography_preference=(
+                "large readable Chinese commercial typography"
+                if allow_product_language
+                else "clean optional external overlay typography"
+            ),
             copywriting_tone=brief.copy_strategy,
             reference_assets=[],
             rejected_style_tags=list(brief.risks),

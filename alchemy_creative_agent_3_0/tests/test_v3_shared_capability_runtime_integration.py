@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.shared_capabilities import UploadedAssetInfo
 
 
@@ -37,6 +39,7 @@ def test_scenario_runtime_runs_optional_asset_capabilities_for_general_creative(
         "asset_role_analyzer",
         "asset_binding_planner",
         "prompt_constraint_compiler",
+        "visual_capability_cluster",
     ]
     assert result.planning_result is not None
     shared = result.planning_result.metadata["shared_capabilities"]
@@ -62,9 +65,52 @@ def test_product_api_runs_information_integrity_for_product_profile(tmp_path) ->
     assert created.status == ProductJobStatusValue.PLANNED
     shared = created.metadata["shared_capabilities"]
     assert shared["enabled"] is True
-    assert shared["module_ids"] == ["information_integrity_lock", "prompt_constraint_compiler"]
+    assert shared["module_ids"] == ["information_integrity_lock", "prompt_constraint_compiler", "visual_capability_cluster"]
     assert shared["result_statuses"]["information_integrity_lock"] == "warning"
+    assert shared["visual_cluster"]["cluster_id"]
     assert created.warnings
+
+
+def test_general_visual_cluster_sanitizes_commercial_case_terms() -> None:
+    runtime = ScenarioRuntime()
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create a fresh summer portrait cover with clean bright light.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"use_case_library": True}},
+            "metadata": {"template_id": "general_template"},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.PLANNED
+    assert result.planning_result is not None
+    shared = result.planning_result.metadata["shared_capabilities"]
+    cluster_text = json.dumps(shared["visual_cluster"], ensure_ascii=False).lower()
+    assert shared["visual_cluster"]["cluster_id"]
+    assert "commercial" not in cluster_text
+    assert "product" not in cluster_text
+    assert "clean optional blank space" in cluster_text or "cover-safe clean space" in cluster_text
+
+
+def test_runtime_generation_passes_visual_cluster_to_generation_metadata() -> None:
+    runtime = ScenarioRuntime()
+
+    result = runtime.generate_job(
+        {
+            "user_input": "Create a fresh summer portrait cover with clean bright light.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"use_case_library": True}},
+            "metadata": {"template_id": "general_template"},
+        },
+        provider_strategy=ProviderStrategy.MOCK_GENERATION,
+    )
+
+    assert result.status == ScenarioRuntimeStatus.GENERATED
+    assert result.generation_result is not None
+    shared = result.generation_result.metadata["shared_capabilities"]
+    plan_metadata = result.generation_result.generation_plans[0].metadata
+    assert shared["visual_cluster"]["cluster_id"]
+    assert plan_metadata["shared_capabilities"]["visual_cluster"]["cluster_id"] == shared["visual_cluster"]["cluster_id"]
+    assert plan_metadata["visual_cluster"]["cluster_id"] == shared["visual_cluster"]["cluster_id"]
 
 
 def test_placeholder_scenario_does_not_run_shared_capabilities(tmp_path) -> None:

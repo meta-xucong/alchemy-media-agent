@@ -5,14 +5,25 @@ from __future__ import annotations
 from typing import Any
 
 from ..app_shell import get_scenario_hub_contract
+from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
 from .service import V3ProductApiService
 
 
 class V3ProductRouteHandlers:
     """Method names mirror the reserved V3 route contract."""
 
-    def __init__(self, service: V3ProductApiService | None = None) -> None:
+    def __init__(
+        self,
+        service: V3ProductApiService | None = None,
+        project_store: InMemoryProjectStore | None = None,
+        template_registry: ProjectTemplateRegistry | None = None,
+    ) -> None:
         self.service = service or V3ProductApiService()
+        self.project_service = V3ProjectModeService(
+            product_service=self.service,
+            project_store=project_store,
+            template_registry=template_registry,
+        )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.service.create_job(payload).model_dump(mode="json")
@@ -46,6 +57,60 @@ class V3ProductRouteHandlers:
 
     def get_history(self, limit: int = 20) -> dict[str, Any]:
         return self.service.list_history(limit=limit).model_dump(mode="json")
+
+    def get_projects(self, limit: int = 20, owner_user_id: int | None = None) -> dict[str, Any]:
+        return self.project_service.list_projects(limit=limit, owner_user_id=owner_user_id).model_dump(mode="json")
+
+    def get_project_outputs(self, limit: int = 60, owner_user_id: int | None = None) -> dict[str, Any]:
+        return self.project_service.list_project_outputs(limit=limit, owner_user_id=owner_user_id)
+
+    def post_projects(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.create_project(payload).model_dump(mode="json")
+
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.get_project(project_id).model_dump(mode="json")
+
+    def post_project_archive(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.archive_project(project_id).model_dump(mode="json")
+
+    def get_project_timeline(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.list_timeline(project_id).model_dump(mode="json")
+
+    def get_project_context(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.get_project_context(project_id).model_dump(mode="json")
+
+    def post_project_reference(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.add_project_reference(project_id, payload).model_dump(mode="json")
+
+    def patch_project_reference(self, project_id: str, reference_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.update_project_reference(project_id, reference_id, payload).model_dump(mode="json")
+
+    def post_project_reference_remove(self, project_id: str, reference_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.project_service.remove_project_reference(project_id, reference_id, payload or {}).model_dump(mode="json")
+
+    def post_project_feedback(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.add_project_feedback(project_id, payload).model_dump(mode="json")
+
+    def post_project_brand_memory_proposal(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.create_brand_memory_proposal(project_id, payload).model_dump(mode="json")
+
+    def post_project_brand_memory_confirm(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.confirm_brand_memory_proposal(project_id, payload).model_dump(mode="json")
+
+    def post_project_output_unselect(self, project_id: str, output_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.project_service.unselect_project_output(project_id, output_id, payload or {})
+
+    def post_project_output_reject(self, project_id: str, output_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.reject_project_output(project_id, output_id, payload)
+
+    def post_project_job(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.create_project_job(project_id, payload).model_dump(mode="json")
+
+    def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.project_service.generate_project_job(project_id, job_id, payload or {}).model_dump(mode="json")
+
+    def post_project_job_select(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.project_service.select_project_job(project_id, job_id, payload or {})
 
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self.service.get_job(job_id).model_dump(mode="json")

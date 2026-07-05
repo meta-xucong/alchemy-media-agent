@@ -173,6 +173,46 @@ alchemy_creative_agent_3_0/docs/28_V3_ASSET_UPLOAD_AND_EXPORT_CLOSURE_SPEC.md
 alchemy_creative_agent_3_0/docs/29_V3_DEVELOPMENT_DOCUMENT_EXECUTION_AUDIT.md
 alchemy_creative_agent_3_0/docs/30_V3_HOME_FIRST_CARD_AND_HISTORY_FRONTEND_FIX_SPEC.md
 alchemy_creative_agent_3_0/docs/31_V3_PRODUCTIZED_MODULE_WORKSPACES_AND_CAPABILITY_AUDIT_SPEC.md
+alchemy_creative_agent_3_0/docs/32_V3_PROJECT_MODE_CORE_CONTROL_SPEC.md
+alchemy_creative_agent_3_0/docs/33_V3_PROJECT_MODE_COMPATIBILITY_AND_MIGRATION_SPEC.md
+alchemy_creative_agent_3_0/docs/34_V3_PROJECT_CONTRACT_AND_CONTEXT_SPEC.md
+alchemy_creative_agent_3_0/docs/35_V3_PROJECT_FIRST_FRONTEND_UX_SPEC.md
+alchemy_creative_agent_3_0/docs/36_V3_GENERAL_TEMPLATE_PROJECT_FLOW_SPEC.md
+alchemy_creative_agent_3_0/docs/37_V3_TEMPLATE_INTERFACE_AND_AUDIT_SPEC.md
+alchemy_creative_agent_3_0/docs/38_V3_PROJECT_WORKSPACE_CONTINUATION_UX_AND_STATE_SPEC.md
+alchemy_creative_agent_3_0/docs/39_V3_PROJECT_CONTEXT_ASSET_AND_FEEDBACK_PERSISTENCE_SPEC.md
+alchemy_creative_agent_3_0/docs/40_V3_PROJECT_TO_BRAND_MEMORY_CONFIRMATION_SPEC.md
+alchemy_creative_agent_3_0/docs/41_V3_TEMPLATE_MANIFEST_REGISTRY_AND_ACTIVATION_GATE_SPEC.md
+alchemy_creative_agent_3_0/docs/42_V3_ECOMMERCE_TEMPLATE_PROJECT_MODE_UNFREEZE_SPEC.md
+alchemy_creative_agent_3_0/docs/43_V3_PROJECT_MODE_PRODUCT_EXPERIENCE_QUALITY_GATE_SPEC.md
+alchemy_creative_agent_3_0/docs/44_V3_PROJECT_MODE_PRE_DEVELOPMENT_READINESS_HANDOFF.md
+alchemy_creative_agent_3_0/docs/45_V3_TEMPLATE_FIRST_WORKSPACE_AND_DELETE_UX_SPEC.md
+alchemy_creative_agent_3_0/docs/46_V3_PROJECT_WORKSPACE_SCENE_SUBPAGES_AND_SELECTION_UX_PATCH_SPEC.md
+alchemy_creative_agent_3_0/docs/47_V3_SINGLE_PRODUCTION_ENTRY_AND_SUITE_FLOW_SPEC.md
+alchemy_creative_agent_3_0/docs/48_V3_LLM_BRAIN_ADAPTER_AND_PRE_GENERATION_REASONING_SPEC.md
+alchemy_creative_agent_3_0/docs/49_V3_GENERAL_TEMPLATE_PROMPT_DEPRODUCTIZATION_BUGFIX_SPEC.md
+alchemy_creative_agent_3_0/docs/50_V3_NATIVE_VISUAL_CAPABILITY_CLUSTER_AND_CHECKPOINT_BRAIN_SPEC.md
+alchemy_creative_agent_3_0/docs/51_V3_VISUAL_CONSISTENCY_PRO_AND_LOVART_GAP_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/52_V3_POST_GENERATION_VISUAL_REVIEW_RETRY_AND_SUITE_DIRECTOR_SPEC.md
+alchemy_creative_agent_3_0/docs/53_V3_VISUAL_AUTO_RETRY_EXECUTION_GUARDRAILS_SPEC.md
+alchemy_creative_agent_3_0/docs/54_V3_GENERAL_VARIATION_DIRECTOR_AND_MODE_SELECTOR_SPEC.md
+alchemy_creative_agent_3_0/docs/55_V3_POST_GENERATION_VISION_INSPECTION_AND_REVIEW_SPEC.md
+alchemy_creative_agent_3_0/docs/56_V3_HUMAN_NATURAL_VARIATION_AND_IDENTITY_BALANCE_SPEC.md
+alchemy_creative_agent_3_0/docs/57_V3_ECOMMERCE_LIFESTYLE_COUNT_AND_WATERMARK_QA_SPEC.md
+alchemy_creative_agent_3_0/docs/58_V3_IDENTITY_ANCHOR_STRONG_REFERENCE_AND_SUITE_DIRECTOR_SPEC.md
+alchemy_creative_agent_3_0/docs/59_V3_MODE_AWARE_ROLE_DIRECTOR_AND_SUITE_DIFFERENTIATION_SPEC.md
+alchemy_creative_agent_3_0/docs/60_V3_ECOMMERCE_PRODUCT_SUITE_SLOT_AND_LABEL_QA_SPEC.md
+alchemy_creative_agent_3_0/docs/61_V3_PORTRAIT_COMMERCIAL_CONSISTENCY_AND_LOVART_BENCHMARK_SPEC.md
+alchemy_creative_agent_3_0/docs/62_V3_PORTRAIT_SUITE_DIRECTOR_AND_NATURAL_ROLE_SEPARATION_SPEC.md
+alchemy_creative_agent_3_0/docs/63_V3_IMAGE_EDIT_PROVIDER_HEALTH_COOLDOWN_AND_FALLBACK_SPEC.md
+alchemy_creative_agent_3_0/docs/64_V3_LOVART_LEVEL_COMMERCIAL_QUALITY_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/65_V3_HUMAN_PHOTOREALISM_AND_ANTI_AI_FACE_LAYER_SPEC.md
+alchemy_creative_agent_3_0/docs/66_V3_STRONG_REFERENCE_REAL_REVIEW_AND_PRECISE_RETRY_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/67_V3_VISUAL_BOUNDARY_AND_QUALITY_REINFORCEMENT_SPEC.md
+alchemy_creative_agent_3_0/docs/68_V3_CASEBOOK_GUIDED_PHOTOGRAPHIC_RECIPE_TUNING_SPEC.md
+alchemy_creative_agent_3_0/docs/68A_V3_CASEBOOK_DISTILLATION_REFERENCE.md
+alchemy_creative_agent_3_0/docs/68B_V3_FOUR_MODE_RECIPE_MATRIX.md
+alchemy_creative_agent_3_0/docs/68C_V3_DOC68_VALIDATION_AND_ACCEPTANCE_MATRIX.md
 ```
 
 Implementation agents must not use the foundation prompt alone when the goal is
@@ -185,13 +225,85 @@ Lab. Document 27 is the commercial frontend shell and page specification; it
 supersedes the minimal UI contract as the implementation target for real
 user-facing pages.
 
-For E-Commerce and production-closure work, read documents 23, 24, 25, 26, 27,
-and 28 before
-coding. The intended sequence is: finish the V3 foundation gaps, migrate V1/V2
-strengths as V3-owned shared capabilities, build the commercial shared frontend
-shell without activating E-Commerce, keep General Creative policy-neutral, then
-build E-Commerce as a Scenario Pack inside the shared V3 workspace, then close
-the real uploaded-asset and export-manifest loop.
+For current Project Mode work, read documents 32 through 66 after the foundation
+and Scenario Platform documents. The intended sequence is: keep V3 independent,
+wrap existing jobs into projects, finish the General Template project loop,
+persist selected references and feedback, add explicit Brand Memory confirmation,
+enforce template activation gates, pass the product experience quality gate, and
+use the pre-development handoff before coding. Document 45 is the template-first
+frontend interaction correction: template selection happens before project
+creation, project detail separates persistent outputs from step-based actions,
+and soft archive/remove controls are required. Document 46 is the acceptance
+patch for distinct child scenes, direct image selection, restored-output
+selection, and folded workflow/prompt artifacts. Document 47 supersedes the
+four-step project action card presentation with one beginner-facing production
+entry for continuing a project and generating a visual suite. Document 48 adds
+V3-owned LLM reasoning before generation. Document 49 fixes General Template
+prompt cleanliness after real-image validation. Document 50 is the current
+visual/brain architecture authority: reusable visual enhancement must be
+consolidated into one V3-native Visual Capability Cluster, and the V3 Brain
+must use one direct checkpoint path without Claude Code expert/provider mode.
+Documents 51 through 66 are the current Lovart-gap improvement chain: visual
+consistency, post-generation review, bounded auto retry, the four General
+Template modes, real image inspection, human natural variation, E-Commerce
+visual QA, strong identity anchors, and mode-aware role differentiation.
+Documents 60 through 68 extend that chain with product slot/label QA, portrait
+commercial benchmark validation, stronger portrait-suite role separation,
+image-edit provider stability, and the next commercial quality closure layer
+for real-output review, suite coverage auditing, issue-specific retry, and
+human photorealism / anti-AI-face rendering control. Document 66 adds selected
+reference closure packages, real-review signal packages, candidate-scoped retry
+signals, and four-mode quality profiles. Document 67 cleans up visual-module
+boundaries before further tuning. Document 68 adds V3-owned casebook-guided
+photographic recipes distilled from V2 and GPT-Image-2 prompt patterns, while
+extending existing visual-cluster modules instead of creating duplicate
+functionality.
+E-Commerce is now unfrozen only
+inside Project Mode through document 42; future templates still require their
+own accepted specs, registry activation, and document 43 quality gate checks.
+
+Current Project Mode implementation status:
+
+```text
+Documents 32-38 and 43-44 are implemented or reconciled for the project-first
+General Template loop.
+Document 39 is implemented for project references, selected output state,
+unselection, rejection feedback, project context snapshots, and friendly
+timeline events.
+Document 41 is implemented with a V3-owned template manifest registry,
+backend activation gate, structured activation errors, and tests for General,
+E-Commerce, and future placeholder boundaries.
+Document 40 is implemented for explicit project-to-brand-style confirmation:
+proposal creation does not write Brand Memory, and only the user's confirm
+action creates or appends a persistent BrandProfile.
+Document 42 is implemented for E-Commerce Project Mode unfreeze: E-Commerce
+Template is active through the registry, project jobs require product
+references, commerce profile data is project-scoped, and the frontend has a
+distinct beginner-facing E-Commerce workspace.
+Document 45 is implemented for template-first home flow, two-region project
+workspace hierarchy, step-based action panels, and beginner-facing soft
+archive/remove controls.
+Document 46 is an implemented Project Workspace acceptance patch: generated images must be directly selectable
+into confirmed references, restored outputs must remain selectable after restart,
+and workflow/prompt details must be folded and beginner-friendly. Its four-card
+presentation is superseded by document 47.
+Document 47 is the current UX authority for project continuation: project pages
+keep image-first outputs, confirmed references, workflow artifacts, and Brand
+Memory on the main page, while continuation is handled by one "continue
+generating suite" production entry and one simple making page.
+Document 48 is implemented for V3-owned LLM reasoning and selected-output
+reference bridging. Document 49 is implemented for General Template prompt
+deproductization. Documents 50 through 68 govern the current visual/brain
+upgrade chain: one native Visual Capability Cluster, direct checkpoint Brain,
+real review/retry, four-mode continuation, human/product consistency, identity
+anchors, strong selected-output references, mode-aware role differentiation,
+provider-stable strong-reference continuation, and Lovart-level commercial
+quality closure. Document 65 is the reusable human photorealism layer for
+General Template now and future Photography Special-Tuning later. Document 66
+closes the selected-reference integration gap. Document 67 reinforces module
+boundaries and quality standards. Document 68 turns casebook/prompt experience
+into compact V3-owned photographic recipes consumed by those same modules.
+```
 
 ## Implementation Waves
 
@@ -232,34 +344,106 @@ V3.6C-1 Home-First V3 Frontend Correction
 V3.7 General Creative With Shared Capabilities
   Finish General Creative against documents 18, 19, 20, and 25 while keeping it policy-neutral and free of marketplace-specific logic.
 
-V3.8 E-Commerce Scenario Pack
-  Implement E-Commerce from document 26 after the shared frontend shell exists; activate its dedicated card/workspace inside the V3 Scenario Hub only after backend contracts and tests pass.
+V3.8 Project Mode Foundation
+  Apply documents 32-37: Project becomes the main design-chain layer, General Template is the active project template, and E-Commerce/future templates start behind activation gates.
 
-V3.8A E-Commerce Asset Upload and Export Closure
-  Implement document 28: V3-owned uploads, real uploaded-asset resolution for shared capabilities, and downloadable E-Commerce export manifests.
+V3.8A Project Mode Compatibility And Contracts
+  Apply documents 33 and 34: keep ScenarioRuntime, ScenarioPack, ProductJobRecord, provider layer, and shared capabilities intact while adding Project Store, Project API, Project Context Builder, and project contracts.
 
-V3.8B Provider/Output Production Closure
-  Implemented in the current V3.8B closure: V3-owned real image generation via the same configured V1/V2 provider base URLs/API keys, V3 output storage, preview/download routes, frontend one-click image generation, and generated asset records in export manifests. ZIP/batch packaging can remain a later enhancement.
+V3.8B Project-First Frontend And General Template Loop
+  Apply documents 35 and 36: V3 home opens projects, project detail contains template work, and General Template can generate inside a project with selected-output continuation.
 
-V3.8C E-Commerce Recipe-To-Generated-Series Optimization
-  Connect E-Commerce recipes to real multi-image generated series so one simple commerce request becomes a mature suite with distinct main, feature, scenario, detail, trust, and cover slots.
+V3.8C Project Mode Template Interface And Audit
+  Apply document 37: keep General Template active, route all templates through the registry, and audit template boundaries before deeper project continuation work. E-Commerce stays gated here until the later document 42 unfreeze.
 
-V3.8D Productized Module Workspaces And Capability Audit
-  Apply document 31: keep the V3 home card/history-first, then make General Creative and E-Commerce feel like distinct beginner-facing modules, hide engineering language, emphasize generated images, and audit that V1/V2-derived shared capabilities are active behind the scenes.
+V3.8D Project Workspace Continuation UX
+  Apply document 38: project detail becomes the continuation surface, with useful references, selected outputs, timeline, and beginner-facing next actions.
 
-V3.9 Future Specialization Packs
+V3.8E Project Context Asset And Feedback Persistence
+  Apply document 39: persist uploaded references, selected generated outputs, unselected outputs, rejected directions, and project context summaries.
+
+V3.8F Project To Brand Memory Confirmation
+  Implemented document 40: let users explicitly save confirmed project style into Brand Memory without automatic writes.
+
+V3.8G Template Manifest Registry And Activation Gate
+  Implemented document 41: templates activate only through a V3-owned registry, backend gate, template-specific spec, and tests.
+
+V3.8H Project Mode Product Experience Quality Gate
+  Apply document 43: every Project Mode phase must preserve architecture, stay beginner-friendly, complete its promised loop, and prioritize images while showing useful plain-language work results.
+
+V3.8I Project Mode Pre-Development Readiness Handoff
+  Apply document 44 before coding: confirm materials, scope, file map, test plan, manual QA, and the exact first implementation boundary.
+
+V3.9 E-Commerce Template Project Mode Unfreeze
+  Apply document 42 only after Project Mode is stable: E-Commerce becomes a project-aware template for product-image suite generation.
+
+V3.9A Project Workspace Scene Subpages And Selection UX Patch
+  Apply document 46 after document 45: each project action card opens a distinct child scene, generated images can be selected directly, restored outputs can enter project context after restart, and workflow/prompt artifacts are folded for optional review.
+
+V3.9B Single Production Entry And Suite Flow
+  Apply document 47 after document 46: replace the four project action cards with one production entry; project outputs, image selection, workflow artifacts, and Brand Memory stay on the project page.
+
+V3.9C LLM Brain And General Prompt Cleanliness
+  Implemented documents 48 and 49: use a V3-owned LLM Brain before generation,
+  bridge selected outputs as strong references, and keep General Template
+  prompts free of product/E-Commerce wording unless the user explicitly asks for
+  it.
+
+V3.9D Native Visual Capability Cluster And Checkpoint Brain
+  Apply document 50: consolidate reusable visual enhancement under one V3-owned
+  Visual Capability Cluster and upgrade the Brain into direct multi-stage
+  checkpoints. Do not add Claude Code expert/provider mode.
+
+V3.9E Visual Consistency, Review, Modes, And Role Differentiation
+  Apply documents 51 through 59: selected-output strong references, identity
+  and product locks, real post-generation review, bounded auto retry, four
+  General Template modes, natural human variation, E-Commerce visual QA,
+  identity anchors, and mode-aware role-specific suite differentiation.
+
+V3.9F Commercial Quality Closure And Lovart Benchmark Hardening
+  Apply documents 60 through 64: product slot/label QA, portrait commercial
+  benchmark validation, stronger portrait-suite direction, image-edit provider
+  stability, real-output quality review, suite coverage auditing, and
+  issue-specific retry planning.
+
+V3.9G Human Photorealism And Photography-Reusable Anti-AI Face Layer
+  Apply document 65: add an independent Visual Capability Cluster submodule for
+  realistic human skin, expression, minor asymmetry, anti-AI-face review, and
+  future Photography Special-Tuning reuse.
+
+V3.9H Strong Reference Real Review And Precise Retry Closure
+  Apply document 66: package selected-reference closure, real-review signals,
+  candidate-scoped retry, and mode-specific quality profiles under the existing
+  V3 Visual Capability Cluster and Product API review/retry path.
+
+V3.9I Casebook-Guided Photographic Recipe Tuning
+  Apply document 68: distill V2 casebook and GPT-Image-2 prompt-pattern
+  experience into V3-owned visual-cluster recipes for photoreal humans,
+  four-mode role direction, product lifestyle context, provider prompt
+  consumption, and validation matrices. Extend existing modules; do not add
+  duplicate visual frameworks.
+
+V3.10 Future Specialization Packs
   Optional unless explicitly requested. Detailed new-media, private-community, brand-IP, AI manga-drama, and other pack-specific workflows require their own accepted specifications.
 ```
 
 Current implementation status:
 
 ```text
-Documents 00-31: implemented, reconciled, audited, or actively governing the accepted current-stage scope.
-V3.8A: complete and verified.
-V3.8B: provider/output production closure implemented and verified for real image generation.
-V3.8C: E-Commerce recipes now drive generated multi-image suite slots.
-V3.8D: productized module-specific workspaces and shared-capability audit govern the current frontend polish pass.
-V3.9: future boundary, not a defect in the current implementation.
+Documents 00-37: implemented, reconciled, audited, or actively governing the accepted current-stage scope.
+Documents 38-47: implemented or governing project continuation, context persistence, Brand Memory confirmation, template activation, E-Commerce unfreeze, product experience quality gates, development-entry handoff, template-first UX, scene-subpage/selection behavior, and the single production entry UX.
+Documents 48-49: implemented for V3-owned LLM reasoning and General Template prompt cleanliness.
+Documents 50-59: implemented or governing the native Visual Capability Cluster, real review/retry, four-mode continuation, human/product consistency, identity anchors, strong selected-output reference loops, and mode-aware role differentiation.
+Documents 60-63: implemented or governing product-suite QA, portrait Lovart benchmarking, portrait-suite role separation, and image-edit provider stability.
+Document 64: commercial-quality closure authority for real-output quality review, reference continuity evaluation, suite role coverage auditing, and issue-specific retry.
+Document 65: human photorealism authority for reducing AI-face feel while preserving commercial appeal and module reuse for future Photography Special-Tuning.
+Document 66: selected-reference closure and precise retry authority.
+Document 67: visual boundary cleanup and quality-reinforcement authority.
+Document 68: current casebook-guided recipe tuning authority for improving photographic realism, four-mode differentiation, product lifestyle context, and validation without duplicating modules.
+V3.8 Project Mode: current accepted architecture.
+General Template: first active project template.
+E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.
+V3.10: future boundary, not a defect in the current implementation.
 ```
 
 ## High-Level Architecture

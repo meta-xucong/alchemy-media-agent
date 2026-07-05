@@ -58,6 +58,7 @@ const productionPortalHomeUrl = "https://aiself.vip/";
 const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
 const v2MediaDisplayBase = window.ALCHEMY_V2_MEDIA_BASE || (isLocalAlchemyHost() ? "http://127.0.0.1:8020/api/v2" : v2ApiBase);
 const v3ApiBase = window.ALCHEMY_V3_API_BASE || `${window.location.origin}/api/v3/creative-agent`;
+const v3ProjectStorageKey = "alchemy_v3_project_history_v1";
 const v3HistoryStorageKey = "alchemy_v3_job_history_v1";
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
@@ -287,15 +288,35 @@ const v3State = {
   loading: false,
   view: "home",
   scenarios: [],
+  templates: [],
+  projects: [],
+  projectsLoaded: false,
+  projectsLoading: false,
+  currentProject: null,
+  projectTimeline: [],
+  selectedTemplate: "general_template",
+  selectedBrandMemory: null,
   selectedScenario: "general_creative",
   selectedPreset: "campaign_poster",
+  selectedVariationMode: "auto",
+  generationCount: 2,
+  selectedSize: "",
+  activeProjectStep: "compose",
   files: [],
   uploadedAssets: [],
   currentJob: null,
+  projectOutputItems: [],
+  projectOutputs: [],
+  resultItems: [],
   selectedResult: null,
+  brandMemoryProposal: null,
   history: [],
   historyLoaded: false,
   historyLoading: false,
+  imageHistory: [],
+  imageHistoryLoaded: false,
+  imageHistoryLoading: false,
+  activeHistoryProjectId: "",
   uploadFingerprints: {},
   presetByScenario: {
     general_creative: "campaign_poster",
@@ -471,19 +492,63 @@ const els = {
   v3HomeView: document.querySelector("#v3HomeView"),
   v3WorkspaceView: document.querySelector("#v3WorkspaceView"),
   v3ScenarioGrid: document.querySelector("#v3ScenarioGrid"),
+  v3TemplateChooser: document.querySelector("#v3TemplateChooser"),
+  v3TemplateCreatePanel: document.querySelector("#v3TemplateCreatePanel"),
+  v3SelectedTemplateTitle: document.querySelector("#v3SelectedTemplateTitle"),
+  v3SelectedTemplateIntro: document.querySelector("#v3SelectedTemplateIntro"),
+  v3SelectedBrandMemoryBar: document.querySelector("#v3SelectedBrandMemoryBar"),
+  v3NewProjectGoalLabel: document.querySelector("#v3NewProjectGoalLabel"),
+  v3NewProjectGoalHint: document.querySelector("#v3NewProjectGoalHint"),
+  v3NewProjectGoalInput: document.querySelector("#v3NewProjectGoalInput"),
+  v3NewProjectBtn: document.querySelector("#v3NewProjectBtn"),
+  v3ProjectList: document.querySelector("#v3ProjectList"),
+  v3ProjectCount: document.querySelector("#v3ProjectCount"),
+  v3RefreshProjectsBtn: document.querySelector("#v3RefreshProjectsBtn"),
+  v3ProjectDetailPanel: document.querySelector("#v3ProjectDetailPanel"),
+  v3ProjectTitle: document.querySelector("#v3ProjectTitle"),
+  v3ProjectGoal: document.querySelector("#v3ProjectGoal"),
+  v3ProjectStyleChips: document.querySelector("#v3ProjectStyleChips"),
+  v3ProjectSnapshot: document.querySelector("#v3ProjectSnapshot"),
+  v3ProjectOutputBoard: document.querySelector("#v3ProjectOutputBoard"),
+  v3UsefulReferenceBoard: document.querySelector("#v3UsefulReferenceBoard"),
+  v3ProjectWorkflow: document.querySelector("#v3ProjectWorkflow"),
+  v3WorkflowArtifacts: document.querySelector("#v3WorkflowArtifacts"),
+  v3ProjectNextActions: document.querySelector("#v3ProjectNextActions"),
+  v3BrandMemoryPanel: document.querySelector("#v3BrandMemoryPanel"),
+  v3ProjectArchiveBtn: document.querySelector("#v3ProjectArchiveBtn"),
+  v3PersistentDisplayRegion: document.querySelector("#v3PersistentDisplayRegion"),
+  v3StepActionRegion: document.querySelector("#v3StepActionRegion"),
+  v3StepCards: document.querySelector("#v3StepCards"),
+  v3ProjectSubpage: document.querySelector("#v3ProjectSubpage"),
+  v3SubpageEyebrow: document.querySelector("#v3SubpageEyebrow"),
+  v3SubpageTitle: document.querySelector("#v3SubpageTitle"),
+  v3SubpageIntro: document.querySelector("#v3SubpageIntro"),
+  v3SubpageBody: document.querySelector("#v3SubpageBody"),
+  v3CloseSubpageBtn: document.querySelector("#v3CloseSubpageBtn"),
+  v3ProjectTimeline: document.querySelector("#v3ProjectTimeline"),
   v3ShellState: document.querySelector("#v3ShellState"),
   v3HistoryCount: document.querySelector("#v3HistoryCount"),
   v3RefreshHistoryBtn: document.querySelector("#v3RefreshHistoryBtn"),
   v3HistoryList: document.querySelector("#v3HistoryList"),
+  v3ProjectHistoryModal: document.querySelector("#v3ProjectHistoryModal"),
+  v3ProjectHistoryCloseBtn: document.querySelector("#v3ProjectHistoryCloseBtn"),
+  v3ProjectHistoryTitle: document.querySelector("#v3ProjectHistoryTitle"),
+  v3ProjectHistorySummary: document.querySelector("#v3ProjectHistorySummary"),
+  v3ProjectHistoryCount: document.querySelector("#v3ProjectHistoryCount"),
+  v3ProjectHistoryOpenProjectBtn: document.querySelector("#v3ProjectHistoryOpenProjectBtn"),
+  v3ProjectHistoryGrid: document.querySelector("#v3ProjectHistoryGrid"),
   v3BackHomeBtn: document.querySelector("#v3BackHomeBtn"),
   v3WorkspaceTitle: document.querySelector("#v3WorkspaceTitle"),
   v3WorkspaceIntro: document.querySelector("#v3WorkspaceIntro"),
   v3ComposerEyebrow: document.querySelector("#v3ComposerEyebrow"),
+  v3VariationModeRow: document.querySelector("#v3VariationModeRow"),
   v3GeneralPresetRow: document.querySelector("#v3GeneralPresetRow"),
   v3EcommercePresetRow: document.querySelector("#v3EcommercePresetRow"),
   v3PromptLabel: document.querySelector("#v3PromptLabel"),
   v3PromptHint: document.querySelector("#v3PromptHint"),
   v3PromptInput: document.querySelector("#v3PromptInput"),
+  v3CountInput: document.querySelector("#v3CountInput"),
+  v3CountValue: document.querySelector("#v3CountValue"),
   v3AssetInput: document.querySelector("#v3AssetInput"),
   v3AssetTitle: document.querySelector("#v3AssetTitle"),
   v3AssetSummary: document.querySelector("#v3AssetSummary"),
@@ -513,6 +578,7 @@ const els = {
   v3ResultBoard: document.querySelector("#v3ResultBoard"),
   v3SummaryTitle: document.querySelector("#v3SummaryTitle"),
   v3SummaryPill: document.querySelector("#v3SummaryPill"),
+  v3ProgressFill: document.querySelector("#v3ProgressFill"),
   v3SummaryIntro: document.querySelector("#v3SummaryIntro"),
   v3SummaryFootnote: document.querySelector("#v3SummaryFootnote"),
   v3CapabilityList: document.querySelector("#v3CapabilityList"),
@@ -520,6 +586,17 @@ const els = {
   v3WarningList: document.querySelector("#v3WarningList"),
   v3CommercePanel: document.querySelector("#v3CommercePanel"),
   v3CommerceIntro: document.querySelector("#v3CommerceIntro"),
+  v3BrandMemoryModal: document.querySelector("#v3BrandMemoryModal"),
+  closeV3BrandMemoryBtn: document.querySelector("#closeV3BrandMemoryBtn"),
+  v3BrandMemoryForm: document.querySelector("#v3BrandMemoryForm"),
+  v3BrandMemoryBrandNameInput: document.querySelector("#v3BrandMemoryBrandNameInput"),
+  v3BrandMemoryStyleSummaryInput: document.querySelector("#v3BrandMemoryStyleSummaryInput"),
+  v3BrandMemoryKeepNotesInput: document.querySelector("#v3BrandMemoryKeepNotesInput"),
+  v3BrandMemoryAvoidNotesInput: document.querySelector("#v3BrandMemoryAvoidNotesInput"),
+  v3BrandMemoryUsageScenesInput: document.querySelector("#v3BrandMemoryUsageScenesInput"),
+  v3BrandMemoryReferenceSummary: document.querySelector("#v3BrandMemoryReferenceSummary"),
+  v3BrandMemoryCancelBtn: document.querySelector("#v3BrandMemoryCancelBtn"),
+  v3BrandMemoryConfirmBtn: document.querySelector("#v3BrandMemoryConfirmBtn"),
   veyraAccountState: document.querySelector("#veyraAccountState"),
   veyraAccountEmail: document.querySelector("#veyraAccountEmail"),
   veyraAccountBalance: document.querySelector("#veyraAccountBalance"),
@@ -982,10 +1059,55 @@ function bindControls() {
   document.querySelectorAll("[data-v3-preset]").forEach((button) => {
     button.addEventListener("click", () => setV3Preset(button.dataset.v3Preset || "campaign_poster"));
   });
+  document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
+    button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
+  });
+  if (els.v3TemplateChooser) els.v3TemplateChooser.addEventListener("click", handleV3HomeTemplateChoice);
+  if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
+  if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
+  if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.addEventListener("click", () => loadV3Projects({ silent: false, force: true }));
+  if (els.v3ProjectList) els.v3ProjectList.addEventListener("click", handleV3ProjectClick);
+  if (els.v3StepCards) els.v3StepCards.addEventListener("click", handleV3StepCardClick);
+  if (els.v3ProjectOutputBoard) els.v3ProjectOutputBoard.addEventListener("click", handleV3ProjectOutputBoardClick);
+  if (els.v3ProjectNextActions) els.v3ProjectNextActions.addEventListener("click", handleV3ProjectActionClick);
+  if (els.v3CloseSubpageBtn) els.v3CloseSubpageBtn.addEventListener("click", closeV3ProjectSubpage);
+  if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
+  if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
+  if (els.v3BrandMemoryPanel) els.v3BrandMemoryPanel.addEventListener("click", handleV3BrandMemoryPanelClick);
+  if (els.closeV3BrandMemoryBtn) els.closeV3BrandMemoryBtn.addEventListener("click", closeV3BrandMemoryModal);
+  if (els.v3BrandMemoryCancelBtn) els.v3BrandMemoryCancelBtn.addEventListener("click", closeV3BrandMemoryModal);
+  if (els.v3BrandMemoryForm) els.v3BrandMemoryForm.addEventListener("submit", confirmV3BrandMemoryProposal);
   if (els.v3BackHomeBtn) els.v3BackHomeBtn.addEventListener("click", () => openV3Home());
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.addEventListener("click", () => loadV3History({ silent: false, force: true }));
   if (els.v3HistoryList) els.v3HistoryList.addEventListener("click", handleV3HistoryClick);
+  if (els.v3ProjectHistoryCloseBtn) els.v3ProjectHistoryCloseBtn.addEventListener("click", closeV3ProjectHistoryModal);
+  if (els.v3ProjectHistoryModal) els.v3ProjectHistoryModal.addEventListener("click", handleV3ProjectHistoryModalClick);
+  if (els.v3ProjectHistoryGrid) els.v3ProjectHistoryGrid.addEventListener("click", handleV3ProjectHistoryGridClick);
+  if (els.v3ProjectHistoryOpenProjectBtn) {
+    els.v3ProjectHistoryOpenProjectBtn.addEventListener("click", () => {
+      const projectId = els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject || "";
+      closeV3ProjectHistoryModal();
+      releaseV3ScrollLockIfNoModal();
+      if (projectId) openV3Project(projectId);
+    });
+  }
   if (els.v3AssetInput) els.v3AssetInput.addEventListener("change", handleV3AssetFiles);
+  if (els.v3CountInput) {
+    els.v3CountInput.addEventListener("input", () => {
+      v3State.generationCount = v3BoundedGenerationCount(els.v3CountInput.value);
+      if (els.v3CountValue) els.v3CountValue.textContent = String(v3State.generationCount);
+    });
+  }
+  document.querySelectorAll("[data-v3-size]").forEach((button) => {
+    button.addEventListener("click", () => {
+      v3State.selectedSize = button.dataset.v3Size || "";
+      document.querySelectorAll("[data-v3-size]").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+    });
+  });
   if (els.v3CreateJobBtn) els.v3CreateJobBtn.addEventListener("click", createV3Job);
   if (els.v3GenerateBtn) els.v3GenerateBtn.addEventListener("click", generateV3Job);
   if (els.v3SelectBtn) els.v3SelectBtn.addEventListener("click", selectV3Job);
@@ -995,7 +1117,15 @@ function bindControls() {
   els.smokeBtn.addEventListener("click", openSampleGuide);
   els.closeSampleGuideBtn.addEventListener("click", closeSampleGuide);
   els.closeImageLightboxBtn.addEventListener("click", closeImageLightbox);
-  els.lightboxImage.addEventListener("click", toggleLightboxZoom);
+  els.lightboxImage.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleLightboxZoom();
+  });
+  if (els.lightboxStage) {
+    els.lightboxStage.addEventListener("click", (event) => {
+      if (event.target === els.lightboxStage) toggleLightboxZoom();
+    });
+  }
   els.lightboxPromptBtn.addEventListener("click", toggleLightboxPrompt);
   els.copyPromptBtn.addEventListener("click", copyLightboxPrompt);
   els.closePromptPanelBtn.addEventListener("click", closeLightboxPrompt);
@@ -1025,6 +1155,7 @@ function bindControls() {
     if (event.key === "Escape" && els.favoritePickerModal && !els.favoritePickerModal.hidden) closeFavoritePicker();
     if (event.key === "Escape" && els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) closeV2FavoriteReferencePicker();
     if (event.key === "Escape" && !els.imageLightbox.hidden) closeImageLightbox();
+    if (event.key === "Escape" && els.v3ProjectHistoryModal && !els.v3ProjectHistoryModal.hidden) closeV3ProjectHistoryModal();
   });
   document.addEventListener("click", (event) => {
     if (!labState.navOpen) return;
@@ -1063,7 +1194,7 @@ function switchTab(tabName) {
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
   } else if (tabName === "v3") {
     initV3Shell().catch((error) => updateV3Notice(`V3 场景加载失败：${friendlyError(error)}`, "warning"));
-    renderHeroHistory([], { source: "v3" });
+    renderV3HeroHistory();
   } else if (tabName === "account") {
     renderHeroHistory(v2State.history, { source: "v2" });
     loadVeyraAccountPanel({ silent: true }).catch((error) => {
@@ -1352,7 +1483,10 @@ function restoreInitialModuleRoute() {
     switchTab("v3");
     const scenarioFromPath = initialV3ScenarioFromPath();
     if (scenarioFromPath) {
-      openV3ScenarioWorkspace(scenarioFromPath, { fromRoute: true });
+      openV3Home({ silent: true });
+      if (scenarioFromPath !== "general_creative") {
+        updateV3Notice("这个模板入口已经并入项目页，请先打开或新建一个 V3 项目。", "info");
+      }
     } else {
       openV3Home({ silent: true });
     }
@@ -1367,22 +1501,40 @@ async function initV3Shell({ force = false } = {}) {
   if (v3State.loading || (v3State.loaded && !force)) {
     renderV3ViewState();
     renderV3ScenarioState();
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
     renderV3History();
     renderV3Job(v3State.currentJob);
     return;
   }
   v3State.loading = true;
   renderV3ViewState();
-  updateV3Notice("正在读取 V3 Agent。", "info");
+  updateV3Notice("正在读取 V3 项目。", "info");
   try {
-    const hub = await request(`${v3ApiBase}/scenarios`);
-    v3State.scenarios = Array.isArray(hub.scenario_cards) ? hub.scenario_cards : [];
+    const payload = await request(`${v3ApiBase}/projects?limit=24`);
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
+    v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
+    v3State.projectsLoaded = true;
+    writeV3LocalProjects(v3State.projects);
     v3State.loaded = true;
-    await loadV3History({ silent: true, force: true });
     renderV3ViewState();
     renderV3ScenarioState();
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
-    updateV3Notice("V3 已就绪。", "success");
+    updateV3Notice("V3 项目工作台已就绪。", "success");
+  } catch (error) {
+    v3State.projects = readV3LocalProjects();
+    v3State.projectsLoaded = true;
+    v3State.loaded = true;
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+    renderV3History();
+    if (!v3State.projects.length) {
+      updateV3Notice(`V3 项目加载失败：${friendlyError(error)}`, "warning");
+    }
   } finally {
     v3State.loading = false;
     renderV3ScenarioState();
@@ -1394,7 +1546,7 @@ function handleV3ScenarioClick(button) {
   if (button.dataset.v3Placeholder === "true" || !v3ScenarioCanCreate(scenarioId)) {
     setV3Scenario(scenarioId);
     openV3Home({ silent: true });
-    showGlobalToast(`${v3ScenarioLabel(scenarioId)} 还未开放，先从通用创意或电商特调开始。`, "warning");
+    showGlobalToast(`${v3ScenarioLabel(scenarioId)} 已并入项目页，请先打开或新建一个 V3 项目。`, "warning");
     return;
   }
   openV3ScenarioWorkspace(scenarioId);
@@ -1402,27 +1554,50 @@ function handleV3ScenarioClick(button) {
 
 function openV3Home({ silent = false } = {}) {
   v3State.view = "home";
+  closeV3ProjectSubpage({ silent: true });
   renderV3ViewState();
   renderV3ScenarioState();
+  renderV3HomeTemplateChooser();
+  renderV3Projects();
   renderV3History();
-  if (!v3State.historyLoaded && !v3State.historyLoading) {
-    loadV3History({ silent: true }).catch((error) => {
-      if (!silent) showGlobalToast(`V3 历史加载失败：${friendlyError(error)}`, "warning");
+  if (!v3State.projectsLoaded && !v3State.projectsLoading) {
+    loadV3Projects({ silent: true }).catch((error) => {
+      if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
+    });
+  }
+  if (!v3State.imageHistoryLoaded && !v3State.imageHistoryLoading) {
+    loadV3ProjectOutputs({ silent: true }).catch((error) => {
+      if (!silent) showGlobalToast(`V3 生成历史加载失败：${friendlyError(error)}`, "warning");
     });
   }
 }
 
 function openV3ScenarioWorkspace(scenarioId = "general_creative", { fromRoute = false, fromHistory = false } = {}) {
-  const requested = scenarioId || "general_creative";
+  let requested = scenarioId || "general_creative";
+  if (!v3State.currentProject?.project_id) {
+    openV3Home({ silent: true });
+    showGlobalToast("请先新建或打开一个 V3 项目，再继续生成。", "warning");
+    return;
+  }
+  const projectScenario = v3ScenarioForTemplate(v3State.currentProject.primary_template_id || "general_template");
+  if (requested !== projectScenario) {
+    requested = projectScenario;
+    if (!fromHistory) {
+      showGlobalToast(`这个项目属于${v3TemplatePlainLabel(v3State.currentProject.primary_template_id || "general_template")}，已回到对应工作区。`, "info");
+    }
+  }
+  v3State.selectedTemplate = v3TemplateIdForScenario(requested);
   if (!v3ScenarioCanCreate(requested)) {
     setV3Scenario(requested, { fromRoute });
-    openV3Home({ silent: true });
-    showGlobalToast(`${v3ScenarioLabel(requested)} 还未开放。`, "warning");
+    renderV3ProjectDetail();
+    showGlobalToast(`${v3ScenarioLabel(requested)} 当前暂不可用，可以先使用已开放的模板继续。`, "warning");
     return;
   }
   v3State.view = "workspace";
+  closeV3ProjectSubpage({ silent: true });
   setV3Scenario(requested, { fromRoute });
   renderV3ViewState();
+  renderV3ProjectDetail();
   renderV3Job(v3State.currentJob);
   if (!fromHistory) {
     updateV3Notice(v3ScenarioNotice(requested), "info");
@@ -1436,8 +1611,24 @@ function renderV3ViewState() {
 }
 
 function v3ScenarioCanCreate(scenarioId) {
-  if (["general_creative", "ecommerce"].includes(scenarioId)) return true;
-  return v3State.scenarios.some((item) => item.scenario_id === scenarioId && item.can_create_jobs);
+  const templateId = v3TemplateIdForScenario(scenarioId);
+  return Boolean(v3State.currentProject?.project_id && v3TemplateCanCreate(templateId));
+}
+
+function v3TemplateIdForScenario(scenarioId) {
+  if (scenarioId === "ecommerce") return "ecommerce_template";
+  return "general_template";
+}
+
+function v3ScenarioForTemplate(templateId) {
+  if (templateId === "ecommerce_template") return "ecommerce";
+  return "general_creative";
+}
+
+function v3TemplateCanCreate(templateId) {
+  const templates = v3State.templates.length ? v3State.templates : v3DefaultTemplateCards();
+  const template = templates.find((item) => item.template_id === templateId);
+  return Boolean(template?.project_can_create_jobs);
 }
 
 function v3DefaultPresetForScenario(scenarioId) {
@@ -1448,67 +1639,263 @@ function v3DefaultPresetForScenario(scenarioId) {
   return defaults[scenarioId] || "campaign_poster";
 }
 
+function v3AvailableTemplates() {
+  const fromApi = Array.isArray(v3State.templates) && v3State.templates.length ? v3State.templates : v3DefaultTemplateCards();
+  const seen = new Set();
+  return fromApi
+    .filter((template) => template?.template_id && !seen.has(template.template_id) && seen.add(template.template_id))
+    .sort((a, b) => {
+      const order = { general_template: 0, ecommerce_template: 1, photographer_template: 2 };
+      const aOrder = Object.prototype.hasOwnProperty.call(order, a.template_id) ? order[a.template_id] : 9;
+      const bOrder = Object.prototype.hasOwnProperty.call(order, b.template_id) ? order[b.template_id] : 9;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a.display_name || "").localeCompare(String(b.display_name || ""), "zh-Hans-CN");
+    });
+}
+
+function v3TemplateById(templateId) {
+  return v3AvailableTemplates().find((template) => template.template_id === templateId) || v3DefaultTemplateCards()[0];
+}
+
+function v3TemplatePlainLabel(templateId) {
+  const template = v3TemplateById(templateId);
+  return template?.display_name || (templateId === "ecommerce_template" ? "电商模板" : "通用模板");
+}
+
+function v3LatestConfirmedBrandMemory(project = v3State.currentProject) {
+  const proposals = Array.isArray(project?.brand_memory_proposals) ? project.brand_memory_proposals : [];
+  return proposals
+    .filter((item) => item?.status === "confirmed")
+    .sort((a, b) => Date.parse(b.confirmed_at || b.created_at || 0) - Date.parse(a.confirmed_at || a.created_at || 0))[0] || null;
+}
+
+function v3BrandMemoryIdLabel(brandId) {
+  const raw = String(brandId || "").trim();
+  if (!raw) return "";
+  return raw.length > 18 ? `${raw.slice(0, 10)}...${raw.slice(-5)}` : raw;
+}
+
+function v3BrandMemoryStatus(project = v3State.currentProject) {
+  const proposal = v3LatestConfirmedBrandMemory(project);
+  const brandId = project?.linked_brand_id || proposal?.target_brand_id || "";
+  const selectedRefs = v3UsefulReferenceItems(project);
+  const proposalRefCount = (proposal?.reference_output_ids || []).length + (proposal?.reference_asset_ids || []).length;
+  const referenceCount = Math.max(selectedRefs.length, proposalRefCount);
+  const saved = Boolean(brandId || proposal);
+  return {
+    saved,
+    brandId,
+    brandIdLabel: v3BrandMemoryIdLabel(brandId),
+    brandName: proposal?.brand_name_suggestion || project?.title || "当前项目风格",
+    confirmedAt: proposal?.confirmed_at || "",
+    styleSummary: proposal?.style_summary || project?.confirmed_style_summary || project?.short_summary || project?.user_goal || "",
+    keepNotes: Array.isArray(proposal?.keep_notes) ? proposal.keep_notes : [],
+    avoidNotes: Array.isArray(proposal?.avoid_notes) ? proposal.avoid_notes : [],
+    referenceCount,
+    canSave: Boolean(project?.project_id && selectedRefs.length),
+  };
+}
+
+function v3BrandMemoryConsistencyCopy(status = v3BrandMemoryStatus()) {
+  if (status.saved && status.referenceCount > 0) {
+    return "一致性强：后续项目会读取这组风格笔记和已确认图片，但仍会受新需求、参考图和模型随机性影响";
+  }
+  if (status.canSave) {
+    return "一致性较强：当前已有确认方向，保存后可以被新项目继续读取";
+  }
+  return "一致性一般：先选中满意图片，再保存长期风格会更稳定";
+}
+
+function v3SetBrandMemoryForNextProject(status = v3BrandMemoryStatus()) {
+  if (!status.saved || !status.brandId) {
+    showGlobalToast("这个项目还没有可复用的长期风格。", "warning");
+    return;
+  }
+  v3State.selectedBrandMemory = {
+    brand_id: status.brandId,
+    brand_name: status.brandName,
+    source_project_id: v3State.currentProject?.project_id || "",
+  };
+  openV3Home({ silent: true });
+  renderV3HomeTemplateChooser();
+  updateV3Notice(`新项目将沿用「${status.brandName}」的长期风格。`, "success");
+  if (els.v3NewProjectGoalInput?.focus) window.setTimeout(() => els.v3NewProjectGoalInput.focus(), 120);
+}
+
+function clearV3SelectedBrandMemory() {
+  v3State.selectedBrandMemory = null;
+  renderV3HomeTemplateChooser();
+  updateV3Notice("已取消沿用长期风格，新项目会按新需求重新开始。", "info");
+}
+
+function v3HomeTemplateCopy(templateId) {
+  if (templateId === "ecommerce_template") {
+    return {
+      title: "电商套图项目",
+      intro: "适合商品主图、卖点图、详情页配图和上架套图。进入项目后先上传商品图，再写一句需求即可生成。",
+      goalLabel: "这套商品图想怎么做",
+      goalHint: "先写一句目标即可。商品图、参数、关键词和参考风格都可以进项目后再补。",
+      button: "创建电商套图项目",
+      placeholder: "例如：基于这款饮品，生成清爽高级的电商主图和详情页套图，适合夏季新品上架",
+    };
+  }
+  return {
+    title: "通用创意项目",
+    intro: "适合海报、社媒封面、活动主视觉和通用商业图片。V3 会沿着本项目已确认结果继续生成。",
+    goalLabel: "这个项目想做什么",
+    goalHint: "写一句自然语言就行，上传参考图和继续生成都可以进项目后再做。",
+    button: "创建通用创意项目",
+    placeholder: "例如：做一组清爽高级的新饮品宣传图，适合小红书封面和店铺活动页",
+  };
+}
+
+function selectV3HomeTemplate(templateId, { silent = false } = {}) {
+  const template = v3TemplateById(templateId);
+  const fallbackId = v3TemplateCanCreate(template?.template_id) ? template.template_id : "general_template";
+  v3State.selectedTemplate = fallbackId;
+  const scenarioId = v3ScenarioForTemplate(fallbackId);
+  v3State.selectedScenario = scenarioId;
+  v3State.selectedPreset = v3State.presetByScenario[scenarioId] || v3DefaultPresetForScenario(scenarioId);
+  renderV3HomeTemplateChooser();
+  renderV3ScenarioState();
+  if (!silent) {
+    updateV3Notice(`${v3TemplatePlainLabel(fallbackId)}已选好，写一句目标就可以创建项目。`, "info");
+  }
+}
+
+function renderV3HomeTemplateChooser() {
+  if (!els.v3TemplateChooser) return;
+  const templates = v3AvailableTemplates();
+  if (!templates.some((template) => template.template_id === v3State.selectedTemplate && template.project_can_create_jobs)) {
+    v3State.selectedTemplate = "general_template";
+  }
+  const copy = v3HomeTemplateCopy(v3State.selectedTemplate);
+  if (els.v3SelectedTemplateTitle) els.v3SelectedTemplateTitle.textContent = copy.title;
+  if (els.v3SelectedTemplateIntro) els.v3SelectedTemplateIntro.textContent = copy.intro;
+  if (els.v3NewProjectGoalLabel) els.v3NewProjectGoalLabel.textContent = copy.goalLabel;
+  if (els.v3NewProjectGoalHint) els.v3NewProjectGoalHint.textContent = copy.goalHint;
+  if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.placeholder = copy.placeholder;
+  if (els.v3NewProjectBtn) els.v3NewProjectBtn.textContent = copy.button;
+  renderV3SelectedBrandMemoryBar();
+  els.v3TemplateChooser.innerHTML = "";
+  templates.forEach((template) => {
+    const canCreate = Boolean(template.project_can_create_jobs);
+    const isSelected = template.template_id === v3State.selectedTemplate;
+    const scenarioId = template.scenario_id || v3ScenarioForTemplate(template.template_id);
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `v3-template-choice${isSelected ? " active" : ""}${canCreate ? "" : " locked"}`;
+    card.dataset.v3TemplateChoice = template.template_id;
+    card.dataset.v3TemplateScenario = scenarioId;
+    card.disabled = !canCreate;
+    card.setAttribute("aria-pressed", String(isSelected && canCreate));
+    card.innerHTML = `
+      <span>${escapeHtml(template.display_name || "项目模板")}</span>
+      <strong>${escapeHtml(canCreate ? "可创建项目" : "稍后开放")}</strong>
+      <small>${escapeHtml(template.description || "选择后再创建项目。")}</small>
+    `;
+    els.v3TemplateChooser.appendChild(card);
+  });
+}
+
+function renderV3SelectedBrandMemoryBar() {
+  if (!els.v3SelectedBrandMemoryBar) return;
+  const memory = v3State.selectedBrandMemory;
+  els.v3SelectedBrandMemoryBar.hidden = !memory?.brand_id;
+  if (!memory?.brand_id) {
+    els.v3SelectedBrandMemoryBar.innerHTML = "";
+    return;
+  }
+  els.v3SelectedBrandMemoryBar.innerHTML = `
+    <div>
+      <span>将沿用长期风格</span>
+      <strong>${escapeHtml(memory.brand_name || "已保存风格")}</strong>
+      <p>新项目创建后会读取这组风格笔记和已确认图片，帮助后续生成保持同一套视觉感觉。</p>
+    </div>
+    <button class="button compact ghost" type="button" data-v3-selected-memory-action="clear">取消沿用</button>
+  `;
+}
+
+function handleV3SelectedBrandMemoryBarClick(event) {
+  const button = event.target.closest("[data-v3-selected-memory-action]");
+  if (!button) return;
+  if (button.dataset.v3SelectedMemoryAction === "clear") {
+    clearV3SelectedBrandMemory();
+  }
+}
+
+function handleV3HomeTemplateChoice(event) {
+  const card = event.target.closest("[data-v3-template-choice]");
+  if (!card) return;
+  const templateId = card.dataset.v3TemplateChoice || "general_template";
+  if (card.disabled || !v3TemplateCanCreate(templateId)) {
+    showGlobalToast("这个项目类型还在准备中，当前不能创建项目。", "warning");
+    return;
+  }
+  selectV3HomeTemplate(templateId);
+}
+
 function v3ScenarioNotice(scenarioId) {
   if (scenarioId === "ecommerce") {
     return "电商特调已就绪：上传商品图，写一句需求，就能生成可用套图。";
   }
-  return "通用创意已就绪：写一句需求，可选上传参考图，就能生成创意图。";
+  return "通用创意已就绪：写一句需求，可选上传参考图，就能生成一组图片。";
 }
 
 function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
   const ecommerce = scenarioId === "ecommerce";
   if (ecommerce) {
     return {
-      eyebrow: "01 / 电商特调",
+      eyebrow: "电商特调",
       title: "电商特调 Agent",
-      intro: "适合商品主图、卖点图、详情页配图。上传商品图，写一句需求即可生成套图。",
-      promptLabel: "这套商品图想怎么做",
-      promptPlaceholder: "例如：基于这款饮品，生成清爽高端的电商主图和详情页套图，适合夏季新品上架",
-      promptHint: "先写一句简单需求；商品参数、关键词和参考风格都可以后面补。",
+      intro: "上传商品图，写一句需求，生成可用电商图。",
+      promptLabel: "这次想继续做什么",
+      promptPlaceholder: "例如：沿用这个项目的清爽高级风格，继续做一组夏季新品电商套图",
+      promptHint: "一句话即可，商品信息后面也能补。",
       assetTitle: "上传商品图",
       assetEmpty: "建议先上传商品图",
       assetSummaryEmpty: "建议上传商品实拍图；也可以补充风格图、包装图或店铺视觉",
       assetSummaryWithCount: (count) => `${count} 张商品/参考图已加入`,
       brandNameLabel: "品牌或店铺名",
       brandToneLabel: "店铺希望的感觉",
-      resultTitle: "电商套图",
-      emptyResult: "生成后的商品主图、卖点图和场景图会显示在这里。",
+      resultTitle: "本次生成",
+      emptyResult: "生成的电商图会显示在这里，并同步到项目主页。",
       pendingResult: "套图正在准备，稍后会显示图片。",
-      createLabel: "生成电商套图",
-      generateLabel: "重新生成套图",
-      selectLabel: "选中套图",
+      createLabel: "生成新电商图",
+      generateLabel: "继续生成",
+      selectLabel: "设为后续参考",
       busyLabel: "生成套图中...",
       readyNotice: "当前是电商特调 Agent。",
-      planningNotice: "V3 正在理解商品和使用场景，并生成可用套图。",
-      generatedNotice: "电商套图已生成，可以查看和下载。",
-      summaryIntro: "V3 会把商品图拆成主图、卖点图、场景图和信任图。",
+      planningNotice: "V3 正在沿用项目风格生成电商图。",
+      generatedNotice: "一组电商图已生成，可以挑选满意方向。",
+      summaryIntro: "V3 会整理商品图、画面方向和出图结果。",
       summaryFootnote: "重点看图片是否能直接上架或做详情页。",
       summaryPill: "电商专属",
     };
   }
   return {
-    eyebrow: "01 / 通用创意",
+    eyebrow: "通用创意",
     title: "通用创意 Agent",
-    intro: "适合海报、封面、活动图、品牌视觉。写一句需求，V3 会自动整理画面方向并出图。",
-    promptLabel: "你想要什么图",
-    promptPlaceholder: "例如：做一张适合小红书的新品宣传图，清爽、高级，有留白",
-    promptHint: "不用写复杂 Prompt，说清用途、风格和想保留的重点即可。",
+    intro: "写一句需求，可选参考图，生成同项目风格图片。",
+    promptLabel: "这次想继续做什么",
+    promptPlaceholder: "例如：沿用这个项目清爽高级的感觉，再做一组夏季饮料宣传图，适合社媒封面",
+    promptHint: "一句话即可，V3 会沿用本项目参考。",
     assetTitle: "上传参考图",
     assetEmpty: "还没有参考图",
     assetSummaryEmpty: "可选，风格、构图、Logo、产品或参考画面都可以放这里",
     assetSummaryWithCount: (count) => `${count} 张参考图已加入`,
     brandNameLabel: "品牌或项目名",
     brandToneLabel: "希望的感觉",
-    resultTitle: "创意图结果",
-    emptyResult: "生成后的创意图会显示在这里。",
+    resultTitle: "本次生成",
+    emptyResult: "生成图片会显示在这里，并同步到项目主页。",
     pendingResult: "图片正在准备，稍后会显示结果。",
-    createLabel: "生成创意图",
-    generateLabel: "重新生成创意图",
-    selectLabel: "选中结果",
-    busyLabel: "生成创意图中...",
+    createLabel: "生成新图片",
+    generateLabel: "继续生成",
+    selectLabel: "设为后续参考",
+    busyLabel: "生成图片中...",
     readyNotice: "当前是通用创意 Agent。",
-    planningNotice: "V3 正在理解需求并生成可用创意图。",
-    generatedNotice: "创意图已生成，可以查看和下载。",
+    planningNotice: "V3 正在沿用项目风格生成图片。",
+    generatedNotice: "一组图片已生成，可以挑选满意方向。",
     summaryIntro: "V3 会把你的需求整理成清晰的画面方向。",
     summaryFootnote: "重点看图片是否符合你想要的感觉。",
     summaryPill: "自动完成",
@@ -1544,11 +1931,21 @@ function renderV3ScenarioState() {
   });
   const canCreate = v3ScenarioCanCreate(selected);
   if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading;
-  if (els.v3GenerateBtn) els.v3GenerateBtn.disabled = !canCreate || !v3State.currentJob || v3State.currentJob.status === "blocked";
-  if (els.v3SelectBtn) els.v3SelectBtn.disabled = !canCreate || !v3State.currentJob || !Array.isArray(v3State.currentJob.candidates) || !v3State.currentJob.candidates.length;
+  if (els.v3GenerateBtn) {
+    els.v3GenerateBtn.hidden = true;
+    els.v3GenerateBtn.disabled = true;
+  }
+  if (els.v3SelectBtn) {
+    els.v3SelectBtn.hidden = true;
+    els.v3SelectBtn.disabled = true;
+  }
+  if (els.v3ResetBtn) {
+    els.v3ResetBtn.hidden = true;
+    els.v3ResetBtn.disabled = true;
+  }
   if (els.v3ShellState) {
-    const activeCount = Math.max(2, v3State.scenarios.filter((item) => item.can_create_jobs).length || 0);
-    els.v3ShellState.textContent = `${activeCount} 个 Agent 可用`;
+    const count = Array.isArray(v3State.projects) ? v3State.projects.length : 0;
+    els.v3ShellState.textContent = count ? `${count} 个项目` : "项目制运行";
   }
   if (els.v3ComposerEyebrow) els.v3ComposerEyebrow.textContent = copy.eyebrow;
   if (els.v3WorkspaceTitle) els.v3WorkspaceTitle.textContent = copy.title;
@@ -1560,12 +1957,16 @@ function renderV3ScenarioState() {
   if (els.v3BrandNameLabel) els.v3BrandNameLabel.textContent = copy.brandNameLabel;
   if (els.v3BrandToneLabel) els.v3BrandToneLabel.textContent = copy.brandToneLabel;
   if (els.v3ResultTitle) els.v3ResultTitle.textContent = copy.resultTitle;
-  if (els.v3SummaryIntro) els.v3SummaryIntro.textContent = copy.summaryIntro;
-  if (els.v3SummaryFootnote) els.v3SummaryFootnote.textContent = copy.summaryFootnote;
-  if (els.v3SummaryPill) els.v3SummaryPill.textContent = copy.summaryPill;
+  if (!v3State.currentJob) {
+    if (els.v3SummaryIntro) els.v3SummaryIntro.textContent = copy.summaryIntro;
+    if (els.v3SummaryFootnote) els.v3SummaryFootnote.textContent = copy.summaryFootnote;
+    if (els.v3SummaryPill) els.v3SummaryPill.textContent = copy.summaryPill;
+    if (els.v3ProgressFill) els.v3ProgressFill.style.width = "12%";
+  }
   if (els.v3EcommerceFields) els.v3EcommerceFields.hidden = selected !== "ecommerce";
   if (els.v3EcommerceAdvanced && selected !== "ecommerce") els.v3EcommerceAdvanced.open = false;
   if (els.v3CommercePanel) els.v3CommercePanel.hidden = selected !== "ecommerce";
+  if (els.v3VariationModeRow) els.v3VariationModeRow.hidden = selected !== "general_creative";
   if (els.v3GeneralPresetRow) els.v3GeneralPresetRow.hidden = selected !== "general_creative";
   if (els.v3EcommercePresetRow) els.v3EcommercePresetRow.hidden = selected !== "ecommerce";
   if (els.v3CreateJobBtn && !v3State.loading) els.v3CreateJobBtn.textContent = copy.createLabel;
@@ -1575,6 +1976,7 @@ function renderV3ScenarioState() {
     button.hidden = button.dataset.v3PresetScope !== selected;
   });
   renderV3Assets();
+  renderV3ProjectDetail();
   if (!v3State.currentJob) {
     if (selected === "ecommerce") {
       renderV3EcommerceSummary(null);
@@ -1595,159 +1997,2068 @@ function setV3Preset(presetId) {
   });
 }
 
-async function loadV3History({ silent = false, force = false } = {}) {
-  if (v3State.historyLoading || (v3State.historyLoaded && !force)) {
-    renderV3History();
+function setV3VariationMode(mode) {
+  const allowed = new Set(["auto", "selection_candidates", "delivery_suite", "creative_exploration", "format_layout_adaptation"]);
+  v3State.selectedVariationMode = allowed.has(mode) ? mode : "auto";
+  document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
+    const active = button.dataset.v3VariationMode === v3State.selectedVariationMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function inferV3VariationMode(text) {
+  const value = String(text || "").toLowerCase();
+  if (/(尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|layout|format|ratio|size|crop|adapt)/i.test(value)) {
+    return "format_layout_adaptation";
+  }
+  if (/(探索|创意|方向|不同风格|多种风格|大胆|概念|explore|creative|direction|concept|mood)/i.test(value)) {
+    return "creative_exploration";
+  }
+  if (/(套图|一组|系列|组图|延展|扩展|series|suite|set|extend|campaign)/i.test(value)) {
+    return "delivery_suite";
+  }
+  if (/(相似|备选|多给|挑选|同一|同款|不同姿势|不同角度|similar|alternative|same person|same product|different pose|different angle)/i.test(value)) {
+    return "selection_candidates";
+  }
+  return "delivery_suite";
+}
+
+function v3VariationModeLabel(mode) {
+  const labels = {
+    auto: "智能选择",
+    selection_candidates: "相似备选模式",
+    delivery_suite: "套图扩展模式",
+    creative_exploration: "创意探索模式",
+    format_layout_adaptation: "尺寸/版式适配模式",
+  };
+  return labels[mode] || labels.auto;
+}
+
+async function loadV3Projects({ silent = false, force = false } = {}) {
+  if (v3State.projectsLoading || (v3State.projectsLoaded && !force)) {
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
     return;
   }
-  v3State.historyLoading = true;
-  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
-  const localItems = readV3LocalHistory();
+  v3State.projectsLoading = true;
+  if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = true;
+  const localItems = readV3LocalProjects();
   try {
-    const payload = await request(`${v3ApiBase}/history?limit=24`);
-    const apiItems = Array.isArray(payload.items) ? payload.items : [];
-    v3State.history = mergeV3HistoryItems(apiItems, localItems);
-    v3State.historyLoaded = true;
-    writeV3LocalHistory(v3State.history);
-    renderV3History();
+    const payload = await request(`${v3ApiBase}/projects?limit=24`);
+    const apiItems = Array.isArray(payload.projects) ? payload.projects : [];
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    v3State.projects = mergeV3ProjectItems(apiItems, localItems);
+    v3State.projectsLoaded = true;
+    writeV3LocalProjects(v3State.projects);
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
   } catch (error) {
-    v3State.history = mergeV3HistoryItems(localItems, []);
-    v3State.historyLoaded = true;
-    renderV3History();
-    if (!silent) showGlobalToast(`V3 历史加载失败，已显示本地记录：${friendlyError(error)}`, "warning");
+    v3State.projects = mergeV3ProjectItems(localItems, []);
+    v3State.projectsLoaded = true;
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+    if (!silent) showGlobalToast(`V3 项目加载失败，已显示本地项目：${friendlyError(error)}`, "warning");
   } finally {
-    v3State.historyLoading = false;
+    v3State.projectsLoading = false;
+    if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = false;
+  }
+}
+
+async function loadV3History(options = {}) {
+  return loadV3ProjectOutputs(options);
+}
+
+async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
+  if (v3State.imageHistoryLoading || (v3State.imageHistoryLoaded && !force)) {
+    if (v3State.currentProject?.project_id && Array.isArray(v3State.imageHistory)) {
+      syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
+    }
+    renderV3History();
+    renderV3HeroHistory();
+    renderV3ProjectOutputBoard();
+    renderV3ProjectSnapshot();
+    renderV3StepCards();
+    renderV3ProjectNextActions();
+    return;
+  }
+  v3State.imageHistoryLoading = true;
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
+  try {
+    const payload = await request(`${v3ApiBase}/project-outputs?limit=80`);
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    v3State.imageHistory = items;
+    v3State.imageHistoryLoaded = true;
+    if (v3State.currentProject?.project_id) {
+      syncV3ProjectOutputsFromList(items, v3State.currentProject.project_id);
+    }
+    renderV3History();
+    renderV3HeroHistory();
+    renderV3ProjectOutputBoard();
+    renderV3ProjectSnapshot();
+    renderV3StepCards();
+    renderV3ProjectNextActions();
+  } catch (error) {
+    v3State.imageHistoryLoaded = true;
+    renderV3History();
+    renderV3HeroHistory();
+    if (!silent) showGlobalToast(`V3 生成历史加载失败：${friendlyError(error)}`, "warning");
+  } finally {
+    v3State.imageHistoryLoading = false;
     if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
   }
 }
 
-function readV3LocalHistory() {
+function readV3LocalProjects() {
   try {
-    const raw = localStorage.getItem(v3HistoryStorageKey);
+    const raw = localStorage.getItem(v3ProjectStorageKey) || localStorage.getItem(v3HistoryStorageKey);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((item) => item && item.job_id) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => item && item.project_id) : [];
   } catch {
     return [];
   }
 }
 
-function writeV3LocalHistory(items) {
+function writeV3LocalProjects(items) {
   try {
-    localStorage.setItem(v3HistoryStorageKey, JSON.stringify(items.slice(0, 24)));
+    localStorage.setItem(v3ProjectStorageKey, JSON.stringify(items.slice(0, 24)));
   } catch {
-    // Local history is a convenience cache; failing to persist must not block V3.
+    // Local project cache is only for quick reopening; V3 must still work without it.
   }
 }
 
-function mergeV3HistoryItems(primaryItems, fallbackItems) {
-  const byId = new Map();
-  [...fallbackItems, ...primaryItems].forEach((item) => {
-    if (!item?.job_id) return;
-    const existing = byId.get(item.job_id) || {};
-    byId.set(item.job_id, { ...existing, ...item });
-  });
-  return Array.from(byId.values()).sort((a, b) => v3HistoryTime(b) - v3HistoryTime(a)).slice(0, 24);
+function syncV3ProjectOutputsFromPayload(payload) {
+  const items = payload?.metadata?.project_outputs;
+  if (!Array.isArray(items)) return;
+  v3State.projectOutputs = items;
 }
 
-function v3HistoryTime(item) {
+function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id) {
+  if (!projectId || !Array.isArray(items)) return;
+  v3State.projectOutputs = items.filter((item) => item?.project_id === projectId);
+}
+
+function mergeV3ProjectItems(primaryItems, fallbackItems) {
+  const byId = new Map();
+  [...fallbackItems, ...primaryItems].forEach((item) => {
+    if (!item?.project_id) return;
+    const existing = byId.get(item.project_id) || {};
+    byId.set(item.project_id, { ...existing, ...item });
+  });
+  return Array.from(byId.values()).sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a)).slice(0, 24);
+}
+
+function v3ProjectTime(item) {
   return Date.parse(item?.updated_at || item?.created_at || "") || 0;
 }
 
-function saveV3HistorySnapshot(job) {
-  const item = v3HistorySnapshotFromJob(job);
-  if (!item) return;
-  v3State.history = mergeV3HistoryItems([item], v3State.history);
-  v3State.historyLoaded = true;
-  writeV3LocalHistory(v3State.history);
-  renderV3History();
+function saveV3ProjectSnapshot(project) {
+  const summary = v3ProjectSummaryFromProject(project || v3State.currentProject);
+  if (!summary) return;
+  v3State.projects = mergeV3ProjectItems([summary], v3State.projects);
+  v3State.projectsLoaded = true;
+  writeV3LocalProjects(v3State.projects);
+  renderV3Projects();
 }
 
-function v3HistorySnapshotFromJob(job) {
-  if (!job?.job_id) return null;
-  const existing = v3State.history.find((item) => item.job_id === job.job_id) || {};
-  const scenarioId = job.scenario?.scenario_id || existing.scenario_id || v3State.selectedScenario || "general_creative";
-  const now = new Date().toISOString();
+function v3ProjectSummaryFromProject(project) {
+  if (!project?.project_id) return null;
+  if (project.memory_summary?.project_id) return project.memory_summary;
+  const activeReferences = v3ActiveProjectReferences(project);
+  const selectedRefs = v3SelectedOutputRefs(project);
+  const referenceThumbs = activeReferences
+    .map((ref) => ref.preview_url || ref.thumbnail_url || ref.download_url)
+    .filter(Boolean)
+    .slice(0, 3);
   return {
-    job_id: job.job_id,
-    status: job.status || existing.status || "planned",
-    scenario_id: scenarioId,
-    scenario_label: job.scenario?.display_name || existing.scenario_label || v3ScenarioLabel(scenarioId),
-    selected_preset_id: job.scenario?.selected_preset_id || existing.selected_preset_id || v3State.selectedPreset,
-    user_input: existing.user_input || (els.v3PromptInput?.value || "").trim() || "V3 任务",
-    asset_count: Array.isArray(job.asset_series) ? job.asset_series.length : existing.asset_count || 0,
-    candidate_count: Array.isArray(job.candidates) ? job.candidates.length : existing.candidate_count || 0,
-    selected_asset_count: Array.isArray(job.selected_result?.selected_asset_ids) ? job.selected_result.selected_asset_ids.length : existing.selected_asset_count || 0,
-    planning_result_id: job.planning_result_id || existing.planning_result_id || null,
-    generation_result_id: job.generation_result_id || existing.generation_result_id || null,
-    asset_pack_id: job.asset_pack_id || existing.asset_pack_id || null,
-    asset_series: Array.isArray(job.asset_series) ? job.asset_series : existing.asset_series || [],
-    candidates: Array.isArray(job.candidates) ? job.candidates : existing.candidates || [],
-    selected_result: job.selected_result || existing.selected_result || null,
-    ecommerce: job.ecommerce || existing.ecommerce || null,
-    general_creative: job.general_creative || existing.general_creative || null,
-    warnings: Array.isArray(job.warnings) ? job.warnings : existing.warnings || [],
-    routes: job.routes || existing.routes || {},
-    balance_estimate: job.balance_estimate || existing.balance_estimate || {},
-    created_at: existing.created_at || now,
-    updated_at: now,
-    route: v3HistoryRouteForScenario(scenarioId),
-    metadata: {
-      ...(existing.metadata || {}),
-      v3_history_owned: true,
-      imports_v1_v2_runtime: false,
-      imports_lab_runtime: false,
-    },
+    project_id: project.project_id,
+    title: v3ProjectDisplayTitle(project),
+    goal: v3ProjectDisplayGoal(project),
+    active_template_label: v3TemplatePlainLabel(project.primary_template_id || "general_template"),
+    latest_thumbnail_urls: referenceThumbs.length
+      ? referenceThumbs
+      : selectedRefs.map((ref) => ref.thumbnail_url || ref.preview_url).filter(Boolean).slice(0, 3),
+    confirmed_style_chips: project.confirmed_style_summary ? [project.confirmed_style_summary] : ["通用创意"],
+    selected_asset_count: activeReferences.length || selectedRefs.length,
+    job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
+    last_action_label: "项目已创建",
+    updated_at: project.updated_at || new Date().toISOString(),
+    next_suggested_actions: ["继续同风格生成", "上传新参考图继续", "挑选满意结果"],
   };
 }
 
-function v3HistoryRouteForScenario(scenarioId) {
-  const tokens = {
-    general_creative: "general",
-    ecommerce: "ecommerce",
-    new_media: "new-media",
-    private_domain: "private-domain",
-    brand_ip: "brand-ip",
-  };
-  return tokens[scenarioId] ? `/creative-agent-v3/${tokens[scenarioId]}` : "/creative-agent-v3";
+async function createV3Project() {
+  const userGoal = (els.v3NewProjectGoalInput?.value || "").trim();
+  const templateId = v3State.selectedTemplate || "general_template";
+  const scenarioId = v3ScenarioForTemplate(templateId);
+  if (!userGoal) {
+    showGlobalToast("先写一句这个项目想做什么。", "warning");
+    if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.focus();
+    return;
+  }
+  if (!v3TemplateCanCreate(templateId)) {
+    showGlobalToast("请先选择一个可以创建项目的类型。", "warning");
+    return;
+  }
+  try {
+    v3State.loading = true;
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
+    updateV3Notice("正在创建 V3 项目。", "info");
+    const payload = await request(`${v3ApiBase}/projects`, {
+      method: "POST",
+      body: {
+        user_goal: userGoal,
+        primary_template_id: templateId,
+        linked_brand_id: v3State.selectedBrandMemory?.brand_id || null,
+        metadata: {
+          frontend_surface: "commercial_v3_project_mode",
+          template_first_create: true,
+          selected_template_id: templateId,
+          selected_scenario_id: scenarioId,
+          selected_brand_memory_id: v3State.selectedBrandMemory?.brand_id || null,
+          selected_brand_memory_name: v3State.selectedBrandMemory?.brand_name || null,
+        },
+      },
+    });
+    v3State.currentProject = payload.project || null;
+    syncV3ProjectOutputsFromPayload(payload);
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    v3State.currentJob = null;
+    v3State.selectedResult = null;
+    v3State.activeProjectStep = "compose";
+    v3State.projectTimeline = [];
+    v3State.selectedBrandMemory = null;
+    if (els.v3PromptInput) els.v3PromptInput.value = userGoal;
+    if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.value = "";
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(v3State.currentProject?.project_id, { silent: true });
+    openV3ScenarioWorkspace(scenarioId);
+    openV3ProjectSubpage("compose");
+    updateV3Notice("项目已创建，直接开始生成第一组图片。", "success");
+  } catch (error) {
+    updateV3Notice(`项目创建失败：${friendlyError(error)}`, "error");
+  } finally {
+    v3State.loading = false;
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = false;
+    renderV3ScenarioState();
+  }
+}
+
+function renderV3Projects() {
+  if (!els.v3ProjectList) return;
+  const items = [...v3State.projects]
+    .filter((item) => item?.status !== "archived")
+    .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
+  if (els.v3ProjectCount) els.v3ProjectCount.textContent = String(items.length);
+  els.v3ProjectList.innerHTML = "";
+  els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0);
+  if (!items.length) {
+    els.v3ProjectList.textContent = "还没有 V3 项目";
+    return;
+  }
+  items.slice(0, 12).forEach((item) => {
+    const card = document.createElement("article");
+    const thumbnails = Array.isArray(item.latest_thumbnail_urls) ? item.latest_thumbnail_urls.filter(Boolean).slice(0, 1) : [];
+    const projectGoal = v3ProjectDisplayGoal(item);
+    card.className = "v3-project-card";
+    card.dataset.v3ProjectId = item.project_id;
+    card.innerHTML = `
+      <div class="v3-project-thumb-wrap">
+        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" src="${escapeHtml(v3MediaUrl(thumbnails[0]))}" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
+      </div>
+      <div class="v3-project-goal-slot" title="${escapeHtml(projectGoal)}">
+        <p>${escapeHtml(projectGoal)}</p>
+      </div>
+      <div class="v3-history-meta">
+        <span>${Number(item.job_count || 0)} 次生成 · ${Number(item.selected_asset_count || 0)} 个已选</span>
+      </div>
+      <div class="v3-project-card-actions">
+        <button type="button" class="button compact secondary" data-v3-project-action="open_project" data-v3-project-id="${escapeHtml(item.project_id)}">继续项目</button>
+        <button type="button" class="button compact ghost" data-v3-project-action="archive_project" data-v3-project-id="${escapeHtml(item.project_id)}">归档</button>
+      </div>
+    `;
+    els.v3ProjectList.appendChild(card);
+  });
 }
 
 function renderV3History() {
   if (!els.v3HistoryList) return;
-  const items = [...v3State.history].sort((a, b) => v3HistoryTime(b) - v3HistoryTime(a));
+  const items = Array.isArray(v3State.imageHistory) ? v3State.imageHistory : [];
   if (els.v3HistoryCount) els.v3HistoryCount.textContent = String(items.length);
   els.v3HistoryList.innerHTML = "";
   els.v3HistoryList.classList.toggle("empty-v3-list", items.length === 0);
   if (!items.length) {
-    els.v3HistoryList.textContent = "还没有 V3 生成记录";
+    els.v3HistoryList.textContent = v3State.imageHistoryLoading ? "正在读取 V3 生成图片..." : "还没有 V3 生成图片";
     return;
   }
-  items.slice(0, 12).forEach((item) => {
-    const card = document.createElement("button");
-    card.className = "v3-history-card";
-    card.type = "button";
-    card.dataset.v3HistoryJob = item.job_id;
+  items.slice(0, 60).forEach((item, index) => {
+    const previewUrl = v3OutputPreviewImageUrl(item);
+    const fullUrl = v3OutputFullImageUrl(item);
+    const itemTitle = v3ProjectDisplayTitle(item, "V3 生成图片");
+    const itemGoal = v3ProjectDisplayGoal(item, "这个项目生成过的图片");
+    const card = document.createElement("article");
+    card.className = "v3-history-card v3-history-image-card";
     card.innerHTML = `
-      <div class="v3-history-meta">
-        <span>${escapeHtml(item.scenario_label || v3ScenarioLabel(item.scenario_id))}</span>
-        <span>${escapeHtml(v3StatusLabel(item.status))}</span>
+      <button class="v3-history-preview" type="button" data-v3-history-preview="${index}" aria-label="查看生成图片">
+        ${previewUrl ? `<img alt="${escapeHtml(itemTitle)}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : `<span>图片准备中</span>`}
+      </button>
+      <div class="v3-history-body">
+        <strong>${escapeHtml(v3ShortText(itemTitle, 36))}</strong>
+        <p>${escapeHtml(v3ShortText(itemGoal, 54))}</p>
+        <div class="v3-history-meta">
+          <span>${escapeHtml(v3TemplatePlainLabel(item.template_id || "general_template"))}</span>
+          <span>${escapeHtml(formatDate(item.created_at))}</span>
+        </div>
       </div>
-      <strong>${escapeHtml(v3ShortText(item.user_input || "V3 任务", 52))}</strong>
-      <p>${escapeHtml(v3HistoryDetailText(item))}</p>
-      <div class="v3-history-meta">
-        <span>${escapeHtml(formatDate(item.updated_at || item.created_at))}</span>
-        <span>继续查看</span>
+      <div class="v3-history-actions">
+        ${fullUrl ? `<a class="v3-result-download" href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener">下载</a>` : ""}
+        <button type="button" class="button compact ghost" data-v3-history-project="${escapeHtml(item.project_id || "")}">进入项目</button>
       </div>
     `;
     els.v3HistoryList.appendChild(card);
   });
 }
 
-function v3HistoryDetailText(item) {
-  const parts = [];
-  if (Number(item.asset_count || 0)) parts.push(`${item.asset_count} 个规划项`);
-  if (Number(item.candidate_count || 0)) parts.push(`${item.candidate_count} 个候选`);
-  if (Number(item.selected_asset_count || 0)) parts.push(`${item.selected_asset_count} 个已选`);
-  return parts.length ? parts.join(" · ") : "点开后继续查看这个 V3 任务";
+function renderV3History() {
+  if (!els.v3HistoryList) return;
+  const groups = v3ProjectImageGroups();
+  if (els.v3HistoryCount) els.v3HistoryCount.textContent = String(groups.length);
+  els.v3HistoryList.innerHTML = "";
+  els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0);
+  if (!groups.length) {
+    els.v3HistoryList.textContent = v3State.imageHistoryLoading ? "正在读取 V3 生成图片..." : "还没有 V3 生成图片";
+    return;
+  }
+  groups.slice(0, 36).forEach((group) => {
+    const previewUrl = v3OutputPreviewImageUrl(group.latestItem);
+    const stackItems = group.items.slice(0, 5);
+    const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
+    const card = document.createElement("article");
+    card.className = "v3-history-card v3-history-project-card";
+    card.dataset.v3HistoryProjectGroup = group.projectId;
+    card.innerHTML = `
+      <button class="v3-history-project-preview" type="button" data-v3-history-project-group="${escapeHtml(group.projectId)}" aria-label="查看项目生成图片">
+        <span class="v3-history-stack" aria-hidden="true">
+          ${stackItems.map((item) => {
+            const thumb = v3OutputThumbImageUrl(item) || v3OutputPreviewImageUrl(item);
+            return thumb ? `<span><img alt="" src="${escapeHtml(thumb)}" loading="lazy" decoding="async" /></span>` : "<span></span>";
+          }).join("")}
+        </span>
+        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : `<span class="v3-history-empty-thumb">图片准备中</span>`}
+      </button>
+      <div class="v3-history-body">
+        <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
+        <div class="v3-history-meta">
+          <span>${escapeHtml(v3TemplatePlainLabel(group.templateId || "general_template"))}</span>
+          <span>${group.count} 张</span>
+          <span>${escapeHtml(formatDate(group.latestAt))}</span>
+        </div>
+      </div>
+      <div class="v3-history-actions">
+        <button type="button" class="button compact secondary" data-v3-history-project-group="${escapeHtml(group.projectId)}">查看全部</button>
+        <button type="button" class="button compact ghost" data-v3-history-project="${escapeHtml(group.projectId)}">进入项目</button>
+      </div>
+    `;
+    els.v3HistoryList.appendChild(card);
+  });
+}
+
+function renderV3HeroHistory() {
+  if (activePanelName() !== "v3") return;
+  renderHeroHistory(v3ProjectImageGroups().slice(0, heroHistoryPageSize), { source: "v3" });
+}
+
+function v3ProjectImageGroups(items = v3State.imageHistory) {
+  const projectLookup = new Map((Array.isArray(v3State.projects) ? v3State.projects : [])
+    .filter((project) => project?.project_id)
+    .map((project) => [String(project.project_id), project]));
+  const groups = new Map();
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (!v3HistoryOutputVisible(item)) return;
+    const projectId = String(item?.project_id || item?.metadata?.project_id || item?.job_id || "v3-unknown-project");
+    if (!groups.has(projectId)) {
+      const project = projectLookup.get(projectId) || {};
+      groups.set(projectId, {
+        projectId,
+        title: v3ProjectDisplayTitle(item, v3ProjectDisplayTitle(project, "V3 项目图片")),
+        goal: v3ProjectDisplayGoal(item, v3ProjectDisplayGoal(project, "")),
+        templateId: item?.template_id || project.primary_template_id || "general_template",
+        project,
+        items: [],
+        latestItem: null,
+        latestAt: "",
+        count: 0,
+      });
+    }
+    const group = groups.get(projectId);
+    group.items.push(item);
+    group.count += 1;
+    if (!group.latestItem || v3OutputItemTime(item) >= v3OutputItemTime(group.latestItem)) {
+      group.latestItem = item;
+      group.latestAt = item?.created_at || item?.updated_at || "";
+      group.title = v3ProjectDisplayTitle(item, group.title);
+      group.goal = v3ProjectDisplayGoal(item, group.goal);
+      group.templateId = item?.template_id || group.templateId;
+    }
+  });
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      items: group.items.sort((a, b) => v3OutputItemTime(b) - v3OutputItemTime(a)),
+    }))
+    .sort((a, b) => v3OutputItemTime(b.latestItem) - v3OutputItemTime(a.latestItem));
+}
+
+function v3OutputItemTime(item) {
+  return Date.parse(item?.created_at || item?.updated_at || item?.metadata?.created_at || "") || 0;
+}
+
+function v3HistoryOutputVisible(item) {
+  const state = item?.selection_state || item?.metadata?.selection_state || "";
+  return state !== "unselected" && state !== "rejected";
+}
+
+function v3ProjectImageGroup(projectId) {
+  return v3ProjectImageGroups().find((group) => group.projectId === projectId) || null;
+}
+
+function openV3ProjectHistoryModal(projectId) {
+  const group = v3ProjectImageGroup(projectId);
+  if (!group || !els.v3ProjectHistoryModal) return;
+  v3State.activeHistoryProjectId = group.projectId;
+  const groupTitle = v3ReadableText(group.title, group.goal || "项目生成图片");
+  if (els.v3ProjectHistoryTitle) els.v3ProjectHistoryTitle.textContent = groupTitle;
+  if (els.v3ProjectHistorySummary) {
+    els.v3ProjectHistorySummary.textContent = group.goal ? v3ShortText(group.goal, 88) : "这个项目生成过的图片都在这里。";
+  }
+  if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = `${group.count} 张`;
+  if (els.v3ProjectHistoryOpenProjectBtn) {
+    els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject = group.projectId;
+    els.v3ProjectHistoryOpenProjectBtn.disabled = !group.projectId;
+  }
+  renderV3ProjectHistoryGrid(group);
+  els.v3ProjectHistoryModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.v3ProjectHistoryCloseBtn?.focus();
+}
+
+function closeV3ProjectHistoryModal({ keepBodyState = false } = {}) {
+  if (!els.v3ProjectHistoryModal) return;
+  els.v3ProjectHistoryModal.hidden = true;
+  v3State.activeHistoryProjectId = "";
+  if (!keepBodyState) releaseV3ScrollLockIfNoModal();
+}
+
+function releaseV3ScrollLockIfNoModal() {
+  const hasOpenModal = [
+    els.imageLightbox,
+    els.v3ProjectHistoryModal,
+    els.v3BrandMemoryModal,
+    els.favoritePickerModal,
+    els.v2FavoriteReferenceModal,
+    els.sampleGuideModal,
+  ].some((modal) => modal && !modal.hidden);
+  if (!hasOpenModal) document.body.classList.remove("modal-open");
+}
+
+function renderV3ProjectHistoryGrid(group) {
+  if (!els.v3ProjectHistoryGrid) return;
+  const items = Array.isArray(group?.items) ? group.items : [];
+  els.v3ProjectHistoryGrid.innerHTML = "";
+  els.v3ProjectHistoryGrid.classList.toggle("empty-v3-list", items.length === 0);
+  if (!items.length) {
+    els.v3ProjectHistoryGrid.textContent = "这个项目还没有可查看的图片。";
+    return;
+  }
+  items.forEach((item, index) => {
+    const previewUrl = v3OutputPreviewImageUrl(item);
+    const imageTitle = v3ReadableText(item.title, group.title || `图片 ${index + 1}`);
+    const card = document.createElement("article");
+    card.className = "v3-project-history-image-card";
+    card.innerHTML = `
+      <button class="v3-project-history-image" type="button" data-v3-history-image="${index}" aria-label="查看项目图片">
+        ${previewUrl ? `<img alt="${escapeHtml(v3ReadableText(group.title, "V3 项目图片"))}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : "<span>图片准备中</span>"}
+      </button>
+      <div class="v3-project-history-image-meta">
+        <strong>${escapeHtml(v3ShortText(imageTitle, 24))}</strong>
+        <span>${escapeHtml(formatDate(item.created_at || item.updated_at))}</span>
+      </div>
+    `;
+    els.v3ProjectHistoryGrid.appendChild(card);
+  });
+}
+
+function handleV3ProjectHistoryModalClick(event) {
+  if (event.target.hasAttribute("data-close-v3-history")) closeV3ProjectHistoryModal();
+}
+
+function handleV3ProjectHistoryGridClick(event) {
+  const imageButton = event.target.closest("[data-v3-history-image]");
+  if (!imageButton) return;
+  const group = v3ProjectImageGroup(v3State.activeHistoryProjectId);
+  const item = group?.items?.[Number(imageButton.dataset.v3HistoryImage || 0)];
+  if (!item) return;
+  openV3OutputLightbox(item, {
+    title: v3ProjectDisplayTitle(item, group.title || "V3 项目图片"),
+    meta: `${v3TemplatePlainLabel(item.template_id || group.templateId || "general_template")} - ${formatDate(item.created_at)}`,
+  });
+}
+
+function renderV3ProjectDetail() {
+  const project = v3State.currentProject;
+  if (project?.primary_template_id && v3State.view === "workspace") {
+    v3State.selectedTemplate = project.primary_template_id;
+  }
+  if (els.v3ProjectTitle) els.v3ProjectTitle.textContent = project ? v3ProjectDisplayTitle(project) : "未打开项目";
+  if (els.v3ProjectGoal) {
+    els.v3ProjectGoal.textContent = project
+      ? `项目目标：${v3ShortText(v3ProjectDisplayGoal(project), 92)}`
+      : "打开项目后，这里展示图片、已选参考和继续入口。";
+  }
+  if (els.v3ProjectStyleChips) {
+    const chips = project?.memory_summary?.confirmed_style_chips || project?.latest_context?.confirmed_visual_tone || [];
+    els.v3ProjectStyleChips.innerHTML = "";
+    (chips.length ? chips : project ? ["通用创意"] : []).slice(0, 5).forEach((chip) => {
+      const el = document.createElement("span");
+      el.textContent = chip;
+      els.v3ProjectStyleChips.appendChild(el);
+    });
+  }
+  if (els.v3ProjectArchiveBtn) {
+    const archived = project?.status === "archived";
+    els.v3ProjectArchiveBtn.disabled = !project?.project_id || archived;
+    els.v3ProjectArchiveBtn.textContent = archived ? "已归档" : "归档项目";
+  }
+  renderV3ProjectOutputBoard();
+  renderV3UsefulReferences();
+  renderV3ProjectSnapshot();
+  renderV3ProjectWorkflow();
+  renderV3StepCards();
+  renderV3ProjectNextActions();
+  renderV3BrandMemoryPanel();
+  renderV3ProjectTimeline();
+  if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+    renderV3ProjectSubpageScene(v3State.activeProjectStep || "compose");
+  }
+}
+
+function v3ProjectNextSuggestion(project = v3State.currentProject) {
+  if (!project?.project_id) return "先从首页创建或打开一个项目";
+  const hasImages = Boolean(v3CurrentJobImageItems().length || v3SelectedOutputRefs(project).length);
+  const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
+  if (!hasImages) return v3State.selectedScenario === "ecommerce" ? "打开制作页，生成第一组电商图" : "打开制作页，生成第一组图片";
+  if (!hasSelectedRefs) return "挑一张满意的图，设为后续参考";
+  return "点“继续生成套图”，沿着已选方向再做一组";
+}
+
+function renderV3ProjectSnapshot() {
+  if (!els.v3ProjectSnapshot) return;
+  const project = v3State.currentProject;
+  els.v3ProjectSnapshot.innerHTML = "";
+  if (!project?.project_id) {
+    els.v3ProjectSnapshot.classList.add("empty-v3-list");
+    els.v3ProjectSnapshot.textContent = "打开项目后，这里会用最简单的方式告诉你：项目类型、已确认参考、生成进度和下一步建议。";
+    return;
+  }
+  els.v3ProjectSnapshot.classList.remove("empty-v3-list");
+  const refs = v3UsefulReferenceItems(project);
+  const selectedRefs = v3SelectedOutputRefs(project);
+  const generatedCount = v3AllProjectImageItems(project).length || selectedRefs.length;
+  const jobCount = Array.isArray(project.job_ids) ? project.job_ids.length : 0;
+  const items = [
+    {
+      label: "项目类型已固定",
+      value: v3TemplatePlainLabel(project.primary_template_id || v3State.selectedTemplate || "general_template"),
+      note: "中途不换类型，避免风格和流程串线",
+    },
+    {
+      label: "项目目标",
+      value: v3ShortText(project.short_summary || project.user_goal || "继续这个项目", 48),
+      note: "后续生成都会围绕这个目标",
+    },
+    {
+      label: "已确认参考",
+      value: `${refs.length} 个`,
+      note: refs.length ? "后续会沿用这些方向" : "选中满意图片后会出现在这里",
+    },
+    {
+      label: "当前进度",
+      value: generatedCount ? `${generatedCount} 张可查看图片` : (jobCount ? `${jobCount} 次尝试` : "还未生成"),
+      note: v3ProjectNextSuggestion(project),
+    },
+  ];
+  items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "v3-project-snapshot-card";
+    card.innerHTML = `
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+      <small>${escapeHtml(item.note)}</small>
+    `;
+    els.v3ProjectSnapshot.appendChild(card);
+  });
+}
+
+function v3ProjectOutputStateMap(project = v3State.currentProject) {
+  const map = new Map();
+  if (!Array.isArray(project?.selected_output_states)) return map;
+  project.selected_output_states.forEach((item) => {
+    if (item?.output_id) map.set(String(item.output_id), item.selection_state || "selected");
+  });
+  return map;
+}
+
+function v3OutputRefIdentity(ref) {
+  return ref?.output_id || ref?.asset_id || ref?.candidate_id || ref?.output_ref_id || "";
+}
+
+function v3SelectedOutputRefs(project = v3State.currentProject) {
+  const stateMap = v3ProjectOutputStateMap(project);
+  return Array.isArray(project?.selected_output_refs)
+    ? project.selected_output_refs.filter((ref) => {
+        const identity = v3OutputRefIdentity(ref);
+        return Boolean(ref) && stateMap.get(identity) !== "unselected" && stateMap.get(identity) !== "rejected";
+      })
+    : [];
+}
+
+function v3ActiveProjectReferences(project = v3State.currentProject) {
+  return Array.isArray(project?.reference_assets)
+    ? project.reference_assets.filter((ref) => ref && ref.status !== "inactive")
+    : [];
+}
+
+function v3UsefulReferenceItems(project = v3State.currentProject) {
+  const activeReferences = v3ActiveProjectReferences(project);
+  if (activeReferences.length) return activeReferences;
+  return v3SelectedOutputRefs(project).map((ref) => ({
+    reference_id: ref.output_ref_id,
+    source_type: "generated_selected",
+    asset_ref_id: v3OutputRefIdentity(ref),
+    preview_url: ref.thumbnail_url || ref.preview_url,
+    label: "继续参考",
+    user_note: ref.selection_reason,
+    use_policy: "style",
+    created_from_job_id: ref.job_id,
+    created_from_output_id: ref.output_id || v3OutputRefIdentity(ref),
+    _legacyOutputRef: ref,
+  }));
+}
+
+function v3ReferenceImageCandidates(ref) {
+  return uniqueNonEmpty([
+    ref?.preview_url,
+    ref?.thumbnail_url,
+    ref?.download_url,
+    ref?._legacyOutputRef?.thumbnail_url,
+    ref?._legacyOutputRef?.preview_url,
+  ]).map(v3MediaUrl);
+}
+
+function v3CurrentJobImageItems(job = v3State.currentJob) {
+  if (!job || job.status === "blocked") return [];
+  const candidates = Array.isArray(job.candidates) ? job.candidates : [];
+  const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
+  const source = candidates.length ? candidates : assets;
+  return source
+    .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "current_job" }))
+    .filter((item) => v3OutputVisibleInProject(item) && (v3OutputImageCandidates(item).length || job.status === "generated"))
+    .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
+}
+
+function v3StoredProjectOutputItems(project = v3State.currentProject) {
+  const projectId = project?.project_id || "";
+  return Array.isArray(v3State.projectOutputs)
+    ? v3State.projectOutputs
+        .filter((item) => !projectId || item?.project_id === projectId)
+        .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "project_output" }))
+    : [];
+}
+
+function v3OutputVisibleInProject(item, project = v3State.currentProject) {
+  const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
+  if (state === "unselected" || state === "rejected") return false;
+  const identity = v3OutputItemIdentity(item);
+  return !v3ReviewOutputIdSet("hidden_output_ids").has(identity);
+}
+
+function v3PostGenerationReview(job = v3State.currentJob) {
+  const metadata = job?.metadata || {};
+  return metadata.post_generation_review || metadata.post_generation_review_package || {};
+}
+
+function v3ReviewOutputIdSet(key, job = v3State.currentJob) {
+  const review = v3PostGenerationReview(job);
+  const ids = Array.isArray(review?.[key]) ? review[key] : [];
+  return new Set(ids.map((item) => String(item || "").trim()).filter(Boolean));
+}
+
+function v3ReviewRank(item, job = v3State.currentJob) {
+  const identity = v3OutputItemIdentity(item);
+  const recommended = v3ReviewOutputIdSet("recommended_output_ids", job);
+  if (recommended.has(identity)) return 0;
+  if (item?.metadata?.visual_auto_retry_output) return 1;
+  return 2;
+}
+
+function v3AllProjectImageItems(project = v3State.currentProject) {
+  const merged = [];
+  const seen = new Set();
+  const push = (item, source) => {
+    if (!item || !v3OutputVisibleInProject(item, project)) return;
+    const identity = v3OutputItemIdentity(item) || `${source}_${merged.length}`;
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    merged.push({ ...item, _v3Source: source, _v3Index: merged.length });
+  };
+  v3StoredProjectOutputItems(project).forEach((item) => push(item, "project_output"));
+  v3CurrentJobImageItems().forEach((item) => push(item, "current_job"));
+  v3SelectedOutputRefs(project).forEach((ref) => push(ref, "selected_ref"));
+  return merged.sort((a, b) => (Date.parse(b?.created_at || "") || 0) - (Date.parse(a?.created_at || "") || 0));
+}
+
+function v3TimelineHasType(type) {
+  return Array.isArray(v3State.projectTimeline) && v3State.projectTimeline.some((item) => item?.item_type === type);
+}
+
+function v3OutputItemIdentity(item) {
+  const metadata = item?.metadata || {};
+  return item?.output_id || metadata.output_id || item?.asset_id || item?.candidate_id || item?.output_ref_id || "";
+}
+
+function v3OutputItemCandidateId(item) {
+  return item?.candidate_id || item?.metadata?.candidate_id || "";
+}
+
+function v3OutputItemAssetId(item) {
+  return item?.asset_id || item?.metadata?.asset_id || "";
+}
+
+function v3IsOutputItemSelected(item, project = v3State.currentProject) {
+  if (item?._v3Source === "selected_ref") return true;
+  const identity = v3OutputItemIdentity(item);
+  const selectedRefs = v3SelectedOutputRefs(project);
+  return selectedRefs.some((ref) => {
+    const values = [ref.output_id, ref.asset_id, ref.candidate_id, ref.output_ref_id].filter(Boolean);
+    return values.includes(identity) || values.includes(item?.output_id) || values.includes(item?.candidate_id) || values.includes(item?.asset_id);
+  });
+}
+
+function renderV3ProjectOutputBoard() {
+  if (!els.v3ProjectOutputBoard) return;
+  const project = v3State.currentProject;
+  const items = v3AllProjectImageItems(project);
+  v3State.projectOutputItems = items;
+  els.v3ProjectOutputBoard.innerHTML = "";
+  els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length);
+  if (!project) {
+    els.v3ProjectOutputBoard.textContent = "打开项目后，这里会优先展示生成图片。";
+    return;
+  }
+  if (!items.length) {
+    els.v3ProjectOutputBoard.textContent = "生成一组图片后会放在这里。满意的图可以直接设为后续参考，让这个项目越做越一致。";
+    return;
+  }
+  items.slice(0, 6).forEach((item, index) => {
+    const urls = v3OutputImageCandidates(item);
+    const isSelected = v3IsOutputItemSelected(item, project);
+    const title = isSelected ? `已确认方向 ${index + 1}` : `项目图片 ${index + 1}`;
+    const reason = item.selection_reason || item.recommendation || item.purpose || item.project_goal || "可作为这组项目继续延展的视觉方向";
+    const downloadUrl = v3OutputDownloadUrl(item) || v3OutputFullImageUrl(item) || v3OutputPreviewImageUrl(item) || "";
+    const card = document.createElement("article");
+    card.className = `v3-project-output-tile${isSelected ? " selected" : ""}`;
+    card.innerHTML = `
+      ${
+        urls.length
+          ? `<button class="v3-project-output-preview" type="button" data-v3-project-preview="${index}" aria-label="查看项目图片"><img alt="${escapeHtml(title)}" /></button>`
+          : `<div class="v3-project-output-placeholder">图片准备中</div>`
+      }
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(v3ShortText(reason, 64))}</p>
+      </div>
+      <div class="v3-result-meta">
+        <span>${isSelected ? "后续会参考" : "可继续使用"}</span>
+        ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
+      </div>
+      <div class="v3-output-actions">
+        <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
+        <button type="button" data-v3-output-action="delete" data-v3-output-index="${index}">删除这张</button>
+      </div>
+    `;
+    const image = card.querySelector(".v3-project-output-preview img");
+    if (image) bindImageWithFallback(image, urls, { emptyAlt: "V3 project image unavailable" });
+    const preview = card.querySelector(".v3-project-output-preview");
+    if (preview) {
+      preview.addEventListener("click", () => {
+        openV3OutputLightbox(item, {
+          title,
+          meta: isSelected ? "已设为项目后续参考" : "项目生成图片",
+        });
+      });
+    }
+    els.v3ProjectOutputBoard.appendChild(card);
+  });
+}
+
+async function handleV3ProjectOutputBoardClick(event) {
+  const actionButton = event.target.closest("[data-v3-output-action]");
+  if (!actionButton) return;
+  const item = v3State.projectOutputItems[Number(actionButton.dataset.v3OutputIndex || 0)];
+  if (!item) return;
+  const action = actionButton.dataset.v3OutputAction;
+  if (action === "select") {
+    await selectV3OutputItem(item);
+  } else if (action === "delete") {
+    await deleteV3OutputItem(item);
+  }
+}
+
+async function selectV3OutputItem(item) {
+  const projectId = v3State.currentProject?.project_id;
+  const jobId = item?.job_id || v3State.currentJob?.job_id || v3LatestProjectJobId(v3State.currentProject);
+  if (!projectId || !jobId) {
+    updateV3Notice("还没有可选的生成图片。", "warning");
+    return;
+  }
+  const selectedCandidateId = v3OutputItemCandidateId(item);
+  const selectedAssetId = v3OutputItemAssetId(item);
+  try {
+    setV3Busy(true, "正在设为后续参考...");
+    const selected = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/select`, {
+      method: "POST",
+      body: {
+        selected_candidate_id: selectedCandidateId || null,
+        selected_asset_id: selectedCandidateId ? null : selectedAssetId || null,
+        apply_memory_update: false,
+        metadata: { frontend_surface: "commercial_v3_project_mode", selected_from: "image_card" },
+      },
+    });
+    v3State.selectedResult = selected;
+    v3State.activeProjectStep = "compose";
+    if (selected.project) v3State.currentProject = selected.project;
+    if (selected.job_status) v3State.currentJob = selected.job_status;
+    syncV3ProjectOutputsFromPayload(selected);
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    renderV3Job(v3State.currentJob);
+    renderV3ProjectDetail();
+    if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+      openV3ProjectSubpage("compose");
+    }
+    updateV3Notice("已设为后续参考。这个项目后面会优先沿用它。", "success");
+  } catch (error) {
+    updateV3Notice(`选中失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+async function deleteV3OutputItem(item) {
+  const projectId = v3State.currentProject?.project_id;
+  const outputId = v3OutputItemIdentity(item);
+  if (!projectId || !outputId) {
+    updateV3Notice("这张图暂时没有可移除的记录。", "warning");
+    return;
+  }
+  const ok = window.confirm("从这个项目里移除这张图？不会影响其他图片。");
+  if (!ok) return;
+  try {
+    setV3Busy(true, "正在移除这张图...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
+      method: "POST",
+      body: {
+        plain_text: "用户从项目图片里移除了这张图。",
+        metadata: { frontend_surface: "commercial_v3_project_mode", removed_from: "image_card" },
+      },
+    });
+    if (payload.project) v3State.currentProject = payload.project;
+    syncV3ProjectOutputsFromPayload(payload);
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    renderV3Job(v3State.currentJob);
+    renderV3ProjectDetail();
+    updateV3Notice("已从这个项目里移除这张图。后续生成不会再优先沿用它。", "success");
+  } catch (error) {
+    updateV3Notice(`移除失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+async function rejectV3OutputItem(item) {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId) return;
+  const outputId = v3OutputItemIdentity(item);
+  const plainText = window.prompt("不想继续哪一点？例如：太暗、太乱、主体不清楚、风格不对");
+  if (!plainText || !plainText.trim()) return;
+  try {
+    setV3Busy(true, "正在记录反馈...");
+    if (v3IsOutputItemSelected(item) && outputId) {
+      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/reject`, {
+        method: "POST",
+        body: {
+          plain_text: plainText.trim(),
+          reason_tags: [],
+          metadata: { frontend_surface: "commercial_v3_project_mode", rejected_from: "image_card" },
+        },
+      });
+      if (payload.project) v3State.currentProject = payload.project;
+      syncV3ProjectOutputsFromPayload(payload);
+    } else {
+      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/feedback`, {
+        method: "POST",
+        body: {
+          target_type: "output",
+          target_id: outputId || null,
+          feedback_type: "avoid_direction",
+          plain_text: plainText.trim(),
+          metadata: { frontend_surface: "commercial_v3_project_mode", rejected_from: "image_card" },
+        },
+      });
+      if (payload.project) v3State.currentProject = payload.project;
+      syncV3ProjectOutputsFromPayload(payload);
+    }
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    renderV3ProjectDetail();
+    updateV3Notice("已记录，后续会尽量避开这个方向。", "success");
+  } catch (error) {
+    updateV3Notice(`反馈记录失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function renderV3UsefulReferences() {
+  if (!els.v3UsefulReferenceBoard) return;
+  const project = v3State.currentProject;
+  const refs = v3UsefulReferenceItems(project);
+  els.v3UsefulReferenceBoard.innerHTML = "";
+  els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", !refs.length);
+  if (!project) {
+    els.v3UsefulReferenceBoard.textContent = "打开项目后，已确认的图片和参考图会显示在这里。";
+    return;
+  }
+  if (!refs.length) {
+    els.v3UsefulReferenceBoard.textContent = "还没有确认参考。在上方图片卡点“设为后续参考”，V3 后续会沿着它继续。";
+    return;
+  }
+  refs.slice(0, 6).forEach((ref, index) => {
+    const urls = v3ReferenceImageCandidates(ref);
+    const outputId = ref.created_from_output_id || ref.asset_ref_id || ref.reference_id || "";
+    const isGeneratedReference = ref.source_type === "generated_selected";
+    const tile = document.createElement("article");
+    tile.className = "v3-useful-reference-tile";
+    tile.innerHTML = `
+      ${
+        urls.length
+          ? `<img alt="项目参考图 ${index + 1}" />`
+          : `<div class="v3-reference-placeholder">参考图</div>`
+      }
+      <div>
+        <strong>${escapeHtml(ref.label || (ref.source_type === "uploaded" ? "上传参考" : "继续参考"))}</strong>
+        <p>${escapeHtml(v3ShortText(ref.user_note || ref._legacyOutputRef?.selection_reason || "这张图会作为本项目后续参考。", 52))}</p>
+        <div class="v3-reference-actions">
+          <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">移出参考</button>
+          <button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}" ${isGeneratedReference ? "" : "disabled"}>不喜欢这个方向</button>
+        </div>
+      </div>
+    `;
+    const image = tile.querySelector("img");
+    if (image) bindImageWithFallback(image, urls, { emptyAlt: "Selected project reference unavailable" });
+    els.v3UsefulReferenceBoard.appendChild(tile);
+  });
+}
+
+async function handleV3ReferenceBoardClick(event) {
+  const button = event.target.closest("[data-v3-reference-action]");
+  if (!button || !v3State.currentProject?.project_id) return;
+  const action = button.dataset.v3ReferenceAction;
+  const referenceId = button.dataset.v3ReferenceId || "";
+  const outputId = button.dataset.v3OutputId || "";
+  const sourceType = button.dataset.v3ReferenceSource || "";
+  if (action === "remove") {
+    await removeV3ProjectReference(referenceId, outputId, sourceType);
+  } else if (action === "reject") {
+    await rejectV3ProjectReference(outputId);
+  }
+}
+
+async function removeV3ProjectReference(referenceId, outputId, sourceType = "") {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId) return;
+  try {
+    setV3Busy(true, "更新参考中...");
+    if (referenceId) {
+      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}/remove`, {
+        method: "POST",
+        body: { plain_text: "用户移除了项目参考", metadata: { frontend_surface: "commercial_v3_project_mode" } },
+      });
+      if (payload.project) v3State.currentProject = payload.project;
+      syncV3ProjectOutputsFromPayload(payload);
+    } else if (outputId) {
+      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
+        method: "POST",
+        body: { metadata: { frontend_surface: "commercial_v3_project_mode" } },
+      });
+      if (payload.project) v3State.currentProject = payload.project;
+      syncV3ProjectOutputsFromPayload(payload);
+    }
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    renderV3ProjectDetail();
+    updateV3Notice("已移出后续参考。它仍会保留在项目记录里。", "success");
+  } catch (error) {
+    updateV3Notice(`参考更新失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+async function rejectV3ProjectReference(outputId) {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId || !outputId) return;
+  const plainText = window.prompt("哪里不喜欢？例如：不要暗色背景，避免杂乱，产品不够突出");
+  if (!plainText || !plainText.trim()) return;
+  try {
+    setV3Busy(true, "记录反馈中...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/reject`, {
+      method: "POST",
+      body: {
+        plain_text: plainText.trim(),
+        reason_tags: [],
+        metadata: { frontend_surface: "commercial_v3_project_mode" },
+      },
+    });
+    if (payload.project) v3State.currentProject = payload.project;
+    syncV3ProjectOutputsFromPayload(payload);
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    renderV3ProjectDetail();
+    updateV3Notice("已记录不想要的方向，后续会避开它。", "success");
+  } catch (error) {
+    updateV3Notice(`反馈记录失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function renderV3ProjectWorkflow() {
+  if (!els.v3ProjectWorkflow) return;
+  const project = v3State.currentProject;
+  const selectedRefs = v3UsefulReferenceItems(project);
+  const hasGenerated = Boolean(v3State.currentJob?.status === "generated" || v3TimelineHasType("job_generated"));
+  renderV3WorkflowArtifacts();
+  if (v3State.selectedScenario === "ecommerce") {
+    const hasProduct = v3ProjectHasProductReference(project) || v3State.files.length > 0 || v3State.uploadedAssets.length > 0;
+    const steps = [
+      {
+        label: "识别商品",
+        text: hasProduct ? "已准备商品图或商品参考" : "先上传一张清晰商品图",
+        state: hasProduct ? "done" : project ? "active" : "todo",
+      },
+      {
+        label: "匹配卖点",
+        text: "把商品信息和用户需求转成适合图片表达的方向",
+        state: project ? "done" : "todo",
+      },
+      {
+        label: "规划套图",
+        text: "自动拆成主图、卖点图、场景图、细节图和信任图",
+        state: project ? "done" : "todo",
+      },
+      {
+        label: "生成套图",
+        text: hasGenerated ? "已有可查看的电商套图" : "生成后图片会优先展示",
+        state: hasGenerated ? "done" : project ? "active" : "todo",
+      },
+      {
+        label: "检查发布",
+        text: hasGenerated ? "请检查商品细节、卖点和平台适配" : "生成后再挑选可用图片",
+        state: hasGenerated ? "active" : "todo",
+      },
+    ];
+    els.v3ProjectWorkflow.innerHTML = steps
+      .map(
+        (step) => `
+          <div class="v3-workflow-step ${escapeHtml(step.state)}">
+            <span>${escapeHtml(step.label)}</span>
+            <p>${escapeHtml(step.text)}</p>
+          </div>
+        `,
+      )
+      .join("");
+    return;
+  }
+  const steps = [
+    {
+      label: "理解需求",
+      text: project ? "已确认这个项目要做什么" : "先新建或打开一个项目",
+      state: project ? "done" : "todo",
+    },
+    {
+      label: "整理参考",
+      text: selectedRefs.length ? `已记录 ${selectedRefs.length} 张后续参考` : "选中喜欢的图后会自动进入参考",
+      state: selectedRefs.length ? "done" : project ? "active" : "todo",
+    },
+    {
+      label: "生成图片",
+      text: hasGenerated ? "已有可查看的生成结果" : "生成后图片会优先展示",
+      state: hasGenerated ? "done" : project ? "active" : "todo",
+    },
+    {
+      label: "筛选方向",
+      text: selectedRefs.length ? "后续会沿着已选方向继续" : "挑一张满意的图作为方向",
+      state: selectedRefs.length ? "done" : hasGenerated ? "active" : "todo",
+    },
+    {
+      label: "继续优化",
+      text: selectedRefs.length ? "可以同风格继续生成" : "先生成或选图后再续作",
+      state: selectedRefs.length ? "active" : "todo",
+    },
+  ];
+  els.v3ProjectWorkflow.innerHTML = steps
+    .map(
+      (step) => `
+        <div class="v3-workflow-step ${escapeHtml(step.state)}">
+          <span>${escapeHtml(step.label)}</span>
+          <p>${escapeHtml(step.text)}</p>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function v3WorkflowArtifact() {
+  const project = v3State.currentProject;
+  const metadataArtifacts = v3State.currentJob?.metadata?.workflow_artifacts || {};
+  const brainSummary = v3BrainUserSummary(metadataArtifacts);
+  const brainGuidance = v3BrainPromptGuidance(metadataArtifacts);
+  const selectedRefs = v3UsefulReferenceItems(project);
+  const avoidNotes = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes : [];
+  const tone = project?.latest_context?.confirmed_visual_tone || project?.memory_summary?.confirmed_style_chips || [];
+  return {
+    userRequest: metadataArtifacts.user_request || project?.user_goal || project?.short_summary || "",
+    optimizedDirection:
+      brainGuidance.optimized_direction ||
+      metadataArtifacts.optimized_direction ||
+      brainSummary.headline ||
+      (tone.length ? `画面需要保持${tone.join("、")}的感觉。` : "V3 会根据项目目标整理画面方向。"),
+    styleNotes: uniqueNonEmpty([
+      ...(Array.isArray(brainGuidance.style_notes) ? brainGuidance.style_notes : []),
+      ...(Array.isArray(metadataArtifacts.style_notes) ? metadataArtifacts.style_notes : []),
+    ]),
+    layoutNotes: uniqueNonEmpty([
+      ...(Array.isArray(brainGuidance.layout_notes) ? brainGuidance.layout_notes : []),
+      ...(Array.isArray(metadataArtifacts.layout_notes) ? metadataArtifacts.layout_notes : []),
+    ]),
+    qualityChecks: uniqueNonEmpty([
+      ...(Array.isArray(brainSummary.done) ? brainSummary.done : []),
+      ...(Array.isArray(metadataArtifacts.llm_brain?.prompt_review?.checks) ? metadataArtifacts.llm_brain.prompt_review.checks : []),
+    ]),
+    consistencyStrategy: brainGuidance.consistency_strategy || "",
+    finalPrompt: metadataArtifacts.final_provider_prompt || "",
+    promptAvailable: Boolean(
+      metadataArtifacts.prompt_available ||
+        metadataArtifacts.final_prompt_available ||
+        metadataArtifacts.optimized_direction ||
+        brainGuidance.optimized_direction,
+    ),
+    restoredWithoutPrompt: Boolean(metadataArtifacts.restored_from_output_store && !metadataArtifacts.final_prompt_available && !metadataArtifacts.prompt_available),
+    selectedReferenceCount: selectedRefs.length,
+    avoidNotes,
+  };
+}
+
+function v3PromptArtifact(artifact = v3WorkflowArtifact()) {
+  if (artifact.finalPrompt) return artifact.finalPrompt;
+  if (artifact.restoredWithoutPrompt) {
+    return "这是从本地图片文件恢复的历史结果。图片和项目关系已恢复，但当时的完整提示词没有保存在图片文件中。之后新生成的图片会保留可查看的提示词记录。";
+  }
+  if (artifact.optimizedDirection) return artifact.optimizedDirection;
+  return "生成后，这里会显示 V3 整理后的画面方向和可选查看的最终提示词。";
+}
+
+function v3PostGenerationReviewLines(job = v3State.currentJob) {
+  const review = v3PostGenerationReview(job);
+  const summary = Array.isArray(review?.user_visible_summary) ? review.user_visible_summary : [];
+  const inspections = Array.isArray(review?.inspections) ? review.inspections : [];
+  const lines = uniqueNonEmpty(summary);
+  const retrySummary = job?.metadata?.visual_auto_retry || {};
+  const executedCount = Number(retrySummary.executed_count || 0);
+  if (executedCount > 0) lines.push("发现可修复问题后，已追加一组更干净的结果");
+  if (!lines.length && inspections.length) {
+    lines.push("V3 已检查生成结果");
+  }
+  const issueLines = inspections
+    .flatMap((item) => (Array.isArray(item.detected_issues) ? item.detected_issues : []))
+    .map((issue) => issue?.message || issue?.code)
+    .filter(Boolean);
+  return uniqueNonEmpty([...lines, ...issueLines]).slice(0, 6);
+}
+
+function renderV3WorkflowArtifacts() {
+  if (!els.v3WorkflowArtifacts) return;
+  const project = v3State.currentProject;
+  if (!project?.project_id) {
+    els.v3WorkflowArtifacts.innerHTML = "";
+    return;
+  }
+  const artifact = v3WorkflowArtifact();
+  const styleLine = artifact.styleNotes.length ? artifact.styleNotes.join("、") : "根据项目目标和已确认参考自动整理";
+  const layoutLine = artifact.layoutNotes.length ? artifact.layoutNotes.join("、") : "优先保证主体清晰、画面干净、留出可用空间";
+  const checkLine = artifact.qualityChecks.length ? artifact.qualityChecks.slice(0, 3).join("、") : "已检查需求、参考和画面方向";
+  const avoidLine = artifact.avoidNotes.length ? artifact.avoidNotes.slice(0, 3).join("；") : "暂无需要避开的方向";
+  const reviewLines = v3PostGenerationReviewLines();
+  els.v3WorkflowArtifacts.innerHTML = `
+    <div class="v3-artifact-card">
+      <span>V3 理解到的目标</span>
+      <strong>${escapeHtml(v3ShortText(artifact.userRequest || "继续这个项目", 92))}</strong>
+      <p>后续生成都会围绕这个项目目标，并优先读取已确认参考。</p>
+    </div>
+    <div class="v3-artifact-card">
+      <span>优化后的画面方向</span>
+      <strong>${escapeHtml(v3ShortText(artifact.optimizedDirection, 110))}</strong>
+      <p>风格：${escapeHtml(v3ShortText(styleLine, 96))}</p>
+      <p>构图：${escapeHtml(v3ShortText(layoutLine, 96))}</p>
+    </div>
+    <div class="v3-artifact-card">
+      <span>一致性怎么保持</span>
+      <strong>${artifact.selectedReferenceCount ? `沿用 ${artifact.selectedReferenceCount} 个已确认参考` : "等待你确认参考"}</strong>
+      <p>${escapeHtml(
+        v3ShortText(
+          artifact.consistencyStrategy ||
+            (artifact.selectedReferenceCount ? "后续生成会优先参考已选图片的风格和画面感觉。" : "在图片卡点“设为后续参考”后，一致性会明显更稳。"),
+          110,
+        ),
+      )}</p>
+      <p>检查：${escapeHtml(v3ShortText(checkLine, 96))}</p>
+      <p>避开：${escapeHtml(v3ShortText(avoidLine, 96))}</p>
+    </div>
+    ${
+      reviewLines.length
+        ? `<details class="v3-prompt-artifact v3-review-artifact">
+            <summary>
+              <span>高级查看：质量复检</span>
+              <small>默认已自动处理</small>
+            </summary>
+            <ul>${reviewLines.map((line) => `<li>${escapeHtml(v3ShortText(line, 120))}</li>`).join("")}</ul>
+          </details>`
+        : ""
+    }
+    <details class="v3-prompt-artifact">
+      <summary>
+        <span>高级查看：最终提示词</span>
+        <small>需要复盘时再打开</small>
+      </summary>
+      <pre>${escapeHtml(v3PromptArtifact(artifact))}</pre>
+    </details>
+  `;
+}
+
+function v3BrainUserSummary(metadataArtifacts = {}) {
+  const direct = metadataArtifacts.llm_brain_summary;
+  if (direct && typeof direct === "object") return direct;
+  const brain = metadataArtifacts.llm_brain;
+  if (brain?.user_visible_summary && typeof brain.user_visible_summary === "object") return brain.user_visible_summary;
+  return {};
+}
+
+function v3BrainPromptGuidance(metadataArtifacts = {}) {
+  const brain = metadataArtifacts.llm_brain;
+  if (brain?.prompt_guidance && typeof brain.prompt_guidance === "object") return brain.prompt_guidance;
+  return {};
+}
+
+function renderV3ProductionEntry({ project, imageCount, refCount, avoidCount, isEcommerce }) {
+  const hasProject = Boolean(project?.project_id);
+  const title = isEcommerce ? "继续生成电商套图" : "继续生成套图";
+  const body = refCount
+    ? `沿用 ${refCount} 个已选参考继续。`
+    : "先生成，再挑满意方向。";
+  const imageLabel = imageCount ? `${imageCount} 张图片` : "还未出图";
+  const avoidLabel = avoidCount ? `${avoidCount} 条避开方向` : "暂无避开方向";
+  return `
+    <button type="button" class="v3-step-card v3-production-entry current active" data-v3-step="compose" ${hasProject ? "" : "disabled"}>
+      <span class="v3-production-kicker">本项目继续生产</span>
+      <strong>${escapeHtml(title)}</strong>
+      <small>${escapeHtml(body)} 结果会自动回到项目里。</small>
+      <span class="v3-production-meta" aria-label="项目续作状态">
+        <em>${escapeHtml(refCount ? `${refCount} 个已确认参考` : "可先生成再选")}</em>
+        <em>${escapeHtml(imageLabel)}</em>
+        <em>${escapeHtml(avoidLabel)}</em>
+      </span>
+    </button>
+  `;
+}
+
+function renderV3StepCards() {
+  if (!els.v3StepCards) return;
+  const project = v3State.currentProject;
+  const outputItems = v3CurrentJobImageItems();
+  const selectedRefs = v3UsefulReferenceItems(project);
+  const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
+  const imageCount = outputItems.length || v3SelectedOutputRefs(project).length;
+  const isEcommerce = v3State.selectedScenario === "ecommerce";
+  v3State.activeProjectStep = "compose";
+  els.v3StepCards.innerHTML = renderV3ProductionEntry({
+    project,
+    imageCount,
+    refCount: selectedRefs.length,
+    avoidCount,
+    isEcommerce,
+  });
+  if (els.v3StepActionRegion) els.v3StepActionRegion.dataset.v3ActiveStep = "compose";
+}
+
+function handleV3StepCardClick(event) {
+  const button = event.target.closest("[data-v3-step]");
+  if (!button || button.disabled) return;
+  openV3ProjectSubpage(button.dataset.v3Step || "compose");
+}
+
+function v3ProjectSubpageCopy(stepKey = "compose") {
+  const ecommerceActive = v3State.selectedScenario === "ecommerce";
+  const map = {
+    compose: {
+      eyebrow: "继续生产",
+      title: ecommerceActive ? "继续生成电商套图" : "继续生成套图",
+      intro: ecommerceActive ? "写一句目标，可补商品图，V3 会沿用本项目风格出图。" : "写一句目标，可补参考图，V3 会沿用本项目方向出图。",
+    },
+    review: {
+      eyebrow: "查看结果",
+      title: "查看这次生成的图片",
+      intro: "看图、下载、选择满意方向。",
+    },
+    select: {
+      eyebrow: "选定方向",
+      title: "把满意结果设为后续参考",
+      intro: "选中后，后续生成会优先沿用这张图的感觉。",
+    },
+    continue: {
+      eyebrow: "继续优化",
+      title: "沿着已选方向继续做",
+      intro: "继续生成同一套视觉感觉。",
+    },
+  };
+  return map[stepKey] || map.compose;
+}
+
+function renderV3ProjectSubpageScene(stepKey = "compose") {
+  if (!els.v3SubpageBody) return;
+  const rendererMap = {
+    compose: renderV3BriefScene,
+    review: renderV3ReviewScene,
+    select: renderV3SelectScene,
+    continue: renderV3ContinueScene,
+  };
+  const renderer = rendererMap[stepKey] || renderV3BriefScene;
+  els.v3SubpageBody.innerHTML = renderer();
+  applyV3SubpageSceneVisibility(stepKey);
+}
+
+function v3SceneStats() {
+  const project = v3State.currentProject;
+  const images = v3CurrentJobImageItems();
+  const refs = v3UsefulReferenceItems(project);
+  const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
+  return { project, images, refs, avoidCount, isEcommerce: v3State.selectedScenario === "ecommerce" };
+}
+
+function renderV3SceneRows(rows) {
+  return `
+    <div class="v3-scene-panel">
+      ${rows
+        .map(
+          (row) => `
+            <article>
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+              <p>${escapeHtml(row.hint)}</p>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderV3BriefScene() {
+  const { project, refs, isEcommerce } = v3SceneStats();
+  const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
+  const modeText = isEcommerce ? "电商套图" : "通用套图";
+  const referenceText = refs.length ? `沿用 ${refs.length} 个已确认参考` : "生成后再挑满意方向";
+  const avoidText = avoidCount ? `避开 ${avoidCount} 条不喜欢方向` : "暂无避开方向";
+  return `
+    <div class="v3-production-context">
+      <span>${escapeHtml(modeText)}</span>
+      <strong>${escapeHtml(referenceText)}</strong>
+      <p>${escapeHtml(`${avoidText}。你只要写一句本次目标，其他由 V3 自动整理。`)}</p>
+    </div>
+  `;
+}
+
+function renderV3ReviewScene() {
+  const { images, refs } = v3SceneStats();
+  return renderV3SceneRows([
+    {
+      label: "图片",
+      value: images.length ? `${images.length} 张可查看` : "还没有生成图片",
+      hint: images.length ? "下方可以放大、下载，也可以直接设为后续参考。" : "先回到“写需求”生成第一组图片。",
+    },
+    {
+      label: "判断",
+      value: "先选方向，不追完美",
+      hint: "只要有一张接近想要的感觉，就可以设为参考，后续会更稳定。",
+    },
+    {
+      label: "已确认",
+      value: `${refs.length} 个参考`,
+      hint: refs.length ? "项目后续会沿着这些图继续。" : "还没选图，建议先选一张最接近的。",
+    },
+  ]);
+}
+
+function renderV3SelectScene() {
+  const { images, refs } = v3SceneStats();
+  return renderV3SceneRows([
+    {
+      label: "作用",
+      value: "锁定后续方向",
+      hint: "满意图片会进入“已确认参考”，后续生成优先沿用它的风格和画面感觉。",
+    },
+    {
+      label: "可选",
+      value: `${images.length} 张图片`,
+      hint: images.length ? "在下方图片卡点击“设为后续参考”。" : "这个项目还没有可选图片。",
+    },
+    {
+      label: "已选",
+      value: `${refs.length} 个方向`,
+      hint: refs.length ? "可以在项目主页的确认参考区移除。" : "选中后会成为项目续作依据。",
+    },
+  ]);
+}
+
+function renderV3ContinueScene() {
+  return renderV3ContinueSceneSimplified();
+  const continueStats = v3SceneStats();
+  const continueRefs = continueStats.refs;
+  const continueStatus = v3BrandMemoryStatus(continueStats.project);
+  return renderV3SceneRows([
+    {
+      label: "续作依据",
+      value: continueRefs.length ? `${continueRefs.length} 个已确认方向` : "还缺少确认方向",
+      hint: continueRefs.length ? "后续会优先读取这些已选图片和参考图，继续保持同一套画面感觉。" : "先把满意图片设为后续参考，再继续生成会更稳。",
+    },
+    {
+      label: "长期风格",
+      value: continueStatus.saved ? `已保存为「${continueStatus.brandName}」` : continueStatus.canSave ? "可以保存" : "选图后可保存",
+      hint: continueStatus.saved ? `保存位置：Brand Memory ${continueStatus.brandIdLabel || ""}` : "保存后会变成可复用的风格资产，可被新项目显式沿用。",
+    },
+    {
+      label: "一致性",
+      value: continueStatus.saved && continueRefs.length ? "强" : continueRefs.length ? "较强" : "一般",
+      hint: `${v3BrandMemoryConsistencyCopy(continueStatus)}；项目已记录 ${continueStats.avoidCount} 条需要避开的方向。`,
+    },
+  ]);
+  const { refs, avoidCount, isEcommerce } = v3SceneStats();
+  return renderV3SceneRows([
+    {
+      label: "继续",
+      value: refs.length ? "沿着已选方向继续" : "先选一张参考更稳",
+      hint: refs.length ? "可以同风格生成新图，也可以上传新参考再生成。" : "没有确认参考时也能继续，但一致性会弱一些。",
+    },
+    {
+      label: "避开",
+      value: `${avoidCount} 条不喜欢方向`,
+      hint: avoidCount ? "后续会把这些反馈作为避开方向。" : "如果某张图不对，可以标记不喜欢。",
+    },
+    {
+      label: "复用",
+      value: refs.length ? "可保存为长期风格" : "选图后可保存",
+      hint: isEcommerce ? "适合后续同商品或同店铺套图。" : "适合之后的新项目继续沿用这组视觉感觉。",
+    },
+  ]);
+}
+
+function renderV3ContinueSceneSimplified() {
+  const { project, refs } = v3SceneStats();
+  const status = v3BrandMemoryStatus(project);
+  return renderV3SceneRows([
+    {
+      label: "方向",
+      value: refs.length ? `${refs.length} 个已选参考` : "还没选定",
+      hint: refs.length ? "这些图就是这套风格的依据。" : "先到“选方向”里选一张满意图。",
+    },
+    {
+      label: "保存",
+      value: status.saved ? "已保存" : status.canSave ? "可以保存" : "暂不能保存",
+      hint: status.saved ? "项目主页可以查看、更新或复用。" : "保存风格描述、已选图片和避开方向。",
+    },
+    {
+      label: "作用",
+      value: status.saved ? "可沿用" : "保存后可沿用",
+      hint: refs.length ? "新项目手动选择它时，会更容易保持同一套感觉。" : "没有已选参考时，一致性会弱一些。",
+    },
+  ]);
+}
+
+function applyV3SubpageSceneVisibility(stepKey = "compose") {
+  if (els.v3ProjectSubpage) els.v3ProjectSubpage.dataset.v3Scene = stepKey;
+  const composer = els.v3ProjectSubpage?.querySelector(".v3-composer-panel");
+  const results = els.v3ProjectSubpage?.querySelector(".v3-results-panel");
+  const side = els.v3ProjectSubpage?.querySelector(".v3-side-stack");
+  const showComposer = stepKey === "compose";
+  const showResults = stepKey === "compose" || stepKey === "review" || stepKey === "select";
+  const showSide = stepKey === "compose" && v3State.selectedScenario === "ecommerce";
+  if (composer) composer.hidden = !showComposer;
+  if (results) results.hidden = !showResults;
+  if (side) side.hidden = !showSide;
+  if (els.v3ProjectNextActions) els.v3ProjectNextActions.hidden = true;
+}
+
+function openV3ProjectSubpage(stepKey = "compose") {
+  if (!v3State.currentProject?.project_id) {
+    showGlobalToast("请先新建或打开一个 V3 项目。", "warning");
+    return;
+  }
+  v3State.activeProjectStep = stepKey || "compose";
+  const copy = v3ProjectSubpageCopy(v3State.activeProjectStep);
+  if (els.v3SubpageEyebrow) els.v3SubpageEyebrow.textContent = copy.eyebrow;
+  if (els.v3SubpageTitle) els.v3SubpageTitle.textContent = copy.title;
+  if (els.v3SubpageIntro) els.v3SubpageIntro.textContent = copy.intro;
+  if (els.v3ProjectSubpage) els.v3ProjectSubpage.hidden = false;
+  renderV3StepCards();
+  renderV3ProjectNextActions();
+  renderV3ProjectSubpageScene(v3State.activeProjectStep);
+  if (els.v3ProjectSubpage?.scrollIntoView) {
+    els.v3ProjectSubpage.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (v3State.activeProjectStep === "compose" && els.v3PromptInput?.focus) {
+    window.setTimeout(() => els.v3PromptInput.focus(), 120);
+  }
+}
+
+function closeV3ProjectSubpage({ silent = false } = {}) {
+  if (els.v3ProjectSubpage) els.v3ProjectSubpage.hidden = true;
+  if (!silent) {
+    renderV3StepCards();
+    if (els.v3StepActionRegion?.scrollIntoView) {
+      els.v3StepActionRegion.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+}
+
+function renderV3StyleConfirmActions() {
+  if (!els.v3ProjectNextActions) return;
+  const project = v3State.currentProject;
+  const refs = v3UsefulReferenceItems(project);
+  const status = v3BrandMemoryStatus(project);
+  const canSave = Boolean(project?.project_id && refs.length && !status.saved);
+  els.v3ProjectNextActions.innerHTML = `
+    <div class="v3-style-confirm-panel ${status.saved ? "saved" : "draft"}">
+      <div>
+        <span>保存这套风格</span>
+        <strong>${status.saved ? "已保存到项目主页" : refs.length ? "确认当前方向" : "先选满意图"}</strong>
+        <p>${status.saved ? "更新和复用入口在项目主页，不放在这里重复。" : refs.length ? "保存后，V3 会记住已选图片、风格描述和避开方向。" : "回到“选方向”，选中一张满意图片后再保存。"}</p>
+      </div>
+      <button class="button primary compact" type="button" data-v3-project-action="save_brand_style" ${canSave ? "" : "disabled"}>
+        ${status.saved ? "已保存" : "确认并保存"}
+      </button>
+    </div>
+  `;
+}
+
+function renderV3ProjectNextActions() {
+  if (!els.v3ProjectNextActions) return;
+  els.v3ProjectNextActions.innerHTML = "";
+  els.v3ProjectNextActions.hidden = true;
+  return;
+  const project = v3State.currentProject;
+  const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
+  const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
+  const ecommerceActive = v3State.selectedScenario === "ecommerce";
+  const status = v3BrandMemoryStatus(project);
+  els.v3ProjectNextActions.innerHTML = `
+    <div class="v3-continuation-panel">
+      <div class="v3-continuation-main">
+        <span>建议下一步</span>
+        <strong>${hasSelectedRefs ? "沿着已确认方向继续生成" : "先选一张满意图，续作会更稳"}</strong>
+        <p>${hasSelectedRefs ? "V3 会读取本项目已选图片、参考图和避开方向，让新图尽量保持同一套视觉感觉。" : "没有确认方向时也能继续，但一致性主要依赖文字需求，稳定性会弱一些。"}</p>
+        <div class="v3-continuation-buttons">
+          <button class="button primary compact" type="button" data-v3-project-action="${hasSelectedRefs ? "continue_same_style" : "start_first_generation"}" ${project ? "" : "disabled"}>
+            ${hasSelectedRefs ? "同风格再生成" : (ecommerceActive ? "生成第一组套图" : "生成第一组图")}
+          </button>
+          <button class="button secondary compact" type="button" data-v3-project-action="upload_reference_continue" ${project ? "" : "disabled"}>
+            ${ecommerceActive ? "加入商品/参考图" : "加入新参考图"}
+          </button>
+          <button class="button ghost compact" type="button" data-v3-project-action="select_current_result" ${hasSelectableJob ? "" : "disabled"}>
+            把当前结果设为方向
+          </button>
+        </div>
+      </div>
+      <div class="v3-style-memory-status ${status.saved ? "saved" : "draft"}">
+        <span>长期风格</span>
+        <strong>${status.saved ? `已保存为「${escapeHtml(status.brandName)}」` : status.canSave ? "可保存为长期风格" : "选中满意图后可保存"}</strong>
+        <p>${status.saved ? `保存位置：Brand Memory ${escapeHtml(status.brandIdLabel || status.brandId)}。以后新项目显式沿用它时，会读取这组风格笔记和确认图片。` : "保存后会形成可复用的风格资产，适合后续新项目继续沿用。"}</p>
+        <div class="v3-continuation-buttons">
+          <button class="button ${status.saved ? "secondary" : "primary"} compact" type="button" data-v3-project-action="save_brand_style" ${status.canSave || status.saved ? "" : "disabled"}>
+            ${status.saved ? "更新长期风格" : "保存长期风格"}
+          </button>
+          <button class="button ghost compact" type="button" data-v3-project-action="reuse_brand_style" ${status.saved && status.brandId ? "" : "disabled"}>
+            用此风格新建项目
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  return;
+  els.v3ProjectNextActions.innerHTML = `
+    <button type="button" data-v3-project-action="${hasSelectedRefs ? "continue_same_style" : "start_first_generation"}" ${project ? "" : "disabled"}>
+      <strong>${hasSelectedRefs ? "继续同风格生成" : (ecommerceActive ? "生成第一组套图" : "生成第一组图")}</strong>
+      <small>${hasSelectedRefs ? "沿用上方已选方向" : "先得到可挑选的图片"}</small>
+    </button>
+    <button type="button" data-v3-project-action="upload_reference_continue" ${project ? "" : "disabled"}>
+      <strong>${ecommerceActive ? "上传商品图" : "上传参考图"}</strong>
+      <small>${ecommerceActive ? "商品图会进入这个项目" : "让这次生成更贴近参考"}</small>
+    </button>
+    <button type="button" data-v3-project-action="select_current_result" ${hasSelectableJob ? "" : "disabled"}>
+      <strong>选中当前结果</strong>
+      <small>作为后续方向</small>
+    </button>
+    <button type="button" data-v3-project-action="save_brand_style" ${hasSelectedRefs ? "" : "disabled"}>
+      <strong>保存长期风格</strong>
+      <small>以后也能沿用</small>
+    </button>
+  `;
+}
+
+function renderV3BrandMemoryPanel() {
+  if (!els.v3BrandMemoryPanel) return;
+  const project = v3State.currentProject;
+  const refs = v3UsefulReferenceItems(project);
+  const canSave = Boolean(project?.project_id && refs.length);
+  const status = v3BrandMemoryStatus(project);
+  els.v3BrandMemoryPanel.hidden = !(canSave || status.saved);
+  if (!(canSave || status.saved)) {
+    els.v3BrandMemoryPanel.innerHTML = "";
+    return;
+  }
+  els.v3BrandMemoryPanel.innerHTML = `
+    <div class="v3-brand-memory-copy">
+      <span>${status.saved ? "长期风格已保存" : "可保存为长期风格"}</span>
+      <strong>${status.saved ? escapeHtml(status.brandName) : "把当前方向沉淀成可复用风格"}</strong>
+      <p>${status.saved ? `保存位置：Brand Memory ${escapeHtml(status.brandIdLabel || status.brandId)}。以后新项目选择沿用它时，会读取这组已确认图片、风格笔记和避开方向。` : "保存后，它不是一张图，而是一组可复用的视觉记忆：已选图片、参考图、风格描述和避开方向。"}</p>
+      <p>${escapeHtml(v3BrandMemoryConsistencyCopy(status))}</p>
+    </div>
+    <div class="v3-brand-memory-actions-inline">
+      <button class="button compact ${status.saved ? "secondary" : "primary"}" type="button" data-v3-brand-memory-action="open">
+        ${status.saved ? "查看/更新风格" : "保存长期风格"}
+      </button>
+      <button class="button compact ghost" type="button" data-v3-brand-memory-action="reuse" ${status.saved && status.brandId ? "" : "disabled"}>
+        用此风格新建项目
+      </button>
+    </div>
+  `;
+  return;
+  const saved = v3TimelineHasType("brand_memory_confirmed");
+  els.v3BrandMemoryPanel.innerHTML = `
+    <div>
+      <strong>${saved ? "已保存过品牌风格" : "这个方向可以长期沿用"}</strong>
+      <p>${saved ? "你可以继续更新这组风格，让之后的新项目更一致。" : "确认后，之后的新项目也能沿用这些已选图片和参考图的感觉。"}</p>
+    </div>
+    <button class="button compact secondary" type="button" data-v3-brand-memory-action="open">
+      ${saved ? "更新品牌风格" : "保存为品牌风格"}
+    </button>
+  `;
+}
+
+function handleV3BrandMemoryPanelClick(event) {
+  const button = event.target.closest("[data-v3-brand-memory-action]");
+  if (!button || button.disabled) return;
+  if (button.dataset.v3BrandMemoryAction === "reuse") {
+    v3SetBrandMemoryForNextProject();
+    return;
+  }
+  openV3BrandMemoryProposal();
+}
+
+async function openV3BrandMemoryProposal() {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId) return;
+  try {
+    setV3Busy(true, "整理可保存的风格...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/brand-memory/proposal`, {
+      method: "POST",
+      body: {
+        mode: v3State.currentProject?.linked_brand_id ? "append" : "create",
+        target_brand_id: v3State.currentProject?.linked_brand_id || null,
+        metadata: { frontend_surface: "commercial_v3_project_mode" },
+      },
+    });
+    v3State.brandMemoryProposal = payload.proposal || null;
+    if (payload.project) v3State.currentProject = payload.project;
+    fillV3BrandMemoryModal(v3State.brandMemoryProposal);
+    openV3BrandMemoryModal();
+    renderV3ProjectDetail();
+  } catch (error) {
+    updateV3Notice(`暂时不能保存为品牌风格：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function fillV3BrandMemoryModal(proposal) {
+  if (!proposal) return;
+  if (els.v3BrandMemoryBrandNameInput) els.v3BrandMemoryBrandNameInput.value = proposal.brand_name_suggestion || v3State.currentProject?.title || "";
+  if (els.v3BrandMemoryStyleSummaryInput) els.v3BrandMemoryStyleSummaryInput.value = proposal.style_summary || "";
+  if (els.v3BrandMemoryKeepNotesInput) els.v3BrandMemoryKeepNotesInput.value = (proposal.keep_notes || []).join("\n");
+  if (els.v3BrandMemoryAvoidNotesInput) els.v3BrandMemoryAvoidNotesInput.value = (proposal.avoid_notes || []).join("\n");
+  if (els.v3BrandMemoryUsageScenesInput) els.v3BrandMemoryUsageScenesInput.value = (proposal.usage_scenes || []).join("\n");
+  if (els.v3BrandMemoryReferenceSummary) {
+    const imageCount = (proposal.reference_output_ids || []).length + (proposal.reference_asset_ids || []).length;
+    els.v3BrandMemoryReferenceSummary.textContent = imageCount ? `参考了 ${imageCount} 个已确认方向` : "会根据当前项目目标保存风格";
+  }
+}
+
+function openV3BrandMemoryModal() {
+  if (!els.v3BrandMemoryModal) return;
+  els.v3BrandMemoryModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.v3BrandMemoryModal.scrollTop = 0;
+  window.setTimeout(() => els.v3BrandMemoryBrandNameInput?.focus?.(), 80);
+}
+
+function closeV3BrandMemoryModal() {
+  if (!els.v3BrandMemoryModal) return;
+  els.v3BrandMemoryModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function v3TextareaLines(element) {
+  return String(element?.value || "")
+    .split(/\n|；|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function confirmV3BrandMemoryProposal(event) {
+  event.preventDefault();
+  const projectId = v3State.currentProject?.project_id;
+  const proposal = v3State.brandMemoryProposal;
+  if (!projectId || !proposal?.proposal_id) return;
+  try {
+    setV3Busy(true, "保存品牌风格...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/brand-memory/confirm`, {
+      method: "POST",
+      body: {
+        proposal_id: proposal.proposal_id,
+        edited_brand_name: els.v3BrandMemoryBrandNameInput?.value || "",
+        edited_style_summary: els.v3BrandMemoryStyleSummaryInput?.value || proposal.style_summary || "",
+        edited_keep_notes: v3TextareaLines(els.v3BrandMemoryKeepNotesInput),
+        edited_avoid_notes: v3TextareaLines(els.v3BrandMemoryAvoidNotesInput),
+        edited_usage_scenes: v3TextareaLines(els.v3BrandMemoryUsageScenesInput),
+        metadata: { frontend_surface: "commercial_v3_project_mode" },
+      },
+    });
+    if (payload.project) v3State.currentProject = payload.project;
+    v3State.brandMemoryProposal = payload.proposal || null;
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    closeV3BrandMemoryModal();
+    v3State.activeProjectStep = "compose";
+    renderV3ProjectDetail();
+    if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+      renderV3ProjectNextActions();
+      renderV3ProjectSubpageScene("compose");
+    }
+    updateV3Notice(payload.plain_summary || "已保存。以后新项目也可以沿用这个风格。", "success");
+  } catch (error) {
+    updateV3Notice(`保存品牌风格失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function handleV3ProjectActionClick(event) {
+  const button = event.target.closest("[data-v3-project-action]");
+  if (!button || button.disabled) return;
+  const action = button.dataset.v3ProjectAction;
+  if (!v3State.currentProject?.project_id) {
+    showGlobalToast("请先新建或打开一个 V3 项目。", "warning");
+    return;
+  }
+  if (action === "select_current_result") {
+    selectV3Job();
+    return;
+  }
+  if (action === "save_brand_style") {
+    openV3BrandMemoryProposal();
+    return;
+  }
+  if (action === "reuse_brand_style") {
+    v3SetBrandMemoryForNextProject();
+    return;
+  }
+  if (v3State.selectedScenario !== "ecommerce") {
+    setV3Scenario("general_creative");
+  }
+  const goal = v3State.currentProject.user_goal || v3State.currentProject.short_summary || "";
+  if (action === "continue_same_style") {
+    if (els.v3PromptInput) {
+      els.v3PromptInput.value = v3State.selectedScenario === "ecommerce"
+        ? `保持这个项目已选图片的商品风格，继续补一张可用于电商的套图。${goal ? ` 目标：${goal}` : ""}`
+        : `保持这个项目已选图片的风格，继续生成一张新的商业视觉图。${goal ? ` 目标：${goal}` : ""}`;
+      els.v3PromptInput.focus();
+    }
+    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已切到电商套图续作。确认需求后点击生成即可。" : "已切到同风格续作。确认需求后点击生成即可。", "info");
+    return;
+  }
+  if (action === "upload_reference_continue") {
+    if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
+      els.v3PromptInput.value = v3State.selectedScenario === "ecommerce"
+        ? (goal || "参考我上传的商品图，继续生成同项目风格的电商套图。")
+        : (goal || "参考我上传的图片，继续生成同项目风格的图片。");
+    }
+    if (els.v3AssetInput) els.v3AssetInput.click();
+    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "可以上传商品图或补充参考图，生成后会留在这个电商项目里。" : "可以上传新参考图，这次生成会参考它；满意后可选为项目方向。", "info");
+    return;
+  }
+  if (action === "start_first_generation") {
+    if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
+      els.v3PromptInput.value = goal;
+      els.v3PromptInput.focus();
+    }
+    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "上传商品图并确认这一句需求后，点击生成第一组电商套图。" : "确认这一句需求后，点击生成第一组图片。", "info");
+  }
+}
+
+function v3DefaultTemplateCards() {
+  return [
+    {
+      template_id: "general_template",
+      scenario_id: "general_creative",
+      display_name: "通用模板",
+      status: "active",
+      project_can_create_jobs: true,
+      description: "海报、封面、活动图、品牌视觉都可以从这里继续。",
+    },
+    {
+      template_id: "ecommerce_template",
+      scenario_id: "ecommerce",
+      display_name: "电商模板",
+      status: "active",
+      project_can_create_jobs: true,
+      description: "上传商品图，说一句需求，在项目里生成电商套图。",
+    },
+    {
+      template_id: "photographer_template",
+      scenario_id: "future_photographer",
+      display_name: "摄影师模板",
+      status: "placeholder",
+      project_can_create_jobs: false,
+      description: "为后续摄影棚、镜头语言和拍摄方案预留入口。",
+    },
+  ];
+}
+
+function renderV3ProjectTimeline() {
+  if (!els.v3ProjectTimeline) return;
+  const items = Array.isArray(v3State.projectTimeline) ? v3State.projectTimeline : [];
+  els.v3ProjectTimeline.innerHTML = "";
+  els.v3ProjectTimeline.classList.toggle("empty-v3-list", items.length === 0);
+  if (!items.length) {
+    els.v3ProjectTimeline.textContent = v3State.currentProject ? "还没有新的项目动作。" : "项目开始后，关键动作会显示在这里。";
+    return;
+  }
+  items.slice(-5).reverse().forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "v3-project-timeline-row";
+    row.innerHTML = `
+      <div class="v3-history-meta">
+        <span>${escapeHtml(item.title || "项目动作")}</span>
+        <span>${escapeHtml(formatDate(item.created_at))}</span>
+      </div>
+      <p>${escapeHtml(item.summary || "V3 已更新项目进度。")}</p>
+    `;
+    els.v3ProjectTimeline.appendChild(row);
+  });
+}
+
+async function archiveV3Project(projectId) {
+  if (!projectId) return;
+  const currentTitle = v3State.currentProject?.project_id === projectId ? v3State.currentProject?.title : "";
+  const ok = window.confirm(`归档${currentTitle ? `「${currentTitle}」` : "这个项目"}？归档后它不会出现在最近项目里。`);
+  if (!ok) return;
+  try {
+    setV3Busy(true, "归档项目中...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/archive`, {
+      method: "POST",
+      body: { metadata: { frontend_surface: "commercial_v3_project_mode" } },
+    });
+    const archivedProject = payload.project || null;
+    v3State.projects = v3State.projects.filter((item) => item.project_id !== projectId);
+    writeV3LocalProjects(v3State.projects);
+    if (v3State.currentProject?.project_id === projectId) {
+      v3State.currentProject = archivedProject;
+      v3State.currentJob = null;
+      v3State.selectedResult = null;
+      v3State.projectTimeline = [];
+      openV3Home({ silent: true });
+    } else {
+      renderV3Projects();
+    }
+    updateV3Notice("项目已归档，最近项目里不会再显示。", "success");
+  } catch (error) {
+    updateV3Notice(`项目归档失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
+function handleV3ProjectClick(event) {
+  const actionButton = event.target.closest("[data-v3-project-action]");
+  if (actionButton) {
+    const projectId = actionButton.dataset.v3ProjectId || "";
+    if (actionButton.dataset.v3ProjectAction === "archive_project") {
+      archiveV3Project(projectId);
+      return;
+    }
+    if (actionButton.dataset.v3ProjectAction === "open_project") {
+      openV3Project(projectId);
+      return;
+    }
+  }
+  const card = event.target.closest("[data-v3-project-id]");
+  if (!card) return;
+  openV3Project(card.dataset.v3ProjectId);
+}
+
+function handleV3HistoryClick(event) {
+  const previewButton = event.target.closest("[data-v3-history-preview]");
+  if (previewButton) {
+    const item = v3State.imageHistory[Number(previewButton.dataset.v3HistoryPreview || 0)];
+    if (item) {
+      openV3OutputLightbox(item, {
+        title: v3ProjectDisplayTitle(item, "V3 生成图片"),
+        meta: `${v3TemplatePlainLabel(item.template_id || "general_template")} · ${formatDate(item.created_at)}`,
+      });
+    }
+    return;
+  }
+  const projectButton = event.target.closest("[data-v3-history-project]");
+  const projectId = projectButton?.dataset.v3HistoryProject || "";
+  if (projectId) openV3Project(projectId);
+}
+
+function handleV3HistoryClick(event) {
+  const projectButton = event.target.closest("[data-v3-history-project]");
+  const directProjectId = projectButton?.dataset.v3HistoryProject || "";
+  if (directProjectId) {
+    openV3Project(directProjectId);
+    return;
+  }
+  const groupButton = event.target.closest("[data-v3-history-project-group]");
+  const card = event.target.closest("[data-v3-history-project-group]");
+  const projectId = groupButton?.dataset.v3HistoryProjectGroup || card?.dataset.v3HistoryProjectGroup || "";
+  if (projectId) openV3ProjectHistoryModal(projectId);
+}
+
+function v3LatestProjectJobId(project = v3State.currentProject) {
+  const timeline = Array.isArray(v3State.projectTimeline) ? v3State.projectTimeline : [];
+  const generatedTimelineJob = [...timeline]
+    .reverse()
+    .find((item) => item?.item_type === "job_generated" && (item.job_id || item.related_job_id));
+  if (generatedTimelineJob) return generatedTimelineJob.job_id || generatedTimelineJob.related_job_id || "";
+  const jobIds = Array.isArray(project?.job_ids) ? project.job_ids.filter(Boolean) : [];
+  return jobIds.length ? jobIds[jobIds.length - 1] : "";
+}
+
+function v3JobHasVisibleImages(job) {
+  return v3CurrentJobImageItems(job).length > 0;
+}
+
+async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true } = {}) {
+  const jobId = v3LatestProjectJobId(project);
+  if (!jobId) return null;
+  if (v3State.currentJob?.job_id === jobId && v3JobHasVisibleImages(v3State.currentJob)) {
+    return v3State.currentJob;
+  }
+  try {
+    const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
+      v3State.currentJob = job;
+      v3State.selectedResult = null;
+      return job;
+    }
+  } catch (error) {
+    if (!silent) showGlobalToast(`V3 project images could not be restored: ${friendlyError(error)}`, "warning");
+  }
+  return null;
+}
+
+async function openV3Project(projectId) {
+  if (!projectId) return;
+  updateV3Notice("正在打开项目。", "info");
+  try {
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+    v3State.currentProject = payload.project || null;
+    syncV3ProjectOutputsFromPayload(payload);
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    v3State.currentJob = null;
+    v3State.selectedResult = null;
+    v3State.selectedTemplate = v3State.currentProject?.primary_template_id || "general_template";
+    v3State.activeProjectStep = "compose";
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+    if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
+      els.v3PromptInput.value = v3State.currentProject?.user_goal || "";
+    }
+    const scenarioId = v3ScenarioForTemplate(v3State.currentProject?.primary_template_id);
+    openV3ScenarioWorkspace(scenarioId, { fromHistory: true });
+    releaseV3ScrollLockIfNoModal();
+    updateV3Notice("项目已打开，可以继续同风格生成。", "success");
+  } catch (error) {
+    updateV3Notice(`项目打开失败：${friendlyError(error)}`, "error");
+  }
+}
+
+async function loadV3ProjectTimeline(projectId, { silent = false } = {}) {
+  if (!projectId) {
+    v3State.projectTimeline = [];
+    renderV3ProjectTimeline();
+    return;
+  }
+  try {
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/timeline`);
+    v3State.projectTimeline = Array.isArray(payload.items) ? payload.items : [];
+  } catch (error) {
+    v3State.projectTimeline = [];
+    if (!silent) showGlobalToast(`项目记录加载失败：${friendlyError(error)}`, "warning");
+  }
+  renderV3ProjectTimeline();
+}
+
+async function refreshV3CurrentProject({ silent = true } = {}) {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId) return;
+  try {
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+    v3State.currentProject = payload.project || v3State.currentProject;
+    syncV3ProjectOutputsFromPayload(payload);
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+    renderV3ProjectDetail();
+  } catch (error) {
+    if (!silent) showGlobalToast(`项目更新失败：${friendlyError(error)}`, "warning");
+  }
 }
 
 function v3ShortText(value, maxLength = 60) {
@@ -1755,99 +4066,35 @@ function v3ShortText(value, maxLength = 60) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
-function handleV3HistoryClick(event) {
-  const card = event.target.closest("[data-v3-history-job]");
-  if (!card) return;
-  openV3HistoryJob(card.dataset.v3HistoryJob);
+function v3LooksCorruptedText(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  const compact = text.replace(/\s/g, "");
+  if (compact.length < 4) return false;
+  const questionCount = (compact.match(/\?/g) || []).length;
+  const replacementCount = (compact.match(/\uFFFD/g) || []).length;
+  return (questionCount + replacementCount) / compact.length >= 0.35;
 }
 
-async function openV3HistoryJob(jobId) {
-  if (!jobId) return;
-  const summary = v3State.history.find((item) => item.job_id === jobId);
-  const scenarioId = summary?.scenario_id || "general_creative";
-  openV3ScenarioWorkspace(scenarioId, { fromHistory: true });
-  if (els.v3PromptInput && summary?.user_input) els.v3PromptInput.value = summary.user_input;
-  updateV3Notice("正在打开 V3 历史任务。", "info");
-  try {
-    const fetchedJob = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
-    if (fetchedJob.status === "not_found") {
-      throw new Error("这个任务只保留了本地摘要，服务端记录已不可用。");
-    }
-    const job = v3MergeHistorySnapshotIntoJob(fetchedJob, summary);
-    v3State.currentJob = job;
-    v3State.selectedResult = job.selected_result || null;
-    setV3Scenario(job.scenario?.scenario_id || scenarioId);
-    renderV3ViewState();
-    renderV3Job(job);
-    saveV3HistorySnapshot(job);
-    updateV3Notice("已打开 V3 历史任务。", "success");
-  } catch (error) {
-    const restoredJob = v3JobFromHistorySnapshot(summary);
-    if (restoredJob) {
-      v3State.currentJob = restoredJob;
-      v3State.selectedResult = restoredJob.selected_result || null;
-      setV3Scenario(restoredJob.scenario?.scenario_id || scenarioId);
-      renderV3ViewState();
-      renderV3Job(restoredJob);
-      updateV3Notice("已从本地历史快照恢复生成图片。", "success");
-      return;
-    }
-    v3State.currentJob = null;
-    v3State.selectedResult = null;
-    renderV3Job(null);
-    updateV3Notice(`只能显示本地历史摘要：${friendlyError(error)}`, "warning");
-  }
+function v3ReadableText(value, fallback = "") {
+  const text = String(value || "").trim();
+  const fallbackText = String(fallback || "").trim();
+  if (!text || v3LooksCorruptedText(text)) return fallbackText || "\u0056\u0033 \u9879\u76EE";
+  return text;
 }
 
-function v3MergeHistorySnapshotIntoJob(job, summary) {
-  if (!summary || v3HistorySnapshotHasRenderableResult(job)) return job;
-  if (!v3HistorySnapshotHasRenderableResult(summary)) return job;
-  return {
-    ...job,
-    status: summary.status || job.status,
-    asset_series: Array.isArray(summary.asset_series) ? summary.asset_series : job.asset_series,
-    candidates: Array.isArray(summary.candidates) ? summary.candidates : job.candidates,
-    selected_result: summary.selected_result || job.selected_result,
-    ecommerce: summary.ecommerce || job.ecommerce,
-    general_creative: summary.general_creative || job.general_creative,
-    warnings: Array.isArray(summary.warnings) ? summary.warnings : job.warnings,
-    metadata: { ...(job.metadata || {}), restored_render_data_from_history_snapshot: true },
-  };
+function v3ProjectDisplayTitle(projectOrItem, fallback = "") {
+  return v3ReadableText(
+    projectOrItem?.project_title || projectOrItem?.title || projectOrItem?.metadata?.project_title,
+    fallback || projectOrItem?.short_summary || projectOrItem?.user_goal || projectOrItem?.project_goal || "\u0056\u0033 \u9879\u76EE",
+  );
 }
 
-function v3JobFromHistorySnapshot(summary) {
-  if (!summary || !v3HistorySnapshotHasRenderableResult(summary)) return null;
-  return {
-    job_id: summary.job_id,
-    status: summary.status || "generated",
-    scenario: {
-      scenario_id: summary.scenario_id || "general_creative",
-      display_name: summary.scenario_label || v3ScenarioLabel(summary.scenario_id),
-      selected_preset_id: summary.selected_preset_id || null,
-      can_create_jobs: true,
-      status: "active",
-    },
-    planning_result_id: summary.planning_result_id || null,
-    generation_result_id: summary.generation_result_id || null,
-    asset_pack_id: summary.asset_pack_id || null,
-    asset_series: Array.isArray(summary.asset_series) ? summary.asset_series : [],
-    candidates: Array.isArray(summary.candidates) ? summary.candidates : [],
-    selected_result: summary.selected_result || null,
-    ecommerce: summary.ecommerce || null,
-    general_creative: summary.general_creative || null,
-    balance_estimate: summary.balance_estimate || {},
-    routes: summary.routes || {},
-    warnings: Array.isArray(summary.warnings) ? summary.warnings : [],
-    metadata: { ...(summary.metadata || {}), restored_from_history_snapshot: true },
-  };
-}
-
-function v3HistorySnapshotHasRenderableResult(item) {
-  return v3HasRenderableV3Items(item?.candidates) || v3HasRenderableV3Items(item?.asset_series);
-}
-
-function v3HasRenderableV3Items(items) {
-  return Array.isArray(items) && items.some((item) => v3OutputImageCandidates(item).length > 0);
+function v3ProjectDisplayGoal(projectOrItem, fallback = "") {
+  return v3ReadableText(
+    projectOrItem?.project_goal || projectOrItem?.goal || projectOrItem?.short_summary || projectOrItem?.user_goal,
+    fallback || "\u7EE7\u7EED\u8FD9\u4E2A\u9879\u76EE",
+  );
 }
 
 function handleV3AssetFiles(event) {
@@ -1935,7 +4182,7 @@ async function uploadV3Files() {
         size_bytes: file.size || 0,
         role: v3State.selectedScenario === "ecommerce" ? "product_reference" : "unknown_reference",
         metadata: {
-          frontend_surface: "commercial_v3_shell",
+          frontend_surface: "commercial_v3_project_mode",
           frontend_fingerprint: fingerprint,
         },
       },
@@ -1958,65 +4205,163 @@ async function uploadV3Files() {
   return uploaded;
 }
 
+async function maybePersistV3UploadedReferences(uploadedAssets = []) {
+  const projectId = v3State.currentProject?.project_id;
+  const assets = Array.isArray(uploadedAssets) ? uploadedAssets.filter((asset) => asset?.asset_id) : [];
+  if (!projectId || !assets.length) return;
+  const isEcommerce = v3State.selectedScenario === "ecommerce";
+  const shouldPersist = isEcommerce || window.confirm("要把这次上传的参考图作为本项目后续参考吗？");
+  if (!shouldPersist) return;
+  for (const asset of assets) {
+    await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/references`, {
+      method: "POST",
+      body: {
+        asset_ref_id: asset.asset_id,
+        source_type: "uploaded",
+        label: asset.filename || (isEcommerce ? "商品图" : "上传参考"),
+        user_note: isEcommerce ? "作为这个电商项目的商品参考图" : "用户确认作为本项目后续参考",
+        use_policy: isEcommerce || asset.role === "product_reference" ? "product" : "general",
+        metadata: {
+          frontend_surface: "commercial_v3_project_mode",
+          persisted_after_generation: true,
+        },
+      },
+    });
+  }
+  await refreshV3CurrentProject({ silent: true });
+  updateV3Notice(isEcommerce ? "商品图已保存到这个项目，后续电商套图会继续参考。" : "参考图已保存到这个项目，后续生成会继续沿用。", "success");
+}
+
+function v3TextLines(value) {
+  return String(value || "")
+    .split(/\n|;|；/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function v3ProjectHasProductReference(project) {
+  const references = Array.isArray(project?.reference_assets) ? project.reference_assets : [];
+  const hasProductReference = references.some((item) => item?.status !== "inactive" && item?.use_policy === "product");
+  const uploadedRefs = Array.isArray(project?.uploaded_asset_refs) ? project.uploaded_asset_refs : [];
+  return hasProductReference || uploadedRefs.some((item) => item?.asset_id);
+}
+
+function v3SuiteSlotRequestForPreset(presetId) {
+  if (presetId === "style_recreation_set") {
+    return ["main_image", "feature_image_1", "scenario_image", "detail_image"];
+  }
+  if (presetId === "marketplace_listing_set") {
+    return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "trust_comparison_image"];
+  }
+  return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "social_cover"];
+}
+
+function v3EcommerceProfilePatch() {
+  const keywordItems = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
+  const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
+  return {
+    product_name: (els.v3BrandNameInput?.value || "").trim() || null,
+    product_category: null,
+    target_platform: (els.v3EcommercePlatformInput?.value || "generic").trim(),
+    target_market: (els.v3EcommerceMarketInput?.value || "").trim() || null,
+    core_selling_points: sellingPoint ? [sellingPoint] : [],
+    must_keep_facts: v3TextLines(els.v3EcommerceSpecsInput?.value || ""),
+    avoid_claims: v3CsvList(els.v3EcommerceClaimsInput?.value || ""),
+    keyword_roots: keywordItems,
+    keywords: keywordItems,
+    competitor_notes: v3CsvList(els.v3EcommerceCompetitorInput?.value || ""),
+    suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset),
+  };
+}
+
+function v3BoundedGenerationCount(value) {
+  const number = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(number)) return 2;
+  return Math.max(1, Math.min(4, number));
+}
+
+function v3CurrentGenerationSettings() {
+  const count = v3BoundedGenerationCount(els.v3CountInput?.value || v3State.generationCount || 2);
+  const size = v3State.selectedSize || document.querySelector("[data-v3-size].active")?.dataset.v3Size || "";
+  v3State.generationCount = count;
+  v3State.selectedSize = size;
+  if (els.v3CountValue) els.v3CountValue.textContent = String(count);
+  return {
+    count,
+    size,
+    sizeLabel: v3SizeLabel(size),
+  };
+}
+
+function v3SizeLabel(size) {
+  const labels = {
+    "1024x1536": "竖版",
+    "1024x1024": "方图",
+    "1536x1024": "横版",
+  };
+  return labels[size] || "自动";
+}
+
 function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
-  const userInput = (els.v3PromptInput?.value || "").trim();
+  if (!v3State.currentProject?.project_id) {
+    throw new Error("请先新建或打开一个 V3 项目。");
+  }
+  const userInput = (els.v3PromptInput?.value || v3State.currentProject.user_goal || v3State.currentProject.short_summary || "").trim();
   if (!userInput) {
     throw new Error("请先输入简单需求。");
   }
-  if (!["general_creative", "ecommerce"].includes(v3State.selectedScenario)) {
-    throw new Error(`${v3ScenarioLabel(v3State.selectedScenario)} 还未激活，暂不能创建任务。`);
+  const scenarioId = v3ScenarioForTemplate(v3State.currentProject.primary_template_id || v3State.selectedTemplate || "general_template");
+  const templateId = v3TemplateIdForScenario(scenarioId);
+  v3State.selectedTemplate = templateId;
+  v3State.selectedScenario = scenarioId;
+  if (!v3ScenarioCanCreate(scenarioId)) {
+    throw new Error("这个模板还不能创建新内容。");
+  }
+  if (scenarioId === "ecommerce" && !uploadedAssets.length && !v3ProjectHasProductReference(v3State.currentProject)) {
+    throw new Error("请先上传商品图，或在项目里保存一张商品参考图。");
   }
   const brandName = (els.v3BrandNameInput?.value || "").trim();
   const brandTone = (els.v3BrandToneInput?.value || "").trim();
-  const productProfile = {};
-  if (brandName) productProfile.brand_or_project_name = brandName;
-  if (brandTone) productProfile.visual_tone = brandTone;
-  if (uploadedAssets.length) {
-    productProfile.reference_files = uploadedAssets.map((asset) => ({
-      asset_id: asset.asset_id,
-      name: asset.filename,
-      type: asset.mime_type,
-      size: asset.size_bytes,
-      role: asset.role,
-      content_url: asset.content_url,
-    }));
-  }
-  const isEcommerce = v3State.selectedScenario === "ecommerce";
-  const ecommerceParameters = {};
-  if (isEcommerce) {
-    const platform = (els.v3EcommercePlatformInput?.value || "generic").trim();
-    const market = (els.v3EcommerceMarketInput?.value || "").trim();
-    const specs = (els.v3EcommerceSpecsInput?.value || "").trim();
-    const keywords = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
-    const competitorRefs = v3CsvList(els.v3EcommerceCompetitorInput?.value || "");
-    const claims = v3CsvList(els.v3EcommerceClaimsInput?.value || "");
-    productProfile.product_specs = specs ? v3CsvList(specs) : [];
-    if (platform) productProfile.platform = platform;
-    if (market) productProfile.market = market;
-    if (keywords.length) productProfile.keywords = keywords;
-    if (competitorRefs.length) productProfile.competitor_references = competitorRefs;
-    if (claims.length) productProfile.claims = claims;
-    ecommerceParameters.platform = platform;
-    if (market) ecommerceParameters.market = market;
-    if (keywords.length) ecommerceParameters.keywords = keywords;
-    if (competitorRefs.length) ecommerceParameters.competitor_references = competitorRefs;
-  }
-  return {
+  const generationSettings = v3CurrentGenerationSettings();
+  const selectedVariationMode = scenarioId === "general_creative" ? (v3State.selectedVariationMode || "auto") : "";
+  const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
+  const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
+  const payload = {
     user_input: userInput,
-    scenario_selection: {
-      scenario_id: v3State.selectedScenario || "general_creative",
-      mode_id: v3State.selectedPreset || (isEcommerce ? "one_click_product_set" : "campaign_poster"),
-      preset_id: v3State.selectedPreset || (isEcommerce ? "one_click_product_set" : "campaign_poster"),
-      platform_profile: isEcommerce ? (els.v3EcommercePlatformInput?.value || "generic") : undefined,
-      parameters: ecommerceParameters,
-    },
+    template_id: templateId,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id),
-    product_profile: productProfile,
+    use_project_context: true,
     metadata: {
-      frontend_surface: "commercial_v3_shell",
-      interaction_style: "card_module",
+      frontend_surface: "commercial_v3_project_mode",
+      interaction_style: "project_card_module",
+      selected_mode_id: v3State.selectedPreset,
+      selected_preset_id: v3State.selectedPreset,
+      variation_mode: scenarioId === "general_creative" ? selectedVariationMode : undefined,
+      inferred_variation_mode: scenarioId === "general_creative" ? inferredVariationMode : undefined,
+      effective_variation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,
+      continuation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,
+      variation_mode_source: scenarioId === "general_creative" ? (selectedVariationMode === "auto" ? "auto" : "manual") : undefined,
+      variation_mode_label: scenarioId === "general_creative" ? v3VariationModeLabel(effectiveVariationMode) : undefined,
+      brand_or_project_name: brandName || undefined,
+      visual_tone: brandTone || undefined,
+      requested_image_count: generationSettings.count,
+      requested_image_size: generationSettings.size || undefined,
+      requested_aspect_label: generationSettings.sizeLabel,
+      reference_files: uploadedAssets.map((asset) => ({
+        asset_id: asset.asset_id,
+        name: asset.filename,
+        type: asset.mime_type,
+        size: asset.size_bytes,
+        role: asset.role,
+        content_url: asset.content_url,
+      })),
     },
   };
+  if (scenarioId === "ecommerce") {
+    payload.commerce_profile_patch = v3EcommerceProfilePatch();
+    payload.suite_slot_request = payload.commerce_profile_patch.suite_slots_requested;
+  }
+  return payload;
 }
 
 async function createV3Job() {
@@ -2025,25 +4370,48 @@ async function createV3Job() {
     setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
     const uploadedAssets = await uploadV3Files();
     const payload = buildV3JobPayload(uploadedAssets);
+    const generationSettings = v3CurrentGenerationSettings();
     updateV3Notice(copy.planningNotice, "info");
-    const created = await request(`${v3ApiBase}/jobs`, { method: "POST", body: payload });
+    const projectId = encodeURIComponent(v3State.currentProject.project_id);
+    const created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
     v3State.currentJob = created;
     v3State.selectedResult = null;
+    syncV3ProjectOutputsFromPayload(created);
     renderV3Job(created);
-    saveV3HistorySnapshot(created);
+    await refreshV3CurrentProject({ silent: true });
     if (created.status !== "blocked") {
       updateV3Notice("V3 已理解需求，正在出图。", "info");
-      const generated = await request(`${v3ApiBase}/jobs/${encodeURIComponent(created.job_id)}/generate`, {
+      const generated = await request(`${v3ApiBase}/projects/${projectId}/jobs/${encodeURIComponent(created.job_id)}/generate`, {
         method: "POST",
-        body: { quality_mode: "standard", metadata: { frontend_surface: "commercial_v3_shell", require_real_images: true } },
+        body: {
+          quality_mode: "standard",
+          metadata: {
+            frontend_surface: "commercial_v3_project_mode",
+            require_real_images: true,
+            requested_image_count: generationSettings.count,
+            requested_image_size: generationSettings.size || null,
+            variation_mode: payload.metadata.variation_mode,
+            inferred_variation_mode: payload.metadata.inferred_variation_mode,
+            effective_variation_mode: payload.metadata.effective_variation_mode,
+            continuation_mode: payload.metadata.continuation_mode,
+            variation_mode_source: payload.metadata.variation_mode_source,
+          },
+        },
       });
       v3State.currentJob = generated;
+      v3State.activeProjectStep = "compose";
+      syncV3ProjectOutputsFromPayload(generated);
       renderV3Job(generated);
-      saveV3HistorySnapshot(generated);
+      await refreshV3CurrentProject({ silent: true });
+      await loadV3ProjectOutputs({ silent: true, force: true });
+      await maybePersistV3UploadedReferences(uploadedAssets);
+      if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+        openV3ProjectSubpage("compose");
+      }
       updateV3Notice(generated.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice, generated.status === "blocked" ? "warning" : "success");
       return;
     }
-    updateV3Notice(created.status === "blocked" ? "当前场景未开放生成，请切回通用创意。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
+    updateV3Notice(created.status === "blocked" ? "当前生成暂时受阻，请检查输入后再试。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
   } catch (error) {
     updateV3Notice(`V3 生成失败：${friendlyError(error)}`, "error");
   } finally {
@@ -2052,27 +4420,11 @@ async function createV3Job() {
 }
 
 async function generateV3Job() {
-  if (!v3State.currentJob?.job_id) {
-    updateV3Notice("请先创建 V3 生成任务。", "warning");
+  if (!v3State.currentProject?.project_id) {
+    updateV3Notice("请先打开一个 V3 项目。", "warning");
     return;
   }
-  try {
-    const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
-    setV3Busy(true, copy.busyLabel);
-    updateV3Notice("V3 正在出图。", "info");
-    const generated = await request(`${v3ApiBase}/jobs/${encodeURIComponent(v3State.currentJob.job_id)}/generate`, {
-      method: "POST",
-      body: { quality_mode: "standard", metadata: { frontend_surface: "commercial_v3_shell", require_real_images: true } },
-    });
-    v3State.currentJob = generated;
-    renderV3Job(generated);
-    saveV3HistorySnapshot(generated);
-    updateV3Notice(copy.generatedNotice, "success");
-  } catch (error) {
-    updateV3Notice(`V3 生成失败：${friendlyError(error)}`, "error");
-  } finally {
-    setV3Busy(false);
-  }
+  await createV3Job();
 }
 
 async function selectV3Job() {
@@ -2080,17 +4432,31 @@ async function selectV3Job() {
     updateV3Notice("还没有可选择的 V3 任务。", "warning");
     return;
   }
+  if (!v3State.currentProject?.project_id) {
+    updateV3Notice("请先打开这个任务所属的 V3 项目。", "warning");
+    return;
+  }
   try {
     setV3Busy(true, "选择中...");
-    const selected = await request(`${v3ApiBase}/jobs/${encodeURIComponent(v3State.currentJob.job_id)}/select`, {
+    const projectId = encodeURIComponent(v3State.currentProject.project_id);
+    const selected = await request(`${v3ApiBase}/projects/${projectId}/jobs/${encodeURIComponent(v3State.currentJob.job_id)}/select`, {
       method: "POST",
-      body: { apply_memory_update: true, metadata: { frontend_surface: "commercial_v3_shell" } },
+      body: { apply_memory_update: false, metadata: { frontend_surface: "commercial_v3_project_mode" } },
     });
     v3State.selectedResult = selected;
+    v3State.activeProjectStep = "compose";
+    if (selected.project) v3State.currentProject = selected.project;
     if (selected.job_status) v3State.currentJob = selected.job_status;
+    syncV3ProjectOutputsFromPayload(selected);
     renderV3Job(v3State.currentJob);
-    saveV3HistorySnapshot(v3State.currentJob);
-    updateV3Notice("已选中结果。", "success");
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(v3State.currentProject.project_id, { silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    renderV3ProjectDetail();
+    if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+      openV3ProjectSubpage("compose");
+    }
+    updateV3Notice("已选中结果，后续生成会参考这次确认的风格。", "success");
   } catch (error) {
     updateV3Notice(`V3 选择失败：${friendlyError(error)}`, "error");
   } finally {
@@ -2102,6 +4468,7 @@ function resetV3Workspace() {
   const currentScenario = v3State.selectedScenario || "general_creative";
   v3State.currentJob = null;
   v3State.selectedResult = null;
+  v3State.activeProjectStep = "compose";
   v3State.files = [];
   v3State.uploadedAssets = [];
   v3State.uploadFingerprints = {};
@@ -2115,6 +4482,7 @@ function resetV3Workspace() {
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
   if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
   if (els.v3EcommerceClaimsInput) els.v3EcommerceClaimsInput.value = "";
+  setV3VariationMode("auto");
   setV3Scenario(currentScenario);
   setV3Preset(v3State.presetByScenario[currentScenario] || v3DefaultPresetForScenario(currentScenario));
   renderV3Assets();
@@ -2133,6 +4501,11 @@ function renderV3Job(job) {
   if (els.v3JobStatus) els.v3JobStatus.textContent = job ? v3StatusLabel(job.status) : "待创建";
   if (els.v3JobId) els.v3JobId.textContent = job?.job_id ? shortOutputId(job.job_id) : "-";
   renderV3ResultBoard(job);
+  renderV3ProjectOutputBoard();
+  renderV3ProjectSnapshot();
+  renderV3ProjectWorkflow();
+  renderV3StepCards();
+  renderV3ProjectNextActions();
   const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
   if (job?.ecommerce || scenarioId === "ecommerce") {
     renderV3EcommerceSummary(job?.ecommerce || null);
@@ -2143,10 +4516,14 @@ function renderV3Job(job) {
 }
 
 function renderV3GeneralSummary(summary) {
-  const entries = ["已理解这张图的使用场景"];
+  const brainSummary = v3BrainUserSummary(v3State.currentJob?.metadata?.workflow_artifacts || {});
+  const brainProgress = uniqueNonEmpty(brainSummary.progress_messages || []);
+  const brainDone = uniqueNonEmpty(brainSummary.done || []);
+  const entries = brainProgress.length ? brainProgress : ["已理解这张图的使用场景"];
   if (!summary) {
-    entries.push("会整理画面风格和氛围", "会参考你上传的图片", "会检查生成结果是否符合需求");
+    entries.push(...(brainDone.length ? brainDone : ["会整理画面风格和氛围", "会参考你上传的图片", "会检查生成结果是否符合需求"]));
   } else {
+    entries.push(...brainDone);
     if (summary.reference_understanding?.length || summary.reference_bindings?.length) entries.push("已参考你上传的图片");
     if (summary.visual_grammar?.length) entries.push("已整理画面风格和构图方向");
     if (summary.information_integrity?.length) entries.push("已保护需要保留的文字或主体");
@@ -2180,11 +4557,40 @@ function renderV3EcommerceSummary(summary) {
 
 function renderV3OutcomeItems(entries) {
   if (!els.v3CapabilityList) return;
+  const items = uniqueNonEmpty(entries).slice(0, 5);
+  const jobStatus = v3State.currentJob?.status || "";
+  const percentMap = {
+    planned: 42,
+    generated: 100,
+    selected: 100,
+    blocked: 100,
+    failed: 100,
+    not_found: 100,
+  };
+  const percent = percentMap[jobStatus] || (v3State.loading ? 66 : 12);
+  const activeIndex = Math.max(0, Math.min(items.length - 1, Math.ceil((percent / 100) * items.length) - 1));
+  const failed = jobStatus === "failed" || jobStatus === "blocked" || jobStatus === "not_found";
+  if (els.v3SummaryTitle) els.v3SummaryTitle.textContent = failed ? "生成已停止" : percent >= 100 ? "生成完成" : "生成进度";
+  if (els.v3SummaryPill) {
+    els.v3SummaryPill.textContent = failed ? "需处理" : percent >= 100 ? "已完成" : v3State.loading ? "进行中" : "待开始";
+  }
+  if (els.v3ProgressFill) els.v3ProgressFill.style.width = `${percent}%`;
+  if (els.v3SummaryIntro) {
+    els.v3SummaryIntro.textContent =
+      items[activeIndex] ||
+      (v3State.currentJob ? "V3 正在把项目需求整理成可执行的画面方向。" : "写一句需求后，V3 会把它整理成清晰的画面方向。");
+  }
+  if (els.v3SummaryFootnote) {
+    els.v3SummaryFootnote.textContent = percent >= 100 ? "图片已准备好，下一步可以挑选满意方向。" : "进度提示会伴随生成推进，主屏仍以图片为核心。";
+  }
   els.v3CapabilityList.innerHTML = "";
-  uniqueNonEmpty(entries).slice(0, 7).forEach((item) => {
-    const chip = document.createElement("span");
-    chip.textContent = item;
-    els.v3CapabilityList.appendChild(chip);
+  items.forEach((item, index) => {
+    const step = document.createElement("span");
+    step.className = `run-progress-step ${
+      failed && index === activeIndex ? "failed" : index < activeIndex || percent >= 100 ? "done" : index === activeIndex ? "active" : ""
+    }`.trim();
+    step.textContent = item;
+    els.v3CapabilityList.appendChild(step);
   });
 }
 
@@ -2257,19 +4663,26 @@ function renderV3ResultBoard(job) {
   els.v3ResultBoard.innerHTML = "";
   els.v3ResultBoard.classList.toggle("empty-v3-board", !job);
   if (!job) {
+    v3State.resultItems = [];
     els.v3ResultBoard.textContent = copy.emptyResult;
     return;
   }
-  const items = candidates.length ? candidates : recipes.length ? recipes : assets;
+  const rawItems = candidates.length ? candidates : recipes.length ? recipes : assets;
+  const items = rawItems
+    .filter((item) => v3OutputVisibleInProject(item))
+    .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
   if (!items.length) {
+    v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
-    els.v3ResultBoard.textContent = warnings[0] ? v3PlainWarningText(warnings[0]) : copy.pendingResult;
+    els.v3ResultBoard.textContent = rawItems.length ? "这次生成的图片已从项目里移除。" : (warnings[0] ? v3PlainWarningText(warnings[0]) : copy.pendingResult);
     return;
   }
+  v3State.resultItems = items.map((item, index) => ({ ...item, _v3Index: index, _v3Source: "current_result" }));
   els.v3ResultBoard.classList.remove("empty-v3-board");
-  items.slice(0, 8).forEach((item, index) => {
+  v3State.resultItems.slice(0, 8).forEach((item, index) => {
     const card = document.createElement("article");
-    card.className = "v3-result-card";
+    const isSelected = v3IsOutputItemSelected(item);
+    card.className = `v3-result-card${isSelected ? " selected" : ""}`;
     const metadata = item.metadata || {};
     const assetMetadata = metadata.asset_metadata || {};
     const recipe = v3EcommerceRecipeForItem(item);
@@ -2299,25 +4712,30 @@ function renderV3ResultBoard(job) {
         ${item.overall_score ? `<span>${Math.round(Number(item.overall_score) * 100)}%</span>` : ""}
         ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
       </div>
+      <div class="v3-output-actions">
+        <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
+        <button type="button" data-v3-result-action="delete" data-v3-result-index="${index}">删除这张</button>
+      </div>
     `;
     const image = card.querySelector(".v3-result-preview img");
     if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "V3 generated image unavailable" });
     const preview = card.querySelector(".v3-result-preview");
     if (preview) {
       preview.addEventListener("click", () => {
-        openImageLightbox({
-          id: item.output_id || metadata.output_id || item.candidate_id || item.asset_id || `v3_${index + 1}`,
+        openV3OutputLightbox(item, {
           title: v3ReadableTitle(title),
-          url: v3MediaUrl(downloadUrl || item.preview_url || metadata.preview_url || item.preview_uri),
-          downloadUrl: v3MediaUrl(downloadUrl || item.download_url || metadata.download_url || item.preview_uri),
-          thumbnailUrl: v3MediaUrl(item.thumbnail_url || metadata.thumbnail_url || item.preview_uri),
-          previewUrl: v3MediaUrl(item.preview_url || metadata.preview_url || item.preview_uri),
-          format: metadata.format || "png",
           meta: `${v3ScenarioLabel(job?.scenario?.scenario_id)} - ${v3StatusLabel(status)}`,
-          promptText: "",
         });
       });
     }
+    card.querySelectorAll("[data-v3-result-action]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const resultItem = v3State.resultItems[Number(button.dataset.v3ResultIndex || 0)];
+        if (!resultItem) return;
+        if (button.dataset.v3ResultAction === "select") await selectV3OutputItem(resultItem);
+        if (button.dataset.v3ResultAction === "delete") await deleteV3OutputItem(resultItem);
+      });
+    });
     els.v3ResultBoard.appendChild(card);
   });
 }
@@ -2346,6 +4764,67 @@ function v3OutputDownloadUrl(item) {
     item?.url,
     metadata.url,
   ]).find((url) => !String(url).startsWith("mock://")) || "";
+}
+
+function v3OutputPreviewImageUrl(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.preview_url,
+    metadata.preview_url,
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
+    item?.download_url,
+    metadata.download_url,
+    item?.url,
+    metadata.url,
+  ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
+}
+
+function v3OutputFullImageUrl(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.download_url,
+    metadata.download_url,
+    item?.preview_url,
+    metadata.preview_url,
+    item?.url,
+    metadata.url,
+  ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
+}
+
+function v3OutputThumbImageUrl(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
+    item?.preview_url,
+    metadata.preview_url,
+    item?.download_url,
+    metadata.download_url,
+  ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
+}
+
+function openV3OutputLightbox(item, { title = "V3 生成图片", meta = "", promptText = "" } = {}) {
+  const metadata = item?.metadata || {};
+  const fullUrl = v3OutputFullImageUrl(item);
+  const previewUrl = v3OutputPreviewImageUrl(item);
+  const thumbnailUrl = v3OutputThumbImageUrl(item) || previewUrl || fullUrl;
+  const url = fullUrl || previewUrl || thumbnailUrl;
+  if (!url) {
+    updateV3Notice("这张图还没有可预览的图片文件。", "warning");
+    return;
+  }
+  openImageLightbox({
+    id: v3OutputItemIdentity(item) || `v3_${Date.now()}`,
+    title,
+    url,
+    downloadUrl: fullUrl || url,
+    thumbnailUrl,
+    previewUrl: previewUrl || thumbnailUrl || url,
+    format: metadata.format || "png",
+    meta,
+    promptText: promptText || metadata.final_prompt || metadata.optimized_prompt || "",
+  });
 }
 
 function v3MediaUrl(url) {
@@ -8886,7 +11365,7 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
   if (!els.heroHistoryCarousel) return;
   clearHeroCarouselTimer();
   const heroItems = [...items]
-    .filter((item) => (source === "v2" ? isRenderableV2HistoryImage(item) : item.url || item.thumbnail_url))
+    .filter((item) => (source === "v3" ? item?.latestItem : source === "v2" ? isRenderableV2HistoryImage(item) : item.url || item.thumbnail_url))
     .sort(compareHistoryItems)
     .slice(0, heroHistoryPageSize)
     .map((item, index) => normalizeHeroHistoryItem(item, source, index));
@@ -8923,6 +11402,10 @@ function openActiveHeroHistorySlide() {
   const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("active")));
   const item = state.heroHistoryItems[activeIndex];
   if (!item) return;
+  if (item.source === "v3" && item.projectId) {
+    openV3ProjectHistoryModal(item.projectId);
+    return;
+  }
   openImageLightbox({
     id: item.id,
     title: item.title ? item.title.slice(0, 34) : "历史图片",
@@ -8965,6 +11448,26 @@ function normalizeHeroHistoryItem(item, source, index) {
       meta: labHistoryMetaText(item),
       promptText: item.final_prompt || item.prompt || "",
       source: "lab",
+    };
+  }
+  if (source === "v3") {
+    const latest = item.latestItem || item;
+    const previewUrl = v3OutputPreviewImageUrl(latest);
+    const fullUrl = v3OutputFullImageUrl(latest);
+    const thumbUrl = v3OutputThumbImageUrl(latest) || previewUrl || fullUrl;
+    return {
+      id: item.projectId || latest?.project_id || `v3-history-${index}`,
+      title: v3ReadableText(item.title || latest?.project_title, `V3 项目图片 ${index + 1}`),
+      url: fullUrl || previewUrl || thumbUrl,
+      downloadUrl: fullUrl || previewUrl || thumbUrl,
+      thumbnailUrl: thumbUrl,
+      previewUrl: previewUrl || thumbUrl || fullUrl,
+      imageCandidates: [thumbUrl, previewUrl, fullUrl].filter(Boolean),
+      format: latest?.metadata?.format || "png",
+      meta: `${v3TemplatePlainLabel(item.templateId || latest?.template_id || "general_template")} - ${item.count || 1} 张`,
+      promptText: latest?.metadata?.final_prompt || latest?.metadata?.optimized_prompt || "",
+      source: "v3",
+      projectId: item.projectId || latest?.project_id || "",
     };
   }
   return {
@@ -9027,7 +11530,7 @@ function compareHistoryItems(a, b) {
 }
 
 function historyTime(item) {
-  const value = item.created_at || item.updated_at;
+  const value = item.created_at || item.updated_at || item.latestAt || item.latestItem?.created_at || item.latestItem?.updated_at;
   if (!value) return 0;
   const time = new Date(value).getTime();
   return Number.isNaN(time) ? 0 : time;
@@ -9153,7 +11656,9 @@ function closeImageLightbox() {
   resetLightboxZoom();
   closeLightboxPrompt();
   renderLightboxActions([]);
-  document.body.classList.remove("modal-open");
+  if (!els.v3ProjectHistoryModal || els.v3ProjectHistoryModal.hidden) {
+    document.body.classList.remove("modal-open");
+  }
 }
 
 function renderLightboxActions(actions = []) {
@@ -9346,7 +11851,7 @@ function showWeChatShareGuide(shareUrl) {
 }
 
 function toggleLightboxZoom(event) {
-  event.stopPropagation();
+  event?.stopPropagation?.();
   if (!els.lightboxStage || !els.lightboxImage.src) return;
   const zoomed = els.lightboxStage.classList.toggle("zoomed");
   els.lightboxImage.classList.toggle("zoomed", zoomed);

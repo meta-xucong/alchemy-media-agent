@@ -17,6 +17,32 @@ def test_keyword_mapping_for_industries() -> None:
     assert detect_industry(normalize_input("蓝牙耳机淘宝主图")) == IndustryCategory.ECOMMERCE_PRODUCT
 
 
+def test_beauty_portrait_does_not_become_local_service() -> None:
+    assert (
+        detect_industry(normalize_input("East Asian summer beauty portrait photo with green-highlighted hair"))
+        == IndustryCategory.UNKNOWN
+    )
+    assert detect_industry(normalize_input("beauty salon opening campaign")) == IndustryCategory.LOCAL_SERVICE_BEAUTY
+
+
+def test_beauty_portrait_planning_does_not_use_local_service_pack() -> None:
+    result = run_creative_planning(
+        "Create an East Asian summer beauty portrait photo with green-highlighted hair for a social cover"
+    )
+    prompt_text = " ".join(
+        [
+            result.prompt_compilations[0].visual_prompt,
+            " ".join(result.prompt_compilations[0].style_notes),
+            " ".join(result.prompt_compilations[0].layout_notes),
+        ]
+    ).lower()
+
+    assert result.commercial_brief.industry == IndustryCategory.UNKNOWN
+    assert "service_detail" not in prompt_text
+    assert "booking cta" not in prompt_text
+    assert result.prompt_compilations[0].provider_notes.get("vertical_pack") != "local_service_agent_family"
+
+
 def test_platform_mapping_defaults() -> None:
     assert detect_platforms(normalize_input("适合小红书和朋友圈")) == [Platform.XIAOHONGSHU, Platform.WECHAT_MOMENTS]
     assert detect_platforms(normalize_input("适合外卖")) == [Platform.DELIVERY_APP]

@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import threading
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ..creative_core.prompt_language import product_language_allowed
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
+from ..shared_capabilities.visual_cluster.casebook_recipes import provider_casebook_prompt_lines
 
 
 class GenerationRequest(BaseModel):
@@ -55,6 +58,73 @@ class GenerationProvider:
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         raise NotImplementedError
 
+    def _retry_patch(self, request: GenerationRequest) -> dict[str, Any]:
+        patch = request.metadata.get("visual_retry_patch")
+        return dict(patch) if isinstance(patch, dict) else {}
+
+    def _retry_attempt(self, request: GenerationRequest) -> int:
+        raw = request.metadata.get("visual_auto_retry_attempt") or request.metadata.get("retry_attempt") or 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def _string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return []
+
+    def _mode_role_recipe(self, request: GenerationRequest) -> dict[str, Any]:
+        for source in (request.metadata, request.generation_plan.metadata, request.prompt_compilation.provider_notes):
+            value = source.get("mode_role_recipe") if isinstance(source, dict) else None
+            if isinstance(value, dict):
+                return dict(value)
+        return {}
+
+    def _role_specific_generation_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        for source in (request.metadata, request.generation_plan.metadata):
+            value = source.get("role_specific_generation_plan") if isinstance(source, dict) else None
+            if isinstance(value, dict):
+                return dict(value)
+        cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata, dict) else None
+        value = cluster.get("role_specific_generation_plan") if isinstance(cluster, dict) else None
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _mode_execution_policy(self, request: GenerationRequest) -> dict[str, Any]:
+        for source in (request.metadata, request.generation_plan.metadata):
+            value = source.get("mode_execution_policy") if isinstance(source, dict) else None
+            if isinstance(value, dict):
+                return dict(value)
+        plan = self._role_specific_generation_plan(request)
+        value = plan.get("policy") if isinstance(plan, dict) else None
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _visual_cluster(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata, dict) else None
+        if isinstance(cluster, dict):
+            return dict(cluster)
+        shared = request.metadata.get("shared_capabilities") if isinstance(request.metadata, dict) else None
+        if isinstance(shared, dict) and isinstance(shared.get("visual_cluster"), dict):
+            return dict(shared["visual_cluster"])
+        return {}
+
+    def _human_photorealism_guidance(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        guidance = cluster.get("human_photorealism_guidance") if isinstance(cluster, dict) else None
+        return dict(guidance) if isinstance(guidance, dict) and guidance.get("applies") else {}
+
+    def _strong_reference_closure_package(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        package = cluster.get("strong_reference_closure_package") if isinstance(cluster, dict) else None
+        return dict(package) if isinstance(package, dict) and package.get("active") else {}
+
+    def _mode_quality_profile(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        profile = cluster.get("mode_quality_profile") if isinstance(cluster, dict) else None
+        return dict(profile) if isinstance(profile, dict) else {}
+
 
 class PlanningOnlyGenerationProvider(GenerationProvider):
     provider_name = "planning_only_generation_provider"
@@ -87,13 +157,14 @@ class MockGenerationProvider(GenerationProvider):
         candidate_count = max(1, request.generation_plan.candidate_count)
         refine_round = int(request.metadata.get("refine_round", request.generation_plan.metadata.get("refine_round", 0) or 0))
         profile = str(request.generation_plan.metadata.get("mock_profile", request.metadata.get("mock_profile", "balanced")))
+        retry_attempt = self._retry_attempt(request)
         candidates: list[CandidateResult] = []
         warnings: list[str] = []
 
         for index in range(candidate_count):
             quality_score, problem_codes = self._candidate_profile(profile, index, refine_round)
             hard_failure = "provider_failure" in problem_codes or "missing_product_area" in problem_codes
-            candidate_id = stable_id(
+            candidate_id_parts = [
                 "candidate",
                 request.generation_plan.asset_id,
                 request.prompt_compilation.prompt_compilation_id,
@@ -101,6 +172,11 @@ class MockGenerationProvider(GenerationProvider):
                 refine_round,
                 index,
                 profile,
+            ]
+            if retry_attempt:
+                candidate_id_parts.append(f"retry_{retry_attempt}")
+            candidate_id = stable_id(
+                *candidate_id_parts,
             )
             candidates.append(
                 CandidateResult(
@@ -121,6 +197,14 @@ class MockGenerationProvider(GenerationProvider):
                         "forced_problem_codes": problem_codes,
                         "hard_failure": hard_failure,
                         "asset_id": request.generation_plan.asset_id,
+                        "visual_auto_retry_attempt": retry_attempt,
+                        "visual_retry_reason_codes": self._string_list(request.metadata.get("visual_retry_reason_codes")),
+                        "retry_patch": self._retry_patch(request),
+                        "mode_execution_policy": self._mode_execution_policy(request),
+                        "role_specific_generation_plan": self._role_specific_generation_plan(request),
+                        "mode_role_recipe": self._mode_role_recipe(request),
+                        "mode_role_key": self._mode_role_recipe(request).get("role_key"),
+                        "mode_role_label": self._mode_role_recipe(request).get("label"),
                     },
                 )
             )
@@ -186,10 +270,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         app_request, provider_name, reference_assets = self._build_app_request(request)
-        result = _run_async_blocking(self._generate_with_app_provider(provider_name, app_request))
+        final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
+        negative_constraints = self._negative_constraints(request)
+        llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
+        shared_capabilities = (
+            request.metadata.get("shared_capabilities") if isinstance(request.metadata.get("shared_capabilities"), dict) else {}
+        )
+        visual_cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata.get("visual_cluster"), dict) else {}
+        if not visual_cluster and isinstance(shared_capabilities.get("visual_cluster"), dict):
+            visual_cluster = shared_capabilities["visual_cluster"]
+        mode_role_recipe = self._mode_role_recipe(request)
+        role_specific_plan = self._role_specific_generation_plan(request)
+        mode_policy = self._mode_execution_policy(request)
+        strong_reference_closure = self._strong_reference_closure_package(request)
+        mode_quality_profile = self._mode_quality_profile(request)
+        auto_identity_anchor_applied = bool(request.metadata.get("auto_batch_identity_anchor_applied"))
+        result = self._run_app_provider_with_timeout_retry(provider_name, app_request, reference_assets)
         candidates: list[CandidateResult] = []
         warnings: list[str] = []
         outputs = list(getattr(result, "outputs", []) or [])
+        requested_group_count = self._group_count_for_request(request)
+        retry_attempt = self._retry_attempt(request)
         if not outputs:
             raise ValueError("V3 production provider returned no image outputs.")
         for index, output in enumerate(outputs[:1]):
@@ -197,13 +298,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             if not encoded:
                 warnings.append("Provider output did not include image bytes and was skipped.")
                 continue
-            candidate_id = stable_id(
+            candidate_id_parts = [
                 "candidate",
                 request.generation_plan.asset_id,
                 request.prompt_compilation.prompt_compilation_id,
                 getattr(result, "provider", provider_name),
                 getattr(result, "model", ""),
                 index,
+            ]
+            if retry_attempt:
+                candidate_id_parts.append(f"retry_{retry_attempt}")
+            candidate_id = stable_id(
+                *candidate_id_parts,
             )
             record = self.output_store.save_base64_output(
                 job_id=str(request.metadata.get("job_id") or request.generation_plan.metadata.get("job_id") or "v3_job"),
@@ -222,9 +328,39 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                     "condition_plan_id": request.condition_plan.condition_plan_id,
                     "reference_asset_count": len(reference_assets),
+                    "compiled_visual_direction": request.prompt_compilation.visual_prompt,
+                    "final_provider_prompt": final_provider_prompt,
+                    "negative_constraints": negative_constraints,
+                    "style_notes": list(request.prompt_compilation.style_notes),
+                    "layout_notes": list(request.prompt_compilation.layout_notes),
+                    "llm_brain": llm_brain,
+                    "llm_brain_summary": request.prompt_compilation.provider_notes.get("llm_brain_summary", {}),
+                    "llm_brain_consistency_strategy": request.prompt_compilation.provider_notes.get("llm_brain_consistency_strategy"),
+                    "shared_capabilities": shared_capabilities,
+                    "visual_capability_cluster": visual_cluster,
+                    "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
                     "api_operation": output.get("api_operation"),
                     "request_index": output.get("request_index"),
+                    "requested_image_count": requested_group_count,
+                    "requested_image_size": app_request.prompt_plan.size,
+                    "project_id": request.metadata.get("project_id"),
+                    "template_id": request.metadata.get("template_id"),
+                    "veyra_user_id": request.metadata.get("veyra_user_id"),
+                    "visual_auto_retry_attempt": retry_attempt,
+                    "visual_retry_reason_codes": self._string_list(request.metadata.get("visual_retry_reason_codes")),
+                    "retry_patch": self._retry_patch(request),
+                    "auto_batch_identity_anchor_applied": auto_identity_anchor_applied,
+                    "auto_batch_identity_anchor_policy": request.metadata.get("auto_batch_identity_anchor_policy", {}),
+                    "auto_batch_identity_anchor_source_output_id": request.metadata.get("auto_batch_identity_anchor_source_output_id"),
+                    "auto_batch_identity_anchor_source_candidate_id": request.metadata.get("auto_batch_identity_anchor_source_candidate_id"),
+                    "mode_execution_policy": mode_policy,
+                    "role_specific_generation_plan": role_specific_plan,
+                    "mode_role_recipe": mode_role_recipe,
+                    "mode_role_key": mode_role_recipe.get("role_key"),
+                    "mode_role_label": mode_role_recipe.get("label"),
+                    "strong_reference_closure_package": strong_reference_closure,
+                    "mode_quality_profile": mode_quality_profile,
                 },
             )
             candidates.append(
@@ -252,7 +388,37 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "width": record.width,
                         "height": record.height,
                         "reference_asset_count": len(reference_assets),
+                        "compiled_visual_direction": request.prompt_compilation.visual_prompt,
+                        "final_provider_prompt": final_provider_prompt,
+                        "negative_constraints": negative_constraints,
+                        "style_notes": list(request.prompt_compilation.style_notes),
+                        "layout_notes": list(request.prompt_compilation.layout_notes),
+                        "llm_brain": llm_brain,
+                        "llm_brain_summary": request.prompt_compilation.provider_notes.get("llm_brain_summary", {}),
+                        "llm_brain_consistency_strategy": request.prompt_compilation.provider_notes.get("llm_brain_consistency_strategy"),
+                        "shared_capabilities": shared_capabilities,
+                        "visual_capability_cluster": visual_cluster,
+                        "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
                         "v3_owned_output": True,
+                        "requested_image_count": requested_group_count,
+                        "requested_image_size": app_request.prompt_plan.size,
+                        "project_id": request.metadata.get("project_id"),
+                        "template_id": request.metadata.get("template_id"),
+                        "veyra_user_id": request.metadata.get("veyra_user_id"),
+                        "visual_auto_retry_attempt": retry_attempt,
+                        "visual_retry_reason_codes": self._string_list(request.metadata.get("visual_retry_reason_codes")),
+                        "retry_patch": self._retry_patch(request),
+                        "auto_batch_identity_anchor_applied": auto_identity_anchor_applied,
+                        "auto_batch_identity_anchor_policy": request.metadata.get("auto_batch_identity_anchor_policy", {}),
+                        "auto_batch_identity_anchor_source_output_id": request.metadata.get("auto_batch_identity_anchor_source_output_id"),
+                        "auto_batch_identity_anchor_source_candidate_id": request.metadata.get("auto_batch_identity_anchor_source_candidate_id"),
+                        "mode_execution_policy": mode_policy,
+                        "role_specific_generation_plan": role_specific_plan,
+                        "mode_role_recipe": mode_role_recipe,
+                        "mode_role_key": mode_role_recipe.get("role_key"),
+                        "mode_role_label": mode_role_recipe.get("label"),
+                        "strong_reference_closure_package": strong_reference_closure,
+                        "mode_quality_profile": mode_quality_profile,
                     },
                 )
             )
@@ -267,6 +433,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "actual_provider": str(getattr(result, "provider", provider_name)),
                 "actual_model": str(getattr(result, "model", "") or ""),
                 "reference_asset_count": len(reference_assets),
+                "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                "llm_brain": llm_brain,
+                "shared_capabilities": shared_capabilities,
+                "visual_capability_cluster": visual_cluster,
+                "requested_image_count": requested_group_count,
+                "requested_image_size": app_request.prompt_plan.size,
+                "project_id": request.metadata.get("project_id"),
+                "template_id": request.metadata.get("template_id"),
+                "veyra_user_id": request.metadata.get("veyra_user_id"),
+                "mode_execution_policy": mode_policy,
+                "auto_batch_identity_anchor_applied": auto_identity_anchor_applied,
+                "auto_batch_identity_anchor_policy": request.metadata.get("auto_batch_identity_anchor_policy", {}),
+                "role_specific_generation_plan": role_specific_plan,
+                "mode_role_recipe": mode_role_recipe,
+                "strong_reference_closure_package": strong_reference_closure,
+                "mode_quality_profile": mode_quality_profile,
             },
             warnings=warnings,
         )
@@ -275,6 +457,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
         provider = self._app_provider(provider_name)
         return await provider.generate(app_request)
 
+    def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
+        timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
+        max_attempts = 2 if reference_assets else 1
+        last_error: TimeoutError | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return _run_async_blocking(
+                    self._generate_with_app_provider(provider_name, app_request),
+                    timeout_seconds=timeout_seconds,
+                )
+            except TimeoutError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    raise
+                time.sleep(self._app_provider_transient_cooldown_seconds())
+        if last_error is not None:
+            raise last_error
+        raise TimeoutError("V3 production provider timed out.")
+
     def _build_app_request(self, request: GenerationRequest):
         from app import schemas as app_schemas
 
@@ -282,7 +483,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt_plan_cls = getattr(app_schemas, "Image" + "PromptPlan")
 
         reference_assets = self._reference_assets(request)
-        asset_plan = self._asset_plan(reference_assets)
+        asset_plan = self._asset_plan(request, reference_assets)
         provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
         prompt_plan = prompt_plan_cls(
@@ -303,6 +504,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "v3_prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                 "v3_generation_plan_id": request.generation_plan.generation_plan_id,
                 "v3_provider_strategy": request.generation_plan.provider_strategy.value,
+                "requested_image_count": self._group_count_for_request(request),
+                "requested_image_size": size,
             },
         )
         return (
@@ -386,8 +589,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
         raw_assets = request.metadata.get("uploaded_assets")
         if not isinstance(raw_assets, list):
             raw_assets = request.generation_plan.metadata.get("uploaded_assets", [])
+        raw_project_refs = request.metadata.get("reference_assets")
+        if not isinstance(raw_project_refs, list):
+            raw_project_refs = request.generation_plan.metadata.get("reference_assets", [])
+        combined_assets = [
+            *(raw_assets if isinstance(raw_assets, list) else []),
+            *(raw_project_refs if isinstance(raw_project_refs, list) else []),
+        ]
         assets: list[dict[str, Any]] = []
-        for item in raw_assets if isinstance(raw_assets, list) else []:
+        seen_paths: set[str] = set()
+        for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             path = data.get("file_path")
             if not path:
@@ -398,35 +609,82 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 continue
             if not file_path.exists() or not file_path.is_file():
                 continue
+            resolved_path = str(file_path.resolve())
+            if resolved_path in seen_paths:
+                continue
+            seen_paths.add(resolved_path)
             assets.append(
                 {
-                    "asset_id": str(data.get("asset_id") or file_path.stem),
-                    "role": str(data.get("role") or "unknown_reference"),
+                    "asset_id": str(data.get("asset_id") or data.get("source_id") or data.get("output_id") or file_path.stem),
+                    "role": str(data.get("role") or data.get("use_policy") or "unknown_reference"),
                     "filename": data.get("filename") or file_path.name,
                     "mime_type": data.get("mime_type"),
                     "file_path": str(file_path),
                     "uri": data.get("uri"),
+                    "strength": data.get("strength"),
+                    "use_policy": data.get("use_policy"),
+                    "lock_targets": data.get("lock_targets") if isinstance(data.get("lock_targets"), list) else [],
+                    "provider_input_required": bool(data.get("provider_input_required")),
+                    "prompt_only_fallback": bool(data.get("prompt_only_fallback")),
                     "metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
                 }
             )
         return assets[:6]
 
-    def _asset_plan(self, reference_assets: list[dict[str, Any]]) -> dict[str, Any]:
+    def _asset_plan(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> dict[str, Any]:
+        allow_product_language = self._product_language_allowed(request, reference_assets)
+        human_guidance = self._human_photorealism_guidance(request)
+        closure = self._strong_reference_closure_package(request)
+        do_not_inherit_rules = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
+        closure_provider_ids = set(self._string_list(closure.get("provider_reference_required_ids")))
+        closure_prompt_rules = self._string_list(closure.get("provider_prompt_rules"))
+        closure_negative_rules = self._string_list(closure.get("negative_prompt_rules"))
+        prompt_constraint = (
+            "Use this uploaded image as visual evidence for product identity, material, style, or composition."
+            if allow_product_language
+            else "Use this uploaded image as visual evidence for subject style, lighting, composition, or mood."
+        )
         assets = []
         for index, asset in enumerate(reference_assets):
+            role = str(asset.get("role") or "")
+            use_policy = str(asset.get("use_policy") or role)
+            lock_targets = [str(item) for item in asset.get("lock_targets", []) if str(item).strip()]
+            if "product" in use_policy:
+                reference_constraint = (
+                    "Use as a strong product identity reference; preserve shape, material, color, proportions, "
+                    "logo/label position, and existing label readability without rewriting, translating, blurring, "
+                    "darkening, cropping, or covering the label/logo."
+                )
+            elif "identity" in use_policy or "face" in role:
+                reference_constraint = (
+                    "Use as a strong identity and style anchor; preserve broad face shape, eye shape and spacing, "
+                    "nose-mouth relationship, jawline direction, age impression, body type, broad hair color/length, "
+                    "wardrobe category, and lighting language while allowing natural expression, pose, head angle, "
+                    "camera angle, crop, and small hair styling variation."
+                )
+                if do_not_inherit_rules:
+                    reference_constraint = f"{reference_constraint} Do not inherit: {'; '.join(do_not_inherit_rules[:4])}."
+            elif "brand" in use_policy or "logo" in role:
+                reference_constraint = "Use as a strong brand asset reference; preserve brand colors, symbol shape, and placement logic."
+            else:
+                reference_constraint = prompt_constraint
+            if lock_targets:
+                reference_constraint = f"{reference_constraint} Lock: {', '.join(lock_targets[:5])}."
+            if closure_prompt_rules and (asset["asset_id"] in closure_provider_ids or not closure_provider_ids):
+                reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             assets.append(
                 {
                     "asset_id": asset["asset_id"],
                     "role": _v1_reference_role(asset.get("role")),
-                    "priority": 100 - index,
+                    "priority": 120 - index if asset.get("strength") == "hard" else 100 - index,
                     "provider_input_mode": "reference_image",
                     "storage_path": asset["file_path"],
                     "filename": asset.get("filename"),
                     "mime_type": asset.get("mime_type"),
-                    "prompt_constraints": [
-                        "Use this uploaded image as visual evidence for product identity, material, style, or composition."
-                    ],
-                    "negative_constraints": [],
+                    "prompt_constraints": [reference_constraint],
+                    "negative_constraints": closure_negative_rules[:8],
+                    "strength": asset.get("strength"),
+                    "use_policy": asset.get("use_policy"),
                 }
             )
         return {
@@ -445,32 +703,202 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt = request.prompt_compilation
         asset = request.asset_spec
         layout = request.layout_plan
+        allow_product_language = self._product_language_allowed(request, reference_assets)
+        human_guidance = self._human_photorealism_guidance(request)
+        human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         parts = [
-            "Create a polished, directly usable commercial image asset.",
+            (
+                "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
+                if human_photo_context and not allow_product_language
+                else
+                "Create a polished, directly usable commercial product image asset."
+                if allow_product_language
+                else "Create a polished, directly usable creative image asset."
+            ),
             f"Visual direction: {prompt.visual_prompt}",
             f"Asset purpose: {asset.purpose}" if asset else "",
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
             f"Composition: {layout.product_area.position}" if layout else "",
             f"Visual hierarchy: {', '.join(layout.visual_hierarchy)}" if layout and layout.visual_hierarchy else "",
+            "Generate exactly one complete image frame for this output. Do not create a collage, split screen, contact sheet, storyboard, before-after comparison, duplicated frame, or grid of separate images inside the same output.",
             "Reserve clean blank areas for later UI/text overlay outside the generated pixels.",
-            "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, or product claims inside the image.",
-            "Only preserve text already visible on the supplied product label if it remains in frame; do not translate, rewrite, enlarge, or invent label copy.",
-            "Preserve supplied product facts, visible product identity, logos, material cues, and proportions.",
+            (
+                "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, AI-generated marks, or product claims inside the image."
+                if allow_product_language
+                else "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, or AI-generated marks inside the image."
+            ),
+            *(
+                [
+                    "Only preserve text already visible on the supplied product label if it remains in frame; keep it readable and unobscured, and do not translate, rewrite, enlarge, blur, darken, cover, crop, or invent label copy.",
+                    "Preserve supplied product facts, visible product identity, logos, label placement, material cues, proportions, and packaging silhouette.",
+                ]
+                if allow_product_language
+                else [
+                    "Preserve the requested subject, scene, style, lighting, composition, and natural proportions.",
+                    "Do not add unrelated props, unrelated labels, logos, distracting objects, or objects not requested by the user.",
+                ]
+            ),
             f"Style notes: {', '.join(prompt.style_notes)}" if prompt.style_notes else "",
             f"Layout notes: {', '.join(prompt.layout_notes)}" if prompt.layout_notes else "",
             f"Hard constraints: {'; '.join(prompt.hard_constraints)}" if prompt.hard_constraints else "",
         ]
+        role_guidance = self._mode_role_prompt_guidance(request)
+        if role_guidance:
+            parts.append("Role-specific generation contract:\n" + "\n".join(role_guidance))
+        mode_quality = self._mode_quality_profile(request)
+        if mode_quality:
+            mode_lines = [
+                f"Mode quality: {mode_quality.get('user_visible_label') or mode_quality.get('mode')}",
+                "Review priorities: " + "; ".join(self._string_list(mode_quality.get("review_priorities"))[:5]),
+                "Pass conditions: " + "; ".join(self._string_list(mode_quality.get("pass_conditions"))[:4]),
+                "Mode guidance: " + "; ".join(self._string_list(mode_quality.get("prompt_guidance"))[:4]),
+            ]
+            parts.append("Mode quality contract:\n" + "\n".join(line for line in mode_lines if not line.endswith(": ")))
+        if human_guidance or (human_photo_context and not allow_product_language):
+            positive = self._string_list(human_guidance.get("positive_prompt_fragments"))
+            preserve = self._string_list(human_guidance.get("reference_preserve_rules"))
+            do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
+            lines = []
+            lines.append(
+                "Polish interpretation: if any earlier line says polished, refined, premium, or beauty, resolve it as camera-ready real-person photography, not skin blur, face slimming, enlarged eyes, V-shaped chin, or idol-card retouch."
+            )
+            lines.append(
+                "Attractive realism balance: keep a healthy clear complexion, fresh bright skin tone from soft natural bounce light, gentle cheek warmth, natural lip color, and awake eyes; preserve natural skin tone and real texture, avoiding skin whitening, dull complexion, muddy color cast, underexposed face, harsh facial shadow, or overly matte documentary plainness."
+            )
+            lines.append(
+                "East Asian portrait aesthetic guard: for East Asian fresh, beauty, or summer portrait requests with no explicit tan, dark, or bronze instruction, keep a clean fair luminous complexion from high-key daylight, soft bounce light, exposure, and color balance; do not darken or tan the skin by default; avoid fake whitening masks or skin smoothing; preserve natural head-to-body, neck, shoulder, and upper-body proportions."
+            )
+            if positive:
+                lines.append("Photoreal human rendering: " + "; ".join(positive[:8]))
+            if preserve:
+                lines.append("Identity continuity: " + "; ".join(preserve[:4]))
+            if do_not_inherit and reference_assets:
+                lines.append("Reference cleanup: " + "; ".join(do_not_inherit[:4]))
+            if lines:
+                parts.append("Human realism contract:\n" + "\n".join(lines))
+        closure = self._strong_reference_closure_package(request)
+        if closure:
+            closure_lines = [
+                "Reference strength: " + str(closure.get("reference_strength") or "strong"),
+                "Provider reference ids: " + ", ".join(self._string_list(closure.get("provider_reference_required_ids"))[:6]),
+                "Keep: " + "; ".join(self._string_list(closure.get("identity_keep_rules"))[:5]),
+                "Allow variation: " + "; ".join(self._string_list(closure.get("allowed_variations"))[:5]),
+                "Do not drift: " + "; ".join(self._string_list(closure.get("forbidden_drift"))[:5]),
+                "Provider rules: " + "; ".join(self._string_list(closure.get("provider_prompt_rules"))[:5]),
+            ]
+            parts.append("Selected reference closure:\n" + "\n".join(line for line in closure_lines if not line.endswith(": ")))
         if reference_assets:
             reference_lines = [
-                f"{index + 1}. {asset.get('role') or 'reference'} - {asset.get('filename') or asset.get('asset_id')}"
+                (
+                    f"{index + 1}. {asset.get('role') or 'reference'}"
+                    f" ({asset.get('strength') or 'normal'}) - {asset.get('filename') or asset.get('asset_id')}"
+                )
                 for index, asset in enumerate(reference_assets)
             ]
             parts.append("Uploaded reference images must guide the result:\n" + "\n".join(reference_lines))
+            strong_reference_rules = []
+            for asset in reference_assets:
+                use_policy = str(asset.get("use_policy") or asset.get("role") or "")
+                if "product" in use_policy:
+                    strong_reference_rules.append(
+                        "Preserve the selected product identity instead of inventing a new product; keep existing label/logo details readable and unobscured when visible."
+                    )
+                elif "identity" in use_policy:
+                    strong_reference_rules.append(
+                        "Preserve the selected person's broad face shape, eye shape and spacing, nose-mouth relationship, jawline direction, age impression, body type, broad hair/wardrobe direction, and light; do not copy the exact same expression, pose, head angle, camera angle, or crop across the batch."
+                    )
+                elif "brand" in use_policy:
+                    strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
+            if strong_reference_rules:
+                parts.append("Strong reference rules: " + " ".join(dict.fromkeys(strong_reference_rules)))
+        retry_guidance = self._retry_prompt_guidance(request)
+        if retry_guidance:
+            parts.append("Retry repair guidance: " + " ".join(retry_guidance))
         if prompt.negative_prompt:
             parts.append(f"Avoid: {prompt.negative_prompt}")
         return "\n".join(part for part in parts if str(part or "").strip())
 
+    def _mode_role_prompt_guidance(self, request: GenerationRequest) -> list[str]:
+        recipe = self._mode_role_recipe(request)
+        if not recipe:
+            return []
+        policy = self._mode_execution_policy(request)
+        lines = [
+            f"Mode: {policy.get('mode') or recipe.get('metadata', {}).get('mode') or 'delivery_suite'}",
+            f"This image role: {recipe.get('label') or recipe.get('role_key')}",
+            f"Purpose: {recipe.get('purpose')}" if recipe.get("purpose") else "",
+            f"Required shot: {recipe.get('prompt_pressure')}" if recipe.get("prompt_pressure") else "",
+            f"Shot family: {recipe.get('shot_family')}" if recipe.get("shot_family") else "",
+            f"Camera distance: {recipe.get('camera_distance')}" if recipe.get("camera_distance") else "",
+            f"Angle: {recipe.get('angle_rule')}" if recipe.get("angle_rule") else "",
+            f"Crop/layout: {recipe.get('crop_rule')}" if recipe.get("crop_rule") else "",
+            f"Scene: {recipe.get('scene_rule')}" if recipe.get("scene_rule") else "",
+            f"Role difference rule: {policy.get('role_difference_requirement')}" if policy.get("role_difference_requirement") else "",
+        ]
+        keep = self._string_list(recipe.get("must_keep_rules"))
+        avoid = self._string_list(recipe.get("must_not_rules"))
+        variation_axes = self._string_list(recipe.get("variation_axes"))
+        metadata = recipe.get("metadata") if isinstance(recipe.get("metadata"), dict) else {}
+        role_lanes = [
+            ("Role expression lane", metadata.get("expression_lane")),
+            ("Role gaze lane", metadata.get("gaze_lane")),
+            ("Role pose lane", metadata.get("pose_lane")),
+            ("Role gesture lane", metadata.get("gesture_lane")),
+            ("Role subject scale", metadata.get("subject_scale_lane")),
+            ("Role scene depth", metadata.get("scene_depth_lane")),
+            ("Clone avoidance", metadata.get("clone_avoidance_rule")),
+        ]
+        if variation_axes:
+            lines.append("Role variation axes: " + "; ".join(variation_axes[:8]))
+        for label, value in role_lanes:
+            text = str(value or "").strip()
+            if text:
+                lines.append(f"{label}: {text}")
+        role_plan = self._role_specific_generation_plan(request)
+        plan_prompt_additions = self._string_list(role_plan.get("prompt_additions"))
+        if plan_prompt_additions:
+            lines.append("Suite director rules: " + "; ".join(plan_prompt_additions[:8]))
+        plan_metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
+        identity_plan = plan_metadata.get("identity_hero_selection_plan") if isinstance(plan_metadata, dict) else {}
+        if isinstance(identity_plan, dict) and identity_plan.get("applies"):
+            identity_rules = self._string_list(identity_plan.get("prompt_additions"))
+            if identity_rules:
+                lines.append("Identity hero selection: " + "; ".join(identity_rules[:4]))
+        subject_identity_card = plan_metadata.get("subject_identity_card") if isinstance(plan_metadata, dict) else {}
+        if isinstance(subject_identity_card, dict) and subject_identity_card.get("applies"):
+            keep_rules = self._string_list(subject_identity_card.get("identity_keep_rules"))
+            feature_rules = self._string_list(subject_identity_card.get("facial_feature_integrity_rules"))
+            realism_rules = self._string_list(subject_identity_card.get("beautiful_realism_rules"))
+            allowed_variations = self._string_list(subject_identity_card.get("allowed_variations"))
+            forbidden_drift = self._string_list(subject_identity_card.get("forbidden_drift"))
+            if keep_rules or feature_rules:
+                lines.append("Subject identity card: " + "; ".join([*keep_rules[:4], *feature_rules[:4]]))
+            if realism_rules:
+                lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:4]))
+            if allowed_variations:
+                lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:6]))
+            if forbidden_drift:
+                lines.append("Identity drift to avoid: " + "; ".join(forbidden_drift[:8]))
+        strict_policy = plan_metadata.get("strict_visual_review_policy") if isinstance(plan_metadata, dict) else {}
+        if isinstance(strict_policy, dict) and strict_policy.get("applies"):
+            strict_rules = self._string_list(strict_policy.get("prompt_additions"))
+            if strict_rules:
+                lines.append("Strict visual review rules: " + "; ".join(strict_rules[:8]))
+            pass_conditions = self._string_list(strict_policy.get("pass_conditions"))
+            if pass_conditions:
+                lines.append("Strict visual pass conditions: " + "; ".join(pass_conditions[:5]))
+            strict_avoid = self._string_list(strict_policy.get("negative_additions"))
+            if strict_avoid:
+                lines.append("Strict visual avoid: " + "; ".join(strict_avoid[:52]))
+        lines.extend(provider_casebook_prompt_lines(recipe))
+        if keep:
+            lines.append("Keep: " + "; ".join(keep[:5]))
+        if avoid:
+            lines.append("Do not: " + "; ".join(avoid[:5]))
+        return [line for line in lines if str(line or "").strip()]
+
     def _negative_constraints(self, request: GenerationRequest) -> list[str]:
+        allow_product_language = self._product_language_allowed(request, [])
         values = [
             "new visible text",
             "invented captions",
@@ -478,15 +906,132 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "infographic icons",
             "claim badges",
             "bottom feature strips",
-            "unsupported product claims",
             "unreadable text",
             "fake brand marks",
-            "distorted product identity",
+            "watermarks",
+            "signatures",
+            "AI-generated marks",
             "cluttered composition",
+            "collage",
+            "split screen",
+            "multi-panel layout",
+            "contact sheet",
+            "storyboard",
+            "before-after comparison",
+            "duplicated frames",
+            "grid of separate images inside one output",
         ]
+        if allow_product_language:
+            values.extend(["unsupported product claims", "distorted product identity"])
+        else:
+            values.extend(
+                [
+                    "unrelated props",
+                    "unrelated labels",
+                    "unrequested distracting objects",
+                ]
+            )
         if request.prompt_compilation.negative_prompt:
             values.extend(part.strip() for part in request.prompt_compilation.negative_prompt.split(",") if part.strip())
+        retry_patch = self._retry_patch(request)
+        values.extend(self._string_list(retry_patch.get("negative_additions")))
+        values.extend(self._string_list(retry_patch.get("negative_prompt_additions")))
+        values.extend(self._string_list(retry_patch.get("object_removal_instruction")))
+        values.extend(self._string_list(retry_patch.get("artifact_repair")))
+        role_recipe = self._mode_role_recipe(request)
+        values.extend(self._string_list(role_recipe.get("negative_pressure")))
+        values.extend(self._string_list(role_recipe.get("must_not_rules")))
+        role_plan = self._role_specific_generation_plan(request)
+        values.extend(self._string_list(role_plan.get("negative_additions")))
+        human_guidance = self._human_photorealism_guidance(request)
+        values.extend(self._string_list(human_guidance.get("negative_prompt_fragments")))
+        closure = self._strong_reference_closure_package(request)
+        values.extend(self._string_list(closure.get("negative_prompt_rules")))
+        mode_quality = self._mode_quality_profile(request)
+        values.extend(self._string_list(mode_quality.get("negative_guidance")))
         return list(dict.fromkeys(values))
+
+    def _retry_prompt_guidance(self, request: GenerationRequest) -> list[str]:
+        retry_patch = self._retry_patch(request)
+        guidance: list[str] = []
+        prompt_additions = self._string_list(retry_patch.get("prompt_additions"))
+        if prompt_additions:
+            guidance.append("Improve: " + "; ".join(prompt_additions))
+        identity = self._string_list(retry_patch.get("identity_reinforcement"))
+        if identity:
+            guidance.append("Keep identity: " + "; ".join(identity))
+        product = self._string_list(retry_patch.get("product_reinforcement"))
+        if product:
+            guidance.append("Keep product: " + "; ".join(product))
+        composition = self._string_list(retry_patch.get("composition_repair"))
+        if composition:
+            guidance.append("Fix composition: " + "; ".join(composition))
+        artifacts = self._string_list(retry_patch.get("artifact_repair"))
+        if artifacts:
+            guidance.append("Fix artifacts: " + "; ".join(artifacts))
+        removals = self._string_list(retry_patch.get("object_removal_instruction"))
+        if removals:
+            guidance.append("Remove: " + "; ".join(removals))
+        references = self._string_list(retry_patch.get("reference_requirements"))
+        if references:
+            guidance.append("Strengthen references: " + "; ".join(references))
+        return guidance
+
+    def _product_language_allowed(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> bool:
+        asset = request.asset_spec
+        return product_language_allowed(
+            template_id=request.metadata.get("template_id"),
+            scenario_id=request.metadata.get("scenario_id"),
+            industry=request.metadata.get("industry"),
+            asset_type=asset.asset_type if asset else None,
+            platform=asset.platform if asset else None,
+            user_input=request.metadata.get("user_input"),
+            metadata=request.metadata,
+            uploaded_assets=request.metadata.get("uploaded_assets", []),
+            reference_assets=[*request.metadata.get("reference_assets", []), *reference_assets],
+        )
+
+    def _looks_like_human_photo_request(self, request: GenerationRequest) -> bool:
+        recipe = self._mode_role_recipe(request)
+        metadata = recipe.get("metadata") if isinstance(recipe.get("metadata"), dict) else {}
+        if str(metadata.get("subject_type") or "").strip().lower() == "character":
+            return True
+        text = " ".join(
+            [
+                str(request.metadata.get("user_input") or ""),
+                str(request.prompt_compilation.visual_prompt or ""),
+                str(request.asset_spec.purpose if request.asset_spec else ""),
+                str(recipe.get("purpose") or ""),
+                str(recipe.get("prompt_pressure") or ""),
+            ]
+        ).lower()
+        english_terms = (
+            "portrait",
+            "human photo",
+            "real person",
+            "person",
+            "woman",
+            "girl",
+            "man",
+            "model",
+            "face",
+            "beauty photo",
+            "fashion photo",
+            "editorial photo",
+        )
+        chinese_terms = (
+            "\u4eba\u50cf",
+            "\u771f\u4eba",
+            "\u5199\u771f",
+            "\u6444\u5f71",
+            "\u6a21\u7279",
+            "\u7f8e\u5973",
+            "\u4eba\u7269",
+            "\u5973\u751f",
+            "\u5973\u5b69",
+            "\u8138",
+        )
+        return any(term in text for term in english_terms) or any(term in text for term in chinese_terms)
 
     def _scene_for_request(self, request: GenerationRequest) -> str | None:
         if request.layout_plan and request.layout_plan.background_strategy:
@@ -502,7 +1047,26 @@ class ProductionImageGenerationProvider(GenerationProvider):
         notes = [layout.product_area.position, *layout.visual_hierarchy]
         return ", ".join(item for item in notes if item)
 
+    def _group_count_for_request(self, request: GenerationRequest) -> int:
+        raw = (
+            request.metadata.get("requested_image_count")
+            or request.generation_plan.metadata.get("requested_image_count")
+            or 2
+        )
+        try:
+            return max(1, min(4, int(raw)))
+        except (TypeError, ValueError):
+            return 2
+
     def _size_for_request(self, request: GenerationRequest) -> str:
+        requested_size = str(
+            request.metadata.get("requested_image_size")
+            or request.generation_plan.metadata.get("requested_image_size")
+            or ""
+        ).strip()
+        allowed_sizes = {"1024x1024", "1024x1536", "1536x1024"}
+        if requested_size in allowed_sizes:
+            return requested_size
         ratio = str((request.asset_spec.aspect_ratio if request.asset_spec else "") or "").strip()
         mapping = {
             "1:1": "1024x1024",
@@ -521,11 +1085,34 @@ class ProductionImageGenerationProvider(GenerationProvider):
         quality_mode = str(request.metadata.get("quality_mode") or request.generation_plan.metadata.get("quality_mode") or "standard")
         return "high" if quality_mode == "strict" else "medium"
 
+    def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]]) -> float:
+        try:
+            from app.config import settings as app_settings
 
-def _run_async_blocking(coro):
+            value = (
+                app_settings.openai_image_edit_request_timeout_seconds
+                if reference_assets
+                else app_settings.openai_image_request_timeout_seconds
+            )
+        except Exception:
+            value = 240.0
+        return max(30.0, float(value) + 15.0)
+
+    def _app_provider_transient_cooldown_seconds(self) -> float:
+        try:
+            from app.config import settings as app_settings
+
+            value = app_settings.openai_image_edit_transient_cooldown_seconds
+        except Exception:
+            value = 12.0
+        return max(0.0, min(float(value), 30.0))
+
+def _run_async_blocking(coro, *, timeout_seconds: float | None = None):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        if timeout_seconds and timeout_seconds > 0:
+            return asyncio.run(asyncio.wait_for(coro, timeout=timeout_seconds))
         return asyncio.run(coro)
 
     result: dict[str, Any] = {}
@@ -538,7 +1125,9 @@ def _run_async_blocking(coro):
 
     thread = threading.Thread(target=runner, name="v3-production-provider", daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout=max(0.0, float(timeout_seconds or 0.0)) or None)
+    if thread.is_alive():
+        raise TimeoutError(f"V3 production provider timed out after {timeout_seconds:.0f} seconds.")
     if "error" in result:
         raise result["error"]
     return result.get("value")

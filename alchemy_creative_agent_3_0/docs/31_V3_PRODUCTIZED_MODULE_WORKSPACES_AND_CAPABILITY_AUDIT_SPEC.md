@@ -9,6 +9,33 @@ after a user clicks `General Creative` or `E-Commerce`, the two modules must
 feel like different beginner-facing products, not the same engineering form
 with a few hidden fields.
 
+Project Mode note:
+
+```text
+Documents 32-37 wrap this workspace model in a Project layer. After Project
+Mode, users should enter a project first, then open General Template inside
+that project. E-Commerce is frozen during the Project Mode foundation phase and
+must not create project jobs until a later accepted E-Commerce Project Mode
+spec reactivates it.
+```
+
+Document 50 note:
+
+```text
+The V1/V2-derived shared capability audit in this document is now wrapped by
+document 50. Future visual enhancement must be consolidated into one V3-native
+Visual Capability Cluster under `app/shared_capabilities`. This document remains
+valid for beginner-facing UI and productized workspace language, but document 50
+is the authority for shared visual module ownership, cluster dispatch, and
+strong verification.
+
+Document 51 extends that same cluster with commercial consistency Pro behavior:
+strong selected-image references, explicit identity/product/brand locks,
+visual review, retry patches, best-output selection, and negative visual memory.
+If this document's older capability-audit wording is less specific, use
+document 51 for the implementation details.
+```
+
 ---
 
 ## 1. Problem Found
@@ -40,7 +67,12 @@ Required distinction:
 
 ```text
 V3 Home
-  -> cards + recent V3 history only
+  -> New Project + recent V3 projects
+
+Project Detail
+  -> template cards
+  -> active General Template workspace
+  -> project timeline
 
 General Creative Workspace
   -> poster / cover / brand visual / product-style creative images
@@ -49,15 +81,16 @@ General Creative Workspace
   -> no marketplace, listing, keyword, competitor, or commerce pack language
 
 E-Commerce Workspace
-  -> product image first
-  -> one-sentence commerce request
-  -> optional platform / market
-  -> optional product facts and risky claims inside secondary details
-  -> mature suite slots: main, feature, scenario, detail, trust, cover
+  -> locked in the Project Mode foundation phase
+  -> visible as a future template card
+  -> no project job creation until reactivated by a later accepted spec
 ```
 
 The same backend central brain can perform the complex reasoning. The frontend
 must show only the useful result of that reasoning in simple product language.
+
+In Project Mode, `General Creative Workspace` should be interpreted as
+`General Template Workspace inside Project Detail`.
 
 ---
 
@@ -165,7 +198,18 @@ The UI must not show raw shared capability result labels.
 
 ---
 
-## 5. E-Commerce Workspace
+## 5. Legacy Pre-Project E-Commerce Workspace
+
+This section describes the pre-Project-Mode E-Commerce workspace. It is useful
+historical context, but it must not be used to keep E-Commerce active during
+the Project Mode foundation phase.
+
+Project Mode rule:
+
+```text
+E-Commerce becomes a locked template card until a later accepted
+E-Commerce Project Mode spec reactivates it.
+```
 
 ### 5.1 User Promise
 
@@ -266,7 +310,17 @@ filenames, or job IDs by default.
 The V1/V2 advantages migrated in document `24` are backend capabilities. They
 must not become visible frontend complexity.
 
-Expected active shared capability behavior:
+Current ownership refinement:
+
+```text
+After document 50, these backend helpers should be treated as child modules of
+the V3 Visual Capability Cluster, not as loose standalone helpers. They may
+remain in their existing files during migration, but all visual enhancement,
+visual reuse, reference binding, visual grammar, consistency guarding, and
+output visual review must be dispatched through the cluster framework.
+```
+
+Expected active shared capability behavior in the pre-Project-Mode stage:
 
 ```text
 General Creative:
@@ -282,6 +336,14 @@ E-Commerce:
   commerce critic and output review contribute plain warnings
 ```
 
+Project Mode replacement:
+
+```text
+General Template remains the only active project-generation template.
+E-Commerce shared capability behavior should not run from the normal Project
+Mode UI until E-Commerce is reactivated by a later accepted spec.
+```
+
 Audit requirement:
 
 ```text
@@ -289,11 +351,28 @@ Audit requirement:
    in backend job records for both General Creative and E-Commerce.
 2. Normal frontend copy must translate those effects into beginner language.
 3. V3 must not import V1/V2 runtime modules or call V1/V2 job/generation APIs.
+4. After document 50 implementation, static ownership audit must prove no
+   reusable visual enhancement logic remains privately owned by Central Brain,
+   PromptCompilerAgent, Project Mode, templates, or providers.
 ```
 
 ---
 
-## 7. Implementation Steps
+## 7. Legacy Implementation Steps
+
+These steps document the pre-Project-Mode workspace polish. They should not be
+used as the next implementation order after documents `32`-`37`.
+
+Project Mode implementation order must follow:
+
+```text
+1. Project data/API layer
+2. project-first V3 home
+3. project detail shell
+4. General Template project flow
+5. E-Commerce locked-state enforcement
+6. Project Mode audit and tests
+```
 
 ### Step 1 - Documentation
 
@@ -344,12 +423,13 @@ Audit requirement:
 
 ---
 
-## 8. Acceptance Criteria
+## 8. Legacy Acceptance Criteria
 
 This phase is complete only when:
 
 ```text
-1. V3 home still shows only cards and V3 history.
+1. V3 home still shows only template cards and V3 project history. The older
+   job-history reading is superseded by documents `32`-`45`.
 2. General Creative and E-Commerce open visibly different workspaces.
 3. General Creative does not show commerce platform, keyword, competitor, or
    listing-style fields.
@@ -362,4 +442,16 @@ This phase is complete only when:
 8. V1/V2-derived shared capabilities are verified as active backend helpers.
 9. V3 still calls only `/api/v3/creative-agent/*` for V3 work.
 10. Relevant backend, frontend, syntax, and audit checks pass.
+```
+
+Project Mode replacement acceptance criteria are defined in documents `35`,
+`36`, and `37`. In the Project Mode foundation phase, success means:
+
+```text
+1. V3 home is project-first.
+2. General Template is the only active generation template.
+3. E-Commerce is visible but locked.
+4. Project jobs include project context.
+5. selected outputs drive continuation.
+6. raw job history is no longer the primary user-facing history object.
 ```

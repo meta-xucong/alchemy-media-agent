@@ -35,6 +35,55 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword.lower() in text for keyword in keywords)
 
 
+PORTRAIT_BEAUTY_CONTEXT_TERMS: tuple[str, ...] = (
+    "portrait",
+    "photo",
+    "photography",
+    "model",
+    "woman",
+    "girl",
+    "face",
+    "fashion",
+    "editorial",
+    "\u4eba\u50cf",
+    "\u5199\u771f",
+    "\u7167\u7247",
+    "\u6444\u5f71",
+    "\u6a21\u7279",
+    "\u7f8e\u5973",
+    "\u4eba\u7269",
+)
+LOCAL_SERVICE_CONTEXT_TERMS: tuple[str, ...] = (
+    "salon",
+    "spa",
+    "nail",
+    "service",
+    "booking",
+    "appointment",
+    "store",
+    "opening",
+    "\u7f8e\u7532",
+    "\u7f8e\u776b",
+    "\u7f8e\u5bb9",
+    "\u7f8e\u53d1",
+    "\u76ae\u80a4\u7ba1\u7406",
+    "\u6309\u6469",
+    "\u5230\u5e97",
+    "\u9884\u7ea6",
+    "\u5f00\u4e1a\u4f18\u60e0",
+)
+
+
+def _is_portrait_beauty_context(normalized_input: str) -> bool:
+    has_beauty_word = "beauty" in normalized_input or "\u7f8e\u5973" in normalized_input
+    if not has_beauty_word:
+        return False
+    return _contains_any(normalized_input, PORTRAIT_BEAUTY_CONTEXT_TERMS) and not _contains_any(
+        normalized_input,
+        LOCAL_SERVICE_CONTEXT_TERMS,
+    )
+
+
 INDUSTRY_KEYWORDS: tuple[tuple[IndustryCategory, tuple[str, ...]], ...] = (
     (
         IndustryCategory.BEVERAGE,
@@ -230,10 +279,10 @@ CREATIVE_DEFAULTS: dict[IndustryCategory, dict[str, object]] = {
         "negative": ["medical fear style", "messy salon background", "cheap overdecorated poster"],
     },
     IndustryCategory.UNKNOWN: {
-        "visual_direction": "clean commercial visual with clear campaign structure",
-        "composition": "main subject centered with readable text hierarchy and clear CTA area",
-        "lighting": "clean commercial lighting",
-        "materials": ["clean background", "simple commercial props"],
+        "visual_direction": "clean polished creative visual with clear subject and atmosphere",
+        "composition": "main subject centered with balanced scene space and optional clean overlay area",
+        "lighting": "clean refined lighting",
+        "materials": ["clean background", "simple scene elements"],
         "negative": ["messy background", "fake unreadable text"],
     },
 }
@@ -241,6 +290,8 @@ CREATIVE_DEFAULTS: dict[IndustryCategory, dict[str, object]] = {
 
 def detect_industry(normalized_input: str) -> IndustryCategory:
     for industry, keywords in INDUSTRY_KEYWORDS:
+        if industry == IndustryCategory.LOCAL_SERVICE_BEAUTY and _is_portrait_beauty_context(normalized_input):
+            continue
         if _contains_any(normalized_input, keywords):
             return industry
     return IndustryCategory.UNKNOWN
@@ -394,7 +445,7 @@ def purpose_for_asset(platform: Platform, asset_type: AssetType, industry: Indus
         return "in-store screen campaign image"
     if industry == IndustryCategory.ECOMMERCE_PRODUCT:
         return "commercial product conversion visual"
-    return "main commercial campaign poster"
+    return "directly usable creative image"
 
 
 def default_color_palette(industry: IndustryCategory, tones: list[str]) -> list[str]:

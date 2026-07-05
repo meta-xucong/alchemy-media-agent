@@ -28,3 +28,11 @@ def test_central_creative_brain_orchestrates_pipeline() -> None:
     assert result.creative_job.job_id.startswith("job_")
     assert result.asset_pack.manifest["asset_count"] == len(result.series_plan.assets)
 
+
+def test_prompt_compilation_preserves_user_requested_subject() -> None:
+    result = run_creative_planning("生成一张清爽高级的夏季饮料宣传图，画面干净明亮，产品感强，不要文字")
+
+    prompt = result.prompt_compilations[0]
+    assert "夏季饮料" in prompt.visual_prompt
+    assert any("must match the user request" in item and "夏季饮料" in item for item in prompt.hard_constraints)
+

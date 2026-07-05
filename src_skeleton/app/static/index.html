@@ -42,6 +42,7 @@
         <nav class="module-tabs" aria-label="生成模块" role="tablist">
           <button class="tab active" data-tab="image" type="button" role="tab" aria-selected="true">生图 V1.0 基础版</button>
           <button class="tab" data-tab="v2" type="button" role="tab" aria-selected="false">生图 V2.0 AGENT</button>
+          <button class="tab" data-tab="v3" type="button" role="tab" aria-selected="false">生图 V3.0 creative OS</button>
           <div class="lab-nav-menu">
             <button class="tab" data-tab="lab" type="button" role="tab" aria-selected="false" aria-haspopup="true" aria-expanded="false">Alchemy Lab</button>
             <div class="lab-nav-dropdown" role="menu" aria-label="Alchemy Lab 子功能" hidden>
@@ -51,7 +52,6 @@
               </button>
             </div>
           </div>
-          <button class="tab" data-tab="v3" type="button" role="tab" aria-selected="false">生图 V3.0 特调 Agent</button>
           <button class="tab" data-tab="video" type="button" role="tab" aria-selected="false">生视频（DEMO）</button>
         </nav>
 
@@ -1306,57 +1306,66 @@
                 <div class="panel-head section-title">
                   <div>
                     <p class="eyebrow">Alchemy Creative Agent 3.0</p>
-                    <h3>选择你要做的图</h3>
-                    <p class="section-subcopy">先选一个特调 Agent。进入后再上传图片、写一句需求，V3 会自己完成理解、规划和套图整理。</p>
+                    <h3>V3 项目工作台</h3>
+                    <p class="section-subcopy">先选要做的项目类型，再创建项目。后续每次继续创作都会读取本项目已确认的风格和结果。</p>
                   </div>
                   <div class="v3-hero-actions">
-                    <span id="v3ShellState" class="state-pill">V3 独立运行</span>
+                    <span id="v3ShellState" class="state-pill">项目制运行</span>
                     <a class="button compact ghost" href="/creative-agent-v3" data-v3-route-link>打开 V3 首页</a>
                   </div>
                 </div>
 
-                <div id="v3ScenarioGrid" class="v3-scenario-grid" aria-label="V3 Agent 选择">
-                  <button id="v3ScenarioGeneral" class="v3-scenario-card active" data-v3-scenario="general_creative" type="button" aria-pressed="true">
-                    <span>通用创意</span>
-                    <strong>传图 + 一句话出商业图</strong>
-                    <small>海报、封面、活动图、品牌视觉、产品感主图都可以从这里开始。</small>
-                  </button>
-                  <button class="v3-scenario-card" data-v3-scenario="ecommerce" type="button" aria-pressed="false">
-                    <span>电商特调</span>
-                    <strong>上传商品图，一键生成套图</strong>
-                    <small>适合主图、卖点图、场景图、信任背书图和导出清单。</small>
-                  </button>
-                  <button class="v3-scenario-card locked" data-v3-scenario="new_media" data-v3-placeholder="true" type="button" aria-pressed="false" aria-disabled="true" disabled>
-                    <span>新媒体投放</span>
-                    <strong>封面与素材矩阵</strong>
-                    <small>面向账号内容、广告钩子和素材批量化，后续开放。</small>
-                  </button>
-                  <button class="v3-scenario-card locked" data-v3-scenario="private_domain" data-v3-placeholder="true" type="button" aria-pressed="false" aria-disabled="true" disabled>
-                    <span>私域运营</span>
-                    <strong>社群转化图片</strong>
-                    <small>面向朋友圈、社群活动和转化物料，后续开放。</small>
-                  </button>
-                  <button class="v3-scenario-card locked" data-v3-scenario="brand_ip" data-v3-placeholder="true" aria-pressed="false" aria-disabled="true" type="button" disabled>
-                    <span>品牌 IP</span>
-                    <strong>长期视觉资产</strong>
-                    <small>面向品牌角色、系列记忆和风格延续，后续开放。</small>
-                  </button>
+                <div id="v3TemplateChooser" class="v3-template-chooser" aria-label="选择项目类型"></div>
+
+                <div id="v3TemplateCreatePanel" class="v3-template-create-panel">
+                  <div>
+                    <p class="eyebrow">Create Project</p>
+                    <h4 id="v3SelectedTemplateTitle">通用创意项目</h4>
+                    <p id="v3SelectedTemplateIntro">适合海报、社媒封面、活动主视觉和通用商业图片。</p>
+                  </div>
+                </div>
+
+                <div id="v3SelectedBrandMemoryBar" class="v3-selected-memory-bar" hidden></div>
+                <div class="v3-project-create">
+                  <label class="field v3-project-goal-field">
+                    <span class="v3-field-title-row">
+                      <span id="v3NewProjectGoalLabel">这个项目想做什么</span>
+                      <small id="v3NewProjectGoalHint" class="v3-field-hint">写一句自然语言就行，上传参考图和继续生成都可以进项目后再做。</small>
+                    </span>
+                    <textarea id="v3NewProjectGoalInput" rows="3" placeholder="例如：做一组清爽高级的新饮品宣传图，适合小红书封面和店铺活动页"></textarea>
+                  </label>
+                  <button id="v3NewProjectBtn" class="button primary" type="button">创建通用创意项目</button>
                 </div>
               </section>
 
               <section class="panel flow-section v3-history-panel">
                 <div class="panel-head section-title">
                   <div>
-                    <p class="eyebrow">V3 History</p>
-                    <h3>最近生成</h3>
-                    <p class="section-subcopy">这里只显示 V3 自己创建的任务。点开可以继续查看规划、结果和导出信息。</p>
+                    <p class="eyebrow">V3 Projects</p>
+                    <h3>最近项目</h3>
+                    <p class="section-subcopy">这里是一个个可继续工作的项目。点开后可以查看已确认内容，并沿着同一套风格继续生成。</p>
+                  </div>
+                  <div class="v3-hero-actions">
+                    <span id="v3ProjectCount" class="state-pill">0</span>
+                    <button id="v3RefreshProjectsBtn" class="button compact ghost" type="button">刷新</button>
+                  </div>
+                </div>
+                <div id="v3ProjectList" class="v3-project-list empty-v3-list" aria-live="polite">还没有 V3 项目</div>
+              </section>
+
+              <section class="panel flow-section v3-image-history-panel">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">V3 Generated Images</p>
+                    <h3>生成历史</h3>
+                    <p class="section-subcopy">这里汇总你在 V3.0 所有项目里生成过的图片。点开图片可以查看大图，也可以进入所属项目继续做。</p>
                   </div>
                   <div class="v3-hero-actions">
                     <span id="v3HistoryCount" class="state-pill">0</span>
                     <button id="v3RefreshHistoryBtn" class="button compact ghost" type="button">刷新</button>
                   </div>
                 </div>
-                <div id="v3HistoryList" class="v3-history-list empty-v3-list" aria-live="polite">还没有 V3 生成记录</div>
+                <div id="v3HistoryList" class="v3-history-list empty-v3-list" aria-live="polite">还没有 V3 生成图片</div>
               </section>
             </div>
 
@@ -1364,7 +1373,7 @@
               <section class="panel flow-section v3-workspace-header">
                 <div class="panel-head section-title">
                   <div>
-                    <p id="v3ComposerEyebrow" class="eyebrow">01 / 通用创意</p>
+                    <p id="v3ComposerEyebrow" class="eyebrow">通用创意</p>
                     <h3 id="v3WorkspaceTitle">通用创意 Agent</h3>
                     <p id="v3WorkspaceIntro" class="section-subcopy">写一句需求，可选上传参考图，V3 会自动组织成可执行的商业视觉方案。</p>
                   </div>
@@ -1375,44 +1384,135 @@
                 </div>
               </section>
 
-              <div class="v3-workspace-grid">
-                <div class="module-stack">
-                  <section class="panel flow-section v3-composer-panel">
-                    <div id="v3GeneralPresetRow" class="v3-preset-row v3-general-presets" aria-label="通用创意快速目标">
-                      <button class="v3-preset-card active" data-v3-preset="campaign_poster" data-v3-preset-scope="general_creative" type="button" aria-pressed="true">
-                        <span>活动海报</span>
-                        <small>适合首屏主视觉</small>
-                      </button>
-                      <button class="v3-preset-card" data-v3-preset="social_cover" data-v3-preset-scope="general_creative" type="button" aria-pressed="false">
-                        <span>社媒封面</span>
-                        <small>适合内容分发</small>
-                      </button>
-                      <button class="v3-preset-card" data-v3-preset="product_style_hero" data-v3-preset-scope="general_creative" type="button" aria-pressed="false">
-                        <span>产品感主图</span>
-                        <small>不启用电商规则</small>
-                      </button>
-                    </div>
+              <section id="v3ProjectDetailPanel" class="panel flow-section v3-project-detail-panel">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">项目概览</p>
+                    <h3 id="v3ProjectTitle">未打开项目</h3>
+                    <p id="v3ProjectGoal" class="section-subcopy">这里汇总这个项目的目标、已确认参考、生成进度和下一步建议。以后从这里继续，会尽量保持同一项目的风格一致。</p>
+                  </div>
+                  <div class="v3-project-header-actions">
+                    <div id="v3ProjectStyleChips" class="v3-project-style-chips" aria-live="polite"></div>
+                    <button id="v3ProjectArchiveBtn" class="button compact ghost" type="button" disabled>归档项目</button>
+                  </div>
+                </div>
+                <div id="v3ProjectSnapshot" class="v3-project-snapshot" aria-live="polite"></div>
+                <div id="v3PersistentDisplayRegion" class="v3-persistent-display-region" aria-label="项目成果展示区">
+                  <div id="v3ProjectOutputBoard" class="v3-project-output-board empty-v3-list" aria-live="polite">生成图片后，会优先显示在这里。</div>
+                  <div id="v3UsefulReferenceBoard" class="v3-useful-reference-board empty-v3-list" aria-live="polite">选中的图片会成为后续参考。</div>
+                  <details class="v3-artifact-details">
+                    <summary>
+                      <span>项目产物与记录</span>
+                      <small>需要时再展开查看</small>
+                    </summary>
+                    <div id="v3ProjectWorkflow" class="v3-project-workflow" aria-live="polite"></div>
+                    <div id="v3WorkflowArtifacts" class="v3-workflow-artifacts" aria-live="polite"></div>
+                    <div id="v3ProjectTimeline" class="v3-project-timeline empty-v3-list" aria-live="polite">项目开始后，关键动作会显示在这里。</div>
+                  </details>
+                  <div id="v3BrandMemoryPanel" class="v3-brand-memory-panel" hidden></div>
+                </div>
+              </section>
 
-                    <div id="v3EcommercePresetRow" class="v3-preset-row v3-ecommerce-presets" aria-label="电商特调快速目标" hidden>
-                      <button class="v3-preset-card" data-v3-preset="one_click_product_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
-                        <span>一键电商套图</span>
-                        <small>上传商品图，再写一句需求</small>
-                      </button>
-                      <button class="v3-preset-card" data-v3-preset="marketplace_listing_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
-                        <span>平台上架套图</span>
-                        <small>主图、卖点、场景、信任背书</small>
-                      </button>
-                      <button class="v3-preset-card" data-v3-preset="style_recreation_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
-                        <span>参考风格复用</span>
-                        <small>借鉴画面结构，不复制内容</small>
-                      </button>
-                    </div>
+              <section id="v3StepActionRegion" class="panel flow-section v3-step-action-region" aria-label="项目下一步操作区">
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">继续生产</p>
+                    <h3>继续生成套图</h3>
+                    <p class="section-subcopy">不用选流程。写一句这次想做什么，V3 会沿用本项目已确认的风格继续生成。</p>
+                  </div>
+                </div>
+                <div id="v3StepCards" class="v3-step-cards" aria-live="polite"></div>
+              </section>
+
+              <section id="v3ProjectSubpage" class="panel flow-section v3-project-subpage" aria-label="项目功能子页面" hidden>
+                <div class="panel-head section-title">
+                  <div>
+                    <p id="v3SubpageEyebrow" class="eyebrow">项目续作</p>
+                    <h3 id="v3SubpageTitle">继续这个项目</h3>
+                    <p id="v3SubpageIntro" class="section-subcopy">这里显示当前步骤需要的具体信息和操作。</p>
+                  </div>
+                  <div class="v3-hero-actions">
+                    <button id="v3CloseSubpageBtn" class="button compact ghost" type="button">返回项目主页</button>
+                  </div>
+                </div>
+
+                <div id="v3SubpageBody" class="v3-subpage-body" aria-live="polite"></div>
+                <div id="v3ProjectNextActions" class="v3-project-next-actions" aria-label="项目下一步动作"></div>
+
+                <div class="v3-workspace-grid">
+                  <div class="module-stack">
+                  <section class="panel flow-section v3-composer-panel">
+                    <details class="v3-intent-details v3-mode-selector" open>
+                      <summary>
+                        <span>生成方式</span>
+                        <small>默认由 V3 智能选择，也可以手动指定</small>
+                      </summary>
+                      <div id="v3VariationModeRow" class="v3-preset-row v3-variation-mode-row" aria-label="通用模板生成方式">
+                        <button class="v3-preset-card active" data-v3-variation-mode="auto" type="button" aria-pressed="true">
+                          <span>智能选择</span>
+                          <strong>自动判断</strong>
+                          <small>V3 根据你的需求判断最合适的生成方式</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-variation-mode="selection_candidates" type="button" aria-pressed="false">
+                          <span>相似备选模式</span>
+                          <strong>多给几个相似选择</strong>
+                          <small>同人物、同产品或同风格，小幅变化方便挑选</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-variation-mode="delivery_suite" type="button" aria-pressed="false">
+                          <span>套图扩展模式</span>
+                          <strong>沿这个方向做一组图</strong>
+                          <small>同一视觉方向下，生成更完整的系列产物</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-variation-mode="creative_exploration" type="button" aria-pressed="false">
+                          <span>创意探索模式</span>
+                          <strong>尝试不同创意方向</strong>
+                          <small>主体不变，风格、氛围和表达更开放</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-variation-mode="format_layout_adaptation" type="button" aria-pressed="false">
+                          <span>尺寸/版式适配模式</span>
+                          <strong>适配不同画幅和排版</strong>
+                          <small>适合封面、横版、竖版、留白和版式变化</small>
+                        </button>
+                      </div>
+
+                      <div id="v3EcommercePresetRow" class="v3-preset-row v3-ecommerce-presets" aria-label="电商特调快速目标" hidden>
+                        <button class="v3-preset-card" data-v3-preset="one_click_product_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                          <span>一键电商套图</span>
+                          <small>上传商品图，再写一句需求</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-preset="marketplace_listing_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                          <span>平台上架套图</span>
+                          <small>主图、卖点、场景、信任背书</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-preset="style_recreation_set" data-v3-preset-scope="ecommerce" type="button" aria-pressed="false">
+                          <span>参考风格复用</span>
+                          <small>借鉴画面结构，不复制内容</small>
+                        </button>
+                      </div>
+                    </details>
 
                     <label class="field v3-prompt-field">
                       <span id="v3PromptLabel">你想要什么图</span>
                       <textarea id="v3PromptInput" rows="5" placeholder="例如：上传一张饮料产品图，生成一组清爽高级的夏季新品宣传图，适合小红书封面和店铺活动页"></textarea>
                       <small id="v3PromptHint" class="v3-field-hint">写一句自然语言即可，不需要写复杂 Prompt。</small>
                     </label>
+
+                    <div class="v3-generation-settings" aria-label="生成设置">
+                      <label class="v3-setting-control v3-count-control" for="v3CountInput">
+                        <span>生成数量</span>
+                        <strong><span id="v3CountValue">2</span> 张</strong>
+                        <input id="v3CountInput" type="range" min="1" max="4" step="1" value="2" />
+                      </label>
+                      <div class="v3-setting-control v3-aspect-control">
+                        <span>画幅比例</span>
+                        <div class="v3-aspect-segments" role="radiogroup" aria-label="V3 画幅比例">
+                          <button class="active" type="button" data-v3-size="" aria-pressed="true">自动</button>
+                          <button type="button" data-v3-size="1024x1536" aria-pressed="false">竖版</button>
+                          <button type="button" data-v3-size="1024x1024" aria-pressed="false">方图</button>
+                          <button type="button" data-v3-size="1536x1024" aria-pressed="false">横版</button>
+                        </div>
+                      </div>
+                    </div>
 
                     <div class="v3-input-grid">
                       <label class="file-drop v3-file-drop" for="v3AssetInput">
@@ -1478,20 +1578,40 @@
                       </details>
                     </div>
 
+                    <div id="v3ProgressPanel" class="run-progress-panel v3-progress-panel" aria-live="polite">
+                      <div class="run-progress-head">
+                        <strong id="v3SummaryTitle">生成进度</strong>
+                        <span id="v3SummaryPill">待开始</span>
+                      </div>
+                      <div class="run-progress-meter" aria-hidden="true">
+                        <span id="v3ProgressFill"></span>
+                      </div>
+                      <div id="v3CapabilityList" class="run-progress-steps v3-progress-steps" aria-label="V3 生图制作进度">
+                        <span class="run-progress-step active">理解你的目标</span>
+                        <span class="run-progress-step">整理画面方向</span>
+                        <span class="run-progress-step">参考上传图片</span>
+                        <span class="run-progress-step">检查生成结果</span>
+                      </div>
+                      <p id="v3SummaryIntro" class="run-progress-detail">写一句需求后，V3 会把它整理成清晰的画面方向。</p>
+                      <div id="v3ClosureList" class="v3-closure-list" aria-live="polite" hidden></div>
+                      <div id="v3WarningList" class="v3-warning-list" aria-live="polite" hidden></div>
+                      <p id="v3SummaryFootnote" class="micro-copy">进度提示只展示关键成果，图片仍然是主结果。</p>
+                    </div>
+
                     <div id="v3NoticeBar" class="notice-bar" role="status" aria-live="polite">请选择 V3 首页里的 Agent，然后开始生成。</div>
 
                     <div class="composer-actions v3-action-row">
-                      <button id="v3CreateJobBtn" class="button primary" type="button">生成创意图</button>
-                      <button id="v3GenerateBtn" class="button secondary" type="button" disabled>重新生成创意图</button>
-                      <button id="v3SelectBtn" class="button secondary" type="button" disabled>选中结果</button>
-                      <button id="v3ResetBtn" class="button ghost" type="button">清空</button>
+                      <button id="v3CreateJobBtn" class="button primary" type="button">生成一组图片</button>
+                      <button id="v3GenerateBtn" class="button secondary" type="button" disabled hidden>继续生成</button>
+                      <button id="v3SelectBtn" class="button secondary" type="button" disabled hidden>设为后续参考</button>
+                      <button id="v3ResetBtn" class="button ghost" type="button" hidden>清空</button>
                     </div>
                   </section>
 
                   <section class="gallery-wrap flow-section v3-results-panel">
                     <div class="panel-head section-title">
                       <div>
-                        <p class="eyebrow">02 / 结果</p>
+                        <p class="eyebrow">结果</p>
                         <h3 id="v3ResultTitle">生成结果</h3>
                       </div>
                       <span id="v3JobId" class="state-pill" hidden>-</span>
@@ -1500,27 +1620,9 @@
                       生成后的图片会显示在这里。
                     </div>
                   </section>
-                </div>
+                  </div>
 
-                <aside class="module-stack v3-side-stack">
-                  <section class="panel flow-section v3-brain-panel">
-                    <div class="mini-head">
-                      <h4 id="v3SummaryTitle">这次 V3 帮你完成了</h4>
-                      <span id="v3SummaryPill" class="mini-pill">自动完成</span>
-                    </div>
-                    <p id="v3SummaryIntro" class="micro-copy">复杂判断由 V3 自动处理，这里只显示你能直接理解的成果。</p>
-                    <div id="v3CapabilityList" class="v3-capability-list">
-                      <span>理解你的目标</span>
-                      <span>识别上传图片用途</span>
-                      <span>整理画面风格</span>
-                      <span>保护文字与事实</span>
-                      <span>检查候选质量</span>
-                    </div>
-                    <div id="v3ClosureList" class="v3-closure-list" aria-live="polite" hidden></div>
-                    <div id="v3WarningList" class="v3-warning-list" aria-live="polite" hidden></div>
-                    <p id="v3SummaryFootnote" class="micro-copy">你只需要看图和选择结果。</p>
-                  </section>
-
+                  <aside class="module-stack v3-side-stack">
                   <section id="v3CommercePanel" class="panel flow-section v3-commerce-panel" hidden>
                     <div class="mini-head">
                       <h4>套图规划</h4>
@@ -1530,8 +1632,9 @@
                     <div id="v3EcommercePlanList" class="v3-commerce-plan-list" hidden></div>
                     <div id="v3EcommerceExportList" class="v3-commerce-export-list" hidden></div>
                   </section>
-                </aside>
-              </div>
+                  </aside>
+                </div>
+              </section>
             </div>
           </div>
         </section>
@@ -1568,7 +1671,47 @@
           </div>
         </section>
       </main>
-    </div>
+            </div>
+
+            <section id="v3BrandMemoryModal" class="sample-modal v3-brand-memory-modal" role="dialog" aria-modal="true" aria-labelledby="v3BrandMemoryTitle" hidden>
+              <div class="sample-dialog v3-brand-memory-dialog">
+                <button id="closeV3BrandMemoryBtn" class="modal-close" type="button" aria-label="关闭品牌风格保存">×</button>
+                <div class="panel-head section-title">
+                  <div>
+                    <p class="eyebrow">长期风格</p>
+                    <h3 id="v3BrandMemoryTitle">保存为品牌风格</h3>
+                    <p class="section-subcopy">确认后，之后的新项目也可以沿用这组风格。你可以先改成自己看得懂的说法。</p>
+                  </div>
+                </div>
+                <form id="v3BrandMemoryForm" class="v3-brand-memory-form">
+                  <label class="field">
+                    <span>品牌或风格名称</span>
+                    <input id="v3BrandMemoryBrandNameInput" type="text" maxlength="80" />
+                  </label>
+                  <label class="field">
+                    <span>这个风格适合什么</span>
+                    <textarea id="v3BrandMemoryStyleSummaryInput" rows="3"></textarea>
+                  </label>
+                  <label class="field">
+                    <span>以后要保持什么</span>
+                    <textarea id="v3BrandMemoryKeepNotesInput" rows="3"></textarea>
+                  </label>
+                  <label class="field">
+                    <span>以后尽量避免什么</span>
+                    <textarea id="v3BrandMemoryAvoidNotesInput" rows="3"></textarea>
+                  </label>
+                  <label class="field">
+                    <span>适合用在哪些场景</span>
+                    <textarea id="v3BrandMemoryUsageScenesInput" rows="2"></textarea>
+                  </label>
+                  <div id="v3BrandMemoryReferenceSummary" class="v3-brand-memory-reference-summary"></div>
+                  <div class="composer-actions v3-brand-memory-actions">
+                    <button id="v3BrandMemoryConfirmBtn" class="button primary" type="submit">确认保存</button>
+                    <button id="v3BrandMemoryCancelBtn" class="button ghost" type="button">取消</button>
+                  </div>
+                </form>
+              </div>
+            </section>
 
     <section id="sampleGuideModal" class="sample-modal" role="dialog" aria-modal="true" aria-labelledby="sampleGuideTitle" hidden>
       <div class="sample-dialog">
@@ -1670,6 +1813,25 @@
       </div>
     </section>
 
+    <section id="v3ProjectHistoryModal" class="v3-project-history-modal" role="dialog" aria-modal="true" aria-labelledby="v3ProjectHistoryTitle" hidden>
+      <div class="v3-project-history-backdrop" data-close-v3-history></div>
+      <div class="v3-project-history-dialog">
+        <button id="v3ProjectHistoryCloseBtn" class="modal-close v3-project-history-close" type="button" aria-label="关闭 V3 项目历史" title="关闭">×</button>
+        <div class="v3-project-history-head">
+          <div>
+            <p class="eyebrow">V3 Project Gallery</p>
+            <h3 id="v3ProjectHistoryTitle">项目生成图片</h3>
+            <p id="v3ProjectHistorySummary" class="section-subcopy">这个项目生成过的图片都在这里。</p>
+          </div>
+          <div class="v3-project-history-head-actions">
+            <span id="v3ProjectHistoryCount" class="state-pill">0</span>
+            <button id="v3ProjectHistoryOpenProjectBtn" class="button compact secondary" type="button">进入项目</button>
+          </div>
+        </div>
+        <div id="v3ProjectHistoryGrid" class="v3-project-history-grid empty-v3-list" aria-live="polite"></div>
+      </div>
+    </section>
+
     <template id="outputTemplate">
       <article class="output-card">
         <button class="output-preview" type="button"></button>
@@ -1680,6 +1842,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260627-v2-upload-polish" defer></script>
+    <script src="/static/app.js?v=20260704-v3-mode-selector" defer></script>
   </body>
 </html>

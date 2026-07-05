@@ -15,6 +15,10 @@ from .product_truth import ProductTruthLockBuilder
 from .selling_point_planner import SellingPointToImagePlanner
 
 
+ECOMMERCE_MAX_REQUESTED_IMAGES = 4
+LIFESTYLE_SLOT_HINTS = {"scenario_image", "ad_cover", "benefit_hook", "store_banner", "collection_cover"}
+
+
 class EcommerceScenarioPack(ScenarioPack):
     """Active V3 Scenario Pack for e-commerce image-set planning."""
 
@@ -54,6 +58,25 @@ class EcommerceScenarioPackPlanner:
             platform_profile=platform_profile,
             parameters=scenario_parameters,
             product_profile=product_profile,
+        )
+        requested_count = _bounded_requested_count(scenario_parameters.get("requested_image_count"))
+        selected_slots = _selected_slots(
+            marketplace_profile.image_slots,
+            scenario_parameters=scenario_parameters,
+            user_input=user_input,
+            requested_count=requested_count,
+        )
+        marketplace_profile = marketplace_profile.model_copy(
+            update={
+                "image_slots": selected_slots,
+                "metadata": {
+                    **marketplace_profile.metadata,
+                    "requested_image_count": requested_count,
+                    "slot_count_unified_with_requested_count": bool(requested_count),
+                    "default_image_slot_count": len(marketplace_profile.image_slots),
+                    "selected_image_slots": selected_slots,
+                },
+            }
         )
         truth = self.product_truth_builder.build(
             user_input=user_input,
@@ -99,7 +122,119 @@ class EcommerceScenarioPackPlanner:
                 "scenario_id": "ecommerce",
                 "mode": scenario_parameters.get("mode") or "one_click_product_set",
                 "recipe_count": len(recipes),
+                "requested_image_count": requested_count,
+                "selected_image_slots": selected_slots,
                 "uses_v3_core": True,
                 "imports_v1_v2_runtime": False,
             },
         )
+
+
+def _bounded_requested_count(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(1, min(ECOMMERCE_MAX_REQUESTED_IMAGES, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _selected_slots(
+    default_slots: list[str],
+    *,
+    scenario_parameters: dict[str, Any],
+    user_input: str,
+    requested_count: int | None,
+) -> list[str]:
+    explicit = _clean_slot_list(scenario_parameters.get("suite_slot_request"))
+    default_order = [slot for slot in default_slots if slot]
+    if requested_count is None and not explicit:
+        return default_order
+    if requested_count is None and explicit:
+        return [slot for slot in explicit if slot in default_order] or default_order
+    priority = _slot_priority(default_order, user_input=user_input, scenario_parameters=scenario_parameters)
+    selected: list[str] = []
+    for slot in explicit:
+        if slot in default_order and slot not in selected:
+            selected.append(slot)
+    for slot in priority:
+        if slot not in selected:
+            selected.append(slot)
+    if requested_count:
+        selected = selected[:requested_count]
+    return selected or default_order
+
+
+def _clean_slot_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_values = [part.strip() for part in value.split(",")]
+    elif isinstance(value, list):
+        raw_values = [str(part).strip() for part in value]
+    else:
+        raw_values = []
+    return [item for item in raw_values if item]
+
+
+def _slot_priority(
+    default_slots: list[str],
+    *,
+    user_input: str,
+    scenario_parameters: dict[str, Any],
+) -> list[str]:
+    text = " ".join(
+        [
+            str(user_input or ""),
+            str(scenario_parameters.get("scene") or ""),
+            str(scenario_parameters.get("style") or ""),
+            str(scenario_parameters.get("mode") or ""),
+        ]
+    ).lower()
+    wants_lifestyle = any(
+        token in text
+        for token in [
+            "lifestyle",
+            "in use",
+            "real scene",
+            "outdoor",
+            "home",
+            "travel",
+            "office",
+            "kitchen",
+            "浴室",
+            "户外",
+            "生活",
+            "场景",
+            "真实",
+        ]
+    )
+    if wants_lifestyle:
+        preferred = [
+            "main_image",
+            "scenario_image",
+            "ad_cover",
+            "benefit_hook",
+            "detail_image",
+            "feature_image_1",
+            "trust_image",
+            "size_spec_image",
+            "store_banner",
+            "collection_cover",
+        ]
+    else:
+        preferred = [
+            "main_image",
+            "hero_image",
+            "feature_image_1",
+            "scenario_image",
+            "detail_image",
+            "feature_image_2",
+            "benefit_image",
+            "size_spec_image",
+            "trust_image",
+            "ad_cover",
+            "store_banner",
+            "collection_cover",
+        ]
+    ordered = [slot for slot in preferred if slot in default_slots]
+    ordered.extend(slot for slot in default_slots if slot not in ordered)
+    return ordered

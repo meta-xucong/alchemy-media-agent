@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.providers.base import ProviderNotConfiguredError, ProviderRateLimitError
+from app.providers.base import ProviderNotConfiguredError, ProviderRateLimitError, ProviderRuntimeError
 import app.providers.doubao_image as doubao_image_provider
 import app.providers.gemini_image as gemini_image_provider
 import app.providers.openai_image as openai_image_provider
@@ -223,6 +223,109 @@ def test_openai_image_provider_accepts_url_response(monkeypatch):
     assert result[0]["api_response_source"] == "url"
 
 
+def test_openai_image_provider_accepts_data_url_response(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+
+    class FailingClient:
+        def __init__(self, **kwargs):
+            raise AssertionError("data URL output should not use HTTP download")
+
+    monkeypatch.setattr(openai_image_provider.httpx, "Client", FailingClient)
+
+    result = provider._outputs_from_response(
+        SimpleNamespace(data=[{"url": f"data:image/png;base64,{encoded}"}]),
+        ImagePromptPlan(main_subject="咖啡海报", count=1, quality="low"),
+        request_index=0,
+    )
+
+    assert result[0]["b64_json"] == encoded
+    assert result[0]["api_response_source"] == "url"
+
+
+def test_openai_image_provider_downloads_relative_proxy_url_with_auth(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    tiny_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+    captured = {}
+    monkeypatch.setattr(settings, "openai_api_key", "sk-proxy-test")
+    monkeypatch.setattr(settings, "openai_base_url", "https://aiself.vip/v1")
+
+    class FakeResponse:
+        content = tiny_png
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers or {}
+            return FakeResponse()
+
+    monkeypatch.setattr(openai_image_provider.httpx, "Client", FakeClient)
+
+    result = provider._outputs_from_response(
+        SimpleNamespace(data=[{"url": "/v1/files/file-image/content"}]),
+        ImagePromptPlan(main_subject="咖啡海报", count=1, quality="low"),
+        request_index=0,
+    )
+
+    assert captured["url"] == "https://aiself.vip/v1/files/file-image/content"
+    assert captured["headers"] == {"Authorization": "Bearer sk-proxy-test"}
+    assert base64.b64decode(result[0]["b64_json"]) == tiny_png
+
+
+def test_openai_image_provider_retries_slow_image_url_download(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    tiny_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+    calls = {"count": 0}
+
+    class FakeResponse:
+        content = tiny_png
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get(self, url, headers=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise openai_image_provider.httpx.ReadTimeout("slow proxy image content")
+            return FakeResponse()
+
+    monkeypatch.setattr(openai_image_provider.httpx, "Client", FakeClient)
+    monkeypatch.setattr(openai_image_provider.time, "sleep", lambda seconds: None)
+
+    result = provider._outputs_from_response(
+        SimpleNamespace(data=[{"url": "https://image.example.test/slow.png"}]),
+        ImagePromptPlan(main_subject="咖啡海报", count=1, quality="low"),
+        request_index=0,
+    )
+
+    assert calls["count"] == 2
+    assert base64.b64decode(result[0]["b64_json"]) == tiny_png
+
+
 def test_v1_prompting_does_not_require_deleted_or_replaced_quoted_text():
     delete_plan = build_prompt_plan(prompt='把左上角的“ALCOEN”logo去掉，保持整体风格。')
     replace_plan = build_prompt_plan(prompt='把“江苏纯安科技有限公司”改成“华斐达集团”，英文换成“HUAFEIDA GROUP”。')
@@ -285,6 +388,157 @@ def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path)
     assert len(captured["image"]) == 1
     assert result[0]["api_operation"] == "images.edit"
     assert result[0]["reference_image_count"] == 1
+
+
+def test_openai_image_provider_retries_gateway_image_edit_500_once(tmp_path, monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    captured = {"attempts": 0}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+    original_base_url = settings.openai_base_url
+    original_cooldown = settings.openai_image_edit_transient_cooldown_seconds
+
+    class Gateway500Error(Exception):
+        status_code = 500
+
+    class FlakyImages:
+        async def edit(self, **kwargs):
+            captured["attempts"] += 1
+            if captured["attempts"] == 1:
+                raise Gateway500Error("500 internal_server_error from aiai image edit")
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    class FlakyClient:
+        images = FlakyImages()
+
+    try:
+        settings.openai_base_url = "https://aiself.vip/v1"
+        settings.openai_image_edit_transient_cooldown_seconds = 0.0
+        result = asyncio.run(
+            provider._generate_one_with_references(
+                FlakyClient(),
+                "prompt",
+                ImagePromptPlan(main_subject="portrait", count=1, quality="medium", output_format="png"),
+                [reference_path],
+                index=0,
+            )
+        )
+    finally:
+        settings.openai_base_url = original_base_url
+        settings.openai_image_edit_transient_cooldown_seconds = original_cooldown
+        openai_image_provider._openai_image_rate_limiter.reset()
+
+    assert captured["attempts"] == 2
+    assert result[0]["api_operation"] == "images.edit"
+    assert result[0]["image_edit_transient_retries"] == 1
+
+
+def test_openai_image_provider_retries_gateway_image_edit_403_once(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    captured = {"attempts": 0}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+    original_base_url = settings.openai_base_url
+    original_cooldown = settings.openai_image_edit_transient_cooldown_seconds
+
+    class Gateway403Error(Exception):
+        status_code = 403
+
+    class FlakyImages:
+        async def edit(self, **kwargs):
+            captured["attempts"] += 1
+            if captured["attempts"] == 1:
+                raise Gateway403Error("403 upstream account aicodexvip temporarily forbidden")
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    class FlakyClient:
+        images = FlakyImages()
+
+    try:
+        settings.openai_base_url = "https://aiself.vip/v1"
+        settings.openai_image_edit_transient_cooldown_seconds = 0.0
+        result = asyncio.run(
+            provider._generate_one_with_references(
+                FlakyClient(),
+                "prompt",
+                ImagePromptPlan(main_subject="portrait", count=1, quality="medium", output_format="png"),
+                [reference_path],
+                index=0,
+            )
+        )
+    finally:
+        settings.openai_base_url = original_base_url
+        settings.openai_image_edit_transient_cooldown_seconds = original_cooldown
+        openai_image_provider._openai_image_rate_limiter.reset()
+
+    assert captured["attempts"] == 2
+    assert result[0]["image_edit_transient_retries"] == 1
+
+
+def test_openai_image_provider_image_edit_has_total_timeout_guard(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    captured = {"attempts": 0}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+    original_timeout = provider._client_timeout_seconds
+    original_cooldown = settings.openai_image_edit_transient_cooldown_seconds
+
+    class SlowImages:
+        async def edit(self, **kwargs):
+            captured["attempts"] += 1
+            await asyncio.sleep(1.0)
+
+    class SlowClient:
+        images = SlowImages()
+
+    try:
+        provider._client_timeout_seconds = lambda *, image_edit: 0.05
+        settings.openai_image_edit_transient_cooldown_seconds = 0.0
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            asyncio.run(
+                provider._generate_one_with_references(
+                    SlowClient(),
+                    "prompt",
+                    ImagePromptPlan(main_subject="portrait", count=1, quality="medium", output_format="png"),
+                    [reference_path],
+                    index=0,
+                )
+            )
+    finally:
+        provider._client_timeout_seconds = original_timeout
+        settings.openai_image_edit_transient_cooldown_seconds = original_cooldown
+        openai_image_provider._openai_image_rate_limiter.reset()
+
+    assert captured["attempts"] == 1
+    assert exc_info.value.detail["operation_timeout_exhausted"] is True
+    assert exc_info.value.detail["operation_timeout_seconds"] == 0.05
+
+
+def test_openai_image_provider_does_not_treat_official_403_as_gateway_transient():
+    provider = registry.image("openai_gpt_image")
+    original_base_url = settings.openai_base_url
+
+    class Official403Error(Exception):
+        status_code = 403
+
+    try:
+        settings.openai_base_url = "https://api.openai.com/v1"
+        exc = Official403Error("403 permission denied")
+        assert provider._is_transient_image_edit_error(exc) is False
+    finally:
+        settings.openai_base_url = original_base_url
 
 
 def test_openai_image_provider_edit_uses_stored_source_output(tmp_path, monkeypatch):

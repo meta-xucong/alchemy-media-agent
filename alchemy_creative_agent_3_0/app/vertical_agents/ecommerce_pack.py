@@ -6,6 +6,7 @@ from .base import VerticalAgentPack
 from ..creative_core.rules import stable_id
 from ..scenario_packs.ecommerce import EcommerceScenarioPackPlanner
 from ..schemas import AssetSpec, AssetType, IndustryCategory, Platform
+from ..shared_capabilities.visual_cluster.casebook_recipes import apply_role_recipe_casebook_overlay
 
 
 class EcommerceAgentFamily(VerticalAgentPack):
@@ -127,6 +128,12 @@ class EcommerceAgentFamily(VerticalAgentPack):
                 base_asset = series.assets[min(index, len(series.assets) - 1)] if series.assets else None
                 asset_type = self._asset_type_for_slot(recipe.slot)
                 recipe_payload = recipe.model_dump(mode="json")
+                mode_role_recipe = _mode_role_recipe_for_ecommerce_recipe(
+                    series_job_id=series.job_id,
+                    recipe_payload=recipe_payload,
+                    index=index + 1,
+                )
+                mode_execution_policy = _ecommerce_mode_execution_policy(series.job_id, len(pack_output.recipes))
                 marketplace_payload = pack_output.marketplace_profile.model_dump(mode="json")
                 product_truth_payload = pack_output.product_truth.model_dump(mode="json")
                 assets.append(
@@ -155,6 +162,10 @@ class EcommerceAgentFamily(VerticalAgentPack):
                                 ecommerce_selling_point=recipe.selling_point,
                                 ecommerce_buyer_intent=recipe.buyer_intent,
                                 ecommerce_visual_scene=recipe.visual_scene,
+                                mode_role_recipe=mode_role_recipe,
+                                mode_role_key=mode_role_recipe["role_key"],
+                                mode_role_label=mode_role_recipe["label"],
+                                mode_execution_policy=mode_execution_policy,
                                 marketplace_profile=marketplace_payload,
                                 product_truth=product_truth_payload,
                                 generated_from_ecommerce_recipe=True,
@@ -166,6 +177,10 @@ class EcommerceAgentFamily(VerticalAgentPack):
                             "ecommerce_selling_point": recipe.selling_point,
                             "ecommerce_buyer_intent": recipe.buyer_intent,
                             "ecommerce_visual_scene": recipe.visual_scene,
+                            "mode_role_recipe": mode_role_recipe,
+                            "mode_role_key": mode_role_recipe["role_key"],
+                            "mode_role_label": mode_role_recipe["label"],
+                            "mode_execution_policy": mode_execution_policy,
                             "marketplace_profile": marketplace_payload,
                             "product_truth": product_truth_payload,
                             "generated_from_ecommerce_recipe": True,
@@ -179,14 +194,22 @@ class EcommerceAgentFamily(VerticalAgentPack):
                         "ecommerce one-click product image set: main image, benefit/detail proof, "
                         "scenario context, trust/comparison support, and optional traffic cover"
                     ),
-                    "metadata": self._metadata(
-                        series.metadata,
-                        "series_plan",
-                        asset_count=len(assets),
-                        ecommerce_recipe_series=True,
-                        ecommerce_recipe_count=len(pack_output.recipes),
-                        marketplace_profile=pack_output.marketplace_profile.model_dump(mode="json"),
-                    ),
+                    "metadata": {
+                        **self._metadata(
+                            series.metadata,
+                            "series_plan",
+                            asset_count=len(assets),
+                            ecommerce_recipe_series=True,
+                            ecommerce_recipe_count=len(pack_output.recipes),
+                            marketplace_profile=pack_output.marketplace_profile.model_dump(mode="json"),
+                        ),
+                        "mode_execution_policy": _ecommerce_mode_execution_policy(series.job_id, len(assets)),
+                        "role_specific_generation_plan": _ecommerce_role_specific_generation_plan(
+                            series_job_id=series.job_id,
+                            user_input=context.user_input,
+                            assets=assets,
+                        ),
+                    },
                 }
             )
         assets = []
@@ -387,3 +410,223 @@ class EcommerceAgentFamily(VerticalAgentPack):
         if slot in {"ad_cover", "store_banner", "collection_cover"}:
             return f"traffic-ready branded ecommerce background; {scene}; keep blank headline area"
         return f"clean ecommerce background with low clutter and no rendered text; {scene or 'product-first hero'}"
+
+
+def _ecommerce_mode_execution_policy(series_job_id: str, count: int) -> dict[str, Any]:
+    return {
+        "policy_id": stable_id("ecommerce_mode_execution_policy", series_job_id, count),
+        "mode": "delivery_suite",
+        "mode_meaning": "ecommerce product image set with distinct listing roles",
+        "visual_distance_budget": "moderate",
+        "anchor_strength": "product_truth_lock",
+        "scene_change_allowed": True,
+        "role_strategy": "ecommerce_slot_roles",
+        "role_difference_requirement": "each output must serve a different shopping or listing purpose",
+        "review_priority": "product truth, slot coverage, label/logo fidelity, commercial finish",
+        "user_visible_label": "Product image set",
+        "user_visible_summary": [
+            "Main product, feature/detail, and scene images keep the same product while serving different purposes."
+        ],
+        "metadata": {"doc": "60", "doc67_boundary_cleanup": True, "ecommerce_recipe_aligned": True},
+    }
+
+
+def _ecommerce_role_specific_generation_plan(
+    *,
+    series_job_id: str,
+    user_input: str,
+    assets: list[AssetSpec],
+) -> dict[str, Any]:
+    recipes = [
+        dict(asset.metadata.get("mode_role_recipe"))
+        for asset in assets
+        if isinstance(asset.metadata.get("mode_role_recipe"), dict)
+    ]
+    policy = _ecommerce_mode_execution_policy(series_job_id, len(recipes) or len(assets))
+    return {
+        "plan_id": stable_id(
+            "ecommerce_role_specific_generation_plan",
+            series_job_id,
+            user_input,
+            ",".join(str(recipe.get("role_key") or "") for recipe in recipes),
+        ),
+        "project_id": None,
+        "job_id": series_job_id,
+        "mode": "delivery_suite",
+        "subject_type": "product",
+        "requested_image_count": len(recipes) or len(assets),
+        "policy": policy,
+        "role_recipes": recipes,
+        "prompt_additions": [
+            f"Output {recipe.get('index')} must follow ecommerce slot '{recipe.get('role_key')}': {recipe.get('prompt_pressure')}"
+            for recipe in recipes
+        ],
+        "negative_additions": _dedupe_strings(
+            rule
+            for recipe in recipes
+            for rule in recipe.get("negative_pressure", [])
+        ),
+        "user_visible_summary": [
+            "Prepared the ecommerce image set from the product slots.",
+            f"{len(recipes) or len(assets)} ecommerce role(s) planned.",
+        ],
+        "metadata": {
+            "doc": "60",
+            "extends": "60",
+            "scenario_id": "ecommerce",
+            "template_id": "ecommerce",
+            "mode_role_director": False,
+            "doc67_boundary_cleanup": True,
+            "owned_by": "ecommerce_vertical_pack",
+            "ecommerce_recipe_aligned": True,
+            "ecommerce_role_keys": [recipe.get("role_key") for recipe in recipes],
+        },
+    }
+
+
+def _mode_role_recipe_for_ecommerce_recipe(
+    *,
+    series_job_id: str,
+    recipe_payload: dict[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    slot = str(recipe_payload.get("slot") or f"slot_{index}").strip()
+    lane = _ecommerce_slot_lane(slot)
+    selling_point = str(recipe_payload.get("selling_point") or "").strip()
+    buyer_intent = str(recipe_payload.get("buyer_intent") or "").strip()
+    scene = str(recipe_payload.get("visual_scene") or lane["scene_rule"]).strip()
+    purpose = str(recipe_payload.get("business_goal") or lane["purpose"]).strip()
+    pressure = " ".join(
+        item
+        for item in [
+            lane["prompt_pressure"],
+            f"Show selling point: {selling_point}." if selling_point else "",
+            f"Answer buyer intent: {buyer_intent}." if buyer_intent else "",
+            f"Scene direction: {scene}." if scene else "",
+        ]
+        if item
+    )
+    recipe = {
+        "role_id": stable_id("ecommerce_mode_role_recipe", series_job_id, slot, index),
+        "index": index,
+        "role_key": slot,
+        "label": lane["label"],
+        "purpose": purpose or lane["purpose"],
+        "shot_family": lane["shot_family"],
+        "camera_distance": lane["camera_distance"],
+        "angle_rule": lane["angle_rule"],
+        "crop_rule": lane["crop_rule"],
+        "scene_rule": scene or lane["scene_rule"],
+        "variation_axes": lane["variation_axes"],
+        "must_keep_rules": [
+            "preserve product shape, color, material cues, label/logo placement, and packaging silhouette",
+            "keep the product as the clear hero subject",
+        ],
+        "must_not_rules": [
+            "do not invent a different product",
+            "do not hide, rewrite, translate, blur, or cover visible label/logo details",
+            "do not add badges, claim strips, random captions, watermarks, or AI-generated marks",
+        ],
+        "prompt_pressure": pressure,
+        "negative_pressure": [
+            "wrong product identity",
+            "missing or distorted label/logo",
+            "busy clutter over product",
+            "fake product claims",
+            "watermark or AI-generated mark",
+        ],
+        "review_checks": [
+            "product identity preserved",
+            "slot role is visually distinct",
+            "commercial finish is publish-ready",
+        ],
+        "user_visible_summary": [lane["summary"]],
+        "metadata": {
+            "doc": "60",
+            "extends": "60",
+            "doc67_boundary_cleanup": True,
+            "owned_by": "ecommerce_vertical_pack",
+            "ecommerce_recipe_aligned": True,
+            "ecommerce_slot": slot,
+            "expression_lane": "",
+            "gaze_lane": "",
+            "pose_lane": "",
+            "gesture_lane": "",
+            "subject_scale_lane": lane["subject_scale_lane"],
+            "scene_depth_lane": lane["scene_depth_lane"],
+            "clone_avoidance_rule": "make this ecommerce slot visibly different from the other product images while preserving product truth",
+        },
+    }
+    return apply_role_recipe_casebook_overlay(
+        recipe,
+        mode="delivery_suite",
+        subject_type="product",
+        index=index,
+    )
+
+
+def _ecommerce_slot_lane(slot: str) -> dict[str, Any]:
+    normalized = slot.lower()
+    if normalized in {"main_image", "hero_image"}:
+        return {
+            "label": "Main product image",
+            "purpose": "make the product instantly clear and desirable",
+            "shot_family": "clean product hero",
+            "camera_distance": "medium product hero distance",
+            "angle_rule": "front or slight three-quarter product angle",
+            "crop_rule": "balanced square or hero crop with the full product readable",
+            "scene_rule": "clean premium product stage",
+            "subject_scale_lane": "large product hero",
+            "scene_depth_lane": "simple depth, product first",
+            "prompt_pressure": "Create a clean main product hero with crisp silhouette, premium lighting, and no distracting props.",
+            "variation_axes": ["product scale", "light angle", "background depth"],
+            "summary": "Clear main product image",
+        }
+    if normalized in {"scenario_image", "lifestyle_image", "ad_cover", "store_banner", "collection_cover"}:
+        return {
+            "label": "Lifestyle scene image",
+            "purpose": "show the product in a believable use or atmosphere scene",
+            "shot_family": "commercial lifestyle scene",
+            "camera_distance": "medium-wide scene distance",
+            "angle_rule": "natural camera angle with product still readable",
+            "crop_rule": "product remains clear with enough scene context",
+            "scene_rule": "lived-in realistic scene, not only a studio tabletop",
+            "subject_scale_lane": "product plus scene context",
+            "scene_depth_lane": "visible foreground/background depth",
+            "prompt_pressure": "Create a real-life lifestyle or context image; avoid pure studio sameness and make the setting feel usable.",
+            "variation_axes": ["environment", "scene depth", "props", "camera distance"],
+            "summary": "Lifestyle context image",
+        }
+    if normalized in {"detail_image", "feature_image_1", "feature_image_2", "benefit_image", "benefit_hook", "size_spec_image"}:
+        return {
+            "label": "Feature/detail image",
+            "purpose": "make a key feature or material detail easy to understand",
+            "shot_family": "feature/detail proof",
+            "camera_distance": "closer feature or detail distance",
+            "angle_rule": "angle chosen to reveal the feature clearly",
+            "crop_rule": "tighter crop while keeping product identity recognizable",
+            "scene_rule": "clean detail setup with minimal supporting props",
+            "subject_scale_lane": "feature area emphasized",
+            "scene_depth_lane": "shallow-to-medium depth",
+            "prompt_pressure": "Create a feature/detail proof image that keeps the same product recognizable while emphasizing the key selling point.",
+            "variation_axes": ["feature emphasis", "crop", "angle", "material lighting"],
+            "summary": "Feature/detail image",
+        }
+    return {
+        "label": "Product support image",
+        "purpose": "support the product listing with a distinct commercial angle",
+        "shot_family": "product support shot",
+        "camera_distance": "medium product distance",
+        "angle_rule": "clear product angle",
+        "crop_rule": "product remains readable",
+        "scene_rule": "clean commercial setting",
+        "subject_scale_lane": "product clearly visible",
+        "scene_depth_lane": "moderate depth",
+        "prompt_pressure": "Create a distinct product support image with clear product truth and premium commercial finish.",
+        "variation_axes": ["scene", "angle", "crop", "light"],
+        "summary": "Product support image",
+    }
+
+
+def _dedupe_strings(values) -> list[str]:
+    return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))

@@ -4,6 +4,95 @@ This document converts the V3 roadmap into concrete development waves.
 
 The goal is to let the project move step by step without re-discussing architecture before every Codex task.
 
+## Current Project Mode Supersession
+
+Documents 32-68 supersede the older E-Commerce-first V3.8 ordering.
+
+The accepted current direction is:
+
+```text
+Project Mode foundation first
+General Template project loop first
+E-Commerce active only after Project Mode document 42 unfreeze
+template selection before project creation after document 45
+project detail split into persistent display and one production entry after document 47
+LLM reasoning and reusable visual enhancement are upgraded by documents 48-68
+future templates activated only through a template registry and accepted specs
+```
+
+This is not a rewrite of the V3 foundation. Project Mode wraps the existing V3
+job, provider, Scenario Pack, Product API, and shared capability layers.
+Document 50 further clarifies that reusable visual enhancement must be owned by
+one V3-native Visual Capability Cluster under the shared capability layer, while
+the V3 Brain uses one direct LLM checkpoint path with deterministic fallback.
+Document 51 extends that cluster with commercial-grade consistency modules:
+strong selected-image references, identity/product/brand locks, visual review,
+auto retry, best-output selection, and template-specific consistency policy.
+Documents 52-66 turn that Lovart-gap closure into executable layers:
+post-generation visual review, auto-retry guardrails, General Template variation
+modes, real vision inspection, human identity/natural-variation balance,
+E-Commerce lifestyle/count/watermark QA, and the Doc58 Identity Anchor +
+Strong Reference Loop + General Suite Director closure. Documents 59-64 extend
+that closure into mode-aware role differentiation, product slot/label QA,
+portrait Lovart benchmarking, portrait-suite role separation, image-edit
+provider stability, and the next real-output commercial quality review layer.
+Doc64 closes the broader commercial-quality review loop. Doc65 is the latest
+authority for reducing AI-face feel in photoreal human outputs through an
+independent Human Photorealism / Anti-AI Face layer that can later be reused by
+Photography Special-Tuning. Doc66 is the latest closure pass for selected
+reference packages, real-review signal packaging, candidate-scoped retry, and
+mode-specific quality priorities.
+Doc67 remains the boundary and quality-hardening authority: before further tuning, it
+cleans up visual-module boundary drift so CentralCreativeBrain and fallback
+Brain consume cluster outputs instead of rebuilding child-module logic; then it
+refines existing module standards, prompt rules, retry signals, tests, and real
+validation criteria.
+Doc68 is the casebook-guided tuning base authority: it distills V2 case patterns
+and GPT-Image-2 prompt-pattern evidence into compact V3-owned photographic
+recipes, then extends existing visual-cluster modules instead of adding
+duplicate feature modules.
+Doc69 is the latest prompt-atom absorption authority: it keeps Doc68's
+architecture, then makes camera, light, texture, reference-truth, product-truth,
+negative, and review atom stacks explicit inside the same visual_cluster
+casebook helper.
+Doc70 is the latest narrow human-realism tuning authority: it keeps Doc69's
+module structure and specifically reduces polished AI beauty-face feel through
+real-camera imperfection, skin/fabric/hair texture, and anti-beauty-app rules.
+Doc71 is the latest attractive-realism balance authority: it keeps Doc70's
+anti-AI-face pressure, then restores healthy clear complexion, soft natural
+bounce light, fresh summer brightness, and flattering color balance without
+skin whitening, face reshaping, or beauty-filter smoothing.
+Doc72 is the latest East Asian portrait aesthetic guard authority: it keeps
+Doc71's attractive-realism balance, then prevents unnecessary dark/tan/gray skin
+in East Asian fresh portrait requests and guards natural head, neck, shoulder,
+and upper-body proportions in close crops.
+Doc73 is the latest text-only human-suite identity authority: user-selected or
+uploaded references always win, but when no user reference exists the first
+generated human portrait output becomes a temporary hard identity anchor for
+later outputs in the same job.
+Doc74 is the latest complex-prompt fidelity authority: detailed prompts keep
+more source detail, explicit negative-prompt sections are split into negative
+constraints, and provider prompts are warned not to simplify complex cinematic
+human scenes into generic portraits.
+Doc75 is the latest identity hero, suite director, and strict review closure
+authority: V3 must pick or honor a strong identity master, direct the set through
+mode-specific visual duties, and strictly review generated outputs with bounded
+retry for identity drift, role collapse, AI-face feel, proportion failure,
+watermark/text artifacts, and weak commercial finish.
+Doc76 is the latest placement-governance authority: universal visual quality
+belongs in the V3 foundation, General Template remains simple and
+scenario-neutral, and professional suite/package definitions belong in
+specialized templates such as E-Commerce, Photography, Brand, and New Media.
+Doc77 is the latest foundation-quality tuning authority for real visual review
+and aesthetic stability. It extends the Visual Capability Cluster, vision
+inspection, provider prompt consumption, and Product API review/retry paths
+without adding specialized deliverable maps to General Template.
+Doc78 is the final foundation tuning plan before the next specialized-template
+phase. It targets long-term subject identity, selected-reference continuity,
+beautiful but realistic human rendering, and facial-feature aesthetic
+integrity without turning General Template into a professional photography
+package.
+
 ## 1. Version Naming
 
 For implementation planning, use the following development waves:
@@ -19,18 +108,133 @@ V3.6 Scenario Hub and General Creative Product Integration
 V3.6C Commercial Frontend Shell and Scenario Workspace
 V3.6C-1 Home-First V3 Frontend Correction
 V3.7 General Creative With Shared Capabilities
-V3.8 E-Commerce Scenario Pack
-V3.8A E-Commerce Asset Upload and Export Closure
-V3.8B Provider/Output Production Closure
-V3.8C E-Commerce Recipe-To-Generated-Series Optimization
-V3.8D Productized Module Workspaces And Capability Audit
-V3.9 Future Specialization Packs (optional unless explicitly requested)
+V3.8 Project Mode Foundation
+V3.8A Project Mode Compatibility And Contracts
+V3.8B Project-First Frontend And General Template Loop
+V3.8C Project Mode Template Interface And Audit
+V3.8D Project Workspace Continuation UX
+V3.8E Project Context Asset And Feedback Persistence
+V3.8F Project To Brand Memory Confirmation
+V3.8G Template Manifest Registry And Activation Gate
+V3.8H Project Mode Product Experience Quality Gate
+V3.8I Project Mode Pre-Development Readiness Handoff
+V3.9 E-Commerce Template Project Mode Unfreeze
+V3.9A Template-First Workspace And Delete UX Correction
+V3.9B Single Production Entry And Suite Flow Correction
+V3.9C LLM Brain And General Prompt Cleanliness
+V3.9D Native Visual Capability Cluster And Checkpoint Brain
+V3.9E Visual Consistency Pro And Lovart Gap Closure
+V3.9F Post-Generation Review, Auto Retry, And Variation Modes
+V3.9G Human/E-Commerce Visual QA Refinement
+V3.9H Identity Anchor, Strong Reference Loop, And General Suite Director
+V3.9I Mode-Aware Role Director And Suite Differentiation
+V3.9J Lovart-Level Commercial Quality Closure
+V3.9K Human Photorealism And Anti-AI Face Layer
+V3.9L Strong Reference Real Review And Precise Retry Closure
+V3.9M Visual Boundary Cleanup And Quality Reinforcement
+V3.9N Casebook-Guided Photographic Recipe Tuning
+V3.9O Prompt Atom Realism And Reference Absorption
+V3.9P Human Real-Camera AI Feel Reduction Tuning
+V3.9Q East Asian Fair Complexion And Proportion Guard
+V3.9R First Output Identity Anchor For Text-Only Human Suites
+V3.9S Complex Prompt Fidelity And Negative Prompt Absorption
+V3.9T Identity Hero, Suite Director, And Strict Review Closure
+V3.9U Foundation Vs Specialized Template Governance
+V3.9V Real Visual Review And Aesthetic Stability Foundation
+V3.9W Long-Term Identity And Beautiful Realism Final Tuning
+V3.10 Future Specialization Packs (optional unless explicitly requested)
 ```
 
 This document now defines the complete current-stage delivery route from V3.0
-Foundation through V3.7 General Creative. Older V3.1 / V3.2 worker prompts remain
-useful historical phase prompts, but they must not cause a one-shot run to stop
-before the later required product and UI waves are complete.
+Foundation through Project Mode. Older V3.1 / V3.2 worker prompts remain useful
+historical phase prompts, but they must not cause a one-shot run to stop before
+the later required product, UI, and Project Mode waves are complete.
+
+### 1.1 Project Mode Document Map
+
+Use this map when a Codex implementation task begins from the current stage:
+
+```text
+32 -> Project Mode core philosophy and long-term control rules.
+33 -> Compatibility and migration rules; Project wraps Job and does not replace it.
+34 -> ProjectRecord, ProjectContextPackage, timeline, and minimum API contracts.
+35 -> Project-first frontend UX; home opens projects, not standalone jobs.
+36 -> General Template project flow; first active template and policy-neutral loop.
+37 -> Template interface and audit; future templates remain locked.
+38 -> Next frontend phase; project workspace continuation UX and state model.
+39 -> Implemented Project Mode persistence; references, selected outputs, unselection, rejection feedback, and context snapshots.
+40 -> Implemented memory phase; explicit project-to-Brand-Memory confirmation.
+41 -> Implemented Template registry phase; activation gate for all future templates.
+42 -> Implemented E-Commerce unfreeze phase; project-aware commerce suite generation.
+43 -> Product experience quality gate; architecture, beginner UX, complete loop, image-first high-value content.
+44 -> Development-entry handoff; materials, code map, tests, manual QA, and exact first coding boundary.
+45 -> Current UX correction; template-first creation, two-region project detail, step-based actions, and soft archive/remove controls.
+46 -> Scene-subpage selection patch; direct image selection, restored-output selection, and folded workflow artifacts.
+47 -> Current continuation UX authority; replace four step cards with one production entry for generating another visual suite.
+48 -> V3-owned LLM Brain Adapter; pre-generation reasoning, prompt review, and strong selected-output reference bridge.
+49 -> General Template prompt deproductization bugfix; pure General image prompts must not inherit product-poster wording unless product intent is explicit.
+50 -> Current visual/brain architecture authority; consolidate reusable visual enhancement into one V3-native Visual Capability Cluster and upgrade the LLM Brain into direct multi-stage checkpoints. Claude Code expert/provider mode is forbidden.
+51 -> Current commercial consistency authority; add strong selected-image references, explicit identity/product/brand locks, output visual review, auto retry patches, best-output selection, negative visual memory, and template consistency policy under the Visual Capability Cluster.
+52 -> Post-generation visual review, retry, and suite-director foundation; generated outputs must be reviewed before the system presents a commercial result.
+53 -> Auto-retry execution guardrails; retries must be bounded, failure-specific, and must not loop blindly.
+54 -> General Template variation modes; automatic or manual choice among similar candidates, delivery suite, creative exploration, and format/layout adaptation.
+55 -> Real vision inspection authority; generated images must be inspected as images, not only by prompt metadata.
+56 -> Human identity/natural-variation balance; preserve recognizable identity while allowing natural expression, pose, angle, crop, and styling variation.
+57 -> E-Commerce lifestyle/count/watermark QA; product suites need stronger lifestyle diversity, count control, and watermark rejection.
+58 -> Latest Lovart-gap closure authority; selected outputs become project Identity Anchors, continuation uses strong references, batches are reviewed for identity drift/over-cloning, and General Template suites receive purposeful image roles.
+59 -> Latest four-mode execution authority; similar candidates, suite expansion, creative exploration, and format/layout adaptation must produce different role recipes, prompts, reviews, retries, and beginner summaries.
+60 -> E-Commerce product-suite slot and label QA; product roles, label/logo fidelity, and commercial product slot coverage are acceptance gates.
+61 -> Portrait commercial consistency and Lovart benchmark protocol; real portrait suites are compared against identity, variation, role separation, and commercial finish criteria.
+62 -> Portrait suite director and natural role separation; delivery-suite portrait roles receive stronger expression, gaze, pose, crop, and scene-depth lanes.
+63 -> Image-edit provider health and bounded fallback; strong-reference continuation must not hang indefinitely when upstream image-edit lanes flap.
+64 -> Latest commercial-quality closure authority; real generated outputs are reviewed for reference continuity, suite role coverage, commercial finish, artifacts, and issue-specific retry actions.
+65 -> Latest human photorealism authority; photoreal people receive realistic skin/expression guidance, anti-AI-face review, strong-reference artifact correction, and future Photography Special-Tuning reuse contracts.
+66 -> Latest closure authority; selected outputs are packaged into strong-reference closure, real review emits candidate-scoped signals, retry is issue/candidate scoped, and the four modes expose different quality profiles.
+67 -> Latest boundary and quality authority; central/fallback Brain must not instantiate visual child modules, ecommerce role metadata belongs in the ecommerce template path, and existing visual modules receive stricter realism, role, prompt, retry, and real-validation standards.
+68 -> Latest casebook-guided recipe authority; V2/GPT-Image-2 prompt experience is distilled into V3-owned visual-cluster recipes for human realism, four-mode role overlays, product lifestyle context, provider prompt consumption, and validation matrices without duplicating modules.
+69 -> Latest prompt-atom absorption authority; camera, light, texture, reference, product truth, negative, and review atoms are explicit in visual-cluster recipes.
+70 -> Latest human AI-feel reduction authority; real-camera skin, hair, fabric, asymmetry, anti-beauty-app, and anti-face-geometry pressure are applied without changing the architecture.
+71 -> Latest attractive-realism balance authority; human portraits must stay real and textured while recovering healthy bright complexion, clean bounce light, fresh expression, and flattering summer color.
+72 -> Latest East Asian fair-complexion and proportion guard authority; fresh East Asian portraits should not be unnecessarily darkened/tanned/gray when the user did not ask for it, and close portrait crops must preserve natural head/neck/shoulder/body scale.
+73 -> Latest text-only human-suite identity authority; manual user references have priority, otherwise the first generated portrait becomes the hard identity anchor for subsequent outputs in the same job.
+74 -> Latest complex prompt fidelity authority; explicit negative prompt sections are split out and detailed action/wardrobe/environment/camera requirements are preserved for provider prompts.
+75 -> Latest identity hero and strict suite closure authority; identity master selection, purposeful suite roles, strict visual pass conditions, and Doc75 retryable quality issue codes close the General Template commercial-quality loop.
+76 -> Latest placement-governance authority; foundation quality capabilities are shared, General Template stays scenario-neutral, and professional deliverable maps belong to specialized templates.
+77 -> Latest foundation-quality tuning authority for stronger real visual review, aesthetic stability issue codes, provider prompt consumption, and bounded retry patches under Doc76 placement rules.
+78 -> Final foundation tuning plan before specialized-template work; long-term subject identity, beautiful realism balance, and facial-feature aesthetic integrity must reach 85%+ without adding vertical package roles to General Template.
+```
+
+Current code-stage priority:
+
+```text
+1. Keep 38, 39, and 41 verified while continuing Project Mode development.
+2. Keep 40 verified so cross-project brand reuse remains explicit and user-confirmed.
+3. Keep the template registry gate in place before activating any future template.
+4. Use 43 as the final product-experience gate before accepting any phase.
+5. Use 44 before starting code so all materials, scope, tests, and QA steps are ready.
+6. Implement 45 before future template work; the user-facing order is Template -> Project -> Project Workspace.
+7. Apply 47 after 46; project continuation uses one "continue generating suite" entry, while image selection and Brand Memory stay on the project page.
+8. Apply 48 after 47 when pre-generation reasoning is needed; it must stay V3-owned and independent from V1/V2 runtime.
+9. Apply 49 after 48 before further real-image tuning; General Template prompt text must stay subject/scene oriented and E-Commerce-only product wording must remain gated.
+10. Apply 50 after 49 before deeper visual consistency work; all reusable visual enhancement must be grouped under the V3 shared capability cluster, and the Brain must use one direct checkpoint path.
+11. Apply 51 after 50 for Lovart-gap closure; selected images become strong references, identity/product/brand locks become explicit contracts, generated outputs receive review reports, retryable failures use retry patches, and best outputs are selected for commercial delivery.
+12. Apply 52-55 after 51 when generated images must be inspected and corrected automatically; retry execution must be bounded and vision-backed.
+13. Apply 56 after 55 for human projects; identity must stay recognizable without cloning every face, pose, expression, or camera angle.
+14. Apply 57 after 55 for E-Commerce projects; lifestyle diversity, requested count, and watermark rejection become acceptance gates.
+15. Apply 58 after 54-56 for General Template Lovart-level continuity; selected images become Identity Anchors and suite outputs must have purposeful roles.
+16. Apply 59 after 58 before the next role-director coding pass; the four modes must become functionally different in role recipes, prompts, review, retry, and beginner summaries.
+17. Apply 60-63 to harden product QA, portrait benchmarking, portrait-suite role separation, and image-edit stability.
+18. Apply 64 after 63 for the next Lovart-quality pass; review actual generated images, audit suite role coverage, evaluate reference continuity, and generate issue-specific retry plans.
+19. Apply 65 after 64 for human photorealism; reduce AI-face feel while preserving identity, commercial appeal, and future Photography Special-Tuning module reuse.
+20. Apply 66 after 65 for the next Lovart-gap closure; package selected references, expose real-review signals, use candidate-scoped retry, and make four-mode quality priorities explicit.
+21. Apply 67 after 66 before adding more modules; clean up visual boundary drift, then tune existing visual modules for stricter Lovart-level quality.
+22. Apply 68 after 67 when quality needs more photographic knowledge; add only V3-owned recipe helpers under the Visual Capability Cluster and extend existing modules rather than adding duplicate feature modules.
+23. Apply 69-75 as narrow human/product prompt-quality tuning passes inside the same Visual Capability Cluster, prompt compiler, and generation loop; Doc75 is the latest identity hero, suite director, and strict review closure authority.
+24. Apply 76 before adding or moving future visual-generation features; classify each change as foundation, General Template, or specialized template work, and keep professional suite/package definitions out of General Template.
+25. Apply 77 only as foundation-quality tuning: strengthen real review and aesthetic stability in the Visual Capability Cluster, vision inspector, provider prompt, and review/retry paths without adding vertical suite roles.
+26. Apply 78 as the final foundation-quality tuning pass before V3.10: improve long-term identity continuity and beautiful realism balance, preserve facial-feature beauty, and keep implementation inside the existing foundation layers.
+27. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+```
 
 ## 2. V3.0 Foundation
 
@@ -567,6 +771,7 @@ This wave is governed by:
 27_V3_COMMERCIAL_FRONTEND_SHELL_AND_PAGE_SPEC.md
 30_V3_HOME_FIRST_CARD_AND_HISTORY_FRONTEND_FIX_SPEC.md
 31_V3_PRODUCTIZED_MODULE_WORKSPACES_AND_CAPABILITY_AUDIT_SPEC.md
+```
 
 This wave is **not part of the current one-shot acceptance target** unless the
 user explicitly requests dedicated vertical-pack development. Current-stage
@@ -625,32 +830,47 @@ Do not start V3.6C commercial frontend shell before V3 route namespace, Scenario
 Hub contracts, Product API, Scenario Runtime, and shared capability foundation
 are stable.
 
-Do not start V3.8 full E-Commerce activation before the V3 commercial frontend
-shell exists and document 26 backend contracts are implemented.
+Do not start V3.8 Project Mode Foundation before General Creative and the V3
+commercial frontend shell are stable enough to wrap jobs into projects.
 
-Do not start V3.8A uploaded-asset/export closure before V3.8 E-Commerce
-activation passes.
+Do not start V3.8D Project Workspace Continuation UX before Project Mode APIs,
+project records, project timeline, and General Template project job creation are
+accepted.
 
-Do not start V3.8B provider/output production closure before V3.8A upload and
-export closure passes.
+Do not start V3.8E Project Context Asset And Feedback Persistence before the
+project workspace has a clear useful-reference, output-selection, and
+continuation interaction model.
 
-Do not start V3.8C recipe-to-generated-series optimization before V3.8B real
-provider/output production closure passes.
+Do not start V3.8F Project To Brand Memory Confirmation before selected outputs
+and active project references are persisted correctly.
 
-Do not start V3.8D productized module workspace polishing before V3.8C proves
-that E-Commerce recipes can produce visible generated suite slots.
+Do not start V3.8G Template Manifest Registry And Activation Gate before the
+General Template project loop and pre-Doc42 E-Commerce locked state are both
+verified.
 
-Do not start V3.9 full vertical packs before V3.6C shared frontend, V3.8
-E-Commerce activation, and V3.8D beginner-facing module-workspace boundaries
-are accepted, unless the user explicitly chooses a different specialization
-order.
+Do not accept V3.8H Project Mode Product Experience Quality Gate before the
+current project workspace is reviewed against architecture fit, beginner
+friendliness, functional completeness, and image-first high-value content.
 
-Even after V3.6C is accepted, V3.8 E-Commerce activation, V3.8A upload/export
-closure, V3.8B provider/output production closure, V3.8C generated-suite
-optimization, V3.8D productized workspace polish, and V3.9 specialization packs
-remain separate explicit phases. A normal current-stage one-shot run must stop
-at the requested phase boundary plus final audit/smoke validation when all
-required gates pass.
+Do not start a code implementation run before V3.8I Project Mode
+Pre-Development Readiness Handoff confirms the exact first implementation
+boundary, code map, test commands, manual QA, and non-goals.
+
+Historical Doc42 gate: do not start V3.9 E-Commerce Template Project Mode
+Unfreeze before documents 38, 39, 41, 43, and 44 are implemented and accepted.
+Document 40 is recommended first when cross-project brand consistency is
+required. This gate has now been satisfied for the current implementation.
+
+Do not start V3.10 full vertical packs before V3.9 E-Commerce or another
+template-specific accepted spec proves the template activation gate works.
+Also do not start V3.10 visual-heavy template work before document 50 is either
+implemented or explicitly scoped out by a later accepted spec, because all
+future templates must share the same V3-native Visual Capability Cluster.
+
+Even after Project Mode is accepted, future specialization packs remain
+separate explicit phases. A normal current-stage one-shot run must stop at the
+requested phase boundary plus final audit/smoke validation when all required
+gates pass.
 
 ## 16. Development Gate Checklist
 
@@ -728,7 +948,7 @@ Before moving from V3.6C to V3.7:
 commercial frontend shell loads
 V3 Scenario Hub renders from registry data
 General Creative workspace is usable
-E-Commerce placeholder cannot create jobs
+future placeholder templates cannot create jobs
 V1, V2, and Alchemy Lab smoke paths still load
 desktop and mobile visual QA pass
 ```
@@ -739,56 +959,101 @@ Before moving from V3.7 to V3.8:
 General Creative shared-capability UI is product-language only
 General Creative remains policy-neutral
 no marketplace or Amazon logic appears in General Creative defaults
-document 26 backend contracts are ready to implement
-commercial shared workspace is ready for E-Commerce activation
+project-first direction from documents 32-37 is accepted
+E-Commerce remains outside Project Mode until the later Doc42 unfreeze gate
+existing job/provider/shared capability tests pass
 ```
 
 Before moving from V3.8 to V3.8A:
 
 ```text
-E-Commerce Scenario Pack is active
-E-Commerce card/workspace can create jobs
-export metadata exists in Product API status
-General Creative remains unaffected
-V3 frontend calls only V3 APIs
+Project Mode is confirmed as an application layer over existing jobs
+ScenarioRuntime, ScenarioPack, ProductJobRecord, provider layer, and shared capabilities remain intact
+Project Store, Project API, and Project Context Builder are planned or implemented
+old job history remains compatible as a source
+no V1/V2/Lab runtime dependency is introduced
 ```
 
 Before moving from V3.8A to V3.8B:
 
 ```text
-V3 upload lifecycle works
-uploaded_asset_ids resolve into UploadedAssetInfo
-shared capability pixel inspection works for V3-uploaded assets
-E-Commerce export/download manifest works
-fake frontend asset ids are removed
+ProjectRecord and ProjectContextPackage contracts are accepted
+project APIs create/list/read project records
+project jobs require project_id
+General Template remains the only active template
+E-Commerce remains locked until Doc42; future templates are visible but locked
 ```
 
 Before moving from V3.8B to V3.8C:
 
 ```text
-V3 real image provider path works behind require_real_images
-generated outputs persist in the V3-owned output store
-preview, thumbnail, and download routes serve generated files
-frontend result cards can render real generated images
+V3 home shows project cards and project history
+project detail opens before template work
+General Template can create project jobs
+selected outputs can enter project context
+locked templates cannot create jobs
+normal UI hides engineering language
 ```
 
 Before moving from V3.8C to V3.8D:
 
 ```text
-E-Commerce recipes expand into generated series slots
-slot metadata reaches Product API candidates and frontend cards
-prompt compilation uses slot context and forbids unsupported image claims
-history can restore generated images after a backend restart
+template interface rules are accepted
+only General Template is active before Doc42
+E-Commerce remains locked by backend and frontend before Doc42
+Project Mode docs 32-37 are reconciled with docs 29-31
+existing V3 tests pass
 ```
 
 Before moving from V3.8D to V3.9:
 
 ```text
-General Creative and E-Commerce workspaces are visibly different
-beginner-facing V3 UI hides engineering language
-generated images are the visual focus of result cards
-V1/V2-derived shared capabilities are audited as active V3-owned helpers
-V3 frontend still calls only V3 API routes
+project detail is the main continuation surface
+active project references persist after refresh
+selected outputs influence future project jobs
+unselected outputs do not pollute positive context
+negative feedback can affect future context
+template registry blocks locked templates
+product experience quality gate passes
+pre-development handoff is complete
+General Template project loop remains stable
+E-Commerce unfreeze spec in document 42 is accepted
+```
+
+Before moving from V3.9 to V3.10:
+
+```text
+E-Commerce Template is active only through Project Mode
+E-Commerce workspace is visibly different from General Template
+E-Commerce project jobs require project_id
+E-Commerce project jobs require a product image or product reference
+E-Commerce generated suite outputs are visible and selectable
+General Template remains policy-neutral
+Brand Memory is not updated without confirmation
+template activation gate has proven isolation
+document 50 visual cluster / checkpoint brain gate is implemented
+documents 51-65 visual consistency / review / retry / variation / identity /
+mode-aware role differentiation / provider stability / commercial quality /
+human photorealism gates
+are implemented
+document 56 human identity balance gate is implemented for human projects
+document 57 e-commerce QA gate is implemented for product projects
+document 58 Identity Anchor / Strong Reference / Suite Director gate is
+implemented for General Template continuation projects
+document 59 Mode-Aware Role Director gate is implemented so the four General
+Template modes do not collapse into the same suite behavior
+document 60 E-Commerce product-suite slot and label QA gate is implemented
+document 61 portrait Lovart benchmark protocol is implemented and recorded
+document 62 portrait-suite role separation is implemented
+document 63 image-edit provider stability and bounded waiting are implemented
+document 64 commercial-quality review, suite coverage audit, and issue-specific
+retry planning are implemented
+document 65 Human Photorealism / Anti-AI Face Layer is implemented for
+photoreal human outputs and remains reusable by future Photography Special-Tuning
+document 66 selected-reference closure and precise retry packaging is implemented
+document 67 visual boundary cleanup and quality reinforcement is implemented
+document 68 casebook-guided photographic recipe tuning is implemented when the
+current phase requires another Lovart-quality pass
 ```
 
 ## 17. Strategic Reminder
@@ -798,7 +1063,7 @@ The user experience should remain simple at every stage.
 Internal complexity may grow, but the default user flow remains:
 
 ```text
-natural language input → commercial visual asset series
+natural language input -> commercial visual asset series
 ```
 
 The product boundary remains:

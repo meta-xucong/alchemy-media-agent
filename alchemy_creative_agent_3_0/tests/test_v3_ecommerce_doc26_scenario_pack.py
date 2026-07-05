@@ -53,6 +53,55 @@ def test_ecommerce_planner_builds_truth_brief_recipes_and_export_package() -> No
     assert output.export_package.files[0]["filename"].endswith("_amazon.png")
 
 
+def test_ecommerce_planner_unifies_requested_count_and_lifestyle_slots() -> None:
+    planner = EcommerceScenarioPackPlanner()
+
+    output = planner.plan(
+        user_input="Create two realistic lifestyle marketplace images for this summer drink bottle",
+        product_profile={
+            "product_category": "drink",
+            "materials": ["clear bottle", "paper label"],
+            "selling_points": ["Fresh summer refreshment", "Portable bottle"],
+        },
+        uploaded_asset_ids=["product_bottle_front"],
+        scenario_parameters={
+            "platform": "amazon_us",
+            "requested_image_count": 2,
+            "suite_slot_request": ["main_image", "scenario_image", "ad_cover"],
+        },
+        platform_profile=None,
+        job_key="job_lifestyle_count",
+    )
+
+    assert len(output.recipes) == 2
+    assert [recipe.slot for recipe in output.recipes] == ["main_image", "scenario_image"]
+    assert output.marketplace_profile.metadata["requested_image_count"] == 2
+    assert output.metadata["selected_image_slots"] == ["main_image", "scenario_image"]
+    scenario_recipe = output.recipes[1]
+    assert scenario_recipe.metadata["lifestyle_realism_required"] is True
+    assert scenario_recipe.metadata["lifestyle_scene_category"] == "drink_summer"
+    assert "Real outdoor or cafe summer refreshment moment" in scenario_recipe.visual_scene
+
+
+def test_ecommerce_planner_respects_explicit_slots_without_extra_fill() -> None:
+    planner = EcommerceScenarioPackPlanner()
+
+    output = planner.plan(
+        user_input="Create the requested ecommerce slots only",
+        product_profile={"product_category": "desk lamp", "selling_points": ["Adjustable angle"]},
+        uploaded_asset_ids=["product_lamp_front"],
+        scenario_parameters={
+            "platform": "amazon_us",
+            "suite_slot_request": ["main_image", "scenario_image"],
+        },
+        platform_profile=None,
+        job_key="job_explicit_slots_only",
+    )
+
+    assert [recipe.slot for recipe in output.recipes] == ["main_image", "scenario_image"]
+    assert output.marketplace_profile.metadata["slot_count_unified_with_requested_count"] is False
+
+
 def test_product_api_exposes_ecommerce_product_language_summary() -> None:
     service = V3ProductApiService()
 
@@ -160,6 +209,66 @@ def test_ecommerce_scenario_recipes_drive_generated_asset_series() -> None:
     assert prompt.metadata["ecommerce_slot"] == "main_image"
     assert "selling point to express visually without text" in prompt.visual_prompt
     assert any("Do not add in-image text" in item for item in prompt.hard_constraints)
+
+
+def test_ecommerce_requested_slots_survive_doc60_role_reconciliation() -> None:
+    service = V3ProductApiService()
+    created = service.create_job(
+        {
+            "user_input": "Create an Aqua Tea marketplace set with main image, freshness feature image, and real summer cafe scene",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "mode_id": "one_click_product_set",
+                "platform_profile": "amazon_us",
+                "parameters": {
+                    "requested_image_count": 3,
+                    "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
+                },
+            },
+            "uploaded_asset_ids": ["product_aqua_tea_can"],
+            "product_profile": {
+                "product_category": "drink",
+                "materials": ["turquoise aluminum can", "printed lime mint label"],
+                "selling_points": ["Cold lime mint refreshment", "Portable summer drink"],
+            },
+            "metadata": {
+                "requested_image_count": 3,
+                "variation_mode": "delivery_suite",
+            },
+        }
+    )
+
+    generated = service.generate_job(
+        created.job_id,
+        {"quality_mode": "standard", "metadata": {"requested_image_count": 3}},
+    )
+    record = service.job_store.get(created.job_id)
+    visual_cluster = generated.metadata.get("visual_cluster") or generated.metadata["shared_capabilities"]["visual_cluster"]
+    role_plan = visual_cluster["role_specific_generation_plan"]
+    candidate_role_keys = [candidate.metadata["mode_role_recipe"]["role_key"] for candidate in generated.candidates]
+    asset_slots = [item.metadata["asset_metadata"]["ecommerce_slot"] for item in generated.asset_series]
+    prompt_text = record.generation_result.prompt_compilations[1].visual_prompt
+    hard_constraints = " ".join(record.generation_result.prompt_compilations[1].hard_constraints)
+
+    assert [item.metadata.get("ecommerce_slot") for item in created.asset_series] == [
+        "main_image",
+        "feature_image_1",
+        "scenario_image",
+    ]
+    assert role_plan["metadata"]["doc"] == "60"
+    assert role_plan["metadata"]["ecommerce_recipe_aligned"] is True
+    assert [recipe["role_key"] for recipe in role_plan["role_recipes"]] == [
+        "main_image",
+        "feature_image_1",
+        "scenario_image",
+    ]
+    assert candidate_role_keys == ["main_image", "feature_image_1", "scenario_image"]
+    assert asset_slots == candidate_role_keys
+    assert "feature_image_1" in prompt_text
+    assert "Planned ecommerce slot 2 (feature_image_1)" in prompt_text
+    assert "Planned image role 3 (detail_image)" not in prompt_text
+    assert "existing product label/logo" in hard_constraints
+    assert generated.metadata["post_generation_review"]["metadata"]["mode_differentiation_review"]["status"] == "pass"
 
 
 def test_general_creative_does_not_receive_ecommerce_summary() -> None:

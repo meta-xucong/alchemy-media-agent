@@ -1,5 +1,14 @@
 # 11 Evaluation and Refinement Spec
 
+Current Project Mode note:
+
+```text
+This document remains the foundational scoring/refinement concept. Document
+51 is the current authority for Project Mode commercial visual review,
+automatic retry patches, selected-reference consistency checks, identity/product
+lock review, and best-output selection.
+```
+
 This document defines how Alchemy Creative Agent 3.0 should score candidates, decide accept/retry/reject, and produce refinement plans.
 
 The first pass may use deterministic mock scoring. The contract should still match future real scoring providers.

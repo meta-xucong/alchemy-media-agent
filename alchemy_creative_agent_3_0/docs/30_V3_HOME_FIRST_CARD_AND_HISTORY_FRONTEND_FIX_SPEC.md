@@ -7,6 +7,15 @@ Document `27` remains the broad commercial frontend target. This document is a
 more specific implementation correction for the current state: the V3 landing
 surface must behave like Alchemy Lab, not like an engineering workbench.
 
+Project Mode note:
+
+```text
+Document 32 and its follow-up documents 33-37 supersede this document for the
+meaning of "history". In Project Mode, the V3 first screen should show New
+Project and project cards. Raw V3 job history becomes a compatibility/fallback
+source inside Project Mode, not the primary user-facing continuation object.
+```
+
 ---
 
 ## 1. Problem Found
@@ -29,6 +38,9 @@ should first see only:
 1. agent / scenario cards
 2. recent V3 history
 ```
+
+For the pre-Project-Mode stage, "recent V3 history" meant job history. For the
+Project Mode stage, documents `32`-`37` replace this with recent V3 projects.
 
 The specific workspace should appear only after the user clicks an active card
 or a history item.
@@ -66,16 +78,20 @@ The V3 home is not a form page. It is an entry and continuation page.
 Use this document with the following precedence for frontend entry behavior:
 
 ```text
-1. V3 product boundary and API independence rules
-2. This document's home-first card/history rule
-3. Document 27 commercial frontend target
-4. Documents 26 and 28 E-Commerce activation details
-5. Earlier minimal UI or app-shell probes
+1. Document 32 Project Mode core control when implementing Project Mode
+2. Documents 33-37 for Project Mode migration, contracts, UX, General Template,
+   and template audit rules
+3. V3 product boundary and API independence rules
+4. This document's legacy home-first card/history rule for pre-Project Mode UI
+5. Document 27 commercial frontend target
+6. Documents 26 and 28 E-Commerce activation details unless frozen by document 37
+7. Earlier minimal UI or app-shell probes
 ```
 
 Document `27` describes the desired commercial frontend broadly. This document
 overrides any interpretation of document `27` that makes the V3 first screen
-show the full workspace by default.
+show the full workspace by default. Documents `32`-`37` then upgrade the first
+screen again from job-history-first to project-first.
 
 ---
 
@@ -141,6 +157,19 @@ V3HomeView
     short request summary
     continue action
 ```
+
+Project Mode replacement:
+
+```text
+V3ProjectHomeView
+  Header
+  New Project action
+  Recent project cards
+  Locked future template hints
+```
+
+When Project Mode is implemented, `Recent history` must mean recent V3
+projects. Raw job history may be used only as a fallback/import source.
 
 The first screen must not include:
 

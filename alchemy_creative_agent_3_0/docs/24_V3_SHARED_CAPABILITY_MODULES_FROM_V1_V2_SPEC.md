@@ -8,6 +8,46 @@ V1/V2 advantages should not be copied directly into the V3 central brain, and th
 
 This phase should be implemented after `23` is complete and before building the full E-Commerce Scenario Pack in `26`.
 
+## Document 50/51 Refinement
+
+Document `50` is the authority for the next ownership upgrade of this layer.
+Document `51` is the current authority for the commercial visual-consistency
+upgrade built on top of that ownership model.
+
+This document created the V3-owned shared capability foundation. Document `50`
+does not replace that foundation. It wraps and upgrades it. Document `51`
+adds the next required child modules:
+
+```text
+app/shared_capabilities
+  -> Visual Capability Cluster
+      -> child modules migrated or rewritten from V1/V2 ideas
+      -> strong reference binding
+      -> identity/product/brand locks
+      -> visual review
+      -> auto retry
+      -> best-output selection
+```
+
+Authoritative refinement:
+
+```text
+1. V1/V2 modules remain references only.
+2. Existing V3 shared capabilities become child modules under one reusable
+   Visual Capability Cluster when visual enhancement work resumes.
+3. Reusable visual grammar, visual memory, reference binding, consistency
+   checks, and output visual review must not be scattered across Central Brain,
+   templates, Project Mode, PromptCompilerAgent, or providers.
+4. The cluster is V3-native and shared by General Template, E-Commerce Template,
+   and future templates through the ScenarioRuntime/shared-capability path.
+5. Provider routing and image generation remain outside shared capabilities.
+```
+
+If any future implementation choice conflicts with this document, use
+document `50` for visual ownership and cluster dispatch, and document `51` for
+strong references, identity/product/brand locks, output review, retry patches,
+best-output selection, and Lovart-gap commercial consistency requirements.
+
 ## Source Code To Reference
 
 V2 source root:
@@ -49,6 +89,10 @@ Suggested structure:
 | `prompt_constraint_compiler.py` | Converts capability outputs into V3 prompt/layout/evaluation constraints. |
 | `output_review.py` | Visual review and refinement hints. |
 | `history_reference.py` | Reuse selected outputs and brand memory as future references. |
+| `visual_cluster/contracts.py` | Document `50` target: cluster-level visual contracts such as `VisualGrammarProfile` and `ProjectVisualGrammarSnapshot`. |
+| `visual_cluster/orchestrator.py` | Document `50` target: one logical dispatch point for visual child modules. |
+| `visual_cluster/consistency_guard.py` | Document `50` target: project-continuation visual drift checks. |
+| `visual_cluster/quality_reviewer.py` | Document `50` target: project-aware generated-output visual review. |
 
 ## Non-Negotiable Migration Rules
 

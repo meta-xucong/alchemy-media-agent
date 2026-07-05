@@ -18,14 +18,23 @@ def _image(path: Path, size=(400, 300), color=(32, 180, 96)) -> Path:
     return path
 
 
-def _input(tmp_path, assets=None, product_profile=None, brand_context=None, scenario_id="general_creative") -> CapabilityInput:
+def _input(
+    tmp_path,
+    assets=None,
+    product_profile=None,
+    brand_context=None,
+    scenario_id="general_creative",
+    metadata=None,
+    user_input="Create a clean social campaign cover for a premium product launch",
+) -> CapabilityInput:
     return CapabilityInput(
         job_id="job_shared_test",
         scenario_id=scenario_id,
-        user_input="Create a clean social campaign cover for a premium product launch",
+        user_input=user_input,
         uploaded_assets=assets or [],
         product_profile=product_profile or {},
         brand_context=brand_context or {},
+        metadata=metadata or {},
     )
 
 
@@ -113,6 +122,126 @@ def test_visual_grammar_and_prompt_compiler_produce_deduped_constraints(tmp_path
     assert grammar["locked_visual_grammar"]
     assert compiled["layout_constraints"]
     assert compiled["prompt_constraints"]
+
+
+def test_visual_capability_cluster_collects_project_context_and_child_modules(tmp_path) -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            metadata={
+                "project_context_snapshot": {
+                    "project_id": "project_visual_cluster",
+                    "context_version": "context_v1",
+                    "confirmed_visual_tone": ["fresh", "premium"],
+                    "selected_output_assets": [
+                        {"output_id": "v3_output_keep", "selection_reason": "best summer portrait style"}
+                    ],
+                    "selected_reference_assets": [
+                        {
+                            "asset_ref_id": "v3_output_keep",
+                            "source_type": "generated_selected",
+                            "use_policy": "style",
+                        }
+                    ],
+                    "negative_direction_notes": ["avoid dark clutter"],
+                    "metadata": {
+                        "positive_context_from_selected_outputs_only": True,
+                        "unselected_candidates_excluded": True,
+                    },
+                }
+            },
+        ),
+        module_ids=[
+            "case_library_retriever",
+            "visual_grammar_lock",
+            "prompt_constraint_compiler",
+            "visual_capability_cluster",
+        ],
+    )
+
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+    snapshot = cluster["project_snapshot"]
+    profile = cluster["profile"]
+    guard = cluster["consistency_guard"]
+    binding_profile = cluster["reference_binding_profile"]
+    assert result.results[-1].module_id == "visual_capability_cluster"
+    assert snapshot["project_id"] == "project_visual_cluster"
+    assert snapshot["positive_anchor_output_ids"] == ["v3_output_keep"]
+    assert snapshot["continuity_strength"] == "strong"
+    assert "avoid dark clutter" in profile["negative_rules"]
+    assert binding_profile["strong_bindings"]
+    assert cluster["identity_lock_profiles"]
+    assert cluster["quality_review_reports"]
+    assert cluster["auto_retry_decisions"]
+    assert cluster["commercial_output_selection"]["selection_id"]
+    assert cluster["template_consistency_policy"]["policy_id"]
+    assert cluster["project_identity_anchors"]
+    assert cluster["strong_reference_continuation_plan"]["active_anchor_ids"]
+    assert cluster["general_suite_role_plan"]["roles"]
+    assert cluster["batch_identity_diversity_review"]["applies"] is True
+    assert "planned distinct image roles for this set" in cluster["user_visible_summary"]
+    assert guard["positive_context_from_selected_outputs_only"] is True
+    assert guard["unselected_candidates_excluded"] is True
+
+
+def test_visual_capability_cluster_adds_human_natural_variation_plan(tmp_path) -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            user_input="Create three same-model East Asian summer portrait alternatives with small pose changes",
+            metadata={
+                "project_context_snapshot": {
+                    "project_id": "project_human_variation",
+                    "selected_output_assets": [
+                        {"output_id": "selected_model_frame", "selection_reason": "best recognizable model"}
+                    ],
+                    "selected_reference_assets": [
+                        {
+                            "asset_ref_id": "selected_model_frame",
+                            "source_type": "generated_selected",
+                            "use_policy": "identity",
+                        }
+                    ],
+                },
+                "requested_image_count": 3,
+                "variation_mode": "selection_candidates",
+            },
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+    plan = cluster["human_natural_variation_plan"]
+    anchor = cluster["human_identity_anchor_profile"]
+
+    assert plan["applies"] is True
+    assert plan["variation_mode"] == "selection_candidates"
+    assert any("expression" in item for item in plan["per_image_variation_axes"])
+    assert any("same exact expression" in item for item in plan["negative_additions"])
+    assert anchor["applies"] is True
+    assert "body type and proportions" in anchor["locked_traits"]
+
+
+def test_human_natural_variation_policy_detects_chinese_person_requests(tmp_path) -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            user_input="夏日清凉东方美女写真，同一个人物，两张图姿势自然变化",
+            metadata={"requested_image_count": 2, "variation_mode": "selection_candidates"},
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+
+    assert cluster["human_natural_variation_plan"]["applies"] is True
+    assert cluster["human_identity_anchor_profile"]["applies"] is True
 
 
 def test_information_integrity_flags_unsupported_claims_and_preserves_text(tmp_path) -> None:

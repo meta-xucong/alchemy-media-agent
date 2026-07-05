@@ -16,11 +16,13 @@ from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
+from ..generation_router import GenerationRouter, ProductionImageGenerationProvider
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
+from ..shared_capabilities.visual_cluster import ModeAwareRoleDirector, OutputQualityReviewMerger, VisionOutputInspector
 from ..schemas import (
     AssetType,
     BrandProfile,
@@ -67,6 +69,7 @@ from .lifecycle import (
     RunRecord,
 )
 from .outputs import V3GeneratedOutputRecord, V3GeneratedOutputStore
+from .output_resolver import GeneratedOutputResolver
 
 
 QUALITY_MODE_TO_MOCK_PROFILE = {
@@ -76,12 +79,150 @@ QUALITY_MODE_TO_MOCK_PROFILE = {
 }
 
 GENERAL_CREATIVE_PUBLIC_CONTROLS = [
-    "Use uploaded images as product or style references",
+    "Use uploaded images as subject or style references",
     "Keep layout similar when a reference or preset is selected",
-    "Keep supplied text, logo, and product facts exact",
+    "Keep supplied text, logo, and important visible details exact",
     "Continue previous brand style when a brand is selected",
     "Avoid directions previously rejected in brand history",
 ]
+
+VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
+    "weak_aesthetic_finish",
+    "generic_stock_photo_finish",
+    "flat_low_contrast_finish",
+    "overexposed_washout",
+    "underexposed_muddy_frame",
+    "unbalanced_color_grade",
+    "weak_subject_readability",
+    "weak_depth_and_material_separation",
+    "unstable_composition_balance",
+    "overprocessed_hdr_finish",
+    "uncanny_micro_detail",
+    "low_resolution_output",
+    "visible_text_artifact",
+    "watermark_or_signature",
+    "faint_corner_watermark",
+    "ai_generated_badge_trace",
+    "signature_like_artifact",
+    "lower_right_mark_artifact",
+    "third_party_aigc_metadata",
+    "provider_provenance_mismatch",
+    "commercial_cleanliness_failure",
+    "collage_or_split_panel",
+    "unrelated_object",
+    "unrelated_product",
+    "identity_drift",
+    "hair_or_outfit_drift",
+    "camera_distance_drift",
+    "identity_card_missing",
+    "identity_card_not_applied",
+    "identity_feature_drift",
+    "eyebrow_shape_drift",
+    "eye_shape_or_spacing_drift",
+    "nose_mouth_relationship_drift",
+    "jaw_chin_direction_drift",
+    "unflattering_feature_degradation",
+    "beautiful_realism_balance_failure",
+    "realism_made_subject_less_attractive",
+    "pretty_but_too_ai_filtered",
+    "real_but_unflattering",
+    "skin_texture_beauty_balance_failure",
+    "product_identity_drift",
+    "product_label_drift",
+    "product_label_unreadable",
+    "product_logo_or_label_obscured",
+    "brand_asset_drift",
+    "lighting_mismatch",
+    "composition_mismatch",
+    "bad_hands_or_body",
+    "face_artifact",
+    "ai_face_render",
+    "plastic_skin",
+    "over_smoothed_skin",
+    "missing_skin_texture",
+    "over_retouching",
+    "poreless_beauty_surface",
+    "synthetic_fashion_face",
+    "weak_photographic_imperfection",
+    "synthetic_beauty_filter",
+    "doll_like_face",
+    "template_smile",
+    "over_perfect_symmetry",
+    "wax_skin_highlight",
+    "uncanny_eye_expression",
+    "same_ai_face_repetition",
+    "beauty_app_face",
+    "idol_photocard_polish",
+    "skin_blur_retouching",
+    "over_uniform_skin_tone",
+    "over_sharp_ai_detail",
+    "perfect_smile_repetition",
+    "face_slimming_filter",
+    "beautified_facial_geometry",
+    "generic_ai_beauty_identity",
+    "dull_complexion",
+    "muddy_skin_tone",
+    "underexposed_face",
+    "harsh_facial_shadow",
+    "overly_matte_documentary_look",
+    "tired_expression",
+    "unflattering_color_cast",
+    "suppressed_fair_complexion",
+    "forced_tan_or_bronze_cast",
+    "gray_brown_skin_cast",
+    "head_body_proportion_distortion",
+    "oversized_head",
+    "compressed_neck_shoulders",
+    "unflattering_face_drift",
+    "same_expression_repetition",
+    "same_head_angle_repetition",
+    "same_pose_repetition",
+    "studio_only_when_lifestyle_requested",
+    "role_collapse",
+    "flat_catalog_lighting",
+    "weak_lifestyle_context",
+    "repeated_concept_or_prop",
+    "reference_guard_ignored",
+    "low_commercial_finish",
+    "project_continuity_warning",
+    "quality_warning",
+    "mode_role_gap",
+    "mode_role_metadata_missing",
+    "mode_role_duplication",
+    "delivery_suite_role_collapse",
+    "ecommerce_slot_mismatch",
+    "ecommerce_suite_role_mismatch",
+    "format_layout_collapse",
+    "selection_candidate_distance_risk",
+}
+
+VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
+    "provider_error",
+    "provider_timeout",
+    "rate_limit",
+    "insufficient_balance",
+    "missing_api_key",
+    "policy_or_safety_block",
+    "unsupported_file",
+    "file_download_failure",
+    "low_confidence_review",
+    "manual_review",
+    "subjective_quality_only",
+    "conflicting_user_request",
+}
+
+VISUAL_RETRY_PATCH_FIELDS = (
+    "prompt_additions",
+    "negative_additions",
+    "negative_prompt_additions",
+    "reference_requirements",
+    "identity_reinforcement",
+    "product_reinforcement",
+    "brand_asset_reinforcement",
+    "composition_repair",
+    "artifact_repair",
+    "object_removal_instruction",
+)
 
 ASSET_ROLE_PUBLIC_LABELS = {
     "product_reference": "product reference",
@@ -163,14 +304,27 @@ class V3ProductApiService:
         ecommerce_planner: EcommerceScenarioPackPlanner | None = None,
         asset_store: V3UploadedAssetStore | None = None,
         output_store: V3GeneratedOutputStore | None = None,
+        output_resolver: GeneratedOutputResolver | None = None,
+        vision_inspector: VisionOutputInspector | None = None,
+        review_merger: OutputQualityReviewMerger | None = None,
+        mode_role_director: ModeAwareRoleDirector | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
-        self.scenario_runtime = scenario_runtime or ScenarioRuntime(brand_profile_service=self.brand_profile_service)
         self.job_store = job_store or InMemoryProductJobStore()
         self.ecommerce_planner = ecommerce_planner or EcommerceScenarioPackPlanner()
         self.asset_store = asset_store or V3UploadedAssetStore()
         self.output_store = output_store or V3GeneratedOutputStore()
+        self.scenario_runtime = scenario_runtime or ScenarioRuntime(
+            brand_profile_service=self.brand_profile_service,
+            generation_router=GenerationRouter(
+                production_provider=ProductionImageGenerationProvider(output_store=self.output_store),
+            ),
+        )
+        self.output_resolver = output_resolver or GeneratedOutputResolver(self.output_store)
+        self.vision_inspector = vision_inspector or VisionOutputInspector()
+        self.review_merger = review_merger or OutputQualityReviewMerger()
+        self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
 
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
@@ -278,6 +432,8 @@ class V3ProductApiService:
             self.job_store.save(record)
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
+        if generate_request.metadata:
+            record.request.metadata = {**dict(record.request.metadata), **dict(generate_request.metadata)}
         try:
             generation_runtime_result = self.scenario_runtime.generate_job(
                 self._runtime_request_payload(record.request),
@@ -301,6 +457,13 @@ class V3ProductApiService:
             self.job_store.save(record)
             return self._status_from_record(record)
         generation_result = generation_runtime_result.generation_result
+        generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        generation_result = self._run_visual_auto_retries(
+            record=record,
+            generate_request=generate_request,
+            provider_strategy=provider_strategy,
+            generation_result=generation_result,
+        )
         record.generation_result = generation_result
         record.scenario_resolution = generation_runtime_result.scenario_resolution
         record.capability_run = generation_runtime_result.capability_run
@@ -326,12 +489,31 @@ class V3ProductApiService:
         require_real_images = bool(metadata.get("require_real_images") or metadata.get("real_image_generation"))
         if not require_real_images:
             return ProviderStrategy.MOCK_GENERATION
-        if record.request.uploaded_asset_ids:
+        project_context = record.request.metadata.get("project_context_snapshot")
+        has_project_references = False
+        if isinstance(project_context, dict):
+            has_project_references = bool(
+                project_context.get("selected_output_assets")
+                or project_context.get("selected_reference_assets")
+                or project_context.get("uploaded_reference_assets")
+                or project_context.get("selected_visual_references")
+                or project_context.get("strong_reference_bindings")
+                or project_context.get("strong_reference_continuation_plan")
+            )
+        if record.request.uploaded_asset_ids or has_project_references:
             return ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER
         return ProviderStrategy.DEFAULT_IMAGE_PROVIDER
 
     def _generation_failure_message(self, exc: Exception, provider_strategy: ProviderStrategy) -> str:
         message = str(exc).strip() or exc.__class__.__name__
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict):
+            detail_message = str(detail.get("message") or detail.get("error_message") or "").strip()
+            detail_error = str(detail.get("error_type") or "").strip()
+            if detail_message and detail_message not in message:
+                message = f"{message} {detail_message}"
+            elif detail_error and detail_error not in message:
+                message = f"{message} {detail_error}"
         provider = getattr(exc, "provider", None)
         code = getattr(exc, "code", exc.__class__.__name__)
         prefix = "V3 real image generation failed"
@@ -339,6 +521,1017 @@ class V3ProductApiService:
             prefix = "V3 candidate generation failed"
         provider_text = f" via {provider}" if provider else ""
         return f"{prefix}{provider_text} ({code}): {message[:500]}"
+
+    def _attach_post_generation_review(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+        generate_request: GenerateJobRequest,
+    ) -> PlanningResult:
+        project_id = record.request.metadata.get("project_id")
+        review_metadata = {
+            **dict(record.request.metadata or {}),
+            **dict(generate_request.metadata or {}),
+            "quality_mode": generate_request.quality_mode,
+            "scenario_id": generation_result.metadata.get("scenario_id"),
+            "template_id": record.request.metadata.get("template_id") or generation_result.metadata.get("scenario_id"),
+        }
+        resolutions = self.output_resolver.resolve_result(generation_result, project_id=project_id)
+        inspections = [
+            self.vision_inspector.inspect(resolution, metadata=review_metadata)
+            for resolution in resolutions
+        ]
+        package = self.review_merger.build_package(
+            job_id=generation_result.creative_job.job_id,
+            project_id=project_id,
+            resolutions=resolutions,
+            inspections=inspections,
+            max_attempts=self._visual_auto_retry_max_attempts(generate_request),
+        )
+        package_payload = package.model_dump(mode="json")
+        metadata = dict(generation_result.metadata)
+        shared_capabilities = dict(metadata.get("shared_capabilities") or {})
+        visual_cluster = dict(shared_capabilities.get("visual_cluster") or metadata.get("visual_cluster") or {})
+        mode_review = self._mode_differentiation_review_for_result(
+            generation_result=generation_result,
+            project_id=project_id,
+            visual_cluster=visual_cluster,
+        )
+        if mode_review:
+            visual_cluster["mode_differentiation_review"] = mode_review
+            package_payload.setdefault("metadata", {})["mode_differentiation_review"] = mode_review
+        existing_reports = [
+            report
+            for report in visual_cluster.get("quality_review_reports", [])
+            if not (isinstance(report, dict) and report.get("metadata", {}).get("post_generation"))
+        ]
+        visual_cluster["quality_review_reports"] = [
+            *existing_reports,
+            *[report.model_dump(mode="json") for report in package.quality_review_reports],
+        ]
+        visual_cluster["auto_retry_decisions"] = self._auto_retry_decisions_with_mode_review(
+            package.auto_retry_decisions,
+            mode_review=mode_review,
+            job_id=generation_result.creative_job.job_id,
+            project_id=project_id,
+            max_attempts=self._visual_auto_retry_max_attempts(generate_request),
+        )
+        package_payload["auto_retry_decisions"] = list(visual_cluster["auto_retry_decisions"])
+        if package.real_review_signal_package is not None:
+            real_signal_payload = package.real_review_signal_package.model_dump(mode="json")
+            package_payload["real_review_signal_package"] = real_signal_payload
+            visual_cluster["real_review_signal_package"] = real_signal_payload
+        visual_cluster["post_generation_review_package"] = package_payload
+        visual_cluster["has_post_generation_review"] = True
+        shared_capabilities["visual_cluster"] = visual_cluster
+        metadata.update(
+            {
+                "shared_capabilities": shared_capabilities,
+                "visual_cluster": visual_cluster,
+                "post_generation_review_package": package_payload,
+                "post_generation_review_summary": list(package.user_visible_summary),
+            }
+        )
+        asset_pack = generation_result.asset_pack.model_copy(
+            update={
+                "manifest": {
+                    **dict(generation_result.asset_pack.manifest),
+                    "post_generation_review_package": package_payload,
+                },
+                "metadata": {
+                    **dict(generation_result.asset_pack.metadata),
+                    "post_generation_review_package": package_payload,
+                },
+            }
+        )
+        return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _mode_differentiation_review_for_result(
+        self,
+        *,
+        generation_result: PlanningResult,
+        project_id: str | None,
+        visual_cluster: dict[str, Any],
+    ) -> dict[str, Any]:
+        role_plan_payload = visual_cluster.get("role_specific_generation_plan")
+        if not isinstance(role_plan_payload, dict):
+            suite = visual_cluster.get("general_suite_role_plan")
+            suite_metadata = suite.get("metadata") if isinstance(suite, dict) else {}
+            role_plan_payload = suite_metadata.get("role_specific_generation_plan") if isinstance(suite_metadata, dict) else {}
+        if not isinstance(role_plan_payload, dict) or not role_plan_payload:
+            return {}
+        try:
+            from ..shared_capabilities.visual_cluster import RoleSpecificGenerationPlan
+
+            role_plan = RoleSpecificGenerationPlan.model_validate(role_plan_payload)
+        except Exception:
+            return {}
+        candidates = self._mode_review_candidates(generation_result)
+        review = self.mode_role_director.review(
+            project_id=project_id,
+            job_id=generation_result.creative_job.job_id,
+            role_plan=role_plan,
+            generated_candidates=candidates,
+        )
+        return review.model_dump(mode="json")
+
+    def _mode_review_candidates(self, result: PlanningResult) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        assets_by_id = {asset.asset_id: asset for asset in result.series_plan.assets}
+        for packaged in result.asset_pack.assets:
+            candidate_metadata = packaged.metadata.get("candidate_metadata")
+            if not isinstance(candidate_metadata, dict):
+                candidate_metadata = {}
+            asset_spec = assets_by_id.get(packaged.asset_id)
+            asset_metadata = dict(asset_spec.metadata) if asset_spec else dict(packaged.metadata.get("asset_metadata") or {})
+            recipe = (
+                candidate_metadata.get("mode_role_recipe")
+                or asset_metadata.get("mode_role_recipe")
+                or packaged.metadata.get("mode_role_recipe")
+            )
+            payloads.append(
+                {
+                    "candidate_id": packaged.metadata.get("selected_candidate_id"),
+                    "asset_id": packaged.asset_id,
+                    "output_id": candidate_metadata.get("output_id"),
+                    "mode_role_recipe": recipe if isinstance(recipe, dict) else {},
+                    "mode_role_key": candidate_metadata.get("mode_role_key") or asset_metadata.get("mode_role_key"),
+                    "mode_role_label": candidate_metadata.get("mode_role_label") or asset_metadata.get("mode_role_label"),
+                    "requested_image_size": candidate_metadata.get("requested_image_size"),
+                    "aspect_ratio": packaged.aspect_ratio,
+                    "metadata": {**asset_metadata, **candidate_metadata},
+                }
+            )
+        return payloads
+
+    def _auto_retry_decisions_with_mode_review(
+        self,
+        decisions: list[Any],
+        *,
+        mode_review: dict[str, Any],
+        job_id: str,
+        project_id: str | None,
+        max_attempts: int,
+    ) -> list[dict[str, Any]]:
+        payloads = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+            for item in decisions
+            if isinstance(item, dict) or hasattr(item, "model_dump")
+        ]
+        if not mode_review or mode_review.get("status") != "retry_recommended":
+            return payloads
+        issue_codes = self._dedupe_strings(mode_review.get("issue_codes"))
+        retry_patch = dict(mode_review.get("retry_patch") or {})
+        payloads.append(
+            {
+                "decision_id": stable_id("mode_role_auto_retry_decision", job_id, ",".join(issue_codes)),
+                "job_id": job_id,
+                "project_id": project_id,
+                "should_retry": bool(issue_codes and retry_patch),
+                "retry_attempt": 0,
+                "max_attempts": max_attempts,
+                "reason_codes": issue_codes,
+                "retry_patch": retry_patch,
+                "blocked_reason": None if retry_patch else "empty_retry_patch",
+                "user_visible_reason": "A role-specific retry can make this set clearer.",
+                "metadata": {"source": "mode_differentiation_review", "doc": "59"},
+            }
+        )
+        return payloads
+
+    def _run_visual_auto_retries(
+        self,
+        *,
+        record: ProductJobRecord,
+        generate_request: GenerateJobRequest,
+        provider_strategy: ProviderStrategy,
+        generation_result: PlanningResult,
+    ) -> PlanningResult:
+        max_attempts = self._visual_auto_retry_max_attempts(generate_request)
+        base_metadata = dict(record.request.metadata)
+        records: list[dict[str, Any]] = []
+        seen_issue_codes: set[str] = set()
+        merged_result = generation_result
+
+        for attempt_index in range(1, max_attempts + 1):
+            plan = self._visual_retry_execution_plan(
+                record=record,
+                result=merged_result,
+                generate_request=generate_request,
+                attempt_index=attempt_index,
+                max_attempts=max_attempts,
+                seen_issue_codes=seen_issue_codes,
+            )
+            if not plan["should_retry"]:
+                if plan.get("record"):
+                    records.append(plan["record"])
+                break
+
+            retry_patch = dict(plan["retry_patch"])
+            reason_codes = list(plan["reason_codes"])
+            retry_metadata = {
+                **base_metadata,
+                "visual_auto_retry_active": True,
+                "visual_auto_retry_attempt": attempt_index,
+                "retry_attempt": attempt_index,
+                "visual_retry_reason_codes": reason_codes,
+                "visual_retry_patch": retry_patch,
+                "max_visual_retry_attempts": max_attempts,
+            }
+            record.request.metadata = retry_metadata
+            try:
+                retry_runtime_result = self.scenario_runtime.generate_job(
+                    self._runtime_request_payload(record.request),
+                    mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
+                    apply_memory_update=False,
+                    provider_strategy=provider_strategy,
+                    quality_mode=generate_request.quality_mode,
+                )
+            except Exception as exc:
+                records.append(
+                    self._visual_retry_execution_record(
+                        record=record,
+                        status="failed",
+                        attempt_index=attempt_index,
+                        max_attempts=max_attempts,
+                        reason_codes=reason_codes,
+                        retry_patch=retry_patch,
+                        source="scenario_runtime",
+                        blocked_reason=self._generation_failure_message(exc, provider_strategy),
+                    )
+                )
+                break
+
+            if retry_runtime_result.generation_result is None:
+                records.append(
+                    self._visual_retry_execution_record(
+                        record=record,
+                        status="blocked",
+                        attempt_index=attempt_index,
+                        max_attempts=max_attempts,
+                        reason_codes=reason_codes,
+                        retry_patch=retry_patch,
+                        source="scenario_runtime",
+                        blocked_reason="retry_generation_returned_no_result",
+                    )
+                )
+                break
+
+            reviewed_retry_result = self._attach_post_generation_review(
+                record,
+                retry_runtime_result.generation_result,
+                generate_request,
+            )
+            retry_result = self._mark_retry_generation_result(
+                reviewed_retry_result,
+                attempt_index=attempt_index,
+                reason_codes=reason_codes,
+                retry_patch=retry_patch,
+            )
+            retry_output_ids = self._visual_result_output_ids(retry_result)
+            records.append(
+                self._visual_retry_execution_record(
+                    record=record,
+                    status="executed",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=reason_codes,
+                    retry_patch=retry_patch,
+                    source=str(plan.get("source") or "visual_review"),
+                    retry_output_ids=retry_output_ids,
+                    retry_candidate_ids=self._visual_result_candidate_ids(retry_result),
+                )
+            )
+            merged_result = self._merge_retry_generation_result(
+                merged_result,
+                retry_result,
+                records=records,
+                max_attempts=max_attempts,
+            )
+            seen_issue_codes.update(reason_codes)
+
+        record.request.metadata = {
+            **base_metadata,
+            "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+        }
+        if not records:
+            return self._with_visual_retry_metadata(merged_result, records, max_attempts)
+        return self._with_visual_retry_metadata(merged_result, records, max_attempts)
+
+    def _visual_auto_retry_max_attempts(self, generate_request: GenerateJobRequest) -> int:
+        metadata = dict(generate_request.metadata or {})
+        if bool(metadata.get("disable_visual_auto_retry")):
+            return 0
+        requested = self._safe_int(metadata.get("max_visual_retry_attempts"), default=None)
+        mode_limit = {"standard": 1, "strict": 2, "explore": 0}.get(generate_request.quality_mode, 1)
+        if generate_request.quality_mode == "explore" and bool(metadata.get("enable_visual_auto_retry_in_explore")):
+            mode_limit = 1
+        if requested is None:
+            return mode_limit
+        return max(0, min(requested, mode_limit))
+
+    def _visual_retry_execution_plan(
+        self,
+        *,
+        record: ProductJobRecord,
+        result: PlanningResult,
+        generate_request: GenerateJobRequest,
+        attempt_index: int,
+        max_attempts: int,
+        seen_issue_codes: set[str],
+    ) -> dict[str, Any]:
+        if max_attempts <= 0:
+            return {"should_retry": False}
+        metadata = dict(generate_request.metadata or {})
+        if bool(metadata.get("disable_visual_auto_retry")):
+            return {"should_retry": False}
+
+        issue_codes, retry_patch, source = self._visual_retry_signal(result, metadata)
+        issue_codes = self._dedupe_strings(issue_codes)
+        if not issue_codes:
+            return {"should_retry": False}
+        if attempt_index > max_attempts:
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="blocked",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=issue_codes,
+                    retry_patch=retry_patch,
+                    source=source,
+                    blocked_reason="max_retry_attempts_reached",
+                ),
+            }
+
+        non_retryable = [code for code in issue_codes if code in VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES]
+        if non_retryable:
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="blocked",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=non_retryable,
+                    retry_patch=retry_patch,
+                    source=source,
+                    blocked_reason="non_retryable_visual_issue",
+                ),
+            }
+        retryable_codes = [code for code in issue_codes if code in VISUAL_AUTO_RETRY_RETRYABLE_ISSUES]
+        if not retryable_codes:
+            return {"should_retry": False}
+        repeated = [code for code in retryable_codes if code in seen_issue_codes]
+        if repeated:
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="blocked",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=repeated,
+                    retry_patch=retry_patch,
+                    source=source,
+                    blocked_reason="same_issue_repeated",
+                ),
+            }
+
+        if not retry_patch:
+            retry_patch = self._visual_retry_patch_from_issues(retryable_codes)
+        if bool(metadata.get("force_empty_visual_retry_patch")):
+            retry_patch = {}
+        if not self._visual_retry_patch_has_content(retry_patch):
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="skipped",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=retryable_codes,
+                    retry_patch=retry_patch,
+                    source=source,
+                    blocked_reason="empty_retry_patch",
+                ),
+            }
+
+        return {
+            "should_retry": True,
+            "reason_codes": retryable_codes,
+            "retry_patch": retry_patch,
+            "source": source,
+        }
+
+    def _visual_retry_signal(
+        self,
+        result: PlanningResult,
+        request_metadata: dict[str, Any],
+    ) -> tuple[list[str], dict[str, Any], str]:
+        explicit_codes = self._metadata_issue_codes(request_metadata)
+        if explicit_codes:
+            return explicit_codes, self._metadata_retry_patch(request_metadata), "request_metadata"
+
+        cluster = self._visual_cluster_metadata_from_result(result)
+        real_signal = self._real_review_signal_package_from_cluster(cluster)
+        if real_signal:
+            signal_codes, signal_patch = self._visual_retry_signal_from_real_review(real_signal)
+            if signal_codes:
+                return signal_codes, signal_patch, "real_review_signal_package"
+        if self._visual_cluster_is_preflight_only(cluster):
+            return [], {}, "preflight_only"
+        decisions = cluster.get("auto_retry_decisions") if isinstance(cluster, dict) else None
+        if not isinstance(decisions, list):
+            return [], {}, "visual_cluster"
+        for decision in decisions:
+            if not isinstance(decision, dict) or not bool(decision.get("should_retry")):
+                continue
+            return (
+                self._dedupe_strings(decision.get("reason_codes")),
+                dict(decision.get("retry_patch") or {}),
+                "visual_cluster",
+            )
+        return [], {}, "visual_cluster"
+
+    def _real_review_signal_package_from_cluster(self, cluster: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(cluster, dict):
+            return {}
+        direct = cluster.get("real_review_signal_package")
+        if isinstance(direct, dict):
+            return dict(direct)
+        package = cluster.get("post_generation_review_package")
+        if isinstance(package, dict) and isinstance(package.get("real_review_signal_package"), dict):
+            return dict(package["real_review_signal_package"])
+        return {}
+
+    def _visual_retry_signal_from_real_review(self, package: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        signals = package.get("candidate_signals")
+        if not isinstance(signals, list):
+            return [], {}
+        retry_signals = [
+            signal
+            for signal in signals
+            if isinstance(signal, dict)
+            and signal.get("recommended_action") == "retry"
+            and self._dedupe_strings(signal.get("retryable_issue_codes"))
+        ]
+        if not retry_signals:
+            return [], {}
+        reason_codes = self._dedupe_strings(
+            code
+            for signal in retry_signals
+            for code in self._dedupe_strings(signal.get("retryable_issue_codes"))
+        )
+        patches = [dict(signal.get("retry_patch") or {}) for signal in retry_signals]
+        retry_patch = self._merge_visual_retry_patches(patches)
+        if not self._visual_retry_patch_has_content(retry_patch):
+            retry_patch = self._visual_retry_patch_from_issues(reason_codes)
+        target_candidate_ids = self._dedupe_strings(signal.get("candidate_id") for signal in retry_signals if signal.get("candidate_id"))
+        target_output_ids = self._dedupe_strings(signal.get("output_id") for signal in retry_signals if signal.get("output_id"))
+        issue_groups = self._dedupe_strings(
+            group
+            for signal in retry_signals
+            for group in self._string_list((signal.get("metadata") or {}).get("issue_groups") if isinstance(signal.get("metadata"), dict) else [])
+        )
+        if target_candidate_ids:
+            retry_patch["target_candidate_ids"] = target_candidate_ids
+        if target_output_ids:
+            retry_patch["target_output_ids"] = target_output_ids
+        if issue_groups:
+            retry_patch["issue_groups"] = issue_groups
+        return reason_codes, retry_patch
+
+    def _merge_visual_retry_patches(self, patches: list[dict[str, Any]]) -> dict[str, Any]:
+        merge_fields = [*VISUAL_RETRY_PATCH_FIELDS, "brand_asset_reinforcement"]
+        merged: dict[str, list[str]] = {field_name: [] for field_name in merge_fields}
+        provider_hint_overrides: dict[str, Any] = {}
+        for patch in patches:
+            if not isinstance(patch, dict):
+                continue
+            for field_name in merge_fields:
+                merged[field_name].extend(self._string_list(patch.get(field_name)))
+            hints = patch.get("provider_hint_overrides")
+            if isinstance(hints, dict):
+                provider_hint_overrides.update(hints)
+        result = {field_name: self._dedupe_strings(values) for field_name, values in merged.items() if self._dedupe_strings(values)}
+        if provider_hint_overrides:
+            result["provider_hint_overrides"] = provider_hint_overrides
+        return result
+
+    def _metadata_issue_codes(self, metadata: dict[str, Any]) -> list[str]:
+        values: list[Any] = []
+        for key in (
+            "force_visual_retry_issue_codes",
+            "visual_retry_issue_codes",
+            "visual_auto_retry_issue_codes",
+            "force_anti_ai_face_issue_codes",
+            "anti_ai_face_issue_codes",
+            "force_beautiful_realism_issue_codes",
+            "beautiful_realism_issue_codes",
+            "facial_feature_issue_codes",
+            "identity_card_issue_codes",
+        ):
+            raw = metadata.get(key)
+            if isinstance(raw, list):
+                values.extend(raw)
+            elif isinstance(raw, str):
+                values.extend(part.strip() for part in raw.split(","))
+        single = metadata.get("force_visual_retry_issue") or metadata.get("visual_retry_issue_code")
+        if single:
+            values.append(single)
+        return self._dedupe_strings(values)
+
+    def _metadata_retry_patch(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        patch = metadata.get("visual_retry_patch")
+        if isinstance(patch, dict):
+            return dict(patch)
+        return {}
+
+    def _visual_cluster_metadata_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        shared = result.metadata.get("shared_capabilities") if isinstance(result.metadata, dict) else {}
+        if isinstance(shared, dict) and isinstance(shared.get("visual_cluster"), dict):
+            return dict(shared["visual_cluster"])
+        cluster = result.metadata.get("visual_cluster") if isinstance(result.metadata, dict) else {}
+        return dict(cluster) if isinstance(cluster, dict) else {}
+
+    def _visual_cluster_is_preflight_only(self, cluster: dict[str, Any]) -> bool:
+        reports = cluster.get("quality_review_reports") if isinstance(cluster, dict) else None
+        if not isinstance(reports, list) or not reports:
+            return True
+        report_dicts = [report for report in reports if isinstance(report, dict)]
+        if not report_dicts:
+            return True
+        return all(bool((report.get("metadata") or {}).get("pre_generation")) for report in report_dicts)
+
+    def _visual_retry_patch_from_issues(self, issue_codes: list[str]) -> dict[str, Any]:
+        prompt_additions: list[str] = []
+        negative_additions: list[str] = []
+        identity_reinforcement: list[str] = []
+        product_reinforcement: list[str] = []
+        composition_repair: list[str] = []
+        artifact_repair: list[str] = []
+        object_removal_instruction: list[str] = []
+        for code in issue_codes:
+            if code in {
+                "visible_text_artifact",
+                "watermark_or_signature",
+                "faint_corner_watermark",
+                "ai_generated_badge_trace",
+                "signature_like_artifact",
+                "lower_right_mark_artifact",
+                "third_party_aigc_metadata",
+                "provider_provenance_mismatch",
+                "commercial_cleanliness_failure",
+            }:
+                artifact_repair.append(
+                    "keep the image completely clean with no visible text, corner watermark, signature, badge, AI mark, third-party AIGC label, lower-right logo, or semi-transparent mark"
+                )
+                negative_additions.extend(
+                    [
+                        "visible text",
+                        "watermark",
+                        "signature",
+                        "AI-generated mark",
+                        "third-party AIGC label",
+                        "provider provenance mark",
+                        "corner text",
+                        "lower-right logo",
+                        "semi-transparent mark",
+                        "random letters",
+                    ]
+                )
+            elif code == "collage_or_split_panel":
+                composition_repair.append("generate one complete single-frame image, not a collage or split-panel layout")
+                negative_additions.extend(["collage", "split screen", "multi-panel layout"])
+            elif code in {"unrelated_object", "unrelated_product"}:
+                object_removal_instruction.append("remove unrelated props or objects that were not requested")
+                negative_additions.extend(["unrelated props", "unrequested objects", "random product"])
+            elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
+                identity_reinforcement.append("preserve the selected subject direction, hair, outfit category, camera distance, and natural proportions")
+            elif code in {"product_identity_drift", "brand_asset_drift"}:
+                product_reinforcement.append(
+                    "preserve the supplied product or brand asset identity, shape, material, colors, proportions, label/logo placement, and packaging silhouette"
+                )
+            elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:
+                product_reinforcement.append(
+                    "preserve the existing product label/logo exactly from the reference when visible; keep it readable, high-contrast, and unobscured"
+                )
+                artifact_repair.append("do not rewrite, translate, invent, blur, crop, darken, cover, or replace visible product label/logo details")
+                negative_additions.extend(
+                    [
+                        "invented product label",
+                        "rewritten logo",
+                        "unreadable product label",
+                        "covered product logo",
+                        "blurred label text",
+                        "darkened product label",
+                    ]
+                )
+            elif code in {"lighting_mismatch", "composition_mismatch", "project_continuity_warning", "quality_warning"}:
+                prompt_additions.append("follow the project visual direction more closely with clean lighting and consistent composition")
+            elif code in {"bad_hands_or_body", "face_artifact"}:
+                artifact_repair.append("prioritize natural anatomy, clean facial structure, and realistic body details")
+                negative_additions.extend(["distorted hands", "face artifacts", "warped anatomy"])
+            elif code in {
+                "identity_card_missing",
+                "identity_card_not_applied",
+                "identity_feature_drift",
+                "eyebrow_shape_drift",
+                "eye_shape_or_spacing_drift",
+                "nose_mouth_relationship_drift",
+                "jaw_chin_direction_drift",
+                "unflattering_feature_degradation",
+                "beautiful_realism_balance_failure",
+                "realism_made_subject_less_attractive",
+                "pretty_but_too_ai_filtered",
+                "real_but_unflattering",
+                "skin_texture_beauty_balance_failure",
+            }:
+                prompt_additions.extend(
+                    [
+                        "repair with beautiful realism: beauty is the visual goal and realism is the rendering method",
+                        "preserve same-person facial feature relationships: attractive eyebrow shape and arc, awake eye shape and spacing, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance",
+                        "make realism come from photographed skin texture, soft natural light, hair strands, fabric detail, lens depth, and natural facial tension instead of making the face less attractive",
+                    ]
+                )
+                identity_reinforcement.append(
+                    "use the selected image or project identity card as the truth source; vary pose, gaze, expression, scene, and camera angle without changing identity-critical face design"
+                )
+                artifact_repair.extend(
+                    [
+                        "repair facial features before style: eyebrows, eyes, nose-mouth spacing, jaw/chin, cheek volume, and face ratio must remain beautiful and recognizable",
+                        "if the face is pretty but too filtered, restore subtle pores, eyelid detail, hair flyaways, fabric texture, and real shadow transitions without reshaping the face",
+                        "if the face is real but unflattering, recover soft flattering light, relaxed facial muscles, graceful eyebrow design, and a better camera angle while preserving identity",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "ugly realism",
+                        "realism made face less attractive",
+                        "real but ugly face",
+                        "harsh documentary ugliness",
+                        "bad eyebrow design",
+                        "ugly eyebrow shape",
+                        "drooping eyebrows",
+                        "mismatched brows",
+                        "random eyebrow thickness drift",
+                        "sleepy dull eyes",
+                        "unflattering nose-mouth drift",
+                        "jaw or chin direction drift",
+                        "facial feature degradation",
+                        "pretty but poreless AI filter",
+                        "over-smoothed beauty face",
+                        "dull complexion",
+                        "muddy skin tone",
+                    ]
+                )
+            elif code in {
+                "ai_face_render",
+                "plastic_skin",
+                "over_smoothed_skin",
+                "missing_skin_texture",
+                "synthetic_beauty_filter",
+                "doll_like_face",
+                "template_smile",
+                "over_perfect_symmetry",
+                "wax_skin_highlight",
+                "uncanny_eye_expression",
+                "same_ai_face_repetition",
+            }:
+                prompt_additions.extend(
+                    [
+                        "render the person as a real camera photograph with natural skin texture, subtle pores, believable expression, and realistic eyes",
+                        "keep identity direction stable while varying expression, gaze, head angle, pose, and camera angle naturally",
+                    ]
+                )
+                artifact_repair.append(
+                    "repair the face away from AI-beauty rendering toward real photographed skin, natural asymmetry, non-waxy highlights, and believable facial tension"
+                )
+                identity_reinforcement.append(
+                    "preserve broad face shape, age direction, body type, hair direction, and recognizable identity cues without copying the same template face"
+                )
+                negative_additions.extend(
+                    [
+                        "plastic skin",
+                        "over-smoothed skin",
+                        "airbrushed face without texture",
+                        "AI beauty filter",
+                        "synthetic influencer face",
+                        "doll-like face",
+                        "porcelain mask skin",
+                        "over-perfect facial symmetry",
+                        "template smile",
+                        "uncanny eyes",
+                        "wax-like skin highlights",
+                        "same exact AI face repeated",
+                    ]
+                )
+            elif code == "low_commercial_finish":
+                prompt_additions.append("raise the final polish with a clean, premium, directly usable visual finish")
+            elif code in {
+                "weak_aesthetic_finish",
+                "generic_stock_photo_finish",
+                "flat_low_contrast_finish",
+                "overexposed_washout",
+                "underexposed_muddy_frame",
+                "unbalanced_color_grade",
+                "weak_subject_readability",
+                "weak_depth_and_material_separation",
+                "unstable_composition_balance",
+                "overprocessed_hdr_finish",
+                "uncanny_micro_detail",
+                "low_resolution_output",
+            }:
+                prompt_additions.extend(
+                    [
+                        "raise the foundation aesthetic finish with intentional framing, clear subject readability, balanced exposure, stable color grade, natural contrast, and believable depth",
+                        "make the result feel like a directed real-camera image rather than a generic stock render or accidental snapshot",
+                    ]
+                )
+                composition_repair.append(
+                    "repair exposure, color, contrast, depth, and framing so the subject reads clearly and the image feels directed"
+                )
+                artifact_repair.append("avoid overprocessed HDR, synthetic micro-detail, waxy polish, and generic stock-photo finish")
+                negative_additions.extend(
+                    [
+                        "generic stock photo",
+                        "weak aesthetic finish",
+                        "flat low-contrast image",
+                        "washed-out exposure",
+                        "muddy underexposed frame",
+                        "unstable color grade",
+                        "unclear subject",
+                        "weak depth separation",
+                        "accidental composition",
+                        "overprocessed HDR",
+                        "synthetic micro detail",
+                    ]
+                )
+            elif code in {
+                "mode_role_gap",
+                "mode_role_metadata_missing",
+                "mode_role_duplication",
+                "delivery_suite_role_collapse",
+                "ecommerce_slot_mismatch",
+                "ecommerce_suite_role_mismatch",
+                "format_layout_collapse",
+                "selection_candidate_distance_risk",
+            }:
+                prompt_additions.append(
+                    "separate the planned image roles more clearly; each output must follow its own requested slot, camera distance, crop, angle, scene duty, or layout duty"
+                )
+                composition_repair.append("avoid repeating or replacing the requested image job across the set")
+                negative_additions.extend(
+                    [
+                        "same crop for every output",
+                        "same camera distance for every output",
+                        "same pose repeated across the set",
+                        "same image duty repeated",
+                        "wrong ecommerce image role",
+                        "requested listing slot ignored",
+                    ]
+                )
+        return {
+            "prompt_additions": self._dedupe_strings(prompt_additions),
+            "negative_additions": self._dedupe_strings(negative_additions),
+            "identity_reinforcement": self._dedupe_strings(identity_reinforcement),
+            "product_reinforcement": self._dedupe_strings(product_reinforcement),
+            "composition_repair": self._dedupe_strings(composition_repair),
+            "artifact_repair": self._dedupe_strings(artifact_repair),
+            "object_removal_instruction": self._dedupe_strings(object_removal_instruction),
+        }
+
+    def _visual_retry_patch_has_content(self, retry_patch: dict[str, Any]) -> bool:
+        for field_name in VISUAL_RETRY_PATCH_FIELDS:
+            value = retry_patch.get(field_name)
+            if isinstance(value, list) and any(str(item).strip() for item in value):
+                return True
+            if isinstance(value, str) and value.strip():
+                return True
+        provider_hint = retry_patch.get("provider_hint_overrides")
+        return isinstance(provider_hint, dict) and bool(provider_hint)
+
+    def _mark_retry_generation_result(
+        self,
+        result: PlanningResult,
+        *,
+        attempt_index: int,
+        reason_codes: list[str],
+        retry_patch: dict[str, Any],
+    ) -> PlanningResult:
+        marked_assets: list[PackagedAsset] = []
+        for asset in result.asset_pack.assets:
+            metadata = dict(asset.metadata)
+            candidate_metadata = dict(metadata.get("candidate_metadata") or {})
+            candidate_metadata.update(
+                {
+                    "visual_auto_retry_output": True,
+                    "visual_auto_retry_attempt": attempt_index,
+                    "retry_source_issue_codes": list(reason_codes),
+                    "retry_patch": retry_patch,
+                }
+            )
+            metadata.update(
+                {
+                    "visual_auto_retry_output": True,
+                    "visual_auto_retry_attempt": attempt_index,
+                    "retry_source_issue_codes": list(reason_codes),
+                    "retry_patch": retry_patch,
+                    "candidate_metadata": candidate_metadata,
+                }
+            )
+            marked_assets.append(asset.model_copy(update={"metadata": metadata}))
+
+        marked_reports = [
+            report.model_copy(
+                update={
+                    "metadata": {
+                        **dict(report.metadata),
+                        "visual_auto_retry_output": True,
+                        "visual_auto_retry_attempt": attempt_index,
+                        "retry_source_issue_codes": list(reason_codes),
+                    }
+                }
+            )
+            for report in result.evaluation_reports
+        ]
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "assets": marked_assets,
+                "metadata": {
+                    **dict(result.asset_pack.metadata),
+                    "visual_auto_retry_output": True,
+                    "visual_auto_retry_attempt": attempt_index,
+                },
+            }
+        )
+        return result.model_copy(
+            update={
+                "evaluation_reports": marked_reports,
+                "asset_pack": asset_pack,
+                "metadata": {
+                    **dict(result.metadata),
+                    "visual_auto_retry_output": True,
+                    "visual_auto_retry_attempt": attempt_index,
+                    "retry_source_issue_codes": list(reason_codes),
+                },
+            }
+        )
+
+    def _merge_retry_generation_result(
+        self,
+        base_result: PlanningResult,
+        retry_result: PlanningResult,
+        *,
+        records: list[dict[str, Any]],
+        max_attempts: int,
+    ) -> PlanningResult:
+        asset_pack = base_result.asset_pack.model_copy(
+            update={
+                "assets": [*base_result.asset_pack.assets, *retry_result.asset_pack.assets],
+                "manifest": {
+                    **dict(base_result.asset_pack.manifest),
+                    "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                },
+                "metadata": {
+                    **dict(base_result.asset_pack.metadata),
+                    "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                },
+            }
+        )
+        return base_result.model_copy(
+            update={
+                "layout_plans": [*base_result.layout_plans, *retry_result.layout_plans],
+                "prompt_compilations": [*base_result.prompt_compilations, *retry_result.prompt_compilations],
+                "condition_plans": [*base_result.condition_plans, *retry_result.condition_plans],
+                "generation_plans": [*base_result.generation_plans, *retry_result.generation_plans],
+                "evaluation_reports": [*base_result.evaluation_reports, *retry_result.evaluation_reports],
+                "asset_pack": asset_pack,
+                "metadata": {
+                    **dict(base_result.metadata),
+                    "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                    "retry_generation_result_ids": self._dedupe_strings(
+                        [
+                            *self._string_list(base_result.metadata.get("retry_generation_result_ids")),
+                            retry_result.planning_result_id,
+                        ]
+                    ),
+                },
+            }
+        )
+
+    def _with_visual_retry_metadata(
+        self,
+        result: PlanningResult,
+        records: list[dict[str, Any]],
+        max_attempts: int,
+    ) -> PlanningResult:
+        summary = self._visual_auto_retry_summary(records, max_attempts)
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "manifest": {**dict(result.asset_pack.manifest), "visual_auto_retry": summary},
+                "metadata": {**dict(result.asset_pack.metadata), "visual_auto_retry": summary},
+            }
+        )
+        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), "visual_auto_retry": summary}})
+
+    def _visual_retry_execution_record(
+        self,
+        *,
+        record: ProductJobRecord | None,
+        status: str,
+        attempt_index: int,
+        max_attempts: int,
+        reason_codes: list[str],
+        retry_patch: dict[str, Any],
+        source: str,
+        retry_output_ids: list[str] | None = None,
+        retry_candidate_ids: list[str] | None = None,
+        blocked_reason: str | None = None,
+    ) -> dict[str, Any]:
+        job_id = record.job_id if record is not None else "job_unavailable"
+        project_id = None
+        if record is not None:
+            project_id = record.request.metadata.get("project_id")
+        return {
+            "retry_execution_id": stable_id("visual_retry_execution", job_id, attempt_index, status, ",".join(reason_codes)),
+            "project_id": project_id,
+            "original_job_id": job_id,
+            "retry_job_id": job_id,
+            "attempt_index": attempt_index,
+            "max_attempts": max_attempts,
+            "status": status,
+            "reason_codes": self._dedupe_strings(reason_codes),
+            "retry_patch": retry_patch,
+            "retry_output_ids": list(retry_output_ids or []),
+            "retry_candidate_ids": list(retry_candidate_ids or []),
+            "blocked_reason": blocked_reason,
+            "source": source,
+            "created_at": _utc_now_iso(),
+            "metadata": {"append_only": True, "doc": "53"},
+        }
+
+    def _visual_auto_retry_summary(self, records: list[dict[str, Any]], max_attempts: int) -> dict[str, Any]:
+        executed = [record for record in records if record.get("status") == "executed"]
+        issue_codes = self._dedupe_strings(code for record in records for code in record.get("reason_codes", []))
+        return {
+            "enabled": max_attempts > 0,
+            "executed_count": len(executed),
+            "max_attempts": max_attempts,
+            "issue_codes": issue_codes,
+            "records": records,
+            "append_only": True,
+        }
+
+    def _visual_result_output_ids(self, result: PlanningResult) -> list[str]:
+        values: list[str] = []
+        for asset in result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = metadata.get("candidate_metadata") if isinstance(metadata.get("candidate_metadata"), dict) else {}
+            output_id = candidate_metadata.get("output_id") or metadata.get("output_id")
+            if output_id:
+                values.append(str(output_id))
+        return self._dedupe_strings(values)
+
+    def _visual_result_candidate_ids(self, result: PlanningResult) -> list[str]:
+        values: list[str] = []
+        for asset in result.asset_pack.assets:
+            candidate_id = asset.metadata.get("selected_candidate_id")
+            if candidate_id:
+                values.append(str(candidate_id))
+        return self._dedupe_strings(values)
+
+    def _string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _dedupe_strings(self, values: Any) -> list[str]:
+        if isinstance(values, str):
+            raw_values = [part.strip() for part in values.split(",")]
+        else:
+            try:
+                raw_values = list(values or [])
+            except TypeError:
+                raw_values = [values]
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in raw_values:
+            text = str(value or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                result.append(text)
+        return result
+
+    def _safe_int(self, value: Any, default: int | None = 0) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     def select_result(
         self,
@@ -572,8 +1765,12 @@ class V3ProductApiService:
                 "selected_vertical_pack": result.metadata.get("selected_vertical_pack"),
                 "scenario_id": result.metadata.get("scenario_id"),
                 "shared_capabilities": result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run),
+                "visual_auto_retry": result.metadata.get("visual_auto_retry", {}),
+                "post_generation_review": result.metadata.get("post_generation_review_package", {}),
                 "exposes_product_concepts_only": True,
                 "lifecycle": self._lifecycle_summary(record),
+                **self._workflow_artifacts_metadata(record, result),
+                **self._project_mode_status_metadata(record),
             },
         )
 
@@ -599,8 +1796,30 @@ class V3ProductApiService:
                 "blocked_before_planning": record.status == ProductJobStatusValue.BLOCKED,
                 "shared_capabilities": self._capability_run_summary(record.capability_run),
                 "lifecycle": self._lifecycle_summary(record),
+                **self._project_mode_status_metadata(record),
             },
         )
+
+    def _project_mode_status_metadata(self, record: ProductJobRecord) -> dict[str, Any]:
+        request_metadata = dict(record.request.metadata or {})
+        allowed_keys = {
+            "project_id",
+            "template_id",
+            "template_manifest_id",
+            "project_job_sequence",
+            "project_context_version",
+            "project_context_snapshot",
+            "project_mode",
+            "apply_brand_memory_update_default",
+            "variation_mode",
+            "effective_variation_mode",
+            "continuation_mode",
+            "inferred_variation_mode",
+            "variation_mode_source",
+            "variation_mode_label",
+            "scenario_parameters",
+        }
+        return {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
 
     def _not_found_status(self, job_id: str) -> ProductJobStatus:
         nav = get_navigation_entry()
@@ -639,7 +1858,7 @@ class V3ProductApiService:
             route=self._history_route_for_scenario(scenario_id),
             metadata={
                 "source": "V3ProductApiService",
-                "product_language": True,
+                "prompt_language": "product" if scenario_id == "ecommerce" else "neutral_subject",
                 "v3_history_owned": True,
                 "imports_v1_v2_runtime": False,
                 "imports_lab_runtime": False,
@@ -751,8 +1970,77 @@ class V3ProductApiService:
                 "v3_independent_product_api": True,
                 "restored_from_output_store": True,
                 "output_count": len(records),
+                **self._workflow_artifacts_from_output_records(records),
             },
         )
+
+    def _workflow_artifacts_metadata(self, record: ProductJobRecord, result: PlanningResult) -> dict[str, Any]:
+        prompt = result.prompt_compilations[0] if result.prompt_compilations else None
+        final_prompt = ""
+        candidate_llm_brain: dict[str, Any] = {}
+        for asset in result.asset_pack.assets:
+            candidate_metadata = asset.metadata.get("candidate_metadata", {}) if asset.metadata else {}
+            final_prompt = str(candidate_metadata.get("final_provider_prompt") or "").strip()
+            if isinstance(candidate_metadata.get("llm_brain"), dict):
+                candidate_llm_brain = candidate_metadata["llm_brain"]
+            if final_prompt:
+                break
+        result_llm_brain = result.metadata.get("llm_brain") if isinstance(result.metadata.get("llm_brain"), dict) else {}
+        prompt_llm_summary = (
+            prompt.provider_notes.get("llm_brain_summary", {})
+            if prompt is not None and isinstance(prompt.provider_notes.get("llm_brain_summary"), dict)
+            else {}
+        )
+        if prompt is None and not final_prompt:
+            return {}
+        return {
+            "workflow_artifacts": {
+                "user_request": record.request.user_input,
+                "optimized_direction": prompt.visual_prompt if prompt else "",
+                "style_notes": list(prompt.style_notes) if prompt else [],
+                "layout_notes": list(prompt.layout_notes) if prompt else [],
+                "hard_constraints": list(prompt.hard_constraints) if prompt else [],
+                "negative_prompt": prompt.negative_prompt if prompt else "",
+                "final_provider_prompt": final_prompt,
+                "llm_brain": candidate_llm_brain or result_llm_brain,
+                "llm_brain_summary": prompt_llm_summary
+                or (candidate_llm_brain.get("user_visible_summary") if isinstance(candidate_llm_brain, dict) else {})
+                or (result_llm_brain.get("user_visible_summary") if isinstance(result_llm_brain, dict) else {}),
+                "prompt_available": prompt is not None,
+                "final_prompt_available": bool(final_prompt),
+            }
+        }
+
+    def _workflow_artifacts_from_output_records(self, records: list[V3GeneratedOutputRecord]) -> dict[str, Any]:
+        for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
+            metadata = dict(record.metadata or {})
+            if metadata.get("compiled_visual_direction") or metadata.get("final_provider_prompt"):
+                llm_brain = metadata.get("llm_brain") if isinstance(metadata.get("llm_brain"), dict) else {}
+                return {
+                    "workflow_artifacts": {
+                        "user_request": "",
+                        "optimized_direction": str(metadata.get("compiled_visual_direction") or ""),
+                        "style_notes": list(metadata.get("style_notes") or []),
+                        "layout_notes": list(metadata.get("layout_notes") or []),
+                        "hard_constraints": [],
+                        "negative_prompt": ", ".join(metadata.get("negative_constraints") or []),
+                        "final_provider_prompt": str(metadata.get("final_provider_prompt") or ""),
+                        "llm_brain": llm_brain,
+                        "llm_brain_summary": metadata.get("llm_brain_summary")
+                        if isinstance(metadata.get("llm_brain_summary"), dict)
+                        else llm_brain.get("user_visible_summary", {}),
+                        "prompt_available": bool(metadata.get("compiled_visual_direction")),
+                        "final_prompt_available": bool(metadata.get("final_provider_prompt")),
+                        "restored_from_output_store": True,
+                    }
+                }
+        return {
+            "workflow_artifacts": {
+                "prompt_available": False,
+                "final_prompt_available": False,
+                "restored_from_output_store": True,
+            }
+        }
 
     def _candidate_metadata_from_output_record(self, record: V3GeneratedOutputRecord) -> dict[str, Any]:
         return {
@@ -1110,6 +2398,7 @@ class V3ProductApiService:
             "module_ids": [result.module_id for result in capability_run.results],
             "result_statuses": {result.module_id: result.status.value for result in capability_run.results},
             "warning_count": len(capability_run.warnings),
+            "visual_cluster": self._visual_cluster_from_results({result.module_id: result for result in capability_run.results}),
             "required_failures": list(capability_run.required_failures),
         }
 
@@ -1334,7 +2623,7 @@ class V3ProductApiService:
             closure_checks=self._general_creative_closure_checks(record, results, warnings),
             warnings=warnings,
             metadata={
-                "product_language": True,
+                "prompt_language": "neutral_subject",
                 "policy_boundary": "general_creative_neutral",
                 "specialized_pack_logic": False,
                 "internal_module_count": len(results),
@@ -1359,6 +2648,22 @@ class V3ProductApiService:
         return summaries
 
     def _reference_binding_summary(self, results: dict[str, Any]) -> list[str]:
+        cluster = self._visual_cluster_from_results(results)
+        binding_profile = cluster.get("reference_binding_profile") if isinstance(cluster, dict) else {}
+        if isinstance(binding_profile, dict) and binding_profile:
+            summaries: list[str] = []
+            reference_count = int(binding_profile.get("reference_count") or 0)
+            if reference_count:
+                summaries.append(f"{reference_count} active visual reference(s) are organized for this project")
+            hard_count = len(binding_profile.get("hard_reference_ids", []) or [])
+            soft_count = len(binding_profile.get("soft_reference_ids", []) or [])
+            if hard_count:
+                summaries.append(f"{hard_count} identity-critical reference(s) require careful preservation")
+            if soft_count:
+                summaries.append(f"{soft_count} style or mood reference(s) guide the visual direction")
+            summaries.extend(str(item) for item in (binding_profile.get("usage_rules") or [])[:3])
+            if summaries:
+                return summaries
         result = results.get("asset_binding_planner")
         plan = result.facts.get("asset_binding_plan", {}) if result else {}
         bindings = plan.get("bindings", []) if isinstance(plan, dict) else []
@@ -1371,6 +2676,29 @@ class V3ProductApiService:
         return summaries
 
     def _visual_grammar_summary(self, results: dict[str, Any]) -> list[str]:
+        cluster = self._visual_cluster_from_results(results)
+        profile = cluster.get("profile") if isinstance(cluster, dict) else {}
+        snapshot = cluster.get("project_snapshot") if isinstance(cluster, dict) else {}
+        guard = cluster.get("consistency_guard") if isinstance(cluster, dict) else {}
+        if isinstance(profile, dict) and profile:
+            summaries: list[str] = []
+            style_signals = profile.get("style_signals") if isinstance(profile.get("style_signals"), list) else []
+            lighting = profile.get("lighting_notes") if isinstance(profile.get("lighting_notes"), list) else []
+            composition = profile.get("composition_rules") if isinstance(profile.get("composition_rules"), list) else []
+            continuity = snapshot.get("continuity_strength") if isinstance(snapshot, dict) else None
+            if continuity and continuity != "weak":
+                summaries.append(f"Continue the confirmed project direction with {continuity} consistency")
+            if style_signals:
+                summaries.append("Keep style cues: " + ", ".join(str(item) for item in style_signals[:3]))
+            if lighting:
+                summaries.append("Keep lighting cues: " + ", ".join(str(item) for item in lighting[:3]))
+            if composition:
+                summaries.append("Use composition cues: " + ", ".join(str(item) for item in composition[:3]))
+            keep_rules = guard.get("keep_rules") if isinstance(guard, dict) and isinstance(guard.get("keep_rules"), list) else []
+            if keep_rules and not summaries:
+                summaries.append("Keep confirmed direction: " + ", ".join(str(item) for item in keep_rules[:3]))
+            if summaries:
+                return summaries
         grammar_result = results.get("visual_grammar_lock")
         grammar = grammar_result.facts.get("visual_grammar_lock", {}) if grammar_result else {}
         if not grammar:
@@ -1405,6 +2733,15 @@ class V3ProductApiService:
         return summaries
 
     def _review_hint_summary(self, results: dict[str, Any]) -> list[str]:
+        cluster = self._visual_cluster_from_results(results)
+        quality = cluster.get("quality_review") if isinstance(cluster, dict) else {}
+        if isinstance(quality, dict) and quality:
+            checklist = quality.get("checklist") if isinstance(quality.get("checklist"), list) else []
+            warnings = quality.get("warning_notes") if isinstance(quality.get("warning_notes"), list) else []
+            summaries = [str(item) for item in checklist[:4]]
+            summaries.extend(str(item) for item in warnings[:3])
+            if summaries:
+                return summaries
         review_result = results.get("output_review")
         review = review_result.facts.get("output_review", {}) if review_result else {}
         if not review:
@@ -1420,6 +2757,14 @@ class V3ProductApiService:
         history_result = results.get("history_reference")
         history = history_result.facts.get("history_reference", {}) if history_result else {}
         summaries: list[str] = []
+        cluster = self._visual_cluster_from_results(results)
+        snapshot = cluster.get("project_snapshot") if isinstance(cluster, dict) else {}
+        guard = cluster.get("consistency_guard") if isinstance(cluster, dict) else {}
+        if isinstance(snapshot, dict) and snapshot.get("continuity_strength") in {"medium", "strong"}:
+            summaries.append(f"Continue project visual consistency: {snapshot.get('continuity_strength')}")
+        avoid_rules = guard.get("avoid_rules") if isinstance(guard, dict) and isinstance(guard.get("avoid_rules"), list) else []
+        if avoid_rules:
+            summaries.append("Avoid project rejected directions: " + ", ".join(str(item) for item in avoid_rules[:3]))
         requested_brand_id = record.request.continue_style_from_brand_id or record.request.brand_id
         if requested_brand_id:
             summaries.append(f"Continue style from brand memory: {requested_brand_id}")
@@ -1443,6 +2788,7 @@ class V3ProductApiService:
         has_assets = bool(record.request.uploaded_asset_ids)
         has_product_profile = bool(record.request.product_profile)
         has_history = bool(record.request.continue_style_from_brand_id or record.request.brand_id)
+        visual_cluster_result = results.get("visual_capability_cluster")
         return [
             self._closure_check(
                 "reference_understanding",
@@ -1461,8 +2807,8 @@ class V3ProductApiService:
             self._closure_check(
                 "visual_grammar",
                 "Visual grammar preservation",
-                results.get("visual_grammar_lock"),
-                applicable=bool(results.get("case_library_retriever") or has_assets),
+                visual_cluster_result or results.get("visual_grammar_lock"),
+                applicable=bool(visual_cluster_result or results.get("case_library_retriever") or has_assets),
                 not_applicable_detail="No selected visual grammar reference was needed.",
             ),
             self._closure_check(
@@ -1470,7 +2816,7 @@ class V3ProductApiService:
                 "Text and fact preservation",
                 results.get("information_integrity_lock"),
                 applicable=has_product_profile,
-                not_applicable_detail="No exact text, logo, or product facts were supplied.",
+                not_applicable_detail="No exact text, logo, or required details were supplied.",
             ),
             self._closure_check(
                 "output_review",
@@ -1482,8 +2828,8 @@ class V3ProductApiService:
             self._closure_check(
                 "history_continuation",
                 "History continuation",
-                results.get("history_reference"),
-                applicable=has_history,
+                visual_cluster_result or results.get("history_reference"),
+                applicable=bool(has_history or visual_cluster_result),
                 not_applicable_detail="No brand history continuation was requested.",
             ),
             {
@@ -1493,6 +2839,14 @@ class V3ProductApiService:
                 "detail": f"{len(warnings)} warning(s) need review." if warnings else "No user-visible warnings.",
             },
         ]
+
+    def _visual_cluster_from_results(self, results: dict[str, Any]) -> dict[str, Any]:
+        result = results.get("visual_capability_cluster")
+        if result is None:
+            return {}
+        facts = getattr(result, "facts", {}) or {}
+        cluster = facts.get("visual_capability_cluster") if isinstance(facts, dict) else {}
+        return dict(cluster) if isinstance(cluster, dict) else {}
 
     def _closure_check(
         self,

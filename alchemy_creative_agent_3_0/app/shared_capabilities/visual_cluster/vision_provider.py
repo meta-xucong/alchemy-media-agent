@@ -1,0 +1,260 @@
+"""Optional real-image vision provider for V3 post-generation inspection."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+from pathlib import Path
+from typing import Any, Protocol
+
+from .contracts import GeneratedOutputResolution
+
+
+class VisionInspectionProviderUnavailable(RuntimeError):
+    """Raised when no configured vision provider can inspect real images."""
+
+
+class VisionInspectionProviderError(RuntimeError):
+    """Raised when a configured vision provider fails during inspection."""
+
+
+class VisionInspectionProvider(Protocol):
+    provider_name: str
+
+    def available(self, *, force: bool = False) -> bool:
+        """Return whether this provider can be used in the current runtime."""
+
+    def inspect(
+        self,
+        resolution: GeneratedOutputResolution,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Inspect a generated output and return a provider-neutral payload."""
+
+
+class OpenAIVisionInspectionProvider:
+    """OpenAI-compatible multimodal adapter used only by the visual cluster."""
+
+    provider_name = "openai_compatible_vision"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    def available(self, *, force: bool = False) -> bool:
+        if not force and not _env_bool("V3_VISION_INSPECTION_ENABLED", default=False):
+            return False
+        return bool(self._api_key())
+
+    def inspect(
+        self,
+        resolution: GeneratedOutputResolution,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not resolution.file_path:
+            raise VisionInspectionProviderUnavailable("generated output file is not available")
+        path = Path(resolution.file_path)
+        if not path.exists() or not path.is_file():
+            raise VisionInspectionProviderUnavailable("generated output file is missing")
+        api_key = self._api_key()
+        if not api_key:
+            raise VisionInspectionProviderUnavailable("vision inspection API key is not configured")
+        metadata = dict(metadata or {})
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(**_openai_client_kwargs(api_key=api_key, base_url=self._base_url()))
+            prompt = _inspection_prompt(metadata)
+            data_url = _image_data_url(path, resolution.mime_type)
+            response_payload = self._inspect_with_responses(client, prompt, data_url, metadata)
+            return _loads_json_object(response_payload)
+        except VisionInspectionProviderUnavailable:
+            raise
+        except Exception as exc:
+            raise VisionInspectionProviderError(f"vision inspection provider failed: {str(exc)[:240]}") from exc
+
+    def _inspect_with_responses(self, client: Any, prompt: str, data_url: str, metadata: dict[str, Any]) -> str:
+        model = self._model(metadata)
+        timeout = self._timeout()
+        try:
+            response = client.responses.create(
+                model=model,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": data_url},
+                        ],
+                    }
+                ],
+                text={"format": {"type": "json_object"}},
+                timeout=timeout,
+                max_output_tokens=1600,
+            )
+            text = getattr(response, "output_text", None) or _response_text_from_openai(response)
+            if text:
+                return text
+        except Exception:
+            pass
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+            timeout=timeout,
+            max_tokens=1600,
+        )
+        return str(response.choices[0].message.content or "")
+
+    def _api_key(self) -> str | None:
+        return (
+            self.api_key
+            or _env("V3_VISION_INSPECTION_API_KEY")
+            or _settings_value("openai_api_key")
+            or _settings_value("lab_openai_api_key")
+        )
+
+    def _base_url(self) -> str | None:
+        return (
+            self.base_url
+            or _env("V3_VISION_INSPECTION_BASE_URL")
+            or _settings_value("openai_base_url")
+            or _settings_value("lab_openai_base_url")
+        )
+
+    def _model(self, metadata: dict[str, Any]) -> str:
+        return str(
+            metadata.get("vision_model")
+            or self.model
+            or _env("V3_VISION_INSPECTION_MODEL")
+            or _settings_value("openai_llm_model")
+            or _settings_value("default_llm_model")
+            or "gpt-5.5"
+        )
+
+    def _timeout(self) -> float:
+        if self.timeout_seconds is not None:
+            return self.timeout_seconds
+        try:
+            return float(os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90"))
+        except ValueError:
+            return 90.0
+
+
+def create_default_vision_provider() -> VisionInspectionProvider:
+    return OpenAIVisionInspectionProvider()
+
+
+def _inspection_prompt(metadata: dict[str, Any]) -> str:
+    user_goal = str(metadata.get("user_input") or metadata.get("original_user_input") or "").strip()
+    template_id = str(metadata.get("template_id") or metadata.get("scenario_id") or "general_creative")
+    project_summary = metadata.get("project_context_summary") or metadata.get("project_memory_summary") or {}
+    return "\n".join(
+        [
+            "You are V3's post-generation visual inspector.",
+            "Inspect the attached generated image only after it exists.",
+            "Return strict JSON. Do not include markdown.",
+            "Judge visible text artifacts, watermarks, collage/split panels, identity or style drift, long-term identity-card continuity, facial-feature aesthetic integrity, eyebrow/eye/nose-mouth/jaw drift, beautiful-realism balance, realism that makes the subject less attractive, product label/logo readability, ecommerce slot fidelity, unrelated objects, anatomy/face artifacts, over-smoothed AI-face realism, East Asian fresh portrait complexion/proportion issues, repeated expression/pose/head angle across a set, weak lifestyle context, lighting/composition mismatch, subject readability, composition balance, exposure stability, color-grade stability, depth/material separation, generic stock-photo finish, overprocessed HDR or synthetic detail, and direct-use visual polish.",
+            "Use beginner-safe wording in summaries. For general_creative, say subject/object/visual direction instead of product/ecommerce language.",
+            f"Template: {template_id}",
+            f"User goal: {user_goal}",
+            f"Project context summary: {json.dumps(project_summary, ensure_ascii=False)[:1200]}",
+            "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, ecommerce_slot_mismatch, ecommerce_suite_role_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
+            'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review","confidence":0.0,"issue_codes":[],"scores":{"artifact_safety":0.0,"composition":0.0,"commercial_finish":0.0,"identity_consistency":0.0,"overall":0.0},"preserved_elements":[],"drift_warnings":[],"artifact_warnings":[],"summary":[],"retry_patch":{}}',
+        ]
+    )
+
+
+def _image_data_url(path: Path, mime_type: str | None) -> str:
+    mime = mime_type or _mime_from_path(path)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _mime_from_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "image/png"
+
+
+def _loads_json_object(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        raise VisionInspectionProviderError("vision inspection returned empty output")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise VisionInspectionProviderError("vision inspection returned non-json output")
+        parsed = json.loads(raw[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise VisionInspectionProviderError("vision inspection json output was not an object")
+    return parsed
+
+
+def _response_text_from_openai(response: Any) -> str:
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if text:
+                chunks.append(str(text))
+    return "\n".join(chunks)
+
+
+def _openai_client_kwargs(*, api_key: str, base_url: str | None) -> dict[str, Any]:
+    try:
+        from app.config import openai_sdk_client_kwargs
+
+        return openai_sdk_client_kwargs(api_key=api_key, base_url=base_url)
+    except Exception:
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return kwargs
+
+
+def _settings_value(name: str) -> Any:
+    try:
+        from app.config import settings
+
+        return getattr(settings, name, None)
+    except Exception:
+        return None
+
+
+def _env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value.strip() if value and value.strip() else None
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

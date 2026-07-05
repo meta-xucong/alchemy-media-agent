@@ -1,158 +1,409 @@
 # 29 V3 Development Document Execution Audit
 
-This document answers the handoff question:
+This audit answers:
 
 ```text
-Have all development documents been executed?
+Have the accepted V3 development documents been executed, and what is the
+current authority for the next coding pass?
 ```
 
-Short answer:
+## 1. Current Short Answer
 
 ```text
-All accepted current-stage development documents through document 30 have been
-implemented or reconciled for their stated scope.
+Documents 00-49:
+  implemented, reconciled, or superseded for their accepted current-stage scope.
 
-The entire product vision is not finished: V3.8B provider/output production
-closure and V3.9 future specialization packs remain future boundaries.
+Documents 50-67:
+  implemented or governing the current V3 Visual Capability Cluster,
+  checkpoint Brain, Project Mode continuation, real review/retry, four-mode
+  generation, human/product consistency, E-Commerce product QA,
+  selected-reference closure, human photorealism, and Doc67 boundary cleanup.
+
+Document 68:
+  implemented for casebook-guided photographic recipe tuning. It does not
+  rewrite the framework. It adds V3-owned recipe fragments under the existing
+  Visual Capability Cluster.
+
+Document 69:
+  implemented for prompt atom absorption. It keeps Doc68's architecture and
+  makes V2/GPT-Image-2 style prompt atom absorption explicit: camera, light,
+  texture, realism, reference-truth, product-truth, negative, review, and retry
+  atom stacks are strengthened inside existing modules.
+
+Document 70:
+  implemented as the narrow human-realism pass. It keeps Doc69's module
+  structure and tunes existing human portrait rules to reduce polished AI
+  beauty-face feel.
+
+Document 71:
+  latest accepted implementation authority for the current attractive-realism
+  balance pass. It keeps Doc70's anti-AI-face pressure while recovering healthy
+  clear complexion, soft bounce light, fresh summer brightness, and flattering
+  color without skin whitening or beauty-filter smoothing.
+
+Document 72:
+  latest accepted implementation authority for East Asian portrait aesthetic
+  guarding. It keeps Doc71's attractive realism, prevents unnecessary
+  dark/tan/gray skin when the user did not ask for it, and guards natural
+  head, neck, shoulder, and upper-body proportions in close crops.
+
+Document 73:
+  latest accepted implementation authority for text-only human-suite identity.
+  User-selected or uploaded references always win. When no user reference
+  exists, the first generated human portrait output becomes a temporary hard
+  identity anchor for later outputs in the same job.
+
+Document 74:
+  implemented authority for complex prompt fidelity and
+  negative prompt absorption. Detailed prompts keep more source detail,
+  explicit negative-prompt sections are split into negative constraints, and
+  provider prompts must not simplify complex human scenes into generic portraits.
+
+Document 75:
+  latest accepted implementation authority for identity hero selection, suite
+  director closure, and strict visual review. It honors user references first,
+  establishes a clear identity master for text-only human suites, makes suite
+  roles purposeful, and expands bounded retry issue codes for AI-face,
+  identity drift, role collapse, proportion failure, watermark/text artifacts,
+  and weak commercial finish.
+
+Document 76:
+  latest accepted placement-governance authority. Universal quality capabilities
+  belong in the V3 foundation, General Template remains simple and
+  scenario-neutral, and professional deliverable maps / suite packaging belong
+  in specialized templates such as E-Commerce, Photography, Brand, and New
+  Media.
+
+Document 77:
+  latest accepted foundation-quality tuning authority for real visual review
+  and aesthetic stability. It strengthens issue codes, review prompts, provider
+  prompt consumption, and bounded retry patches inside the existing foundation
+  layers without adding specialized deliverable maps to General Template.
+
+Document 78:
+  final accepted foundation tuning plan before the next specialized-template
+  phase. It targets long-term subject identity continuity, selected-reference
+  persistence, beautiful realism balance, and facial-feature aesthetic
+  integrity while preserving Doc76 boundaries.
 ```
 
-## 1. Why This Audit Exists
+V3.10 future specialization packs remain future phases. They require their own
+accepted specifications, registry activation, and product-experience gate.
 
-The V3 document set contains two kinds of documents:
+## 2. Non-Conflict Rule
 
-1. Current-stage implementation contracts.
-2. Long-range product vision, future provider, and future vertical-pack plans.
-
-Those must not be collapsed into one status. A document can be fully executed
-for its accepted current-stage scope while still naming future work that belongs
-to another phase.
-
-## 2. Executed Current-Stage Documents
-
-| Document | Current status | Evidence |
-| --- | --- | --- |
-| `00`-`16` foundation documents | Executed for foundation scope | Core schemas, creative core, brand memory, generation loop, rendering, provider interfaces, product boundary guardrails, and tests exist. |
-| `17` Scenario Pack platform | Executed and later extended | Scenario Pack registry, ScenarioRuntime, Scenario Hub contract, active General Creative, active E-Commerce, and placeholder future packs exist. |
-| `18` General Creative runtime | Executed for productized General Creative scope | General Creative runs through V3 Product API and ScenarioRuntime. |
-| `19` General quick-start presets | Executed for current preset scope | General Creative presets and product-language summaries are surfaced in Product API/frontend. |
-| `20` General common-scene closure | Executed for current product API/frontend scope | Closure checks, information integrity, and shared capability summaries are visible through General Creative status. |
-| `21` Product integration execution prompt | Executed for its original stage | Shared V3 entry, Product API, Scenario Hub, and General Creative integration exist. Later docs supersede the earlier placeholder-only E-Commerce state. |
-| `22` One-shot handoff | Executed for its original stage | Commercial frontend shell and placeholder behavior were implemented before E-Commerce activation. Later docs supersede the earlier placeholder-only E-Commerce state. |
-| `23` Foundation gap audit/completion | Executed | Scenario Pack foundation, ScenarioRuntime, scenario-aware Product API, lifecycle records, guardrails, tests, and scope audits exist. |
-| `24` Shared capability modules | Executed | V3-owned shared capabilities, registry, deterministic modules, runtime integration, and focused tests exist. |
-| `25` General Creative shared-capability delta | Executed | General Creative uses shared capabilities without marketplace/E-Commerce leakage. |
-| `26` E-Commerce Scenario Pack | Executed for planning/export-metadata scope | V3-owned E-Commerce package, product truth, marketplace profile, commerce brief, image recipes, critic, export metadata, Product API summary, frontend activation, and tests exist. |
-| `27` Commercial frontend shell | Executed and later extended | V1/V2/Alchemy Lab/V3 navigation, V3 Scenario Hub, card-module workspace, General Creative and E-Commerce workspaces, V3-only API calls, and frontend/API smoke tests exist. |
-| `28` Asset upload/export closure | Executed | V3 upload lifecycle, real uploaded asset resolution, E-Commerce export/download manifest, frontend upload-before-create flow, and focused tests exist. |
-| `30` Home-first card/history frontend correction | Executed | V3 first screen is now cards plus V3-owned history; detailed composer/upload/result surfaces open only after active card or V3 history click; V3 history uses `/api/v3/creative-agent/history` plus V3 local fallback. |
-
-## 3. Documents With Historical Placeholder Statements
-
-Documents `21`, `22`, and parts of `27` intentionally describe an earlier
-phase where E-Commerce was a placeholder. That is not a current defect.
-
-The supersession order is:
+When older documents describe earlier states, use the latest accepted document
+for the same topic:
 
 ```text
-21/22: V3 shell and General Creative stage; E-Commerce placeholder
-27: commercial shell before full E-Commerce activation
-26: activates E-Commerce as a Scenario Pack
-28: closes real upload and export-manifest loop
-30: corrects the V3 first screen and hardens V3 runtime independence
+Project object model:
+  Docs 32-34
+
+Project frontend and continuation:
+  Docs 35-47
+
+LLM Brain and prompt cleanliness:
+  Docs 48-49
+
+Visual module ownership:
+  Docs 50 and 67
+
+Generated-output review and retry:
+  Docs 52-55, 64, 66
+
+Four General Template modes:
+  Docs 54, 59, 68B
+
+Human identity and photorealism:
+  Docs 56, 61, 62, 65, 68, 69, 70, 71, 72, 73, 75
+
+Product/E-Commerce suite truth:
+  Docs 57, 60, 68, 69
+
+Casebook-guided prompt/recipe tuning:
+  Doc68, Docs 68A-68C, Doc69, Doc69A, Doc70, and Doc71
+
+Foundation vs specialized template placement:
+  Doc76
+
+Real visual review and aesthetic stability:
+  Doc77, under Doc76 placement rules
+
+Long-term identity and beautiful realism balance:
+  Doc78, under Doc76 placement rules
 ```
 
-When the current state conflicts with older placeholder wording, use the later
-document and tests as the authority.
+If a conflict exists:
 
-## 4. Future Boundaries Not Yet Executed
+```text
+architecture ownership:
+  Doc50 and Doc67 win
 
-These are not current defects:
+casebook recipe details:
+  Doc72 wins for East Asian fair-complexion and proportion guard; Doc71 wins
+  for attractive-realism balance; Doc70 wins for human AI-feel
+  tuning; Doc69 wins for prompt atom stacks; Doc68 remains the base recipe
+  authority
 
-| Future boundary | Status | Reason |
-| --- | --- | --- |
-| V3.8B Provider/output production closure | Not implemented | Requires a separate accepted phase to bind E-Commerce recipes to generated image assets, QA generated outputs, and package final files. |
-| Full ZIP/batch export of generated images | Not implemented | Depends on generated image assets from V3.8B. |
-| Slot-level E-Commerce regeneration/editing | Not implemented | Depends on generated-output asset records and UI workflow decisions. |
-| New Media Scenario Pack | Placeholder | Requires its own accepted pack spec. |
-| Private Domain Scenario Pack | Placeholder | Requires its own accepted pack spec. |
-| Brand IP Scenario Pack | Placeholder | Requires its own accepted pack spec. |
-| AI manga-drama and other future packs | Not in current scope | Optional future work. |
-| Heavy provider sidecars as production dependencies | Not in current scope | Core tests must remain independent of GPU/sidecar dependencies. |
+text-only human suite identity:
+  Doc73 wins. User-selected references have priority; auto first-output anchors
+  are only a fallback for no-reference human suites.
 
-## 5. Current Runtime Status
+complex prompt fidelity:
+  Doc74 wins for explicit negative-prompt splitting and long detailed prompt
+  preservation.
+
+identity hero and strict suite closure:
+  Doc75 wins for identity master selection, suite role closure, strict visual
+  pass conditions, and Doc75 retryable quality issue codes.
+
+foundation vs specialized template placement:
+  Doc76 wins. Shared image quality, consistency, realism, curation, review, and
+  retry belong in the foundation. Professional deliverable maps and output
+  packaging belong in specialized templates. General Template must remain
+  beginner-friendly and scenario-neutral.
+
+real visual review and aesthetic stability:
+  Doc77 wins for foundation issue codes, visual-review prompt strictness,
+  provider prompt consumption, and actionable retry patches. Doc77 must not be
+  used to add ecommerce, photography, brand, or new-media deliverable maps to
+  General Template.
+
+long-term identity and beautiful realism:
+  Doc78 wins for SubjectIdentityCard planning, selected-reference continuity,
+  facial-feature aesthetic integrity, and the rule that realism must come from
+  skin, light, hair, fabric, camera texture, and natural asymmetry rather than
+  making the face less beautiful.
+
+E-Commerce product truth:
+  Doc60 wins unless Doc68/Doc69 only strengthen product lifestyle/context,
+  product-truth, or review wording
+
+retry budget and loop safety:
+  Doc53 wins
+
+beginner UI wording:
+  Doc43 and Doc47 win
+```
+
+## 3. Executed / Governing Document Chain
+
+| Range | Current status |
+| --- | --- |
+| `00`-`16` | Foundation implemented for independent V3 schemas, agents, product boundary, rules, memory, provider contracts, tests. |
+| `17`-`31` | Scenario Platform, General/E-Commerce workspaces, shared capabilities, upload/export, frontend shell, and pre-Project corrections implemented or superseded by Project Mode. |
+| `32`-`47` | Project Mode implemented: projects wrap jobs, template-first creation, project context, references, selection, feedback, timeline, Brand Memory confirmation, E-Commerce unfreeze, and single production entry. |
+| `48`-`49` | V3-owned LLM Brain and General Template prompt deproductization implemented. |
+| `50`-`59` | Visual Capability Cluster, direct checkpoint Brain, visual consistency, review/retry, four modes, human variation, identity anchors, and mode-aware role director implemented or governing. |
+| `60`-`64` | E-Commerce product slot/label QA, portrait Lovart benchmark, portrait role separation, image-edit provider stability, and commercial-quality closure implemented or governing. |
+| `65`-`67` | Human photorealism, selected-reference closure, real-review signals, candidate-scoped retry, and visual boundary cleanup implemented or governing. |
+| `68` | Implemented phase: casebook-guided photographic recipe tuning. |
+| `69` | Implemented phase: prompt atom realism and reference absorption. |
+| `70` | Implemented phase: human real-camera AI-feel reduction tuning. |
+| `71` | Implemented phase: human attractive-realism balance tuning. |
+| `72` | Implemented phase: East Asian fair-complexion and proportion guard. |
+| `73` | Implemented phase: first-output identity anchor for text-only human suites. |
+| `74` | Implemented phase: complex prompt fidelity and negative prompt absorption. |
+| `75` | Implemented phase: identity hero, suite director, and strict visual review closure. |
+| `76` | Current accepted governance phase: foundation vs specialized template placement. |
+| `77` | Current accepted implementation phase: real visual review and aesthetic stability foundation. |
+| `78` | Current accepted final planning phase: long-term identity and beautiful realism foundation tuning. |
+
+## 4. Current Runtime Status
 
 The current implementation supports:
 
 ```text
-General Creative:
-  active
-  shared capabilities integrated
-  product-language closure summaries
+V3 Project Mode:
+  project-first home, project cards, project detail, references, selected
+  outputs, feedback, project-scoped jobs, and explicit Brand Memory confirmation
 
-E-Commerce:
-  active
-  V3-owned Scenario Pack
-  product truth, commerce brief, image recipes, critic, export metadata
-  real V3 uploaded-asset analysis
-  downloadable JSON export manifest
+General Template:
+  active, policy-neutral, project-scoped, four-mode capable, selected-output
+  continuation capable
 
-V3 frontend:
-  active in the shared outer page only
-  first screen is V3 cards plus V3-owned history
-  workspace opens only after active card/history click
-  no V1/V2/Lab runtime state, upload, job, provider, selection, export, or history dependency
+E-Commerce Template:
+  active only through Project Mode and registry, requires product reference,
+  product profile is project-scoped, suite roles and label/product truth are
+  checked through V3-owned modules
 
-New Media / Private Domain / Brand IP:
-  placeholder
-  visible in Scenario Hub
-  cannot create jobs
+Visual Capability Cluster:
+  owns visual grammar, references, identity/product locks, human variation,
+  human photorealism, mode role plans, quality review, auto retry signals, and
+  selected-reference closure
 ```
 
-## 6. Verification Status
+## 5. Doc76 Governance Requirement
 
-Latest verified commands:
+Every future V3 visual-generation implementation run must:
 
 ```text
-python -m pytest alchemy_creative_agent_3_0/tests/test_v3_asset_upload_and_export_doc28.py -q
-python -m pytest tests/test_v3_commercial_frontend_shell.py -q
-python -m pytest alchemy_creative_agent_3_0/tests -q
-python -m pytest tests/test_api_smoke.py tests/test_v3_commercial_frontend_shell.py -q
-python -m pytest -q
-python -m compileall -q alchemy_creative_agent_3_0 src_skeleton
-node --check src_skeleton/app/static/app.js
-git diff --check
-browser click-through at http://127.0.0.1:8773/creative-agent-v3
+1. Classify the work as foundation, General Template, or specialized template.
+2. Put universal quality improvements in the V3 foundation.
+3. Keep General Template simple, beginner-friendly, and scenario-neutral.
+4. Put professional deliverable maps, suite directors, and output packaging in
+   specialized templates.
+5. Add tests proving the change does not leak into the wrong layer.
+6. Do not infer ecommerce, photography, brand, or new-media packages from vague
+   General Template prompts.
+7. Use Doc76 as the placement rule before applying Doc75 or future quality
+   improvements.
 ```
 
-Latest recorded results:
+The previous Doc75 implementation run required:
 
 ```text
-Doc28 focused tests: 2 passed
-V3 commercial frontend/API tests: 5 passed
-V3 package suite: 122 passed
-main app smoke plus V3 smoke: 84 passed
-root pytest: 119 passed
-compile and JS checks: passed
-scope audits: passed
-state validation: passed
-browser flow: V3 home, General Creative card, back, E-Commerce card, locked cards, V3 create job, and V3 history click passed
+1. Add Doc75.
+2. Keep Doc50/Doc67 ownership: new logic belongs under the Visual Capability
+   Cluster, not inside CentralCreativeBrain or a duplicate framework.
+3. Add identity_hero_selector and strict_visual_review_policy child
+   responsibilities.
+4. Honor user-selected or uploaded identity references first; otherwise use the
+   first generated human portrait as the temporary identity master in text-only
+   multi-image human suites.
+5. Make suite roles purposeful through existing Doc54/59 modes.
+6. Feed identity hero, suite director, and strict review rules into provider
+   prompts through metadata.
+7. Expand review/retry issue codes for AI-face feel, identity drift, role
+   collapse, repeated expression/pose/angle, proportion failure, watermark/text
+   artifacts, and weak commercial finish.
+8. Absorb valuable anti-AI negative terms from the previous detailed portrait
+   prompt as negative constraints only.
+9. Run focused Doc75 tests plus Doc74/Doc73/Doc72/Doc71/provider/general
+   regressions.
+10. Attempt real validation with the East Asian summer seaside portrait case.
 ```
 
-## 7. Final Audit Conclusion
-
-Use this conclusion for future Codex handoffs:
+The previous Doc74 implementation run required:
 
 ```text
-CURRENT_STAGE_DOCUMENT_EXECUTION_STATUS: COMPLETE THROUGH DOCUMENT 30
-CURRENT_STAGE_CODE_STATUS: PASS
-CURRENT_STAGE_TEST_STATUS: PASS
-CURRENT_STAGE_DOC_STATUS: PASS AFTER DOCUMENT 30 FRONTEND CORRECTION
-ALL_LONG_RANGE_PRODUCT_VISION_STATUS: NOT COMPLETE BY DESIGN
-NEXT_RECOMMENDED_BOUNDARY: V3.8B Provider/output production closure
+1. Add Doc74.
+2. Split explicit negative-prompt sections out of positive user prompts.
+3. Raise detailed prompt retention so complex scene prompts are not truncated
+   before key action, wardrobe, environment, camera, and aspect-ratio details.
+4. Add hard constraints telling the provider to preserve detailed scene content
+   and not simplify it into a generic portrait.
+5. Ensure negative terms never become desired visual content.
+6. Run focused Doc74 tests plus Doc73/Doc72/Doc71/Doc70/provider/general
+   regressions.
+7. Attempt real validation with the user's evening fountain-square prompt.
 ```
 
-The next implementation run should not reopen documents `23`-`30` unless tests
-fail or a regression is found. It should either:
+The previous Doc73 implementation run required:
 
-1. wait for user acceptance, or
-2. start a separately accepted V3.8B provider/output production-closure phase.
+```text
+1. Add Doc73.
+2. Keep Project Mode user-selected references as the highest priority.
+3. Enable auto first-output identity anchor only for real, text-only,
+   multi-image human suites without user references.
+4. Pass the first generated output file as a hard identity reference to later
+   outputs in the same job.
+5. Lock concrete identity traits: broad face shape, eye shape/spacing,
+   nose-mouth relationship, jawline, age impression, body type, hair family,
+   wardrobe category, and lighting.
+6. Still allow expression, pose, head angle, crop, and camera variation.
+7. Do not affect E-Commerce/product suites by default.
+8. Run focused Doc73 tests plus Doc72/Doc71/Doc70/mode/provider/general
+   regressions.
+9. Attempt real portrait validation and compare identity consistency.
+```
+
+The previous Doc72 implementation run required:
+
+```text
+1. Add Doc72.
+2. Extend only existing human realism/casebook/provider/review behavior under
+   visual_cluster.
+3. Keep Doc70 and Doc71 rules intact.
+4. Prevent East Asian fresh/summer/beauty portrait outputs from unnecessary
+   dark/tan/gray complexion when the user did not ask for that look.
+5. Preserve clean fair luminous complexion through light and color balance, not
+   through fake whitening, face replacement, or skin smoothing.
+6. Guard close crops against oversized head, compressed neck/shoulders, warped
+   upper body, or unflattering face drift.
+7. Extend review/retry issue codes for suppressed fair complexion, forced
+   tan/bronze cast, gray-brown skin cast, and head/body proportion failures.
+8. Prove no V1/V2 runtime imports or duplicate visual framework are introduced.
+9. Run focused Doc72 tests plus Doc71/Doc70/human/mode/provider/general
+   regressions.
+10. Attempt real portrait validation and compare to Doc71.
+```
+
+The previous Doc71 implementation run required:
+
+
+```text
+1. Add Doc71.
+2. Extend only existing human realism/casebook/provider/review behavior under
+   visual_cluster.
+3. Keep Doc70's anti-AI-face rules intact.
+4. Recover attractive fresh portrait quality with healthy clear complexion,
+   soft natural bounce light, clean bright summer daylight, and flattering
+   color balance.
+5. Reject dull complexion, muddy skin tone, underexposed face, harsh facial
+   shadow, overly matte documentary look, and tired expression.
+6. Explicitly avoid skin whitening, face reshaping, poreless glow, or
+   beauty-filter smoothing.
+7. Keep provider prompt rendering metadata-driven and product-language clean.
+8. Extend review/retry issue codes for dull/dark/unflattering complexion.
+9. Prove no V1/V2 runtime imports or duplicate visual framework are introduced.
+10. Run focused Doc71 tests plus Doc70/Doc69/human/provider/general regressions.
+11. Attempt real portrait validation and compare to Doc70.
+```
+
+The previous Doc70 implementation run required:
+
+```text
+1. Add Doc70.
+2. Extend only existing human realism/casebook/review behavior under
+   visual_cluster.
+3. Reduce AI beauty-face feel by adding real-camera imperfection, natural
+   skin/fabric/hair detail, and anti-beauty-app/idol-polish rules.
+4. Keep provider prompt rendering metadata-driven.
+5. Extend review/retry issue codes for beauty-app face, idol photocard polish,
+   skin blur, over-uniform skin, over-sharp AI detail, and perfect-smile
+   repetition.
+6. Prove no V1/V2 runtime imports are introduced.
+7. Prove no duplicate visual framework is created.
+8. Run focused Doc70 tests plus Doc69/human/provider regressions.
+9. Attempt real portrait validation and compare to Doc69.
+```
+
+## 6. Verification Commands For Doc78
+
+```text
+rg -n "V3 Foundation vs Specialized Template Principle|76_V3_FOUNDATION_VS_SPECIALIZED_TEMPLATE_GOVERNANCE_SPEC" AGENTS.md
+rg -n "Doc78|78 ->|V3.9W|beautiful realism|facial-feature aesthetic|SubjectIdentityCard" AGENTS.md alchemy_creative_agent_3_0/docs/13_STEP_BY_STEP_DELIVERY_PLAN.md alchemy_creative_agent_3_0/docs/29_V3_DEVELOPMENT_DOCUMENT_EXECUTION_AUDIT.md alchemy_creative_agent_3_0/docs/78_V3_LONG_TERM_IDENTITY_AND_BEAUTIFUL_REALISM_FINAL_TUNING_SPEC.md
+git diff --check -- AGENTS.md alchemy_creative_agent_3_0/docs
+
+# Future Doc78 focused regression after coding:
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc78_long_term_identity_beautiful_realism.py -q --tb=short
+
+# Doc77 focused regression remains required:
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc77_real_review_aesthetic_stability.py -q --tb=short
+
+# Previous Doc75 technical regression commands remain valid:
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc75_identity_hero_strict_review.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc74_complex_prompt_fidelity.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc73_first_output_identity_anchor.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc72_east_asian_fair_complexion_and_proportion_guard.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc71_human_attractive_realism_balance.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc70_human_ai_feel_reduction.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc69_prompt_atom_absorption.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc68_casebook_guided_quality.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_doc67_boundary_quality.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_human_photorealism_layer.py alchemy_creative_agent_3_0/tests/test_v3_mode_aware_role_director.py -q --tb=short
+python -m pytest alchemy_creative_agent_3_0/tests/test_v3_provider_output_production.py alchemy_creative_agent_3_0/tests/test_v3_general_prompt_deproductization.py -q --tb=short
+python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_0/tests src_skeleton/app .codex-longrun
+git diff --check -- alchemy_creative_agent_3_0/app alchemy_creative_agent_3_0/docs alchemy_creative_agent_3_0/tests .codex-longrun
+```
+
+## 7. Audit Conclusion
+
+```text
+CURRENT_ACCEPTED_DOCUMENT_STATUS: DOC78 IS THE LATEST LONG-TERM IDENTITY AND BEAUTIFUL REALISM FOUNDATION TUNING PLAN; DOC76 REMAINS THE PLACEMENT-GOVERNANCE AUTHORITY
+CURRENT_ARCHITECTURE_STATUS: KEEP V3 PROJECT MODE + VISUAL CAPABILITY CLUSTER
+CURRENT_IMPLEMENTATION_RULE: CLASSIFY WORK AS FOUNDATION, GENERAL TEMPLATE, OR SPECIALIZED TEMPLATE BEFORE CODING
+CURRENT_TEST_RULE: PROVE CHANGES DO NOT LEAK INTO THE WRONG LAYER
+NEXT_RECOMMENDED_BOUNDARY: USE DOC76 FOR PLACEMENT, DOC77 FOR REVIEW/AESTHETIC STABILITY, AND DOC78 FOR LONG-TERM IDENTITY + BEAUTIFUL REALISM TUNING
+```

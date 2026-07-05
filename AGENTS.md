@@ -1,5 +1,43 @@
 # AlchemyOS Agent Development Principles
 
+## V3 Foundation vs Specialized Template Principle
+
+When developing Alchemy Media Agent V3, always follow:
+
+```text
+Foundation makes every image better.
+General Template stays simple and scenario-neutral.
+Specialized templates decide what a professional set should contain.
+```
+
+Detailed authority:
+
+```text
+alchemy_creative_agent_3_0/docs/76_V3_FOUNDATION_VS_SPECIALIZED_TEMPLATE_GOVERNANCE_SPEC.md
+alchemy_creative_agent_3_0/docs/77_V3_REAL_VISUAL_REVIEW_AND_AESTHETIC_STABILITY_FOUNDATION_SPEC.md
+alchemy_creative_agent_3_0/docs/78_V3_LONG_TERM_IDENTITY_AND_BEAUTIFUL_REALISM_FINAL_TUNING_SPEC.md
+```
+
+Hard rules:
+
+1. Universal capabilities such as single-image aesthetics, identity/product/style consistency primitives, photorealism, anti-AI-feel, automatic curation, generated-image visual review, bounded retry, watermark/text/artifact detection, prompt refinement, and selected-result continuity belong in the V3 foundation quality layer.
+2. The General Template must remain beginner-friendly and scenario-neutral. It can support simple modes such as similar alternatives, basic suite expansion, creative exploration, and format/layout adaptation, but it must not become an ecommerce, photography, brand-kit, storyboard, or campaign-package builder.
+3. Specialized templates own scenario-specific deliverable maps and packaging. E-Commerce owns listing/A+ product image roles. Photography owns portrait/session roles. Brand owns brand-kit assets. New Media owns platform/content deliverables.
+4. If a feature defines what images a professional scenario should output, put it in that specialized template, not in General Template or the shared Visual Capability Cluster.
+5. If a feature improves quality for almost every image, implement it as a reusable V3 foundation capability under the shared capability / brain / provider / review layers.
+6. If the correct output package depends on a hidden use case the user did not state, do not hard-code the assumption into General Template. Keep General neutral or expose a simple user choice.
+7. Before changing V3 visual generation, state whether the work is foundation, General Template, or specialized template work, and add tests proving it does not leak into the wrong layer.
+8. Real visual review and aesthetic stability tuning must extend the V3 foundation review/provider/retry paths; it must not create vertical deliverable maps inside General Template.
+9. Long-term human identity and beautiful realism tuning must preserve attractive facial-feature design, including eyes, brows, nose-mouth relationship, jaw/chin direction, skin/lighting realism, and natural variation; never make a face less beautiful merely to make it look realistic.
+
+Short form:
+
+```text
+Quality is shared.
+Professional deliverables are template-specific.
+General Template is not the place for every vertical's suite director.
+```
+
 ## V2 Template Lock Principle
 
 When developing Custom Media Agent 2.0, preserve this rule:

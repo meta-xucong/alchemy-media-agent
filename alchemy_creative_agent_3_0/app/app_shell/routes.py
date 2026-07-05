@@ -6,6 +6,10 @@ PRODUCT_API_NAMESPACE = "/v3"
 ROUTE_CONTRACTS = {
     "scenario_hub": f"{API_NAMESPACE}/scenarios",
     "history": f"{API_NAMESPACE}/history",
+    "projects": f"{API_NAMESPACE}/projects",
+    "get_project": f"{API_NAMESPACE}/projects/{{project_id}}",
+    "create_project_job": f"{API_NAMESPACE}/projects/{{project_id}}/jobs",
+    "project_timeline": f"{API_NAMESPACE}/projects/{{project_id}}/timeline",
     "create_job": f"{API_NAMESPACE}/jobs",
     "get_job": f"{API_NAMESPACE}/jobs/{{job_id}}",
     "generate": f"{API_NAMESPACE}/jobs/{{job_id}}/generate",
