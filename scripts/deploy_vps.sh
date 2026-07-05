@@ -296,7 +296,7 @@ start_stack() {
     return
   fi
 
-  docker build -t alchemy-media-agent:latest ./src_skeleton
+  docker build -t alchemy-media-agent:latest -f ./src_skeleton/Dockerfile .
   local docker_run_args=(
     -d
     --name alchemy-media-agent

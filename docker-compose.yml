@@ -1,7 +1,8 @@
 services:
   alchemy-media-agent:
     build:
-      context: ./src_skeleton
+      context: .
+      dockerfile: ./src_skeleton/Dockerfile
     image: alchemy-media-agent:latest
     container_name: alchemy-media-agent
     env_file:
