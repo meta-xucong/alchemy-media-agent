@@ -249,7 +249,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     provider_name = "production_image_generation_provider"
     provider_version = "v3.8b-provider-output-production"
-    max_provider_prompt_chars = 6000
+    max_provider_prompt_chars = 3200
 
     def __init__(self, output_store: Any | None = None) -> None:
         if output_store is None:
@@ -835,7 +835,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 body.append(item)
 
         max_chars = self.max_provider_prompt_chars
-        avoid_budget = min(1200, max(600, max_chars // 5))
+        avoid_budget = min(700, max(450, max_chars // 5))
         selected = self._fit_prompt_lines(
             sorted(body, key=lambda item: (item[0], item[1])),
             max_chars=max_chars - avoid_budget,
@@ -889,12 +889,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
             return 0
-        if line.startswith("Generate exactly one") or line.startswith("Do not add any new visible text"):
-            return 1
         if "human realism" in lowered or "photoreal human" in lowered or "east asian portrait" in lowered:
-            return 2
+            return 1
         if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
-            return 2
+            return 1
+        if line.startswith("Generate exactly one") or line.startswith("Do not add any new visible text"):
+            return 4
         if line.startswith("Role-specific generation contract") or line.startswith("Mode:") or line.startswith("This image role:"):
             return 3
         if line.startswith("Purpose:") or line.startswith("Required shot:") or line.startswith("Suite director rules:"):
@@ -909,16 +909,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _provider_prompt_line_limit(self, line: str) -> int:
         if line.startswith("Visual direction:"):
-            return 1800
-        if line.startswith("Avoid:"):
             return 1200
-        if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
-            return 850
-        if "Strict visual" in line or "Suite director rules" in line or "Subject identity" in line:
+        if line.startswith("Avoid:"):
             return 700
+        if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
+            return 520
+        if "Strict visual" in line or "Suite director rules" in line or "Subject identity" in line:
+            return 420
         if "reference" in line.lower():
-            return 650
-        return 520
+            return 420
+        return 360
 
     def _clip_prompt_line(self, line: str, max_chars: int) -> str:
         value = str(line or "").strip()
