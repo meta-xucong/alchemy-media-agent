@@ -4588,11 +4588,34 @@ function renderV3Warnings(warnings) {
 function v3PlainWarningText(item) {
   const text = String(item || "").trim();
   const lower = text.toLowerCase();
-  if (lower.includes("provider") || lower.includes("api key") || lower.includes("base url") || lower.includes("model")) {
-    return "图片生成配置暂时不可用，请检查后台配置或稍后再试。";
+  const looksLikeMissingConfig =
+    lower.includes("api key") ||
+    lower.includes("base url") ||
+    lower.includes("not configured") ||
+    lower.includes("missing configuration") ||
+    lower.includes("provider_not_configured") ||
+    lower.includes("no image provider");
+  const looksLikeProviderTransit =
+    lower.includes("provider_error") ||
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("could not be downloaded") ||
+    lower.includes("internal_server_error") ||
+    lower.includes("temporarily") ||
+    lower.includes("403") ||
+    lower.includes("429") ||
+    lower.includes("500") ||
+    lower.includes("502") ||
+    lower.includes("503") ||
+    lower.includes("504");
+  if (looksLikeMissingConfig) {
+    return "\u56fe\u7247\u751f\u6210\u914d\u7f6e\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u68c0\u67e5\u540e\u53f0\u914d\u7f6e\u6216\u7a0d\u540e\u518d\u8bd5\u3002";
+  }
+  if (looksLikeProviderTransit) {
+    return "\u56fe\u7247\u751f\u6210\u670d\u52a1\u521a\u521a\u6ce2\u52a8\uff0c\u9879\u76ee\u5df2\u4fdd\u7559\uff0c\u53ef\u4ee5\u7a0d\u540e\u91cd\u8bd5\u751f\u6210\u3002";
   }
   if (lower.includes("claim") || lower.includes("unsupported")) {
-    return "有些宣传说法需要确认后再放进图片。";
+    return "\u6709\u4e9b\u5ba3\u4f20\u8bf4\u6cd5\u9700\u8981\u786e\u8ba4\u540e\u518d\u653e\u8fdb\u56fe\u7247\u3002";
   }
   return text;
 }
