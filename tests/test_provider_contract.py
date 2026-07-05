@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -155,6 +156,36 @@ def test_openai_image_provider_retries_gateway_wrapped_openai_error():
 
     assert provider._is_retryable_error(exc) is True
     assert provider._is_transient_image_edit_error(exc) is True
+
+
+def test_openai_image_provider_compresses_large_reference_png(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    source = tmp_path / "large-reference.png"
+    Image.frombytes("RGB", (1024, 1536), os.urandom(1024 * 1536 * 3)).save(source, format="PNG")
+    original_size = source.stat().st_size
+    provider = registry.image("openai_gpt_image")
+    original_root = settings.media_storage_root
+    original_max_bytes = settings.openai_image_reference_max_upload_bytes
+    original_max_edge = settings.openai_image_reference_max_edge
+
+    try:
+        settings.media_storage_root = tmp_path / "media"
+        settings.openai_image_reference_max_upload_bytes = 1_200_000
+        settings.openai_image_reference_max_edge = 1024
+
+        prepared = provider._provider_reference_path(source)
+    finally:
+        settings.media_storage_root = original_root
+        settings.openai_image_reference_max_upload_bytes = original_max_bytes
+        settings.openai_image_reference_max_edge = original_max_edge
+
+    assert prepared != source
+    assert prepared.suffix == ".jpg"
+    assert prepared.exists()
+    assert prepared.stat().st_size <= 1_200_000
+    assert source.stat().st_size == original_size
+    with Image.open(prepared) as image:
+        assert max(image.size) <= 1024
 
 
 def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch):
