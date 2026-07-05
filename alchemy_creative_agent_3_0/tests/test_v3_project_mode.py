@@ -1266,3 +1266,50 @@ def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:
     assert [item["project_id"] for item in first_projects] == [first_project["project_id"]]
     assert {item["output_id"] for item in first_outputs} == {first_record.output_id}
     assert {item["output_id"] for item in second_outputs} == {second_record.output_id}
+
+
+def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    public_project = handlers.post_projects(
+        {
+            "user_goal": "Create public V3 validation images",
+            "title": "Public V3 Validation",
+        }
+    )["project"]
+    private_project = handlers.post_projects(
+        {
+            "user_goal": "Create private account images",
+            "title": "Private V3 Validation",
+            "metadata": {"veyra_user_id": 202},
+        }
+    )["project"]
+    public_job = handlers.post_project_job(public_project["project_id"], {"user_input": "Create shared image"})
+    private_job = handlers.post_project_job(private_project["project_id"], {"user_input": "Create private image"})
+    public_record = _save_project_output(
+        handlers,
+        job_id=public_job["job_id"],
+        candidate_id="candidate_public",
+        asset_id="asset_public",
+        owner_user_id=None,
+    )
+    private_record = _save_project_output(
+        handlers,
+        job_id=private_job["job_id"],
+        candidate_id="candidate_private",
+        asset_id="asset_private",
+        owner_user_id=202,
+    )
+
+    first_projects = {item["project_id"] for item in handlers.get_projects(limit=10, owner_user_id=101)["projects"]}
+    first_outputs = {item["output_id"] for item in handlers.get_project_outputs(limit=10, owner_user_id=101)["items"]}
+    second_projects = {item["project_id"] for item in handlers.get_projects(limit=10, owner_user_id=202)["projects"]}
+    second_outputs = {item["output_id"] for item in handlers.get_project_outputs(limit=10, owner_user_id=202)["items"]}
+
+    assert public_project["project_id"] in first_projects
+    assert public_project["project_id"] in second_projects
+    assert private_project["project_id"] not in first_projects
+    assert private_project["project_id"] in second_projects
+    assert public_record.output_id in first_outputs
+    assert public_record.output_id in second_outputs
+    assert private_record.output_id not in first_outputs
+    assert private_record.output_id in second_outputs

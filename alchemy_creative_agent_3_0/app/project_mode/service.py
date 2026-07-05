@@ -2668,7 +2668,8 @@ class V3ProjectModeService:
     def _project_visible_to_owner(self, project: ProjectRecord, owner_user_id: int | None) -> bool:
         if owner_user_id is None:
             return True
-        return self._positive_owner_id(project.metadata.get("veyra_user_id")) == owner_user_id
+        project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        return project_owner_id is None or project_owner_id == owner_user_id
 
     def _output_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
         if owner_user_id is None:

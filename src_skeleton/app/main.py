@@ -931,7 +931,7 @@ def _require_v3_output_visible(request: Request, output_id: str, authorization: 
         return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v3_output_owner_id(output_id)}
     user_id = _veyra_user_id_from_request(request, authorization)
     owner_id = _v3_output_owner_id(output_id)
-    if owner_id is not None and owner_id == user_id:
+    if owner_id is None or owner_id == user_id:
         return {"authenticated": True, "user_id": user_id, "is_admin": False, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "v3_output_forbidden", "message": "Generated V3 output is not visible to this account."})
 
@@ -948,7 +948,7 @@ def _require_v3_project_visible(request: Request, project_id: str, authorization
         return None
     user_id = _veyra_user_id_from_request(request, authorization)
     owner_id = _v3_project_owner_id(project_id)
-    if owner_id is not None and owner_id == user_id:
+    if owner_id is None or owner_id == user_id:
         return user_id
     raise HTTPException(status_code=403, detail={"error_code": "v3_project_forbidden", "message": "V3 project is not visible to this account."})
 
