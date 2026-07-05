@@ -17,7 +17,6 @@ RUN python -m pip install --upgrade pip && \
 COPY src_skeleton/app ./app
 COPY alchemy_creative_agent_3_0/__init__.py ./alchemy_creative_agent_3_0/__init__.py
 COPY alchemy_creative_agent_3_0/app ./alchemy_creative_agent_3_0/app
-COPY alchemy_creative_agent_3_0/data ./alchemy_creative_agent_3_0/data
 
 EXPOSE 8017
 
