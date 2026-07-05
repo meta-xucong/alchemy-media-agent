@@ -188,6 +188,40 @@ def test_openai_image_provider_compresses_large_reference_png(tmp_path):
         assert max(image.size) <= 1024
 
 
+def test_openai_image_provider_reuses_provider_reference_cache(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    source = tmp_path / "uploaded-reference.png"
+    Image.frombytes("RGB", (1024, 1536), os.urandom(1024 * 1536 * 3)).save(source, format="PNG")
+    provider = registry.image("openai_gpt_image")
+    original_root = settings.media_storage_root
+    original_max_bytes = settings.openai_image_reference_max_upload_bytes
+
+    try:
+        settings.media_storage_root = tmp_path / "media"
+        settings.openai_image_reference_max_upload_bytes = 1_200_000
+        first = provider._provider_reference_path(source)
+        second = provider._provider_reference_path(source)
+    finally:
+        settings.media_storage_root = original_root
+        settings.openai_image_reference_max_upload_bytes = original_max_bytes
+
+    assert first == second
+    assert first.exists()
+    assert first.parent.name == "provider_reference_cache"
+    assert first.stat().st_size <= 1_200_000
+
+
+def test_openai_image_provider_keeps_small_supported_reference_unchanged(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    source = tmp_path / "small-upload.jpg"
+    Image.new("RGB", (320, 320), (235, 236, 238)).save(source, format="JPEG", quality=90)
+    provider = registry.image("openai_gpt_image")
+
+    prepared = provider._provider_reference_path(source)
+
+    assert prepared == source
+
+
 def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "")
 
