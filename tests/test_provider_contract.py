@@ -146,6 +146,17 @@ def test_openai_image_provider_detects_image_quota_limit():
     assert provider._is_image_quota_limit_error(exc) is True
 
 
+def test_openai_image_provider_retries_gateway_wrapped_openai_error():
+    provider = registry.image("openai_gpt_image")
+    exc = Exception(
+        "OpenAI image reference generation failed. Error code: 400 - "
+        "{'error': {'code': 'bad_response_status_code', 'message': 'openai_error', 'type': 'bad_response_status_code'}}"
+    )
+
+    assert provider._is_retryable_error(exc) is True
+    assert provider._is_transient_image_edit_error(exc) is True
+
+
 def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "")
 

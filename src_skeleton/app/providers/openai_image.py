@@ -644,6 +644,8 @@ class OpenAIGPTImageProvider:
             return True
         message = str(exc).lower()
         retryable_markers = [
+            "bad_response_status_code",
+            "openai_error",
             "upstream_error",
             "temporarily unavailable",
             "concurrency limit exceeded",
@@ -685,6 +687,8 @@ class OpenAIGPTImageProvider:
         return any(
             marker in message
             for marker in [
+                "bad_response_status_code",
+                "openai_error",
                 "internal_server_error",
                 "upstream_error",
                 "upstream 403",
