@@ -1278,8 +1278,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         elif strong_bindings:
             source_priority = "strong_reference_binding"
             source_binding_ids = [binding.binding_id for binding in strong_bindings]
-            source_asset_ids = _dedupe(binding.source_asset_id for binding in strong_bindings if binding.source_asset_id)
-            source_output_ids = _dedupe(binding.source_output_id for binding in strong_bindings if binding.source_output_id)
+            source_asset_ids = _dedupe(binding.asset_id for binding in strong_bindings if binding.asset_id)
+            source_output_ids = _dedupe(binding.output_id for binding in strong_bindings if binding.output_id)
             status = "strong_reference_identity_ready"
         elif project_identity_anchors:
             source_priority = "project_identity_anchor"

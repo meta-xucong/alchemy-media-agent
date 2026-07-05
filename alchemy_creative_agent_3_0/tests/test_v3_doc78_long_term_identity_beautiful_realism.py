@@ -137,6 +137,34 @@ def test_doc78_selected_output_becomes_subject_identity_card_truth_source() -> N
     assert "beautiful_realism_balance_review" in cluster["child_module_ids"]
 
 
+def test_doc78_strong_reference_binding_becomes_subject_identity_card_truth_source() -> None:
+    cluster = _cluster(
+        {
+            "project_context_snapshot": {
+                "project_id": "project_doc78_binding",
+                "template_id": "general_template",
+                "selected_reference_assets": [
+                    {
+                        "asset_ref_id": "reference_identity_asset",
+                        "asset_id": "reference_identity_asset",
+                        "output_id": "reference_identity_output",
+                        "file_path": "D:/AI/mock_reference_identity.png",
+                        "use_policy": "identity",
+                    }
+                ],
+            }
+        }
+    )
+
+    card = cluster["subject_identity_card"]
+
+    assert card["applies"] is True
+    assert card["source_priority"] == "strong_reference_binding"
+    assert card["status"] == "strong_reference_identity_ready"
+    assert "reference_identity_asset" in card["source_asset_ids"]
+    assert "reference_identity_output" in card["source_output_ids"]
+
+
 def test_doc78_text_only_suite_falls_back_to_first_identity_anchor_plan() -> None:
     cluster = _cluster()
     card = cluster["subject_identity_card"]
