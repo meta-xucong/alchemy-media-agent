@@ -55,7 +55,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3SelectedBrandMemoryBar"' in index.text
     assert 'id="v3NewProjectGoalInput"' in index.text
     assert 'id="v3NewProjectGoalHint" class="v3-field-hint"' in index.text
-    assert 'id="v3ProjectList"' in index.text
+    assert 'id="v3ProjectList"' not in index.text
     assert 'id="v3ProjectDetailPanel"' in index.text
     assert 'id="v3ProjectArchiveBtn"' in index.text
     assert 'id="v3ProjectSnapshot"' in index.text
@@ -82,6 +82,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "不用选流程" in index.text
     assert "继续生成套图" in index.text
     assert "最近项目" in index.text
+    assert "按项目展示最近生成的图片" in index.text
     assert "项目产物与记录" in index.text
     assert "返回项目主页" in index.text
     assert "上传商品图，一键生成套图" not in index.text

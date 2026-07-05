@@ -7433,6 +7433,11 @@ body[data-active-module="v3"] #sessionLabel {
   gap: 8px;
 }
 
+.v3-history-actions .button.primary {
+  flex: 1;
+  justify-content: center;
+}
+
 .v3-project-card {
   height: 382px;
   display: grid;

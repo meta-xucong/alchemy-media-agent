@@ -1567,7 +1567,7 @@ function openV3Home({ silent = false } = {}) {
   }
   if (!v3State.imageHistoryLoaded && !v3State.imageHistoryLoading) {
     loadV3ProjectOutputs({ silent: true }).catch((error) => {
-      if (!silent) showGlobalToast(`V3 生成历史加载失败：${friendlyError(error)}`, "warning");
+      if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
     });
   }
 }
@@ -2102,7 +2102,7 @@ async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
     v3State.imageHistoryLoaded = true;
     renderV3History();
     renderV3HeroHistory();
-    if (!silent) showGlobalToast(`V3 生成历史加载失败：${friendlyError(error)}`, "warning");
+    if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
   } finally {
     v3State.imageHistoryLoading = false;
     if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
@@ -2283,50 +2283,12 @@ function renderV3Projects() {
 
 function renderV3History() {
   if (!els.v3HistoryList) return;
-  const items = Array.isArray(v3State.imageHistory) ? v3State.imageHistory : [];
-  if (els.v3HistoryCount) els.v3HistoryCount.textContent = String(items.length);
-  els.v3HistoryList.innerHTML = "";
-  els.v3HistoryList.classList.toggle("empty-v3-list", items.length === 0);
-  if (!items.length) {
-    els.v3HistoryList.textContent = v3State.imageHistoryLoading ? "正在读取 V3 生成图片..." : "还没有 V3 生成图片";
-    return;
-  }
-  items.slice(0, 60).forEach((item, index) => {
-    const previewUrl = v3OutputPreviewImageUrl(item);
-    const fullUrl = v3OutputFullImageUrl(item);
-    const itemTitle = v3ProjectDisplayTitle(item, "V3 生成图片");
-    const itemGoal = v3ProjectDisplayGoal(item, "这个项目生成过的图片");
-    const card = document.createElement("article");
-    card.className = "v3-history-card v3-history-image-card";
-    card.innerHTML = `
-      <button class="v3-history-preview" type="button" data-v3-history-preview="${index}" aria-label="查看生成图片">
-        ${previewUrl ? `<img alt="${escapeHtml(itemTitle)}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : `<span>图片准备中</span>`}
-      </button>
-      <div class="v3-history-body">
-        <strong>${escapeHtml(v3ShortText(itemTitle, 36))}</strong>
-        <p>${escapeHtml(v3ShortText(itemGoal, 54))}</p>
-        <div class="v3-history-meta">
-          <span>${escapeHtml(v3TemplatePlainLabel(item.template_id || "general_template"))}</span>
-          <span>${escapeHtml(formatDate(item.created_at))}</span>
-        </div>
-      </div>
-      <div class="v3-history-actions">
-        ${fullUrl ? `<a class="v3-result-download" href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener">下载</a>` : ""}
-        <button type="button" class="button compact ghost" data-v3-history-project="${escapeHtml(item.project_id || "")}">进入项目</button>
-      </div>
-    `;
-    els.v3HistoryList.appendChild(card);
-  });
-}
-
-function renderV3History() {
-  if (!els.v3HistoryList) return;
   const groups = v3ProjectImageGroups();
-  if (els.v3HistoryCount) els.v3HistoryCount.textContent = String(groups.length);
+  if (els.v3HistoryCount) els.v3HistoryCount.textContent = `${groups.length} 个项目`;
   els.v3HistoryList.innerHTML = "";
   els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0);
   if (!groups.length) {
-    els.v3HistoryList.textContent = v3State.imageHistoryLoading ? "正在读取 V3 生成图片..." : "还没有 V3 生成图片";
+    els.v3HistoryList.textContent = v3State.imageHistoryLoading ? "正在读取最近项目..." : "还没有生成过图片的项目";
     return;
   }
   groups.slice(0, 36).forEach((group) => {
@@ -2355,8 +2317,8 @@ function renderV3History() {
         </div>
       </div>
       <div class="v3-history-actions">
-        <button type="button" class="button compact secondary" data-v3-history-project-group="${escapeHtml(group.projectId)}">查看全部</button>
-        <button type="button" class="button compact ghost" data-v3-history-project="${escapeHtml(group.projectId)}">进入项目</button>
+        <button type="button" class="button compact primary" data-v3-history-project="${escapeHtml(group.projectId)}">继续项目</button>
+        <button type="button" class="button compact ghost" data-v3-history-project-group="${escapeHtml(group.projectId)}">查看图片</button>
       </div>
     `;
     els.v3HistoryList.appendChild(card);
@@ -3936,23 +3898,6 @@ function handleV3ProjectClick(event) {
   const card = event.target.closest("[data-v3-project-id]");
   if (!card) return;
   openV3Project(card.dataset.v3ProjectId);
-}
-
-function handleV3HistoryClick(event) {
-  const previewButton = event.target.closest("[data-v3-history-preview]");
-  if (previewButton) {
-    const item = v3State.imageHistory[Number(previewButton.dataset.v3HistoryPreview || 0)];
-    if (item) {
-      openV3OutputLightbox(item, {
-        title: v3ProjectDisplayTitle(item, "V3 生成图片"),
-        meta: `${v3TemplatePlainLabel(item.template_id || "general_template")} · ${formatDate(item.created_at)}`,
-      });
-    }
-    return;
-  }
-  const projectButton = event.target.closest("[data-v3-history-project]");
-  const projectId = projectButton?.dataset.v3HistoryProject || "";
-  if (projectId) openV3Project(projectId);
 }
 
 function handleV3HistoryClick(event) {
