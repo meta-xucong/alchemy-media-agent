@@ -249,6 +249,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     provider_name = "production_image_generation_provider"
     provider_version = "v3.8b-provider-output-production"
+    max_provider_prompt_chars = 6000
 
     def __init__(self, output_store: Any | None = None) -> None:
         if output_store is None:
@@ -816,7 +817,114 @@ class ProductionImageGenerationProvider(GenerationProvider):
             parts.append("Retry repair guidance: " + " ".join(retry_guidance))
         if prompt.negative_prompt:
             parts.append(f"Avoid: {prompt.negative_prompt}")
-        return "\n".join(part for part in parts if str(part or "").strip())
+        return self._compact_provider_prompt("\n".join(part for part in parts if str(part or "").strip()))
+
+    def _compact_provider_prompt(self, raw_prompt: str) -> str:
+        lines = self._normalised_unique_prompt_lines(raw_prompt)
+        if not lines:
+            return ""
+        body: list[tuple[int, int, str]] = []
+        avoid: list[tuple[int, int, str]] = []
+        for index, line in enumerate(lines):
+            clipped = self._clip_prompt_line(line, self._provider_prompt_line_limit(line))
+            priority = self._provider_prompt_priority(line)
+            item = (priority, index, clipped)
+            if priority >= 90:
+                avoid.append(item)
+            else:
+                body.append(item)
+
+        max_chars = self.max_provider_prompt_chars
+        avoid_budget = min(1200, max(600, max_chars // 5))
+        selected = self._fit_prompt_lines(
+            sorted(body, key=lambda item: (item[0], item[1])),
+            max_chars=max_chars - avoid_budget,
+        )
+        remaining = max_chars - len("\n".join(selected)) - (1 if selected else 0)
+        selected.extend(
+            self._fit_prompt_lines(
+                sorted(avoid, key=lambda item: (item[0], item[1])),
+                max_chars=max(0, remaining),
+            )
+        )
+        compacted = "\n".join(line for line in selected if line).strip()
+        if len(compacted) <= max_chars:
+            return compacted
+        return compacted[: max_chars - 1].rstrip() + "..."
+
+    def _normalised_unique_prompt_lines(self, raw_prompt: str) -> list[str]:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for raw_line in str(raw_prompt or "").splitlines():
+            line = " ".join(str(raw_line or "").split()).strip()
+            if not line:
+                continue
+            key = line.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(line)
+        return lines
+
+    def _fit_prompt_lines(self, items: list[tuple[int, int, str]], *, max_chars: int) -> list[str]:
+        if max_chars <= 0:
+            return []
+        selected: list[str] = []
+        used = 0
+        for _priority, _index, line in items:
+            if not line:
+                continue
+            extra = len(line) + (1 if selected else 0)
+            if used + extra <= max_chars:
+                selected.append(line)
+                used += extra
+                continue
+            remaining = max_chars - used - (1 if selected else 0)
+            if remaining >= 80:
+                selected.append(self._clip_prompt_line(line, remaining))
+            break
+        return selected
+
+    def _provider_prompt_priority(self, line: str) -> int:
+        lowered = line.lower()
+        if line.startswith("Create ") or line.startswith("Visual direction:"):
+            return 0
+        if line.startswith("Generate exactly one") or line.startswith("Do not add any new visible text"):
+            return 1
+        if "human realism" in lowered or "photoreal human" in lowered or "east asian portrait" in lowered:
+            return 2
+        if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
+            return 2
+        if line.startswith("Role-specific generation contract") or line.startswith("Mode:") or line.startswith("This image role:"):
+            return 3
+        if line.startswith("Purpose:") or line.startswith("Required shot:") or line.startswith("Suite director rules:"):
+            return 3
+        if "strict visual" in lowered or "mode quality" in lowered or "pass conditions" in lowered:
+            return 4
+        if "reference" in lowered or line.startswith("Keep:") or line.startswith("Allow variation:") or line.startswith("Do not drift:"):
+            return 5
+        if line.startswith("Avoid:") or lowered.startswith("do not:") or " avoid:" in lowered:
+            return 90
+        return 20
+
+    def _provider_prompt_line_limit(self, line: str) -> int:
+        if line.startswith("Visual direction:"):
+            return 1800
+        if line.startswith("Avoid:"):
+            return 1200
+        if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
+            return 850
+        if "Strict visual" in line or "Suite director rules" in line or "Subject identity" in line:
+            return 700
+        if "reference" in line.lower():
+            return 650
+        return 520
+
+    def _clip_prompt_line(self, line: str, max_chars: int) -> str:
+        value = str(line or "").strip()
+        if max_chars <= 0 or len(value) <= max_chars:
+            return value
+        return value[: max(1, max_chars - 3)].rstrip(" ,;") + "..."
 
     def _mode_role_prompt_guidance(self, request: GenerationRequest) -> list[str]:
         recipe = self._mode_role_recipe(request)
@@ -889,7 +997,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 lines.append("Strict visual pass conditions: " + "; ".join(pass_conditions[:5]))
             strict_avoid = self._string_list(strict_policy.get("negative_additions"))
             if strict_avoid:
-                lines.append("Strict visual avoid: " + "; ".join(strict_avoid[:52]))
+                lines.append("Strict visual avoid: " + "; ".join(strict_avoid[:16]))
         lines.extend(provider_casebook_prompt_lines(recipe))
         if keep:
             lines.append("Keep: " + "; ".join(keep[:5]))
