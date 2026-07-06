@@ -318,6 +318,13 @@ const v3State = {
   imageHistoryLoading: false,
   activeHistoryProjectId: "",
   uploadFingerprints: {},
+  progressStartedAt: null,
+  progressStageKey: "queued",
+  progressDetail: "",
+  progressType: "info",
+  progressTimer: null,
+  recoverPollTimer: null,
+  recoverPollAttempt: 0,
   presetByScenario: {
     general_creative: "campaign_poster",
     ecommerce: "one_click_product_set",
@@ -4313,7 +4320,9 @@ async function createV3Job() {
   try {
     const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
     setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
+    startV3Progress("uploading", v3State.files.length ? "正在上传并理解参考图。" : "正在准备项目上下文。");
     const uploadedAssets = await uploadV3Files();
+    setV3Progress("planning", "V3 中枢正在理解需求并规划画面。");
     const payload = buildV3JobPayload(uploadedAssets);
     const generationSettings = v3CurrentGenerationSettings();
     updateV3Notice(copy.planningNotice, "info");
@@ -4325,9 +4334,10 @@ async function createV3Job() {
     renderV3Job(created);
     await refreshV3CurrentProject({ silent: true });
     if (created.status !== "blocked") {
-      updateV3Notice("V3 已理解需求，正在出图。", "info");
-      const generated = await request(`${v3ApiBase}/projects/${projectId}/jobs/${encodeURIComponent(created.job_id)}/generate`, {
-        method: "POST",
+      setV3Progress("generating", "V3 已理解需求，正在调用生图引擎。真实出图可能需要几分钟。");
+      const generated = await runV3GenerationWithRecovery({
+        projectId: v3State.currentProject.project_id,
+        jobId: created.job_id,
         body: {
           quality_mode: "standard",
           metadata: {
@@ -4343,25 +4353,83 @@ async function createV3Job() {
           },
         },
       });
-      v3State.currentJob = generated;
-      v3State.activeProjectStep = "compose";
-      syncV3ProjectOutputsFromPayload(generated);
-      renderV3Job(generated);
-      await refreshV3CurrentProject({ silent: true });
-      await loadV3ProjectOutputs({ silent: true, force: true });
-      await maybePersistV3UploadedReferences(uploadedAssets);
-      if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
-        openV3ProjectSubpage("compose");
-      }
-      updateV3Notice(generated.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice, generated.status === "blocked" ? "warning" : "success");
+      await completeV3GeneratedJob(generated, uploadedAssets, copy);
       return;
     }
     updateV3Notice(created.status === "blocked" ? "当前生成暂时受阻，请检查输入后再试。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
   } catch (error) {
-    updateV3Notice(`V3 生成失败：${friendlyError(error)}`, "error");
+    updateV3Notice(`V3 暂时没有读到完成结果：${friendlyError(error)}。项目已保留，可以稍后刷新。`, "warning");
   } finally {
+    clearV3RecoverPolling();
+    clearV3ProgressTimer();
     setV3Busy(false);
   }
+}
+
+async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative")) {
+  v3State.currentJob = generated;
+  v3State.activeProjectStep = "compose";
+  syncV3ProjectOutputsFromPayload(generated);
+  setV3Progress(generated?.status === "blocked" ? "failed" : "completed", generated?.status === "blocked" ? "生成遇到阻碍，已保留项目记录。" : "后台已完成出图，正在刷新项目图片。", generated?.status === "blocked" ? "warning" : "success");
+  renderV3Job(generated);
+  await refreshV3CurrentProject({ silent: true });
+  await loadV3ProjectOutputs({ silent: true, force: true });
+  await maybePersistV3UploadedReferences(uploadedAssets);
+  if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+    openV3ProjectSubpage("compose");
+  }
+  updateV3Notice(
+    generated?.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice,
+    generated?.status === "blocked" ? "warning" : "success"
+  );
+}
+
+async function runV3GenerationWithRecovery({ projectId, jobId, body }) {
+  const endpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/generate`;
+  try {
+    return await request(endpoint, { method: "POST", body });
+  } catch (error) {
+    setV3Progress("recovering", "页面连接刚刚中断，正在核对后台是否已经完成出图。", "warning", { forceNotice: true });
+    return await recoverV3GeneratedJob(projectId, jobId, error);
+  }
+}
+
+async function recoverV3GeneratedJob(projectId, jobId, originalError) {
+  clearV3RecoverPolling();
+  let lastError = originalError;
+  for (let attempt = 1; attempt <= 90; attempt += 1) {
+    v3State.recoverPollAttempt = attempt;
+    await v3Delay(attempt === 1 ? 1200 : 2500);
+    try {
+      const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+      if (job?.status === "generated" || job?.status === "selected" || v3JobHasVisibleImages(job)) {
+        return job;
+      }
+      if (job?.status === "blocked" || job?.status === "failed" || job?.status === "not_found") {
+        return job;
+      }
+      v3State.currentJob = job || v3State.currentJob;
+      renderV3Job(v3State.currentJob);
+    } catch (error) {
+      lastError = error;
+    }
+    try {
+      await refreshV3CurrentProject({ silent: true });
+      await loadV3ProjectOutputs({ silent: true, force: true });
+      const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+      if (restored?.job_id === jobId && v3JobHasVisibleImages(restored)) return restored;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt === 1 || attempt % 5 === 0) {
+      setV3Progress("recovering", `后台仍在处理或刷新中，已核对 ${attempt} 次。`, "warning", { forceNotice: attempt === 1 || attempt % 15 === 0 });
+    }
+  }
+  throw lastError || originalError || new Error("V3 generation status could not be restored.");
+}
+
+function v3Delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 async function generateV3Job() {
@@ -4442,6 +4510,55 @@ function setV3Busy(isBusy, label = "") {
   renderV3ScenarioState();
 }
 
+const v3ProgressStages = [
+  { key: "queued", percent: 12, label: "准备项目" },
+  { key: "uploading", percent: 22, label: "上传参考" },
+  { key: "planning", percent: 38, label: "理解需求" },
+  { key: "generating", percent: 68, label: "生成图片" },
+  { key: "recovering", percent: 82, label: "核对结果" },
+  { key: "reviewing", percent: 92, label: "整理结果" },
+  { key: "completed", percent: 100, label: "完成" },
+  { key: "failed", percent: 100, label: "需要处理" },
+];
+
+const v3ProgressByKey = Object.fromEntries(v3ProgressStages.map((stage) => [stage.key, stage]));
+
+function startV3Progress(stageKey = "queued", detail = "") {
+  clearV3ProgressTimer();
+  v3State.progressStartedAt = Date.now();
+  v3State.progressNoticeKey = "";
+  setV3Progress(stageKey, detail, "info", { forceNotice: true });
+  v3State.progressTimer = window.setInterval(renderV3ProjectWorkflow, 1000);
+}
+
+function clearV3ProgressTimer() {
+  if (!v3State.progressTimer) return;
+  window.clearInterval(v3State.progressTimer);
+  v3State.progressTimer = null;
+}
+
+function clearV3RecoverPolling() {
+  if (v3State.recoverPollTimer) {
+    window.clearTimeout(v3State.recoverPollTimer);
+    v3State.recoverPollTimer = null;
+  }
+  v3State.recoverPollAttempt = 0;
+}
+
+function setV3Progress(stageKey = "planning", detail = "", type = "info", { forceNotice = false } = {}) {
+  const normalized = v3ProgressByKey[stageKey] ? stageKey : "planning";
+  const stage = v3ProgressByKey[normalized];
+  v3State.progressStageKey = normalized;
+  v3State.progressDetail = detail || stage.label;
+  v3State.progressType = type;
+  renderV3ProjectWorkflow();
+  const noticeKey = `${normalized}:${v3State.progressDetail}:${type}`;
+  if (forceNotice || noticeKey !== v3State.progressNoticeKey) {
+    v3State.progressNoticeKey = noticeKey;
+    updateV3Notice(`${stage.label} · ${v3State.progressDetail}`, type);
+  }
+}
+
 function renderV3Job(job) {
   if (els.v3JobStatus) els.v3JobStatus.textContent = job ? v3StatusLabel(job.status) : "待创建";
   if (els.v3JobId) els.v3JobId.textContent = job?.job_id ? shortOutputId(job.job_id) : "-";
@@ -4512,21 +4629,25 @@ function renderV3OutcomeItems(entries) {
     failed: 100,
     not_found: 100,
   };
-  const percent = percentMap[jobStatus] || (v3State.loading ? 66 : 12);
+  const activeProgress = v3State.loading && v3ProgressByKey[v3State.progressStageKey];
+  const percent = activeProgress ? v3ProgressByKey[v3State.progressStageKey].percent : percentMap[jobStatus] || (v3State.loading ? 66 : 12);
   const activeIndex = Math.max(0, Math.min(items.length - 1, Math.ceil((percent / 100) * items.length) - 1));
   const failed = jobStatus === "failed" || jobStatus === "blocked" || jobStatus === "not_found";
-  if (els.v3SummaryTitle) els.v3SummaryTitle.textContent = failed ? "生成已停止" : percent >= 100 ? "生成完成" : "生成进度";
+  const progressStage = activeProgress ? v3ProgressByKey[v3State.progressStageKey] : null;
+  const elapsed = v3ProgressElapsedLabel();
+  if (els.v3SummaryTitle) els.v3SummaryTitle.textContent = failed ? "生成已停止" : percent >= 100 ? "生成完成" : progressStage?.label || "生成进度";
   if (els.v3SummaryPill) {
-    els.v3SummaryPill.textContent = failed ? "需处理" : percent >= 100 ? "已完成" : v3State.loading ? "进行中" : "待开始";
+    els.v3SummaryPill.textContent = failed ? "需处理" : percent >= 100 ? "已完成" : elapsed ? `已用 ${elapsed}` : v3State.loading ? "进行中" : "待开始";
   }
   if (els.v3ProgressFill) els.v3ProgressFill.style.width = `${percent}%`;
   if (els.v3SummaryIntro) {
     els.v3SummaryIntro.textContent =
+      (v3State.loading && v3State.progressDetail) ||
       items[activeIndex] ||
       (v3State.currentJob ? "V3 正在把项目需求整理成可执行的画面方向。" : "写一句需求后，V3 会把它整理成清晰的画面方向。");
   }
   if (els.v3SummaryFootnote) {
-    els.v3SummaryFootnote.textContent = percent >= 100 ? "图片已准备好，下一步可以挑选满意方向。" : "进度提示会伴随生成推进，主屏仍以图片为核心。";
+    els.v3SummaryFootnote.textContent = percent >= 100 ? "图片已准备好，下一步可以挑选满意方向。" : "如果网络短暂断开，页面会继续核对后台结果。";
   }
   els.v3CapabilityList.innerHTML = "";
   items.forEach((item, index) => {
@@ -4537,6 +4658,13 @@ function renderV3OutcomeItems(entries) {
     step.textContent = item;
     els.v3CapabilityList.appendChild(step);
   });
+}
+
+function v3ProgressElapsedLabel() {
+  if (!v3State.progressStartedAt) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - v3State.progressStartedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function renderV3EcommercePlanList(summary) {
