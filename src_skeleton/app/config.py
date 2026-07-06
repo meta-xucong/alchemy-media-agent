@@ -138,7 +138,7 @@ class Settings(BaseModel):
     openai_image_upstream_cooldown_seconds: float = _float_env("OPENAI_IMAGE_UPSTREAM_COOLDOWN_SECONDS", 90.0)
     openai_image_max_retry_after_seconds: float = _float_env("OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", 900.0)
     openai_image_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_REQUEST_TIMEOUT_SECONDS", 240.0)
-    openai_image_edit_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 240.0)
+    openai_image_edit_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 420.0)
     openai_image_edit_transient_cooldown_seconds: float = _float_env("OPENAI_IMAGE_EDIT_TRANSIENT_COOLDOWN_SECONDS", 12.0)
     openai_image_reference_max_upload_bytes: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_UPLOAD_BYTES", 1_200_000)
     openai_image_reference_max_edge: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_EDGE", 1024)

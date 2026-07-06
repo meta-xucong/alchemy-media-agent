@@ -4479,7 +4479,16 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
         return job;
       }
       if (job?.status === "blocked" || job?.status === "failed" || job?.status === "not_found") {
+        v3State.currentJob = job;
+        renderV3Job(job);
+        await refreshV3CurrentProject({ silent: true });
+        await loadV3ProjectTimeline(projectId, { silent: true });
+        await loadV3ProjectOutputs({ silent: true, force: true });
+        setV3Progress("failed", v3ProviderFailureUserMessage(job), "warning", { forceNotice: true });
         return job;
+      }
+      if (v3JobProviderRetryActive(job)) {
+        setV3Progress("recovering", "正在换一条线路重试。", "warning", { forceNotice: true });
       }
       v3State.currentJob = job || v3State.currentJob;
       renderV3Job(v3State.currentJob);
@@ -4515,6 +4524,34 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     lastError = error;
   }
   throw lastError || originalError || new Error("V3 generation status could not be restored.");
+}
+
+function v3JobProviderRetrySummary(job) {
+  const summary = job?.metadata?.provider_failure_retry;
+  return summary && typeof summary === "object" ? summary : {};
+}
+
+function v3JobProviderRetryActive(job) {
+  const summary = v3JobProviderRetrySummary(job);
+  const finalStatus = String(summary.final_status || "");
+  return Boolean(summary && Number(summary.executed_count || 0) > 0 && !["succeeded", "failed"].includes(finalStatus));
+}
+
+function v3ProviderFailureUserMessage(job) {
+  const summary = v3JobProviderRetrySummary(job);
+  const executed = Number(summary.executed_count || 0);
+  const warnings = Array.isArray(job?.warnings) ? job.warnings.join(" ") : "";
+  const text = `${warnings} ${JSON.stringify(summary || {})}`.toLowerCase();
+  if (executed > 0 && /timeout|timed out|gateway|502|503|504|could not be downloaded|bad_response/.test(text)) {
+    return "上游生图暂时超时，V3 已自动换线重试但这次仍未成功。项目已保留，可以稍后重新生成。";
+  }
+  if (/timeout|timed out|gateway|502|503|504|could not be downloaded|bad_response/.test(text)) {
+    return "上游生图暂时超时，本次没有生成图片。项目已保留，可以稍后重新生成。";
+  }
+  if (/api key|not configured|insufficient|policy|safety|invalid/.test(text)) {
+    return "生成配置或策略暂时不满足要求，本次没有生成图片。项目已保留。";
+  }
+  return "本次没有生成图片，项目已保留，可以稍后重新生成。";
 }
 
 function v3Delay(ms) {

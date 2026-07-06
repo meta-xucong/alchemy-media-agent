@@ -722,7 +722,46 @@ class V3ProjectModeService:
                         "max_attempts": retry_summary.get("max_attempts"),
                     },
                 )
+        elif status.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
+            provider_retry = status.metadata.get("provider_failure_retry") if isinstance(status.metadata, dict) else None
+            if isinstance(provider_retry, dict) and int(provider_retry.get("executed_count") or 0) > 0:
+                self._append_timeline(
+                    project.project_id,
+                    TimelineItemType.PROVIDER_RETRY,
+                    "V3 已自动换线重试",
+                    "第一次生图没有成功，V3 已重新发起一次生成请求。",
+                    job_id=job_id,
+                    metadata={
+                        "template_id": template_id,
+                        "executed_count": provider_retry.get("executed_count"),
+                        "max_attempts": provider_retry.get("max_attempts"),
+                        "fresh_upstream_requests": provider_retry.get("fresh_upstream_requests"),
+                        "final_status": provider_retry.get("final_status"),
+                    },
+                )
+            self._append_timeline(
+                project.project_id,
+                TimelineItemType.JOB_BLOCKED,
+                "本次没有生成图片",
+                self._blocked_generation_summary(status),
+                job_id=job_id,
+                metadata={
+                    "template_id": template_id,
+                    "status": str(status.status),
+                    "warnings": list(status.warnings or [])[:3],
+                    "provider_failure_retry": provider_retry if isinstance(provider_retry, dict) else {},
+                },
+            )
         return status
+
+    def _blocked_generation_summary(self, status: ProductJobStatus) -> str:
+        warnings = [str(item).strip() for item in (status.warnings or []) if str(item).strip()]
+        joined = " ".join(warnings).lower()
+        if any(token in joined for token in ("timeout", "timed out", "gateway", "502", "503", "504", "could not be downloaded")):
+            return "上游生图暂时超时，本次没有生成图片。项目已保留，可以稍后重新生成。"
+        if any(token in joined for token in ("api key", "not configured", "insufficient", "policy", "safety")):
+            return "生成配置或策略暂时不满足要求，本次没有生成图片。项目已保留。"
+        return "本次生成没有拿到可用图片。项目已保留，可以稍后重新生成。"
 
     def select_project_job(
         self,

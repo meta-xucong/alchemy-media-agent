@@ -51,6 +51,8 @@ class TimelineItemType(StrEnum):
     REFERENCE_REMOVED = "reference_removed"
     JOB_CREATED = "job_created"
     JOB_GENERATED = "job_generated"
+    PROVIDER_RETRY = "provider_retry"
+    JOB_BLOCKED = "job_blocked"
     VISUAL_REVIEW = "visual_review"
     VISUAL_RETRY = "visual_retry"
     CANDIDATE_SELECTED = "candidate_selected"

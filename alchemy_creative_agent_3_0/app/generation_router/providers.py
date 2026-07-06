@@ -261,6 +261,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
             output_store = V3GeneratedOutputStore()
         self.output_store = output_store
+        self._last_provider_failure_retry_summary: dict[str, Any] = {}
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -291,6 +292,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         mode_quality_profile = self._mode_quality_profile(request)
         auto_identity_anchor_applied = bool(request.metadata.get("auto_batch_identity_anchor_applied"))
         result = self._run_app_provider_with_timeout_retry(provider_name, app_request, reference_assets)
+        provider_failure_retry = dict(self._last_provider_failure_retry_summary or {})
         candidates: list[CandidateResult] = []
         warnings: list[str] = []
         outputs = list(getattr(result, "outputs", []) or [])
@@ -345,6 +347,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "visual_capability_cluster": visual_cluster,
                     "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
+                    "provider_failure_retry": provider_failure_retry,
                     "api_operation": output.get("api_operation"),
                     "request_index": output.get("request_index"),
                     "requested_image_count": requested_group_count,
@@ -404,6 +407,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "shared_capabilities": shared_capabilities,
                         "visual_capability_cluster": visual_cluster,
                         "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                        "provider_failure_retry": provider_failure_retry,
                         "v3_owned_output": True,
                         "requested_image_count": requested_group_count,
                         "requested_image_size": app_request.prompt_plan.size,
@@ -454,6 +458,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "mode_role_recipe": mode_role_recipe,
                 "strong_reference_closure_package": strong_reference_closure,
                 "mode_quality_profile": mode_quality_profile,
+                "provider_failure_retry": provider_failure_retry,
             },
             warnings=warnings,
         )
@@ -464,22 +469,153 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
         timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
-        max_attempts = 2 if reference_assets else 1
-        last_error: TimeoutError | None = None
+        max_attempts = 2
+        attempts: list[dict[str, Any]] = []
+        last_error: BaseException | None = None
+        self._last_provider_failure_retry_summary = {
+            "executed_count": 0,
+            "max_attempts": max_attempts,
+            "fresh_upstream_requests": 0,
+            "final_status": "skipped",
+            "attempts": attempts,
+            "reference_asset_count": len(reference_assets),
+        }
         for attempt in range(1, max_attempts + 1):
+            retry_metadata = self._provider_failure_retry_metadata(
+                attempt=attempt,
+                max_attempts=max_attempts,
+                previous_error=last_error,
+            )
+            self._apply_provider_retry_metadata(app_request, retry_metadata)
             try:
-                return _run_async_blocking(
+                result = _run_async_blocking(
                     self._generate_with_app_provider(provider_name, app_request),
                     timeout_seconds=timeout_seconds,
                 )
-            except TimeoutError as exc:
+                attempts.append({"attempt": attempt, "status": "succeeded"})
+                self._last_provider_failure_retry_summary = {
+                    "executed_count": max(0, attempt - 1),
+                    "max_attempts": max_attempts,
+                    "fresh_upstream_requests": attempt,
+                    "final_status": "succeeded",
+                    "attempts": attempts,
+                    "reference_asset_count": len(reference_assets),
+                }
+                return result
+            except BaseException as exc:
                 last_error = exc
-                if attempt >= max_attempts:
+                classification = self._classify_provider_failure(exc)
+                retryable = classification in {"retryable_provider_failure", "unknown_retryable_failure"}
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "status": "failed",
+                        "classification": classification,
+                        "error_type": exc.__class__.__name__,
+                        "message": self._provider_failure_message(exc),
+                        "retryable": retryable,
+                    }
+                )
+                if attempt >= max_attempts or not retryable:
+                    self._last_provider_failure_retry_summary = {
+                        "executed_count": max(0, attempt - 1),
+                        "max_attempts": max_attempts,
+                        "fresh_upstream_requests": attempt,
+                        "final_status": "failed",
+                        "attempts": attempts,
+                        "reference_asset_count": len(reference_assets),
+                        "final_classification": classification,
+                    }
+                    try:
+                        setattr(exc, "provider_failure_retry", dict(self._last_provider_failure_retry_summary))
+                    except Exception:
+                        pass
                     raise
                 time.sleep(self._app_provider_transient_cooldown_seconds())
         if last_error is not None:
             raise last_error
         raise TimeoutError("V3 production provider timed out.")
+
+    def _provider_failure_retry_metadata(self, *, attempt: int, max_attempts: int, previous_error: BaseException | None) -> dict[str, Any]:
+        metadata = {
+            "provider_failure_retry_attempt": attempt,
+            "provider_failure_retry_max_attempts": max_attempts,
+            "fresh_upstream_request": True,
+        }
+        if previous_error is not None:
+            metadata["previous_provider_error_type"] = previous_error.__class__.__name__
+            metadata["previous_provider_error"] = self._provider_failure_message(previous_error)
+        return metadata
+
+    def _apply_provider_retry_metadata(self, app_request, retry_metadata: dict[str, Any]) -> None:
+        existing = dict(getattr(app_request, "metadata", {}) or {})
+        merged = {**existing, **retry_metadata}
+        try:
+            app_request.metadata = merged
+        except Exception:
+            return
+
+    def _classify_provider_failure(self, exc: BaseException) -> str:
+        code = str(getattr(exc, "code", "") or "").lower()
+        detail = getattr(exc, "detail", None)
+        detail_text = ""
+        if isinstance(detail, dict):
+            detail_text = " ".join(str(value) for value in detail.values() if value is not None).lower()
+        message = f"{exc.__class__.__name__} {code} {str(exc)} {detail_text}".lower()
+        non_retryable_markers = [
+            "provider_not_configured",
+            "not configured",
+            "missing api key",
+            "invalid api key",
+            "authentication",
+            "unauthorized",
+            "insufficient",
+            "balance",
+            "policy",
+            "safety",
+            "invalid uploaded asset",
+            "source file was not found",
+            "unsupported media type",
+            "bad request",
+            "400",
+        ]
+        if any(marker in message for marker in non_retryable_markers):
+            return "non_retryable_provider_failure"
+        retryable_markers = [
+            "timeouterror",
+            "timeout",
+            "timed out",
+            "image reference generation failed",
+            "image generation failed",
+            "could not be downloaded",
+            "no image outputs",
+            "did not include image bytes",
+            "bad_response_status_code",
+            "gateway timeout",
+            "bad gateway",
+            "502",
+            "503",
+            "504",
+            "500",
+            "408",
+            "429",
+            "transport",
+            "connection",
+            "read timeout",
+            "internal_server_error",
+        ]
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(marker in message for marker in retryable_markers):
+            return "retryable_provider_failure"
+        return "unknown_retryable_failure"
+
+    def _provider_failure_message(self, exc: BaseException) -> str:
+        message = str(exc).strip() or exc.__class__.__name__
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict):
+            detail_message = str(detail.get("message") or detail.get("error_message") or detail.get("error_type") or "").strip()
+            if detail_message and detail_message not in message:
+                message = f"{message} {detail_message}"
+        return message[:500]
 
     def _build_app_request(self, request: GenerationRequest):
         from app import schemas as app_schemas

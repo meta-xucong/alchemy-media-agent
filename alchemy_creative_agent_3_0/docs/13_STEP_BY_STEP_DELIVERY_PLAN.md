@@ -202,6 +202,8 @@ Use this map when a Codex implementation task begins from the current stage:
 76 -> Latest placement-governance authority; foundation quality capabilities are shared, General Template stays scenario-neutral, and professional deliverable maps belong to specialized templates.
 77 -> Latest foundation-quality tuning authority for stronger real visual review, aesthetic stability issue codes, provider prompt consumption, and bounded retry patches under Doc76 placement rules.
 78 -> Final foundation tuning plan before specialized-template work; long-term subject identity, beautiful realism balance, and facial-feature aesthetic integrity must reach 85%+ without adding vertical package roles to General Template.
+80 -> Provider-reference upload compression authority; large reference images are compressed only for upstream provider input while originals, previews, and archives stay unchanged.
+81 -> Provider-failure retry and Project status sync authority; zero-candidate provider failures receive a bounded fresh provider retry before blocked, while final failures are written to Project timeline and shown clearly in the frontend.
 ```
 
 Current code-stage priority:
@@ -233,7 +235,9 @@ Current code-stage priority:
 24. Apply 76 before adding or moving future visual-generation features; classify each change as foundation, General Template, or specialized template work, and keep professional suite/package definitions out of General Template.
 25. Apply 77 only as foundation-quality tuning: strengthen real review and aesthetic stability in the Visual Capability Cluster, vision inspector, provider prompt, and review/retry paths without adding vertical suite roles.
 26. Apply 78 as the final foundation-quality tuning pass before V3.10: improve long-term identity continuity and beautiful realism balance, preserve facial-feature beauty, and keep implementation inside the existing foundation layers.
-27. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+27. Apply 80 when uploaded or selected reference images are sent to image-edit providers; provider input copies may be compressed but user-facing originals must remain untouched.
+28. Apply 81 whenever real provider generation can fail before any candidate image exists; this is provider-failure recovery, not visual-quality retry, and must stay bounded under Doc53 loop-safety rules.
+29. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 
 ## 2. V3.0 Foundation

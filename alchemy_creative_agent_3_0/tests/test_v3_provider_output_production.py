@@ -15,6 +15,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
     ProviderStrategy,
 )
 from app.schemas import ImageGenerationResult
+from app.providers.base import ProviderRuntimeError, ProviderNotConfiguredError
 
 
 def _png_base64(width: int = 96, height: int = 72) -> str:
@@ -197,6 +198,83 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert records[0].metadata["compiled_visual_direction"] == candidate.metadata["compiled_visual_direction"]
     assert records[0].metadata["final_provider_prompt"] == candidate.metadata["final_provider_prompt"]
     assert records[0].metadata["style_notes"] == ["premium", "clean"]
+
+
+def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    calls = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        if len(calls) == 1:
+            raise ProviderRuntimeError(
+                "OpenAI image reference generation failed.",
+                provider="openai_gpt_image",
+                detail={"error_type": "TimeoutError", "message": "TimeoutError"},
+            )
+        return ImageGenerationResult(
+            provider="openai_gpt_image",
+            model="test-image-model",
+            outputs=[
+                {"b64_json": _png_base64(96, 72), "mime_type": "image/png", "format": "png", "width": 96, "height": 72},
+            ],
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_app_provider_transient_cooldown_seconds", lambda self: 0.0)
+    try:
+        reference_path = _reference_image(tmp_path / "reference.png")
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        response = provider.generate(_generation_request(reference_path))
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert len(calls) == 2
+    assert response.candidates
+    summary = response.provider_metadata["provider_failure_retry"]
+    assert summary["executed_count"] == 1
+    assert summary["fresh_upstream_requests"] == 2
+    assert summary["final_status"] == "succeeded"
+    assert summary["attempts"][0]["classification"] == "retryable_provider_failure"
+    assert response.candidates[0].metadata["provider_failure_retry"]["executed_count"] == 1
+
+
+def test_production_provider_does_not_retry_non_retryable_configuration_failure(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    calls = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        raise ProviderNotConfiguredError("OPENAI_API_KEY is not configured.", provider="openai_gpt_image")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        try:
+            provider.generate(_generation_request())
+        except ProviderNotConfiguredError:
+            pass
+        else:
+            raise AssertionError("ProviderNotConfiguredError should propagate")
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert len(calls) == 1
+    summary = provider._last_provider_failure_retry_summary  # noqa: SLF001
+    assert summary["final_status"] == "failed"
+    assert summary["attempts"][0]["classification"] == "non_retryable_provider_failure"
 
 
 def test_production_provider_respects_requested_size_without_multiplying_group_count(tmp_path, monkeypatch) -> None:

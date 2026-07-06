@@ -11,6 +11,7 @@ from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, Bra
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
 
 
@@ -813,6 +814,56 @@ def test_removed_uploaded_reference_exits_project_context(tmp_path) -> None:
     assert removed["context"]["uploaded_reference_assets"] == []
     assert context["uploaded_reference_assets"] == []
     assert timeline["items"][-1]["item_type"] == "reference_removed"
+
+
+def test_project_generation_blocked_records_provider_retry_timeline() -> None:
+    class BlockingProductService(V3ProductApiService):
+        def generate_job(self, job_id, request=None):  # noqa: ANN001
+            status = super().get_job(job_id)
+            metadata = dict(status.metadata or {})
+            metadata["provider_failure_retry"] = {
+                "executed_count": 1,
+                "max_attempts": 2,
+                "fresh_upstream_requests": 2,
+                "final_status": "failed",
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "status": "failed",
+                        "classification": "retryable_provider_failure",
+                        "message": "TimeoutError",
+                    },
+                    {
+                        "attempt": 2,
+                        "status": "failed",
+                        "classification": "retryable_provider_failure",
+                        "message": "TimeoutError",
+                    },
+                ],
+            }
+            return status.model_copy(
+                update={
+                    "status": ProductJobStatusValue.BLOCKED,
+                    "warnings": ["V3 real image generation failed via openai_gpt_image (provider_error): TimeoutError"],
+                    "metadata": metadata,
+                    "asset_series": [],
+                    "candidates": [],
+                }
+            )
+
+    handlers = V3ProductRouteHandlers(service=BlockingProductService())
+    project = handlers.post_projects({"user_goal": "Create a product image", "primary_template_id": "ecommerce_template"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create Ozon style ecommerce image", "template_id": "ecommerce_template"})
+
+    blocked = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
+    timeline = handlers.get_project_timeline(project["project_id"])
+
+    item_types = [item["item_type"] for item in timeline["items"]]
+    assert blocked["status"] == "blocked"
+    assert "provider_retry" in item_types
+    assert "job_blocked" in item_types
+    assert timeline["items"][-1]["summary"].startswith("上游生图暂时超时")
+    assert timeline["items"][-1]["metadata"]["provider_failure_retry"]["executed_count"] == 1
 
 
 def test_selected_output_creates_active_generated_reference_and_selection_state() -> None:

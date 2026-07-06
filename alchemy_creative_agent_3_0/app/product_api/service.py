@@ -474,6 +474,13 @@ class V3ProductApiService:
             )
         except Exception as exc:
             record.status = ProductJobStatusValue.BLOCKED
+            provider_failure_retry = self._provider_failure_retry_summary_from_exception(exc)
+            if provider_failure_retry:
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "provider_failure_retry": provider_failure_retry,
+                    "provider_failure_retry_exhausted": provider_failure_retry.get("final_status") == "failed",
+                }
             record.warnings.append(self._generation_failure_message(exc, provider_strategy))
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
@@ -551,6 +558,66 @@ class V3ProductApiService:
             prefix = "V3 candidate generation failed"
         provider_text = f" via {provider}" if provider else ""
         return f"{prefix}{provider_text} ({code}): {message[:500]}"
+
+    def _provider_failure_retry_summary_from_exception(self, exc: Exception) -> dict[str, Any]:
+        summary = getattr(exc, "provider_failure_retry", None)
+        if isinstance(summary, dict):
+            return dict(summary)
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict) and isinstance(detail.get("provider_failure_retry"), dict):
+            return dict(detail["provider_failure_retry"])
+        message = self._generation_failure_message(exc, ProviderStrategy.DEFAULT_IMAGE_PROVIDER)
+        lowered = message.lower()
+        retryable_markers = (
+            "timeout",
+            "timed out",
+            "gateway",
+            "bad_response_status_code",
+            "could not be downloaded",
+            "image reference generation failed",
+            "image generation failed",
+            "provider returned no image",
+            "no image outputs",
+            "502",
+            "503",
+            "504",
+            "500",
+        )
+        non_retryable_markers = (
+            "not configured",
+            "api key",
+            "insufficient",
+            "policy",
+            "safety",
+            "invalid uploaded asset",
+            "source file was not found",
+        )
+        if any(marker in lowered for marker in non_retryable_markers):
+            classification = "non_retryable_provider_failure"
+            retryable = False
+        elif any(marker in lowered for marker in retryable_markers):
+            classification = "retryable_provider_failure"
+            retryable = True
+        else:
+            classification = "unknown_retryable_failure"
+            retryable = True
+        return {
+            "executed_count": 0,
+            "max_attempts": 1,
+            "fresh_upstream_requests": 1,
+            "final_status": "failed",
+            "final_classification": classification,
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "status": "failed",
+                    "classification": classification,
+                    "error_type": exc.__class__.__name__,
+                    "message": message[:500],
+                    "retryable": retryable,
+                }
+            ],
+        }
 
     def _attach_post_generation_review(
         self,
@@ -1851,6 +1918,8 @@ class V3ProductApiService:
             "commerce_profile_present",
             "ecommerce_text_to_image_fallback",
             "has_product_reference",
+            "provider_failure_retry",
+            "provider_failure_retry_exhausted",
         }
         return {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
 

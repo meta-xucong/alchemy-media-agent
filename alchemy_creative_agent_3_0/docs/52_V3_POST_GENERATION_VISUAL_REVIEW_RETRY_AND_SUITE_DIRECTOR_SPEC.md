@@ -1305,7 +1305,9 @@ Guardrail:
 
 ```text
 strict retry budget
-no retry for provider errors
+no post-generation visual retry for provider errors
+provider errors that produce zero candidates are handled by Doc81's bounded
+provider-failure retry layer before post-generation visual review begins
 stop repeated same issue
 store retry reason
 ```

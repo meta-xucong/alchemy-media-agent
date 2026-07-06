@@ -604,7 +604,9 @@ Retry guardrails:
 ```text
 max one automatic retry per affected output by default
 max two automatic retries for a whole job unless explicitly configured
-no retry if provider failure is the only issue
+no visual-quality retry if provider failure is the only issue
+provider failures with zero candidates are handled by Doc81 provider-failure
+recovery before visual review begins
 no retry if issue confidence is low and image is otherwise usable
 no retry if the same issue persists after retry
 no retry loop that keeps changing the user's locked direction
