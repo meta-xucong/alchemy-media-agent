@@ -1428,6 +1428,17 @@ class V3ProjectModeService:
         selected_output_refs: list[OutputRef] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ProjectTimelineItem:
+        idempotent_job_items = {
+            TimelineItemType.JOB_GENERATED,
+            TimelineItemType.PROVIDER_RETRY,
+            TimelineItemType.JOB_BLOCKED,
+            TimelineItemType.VISUAL_REVIEW,
+            TimelineItemType.VISUAL_RETRY,
+        }
+        if job_id and item_type in idempotent_job_items:
+            for existing in self.project_store.list_timeline(project_id):
+                if existing.item_type == item_type and (existing.job_id == job_id or existing.related_job_id == job_id):
+                    return existing
         created_at = _utc_now_iso()
         item = ProjectTimelineItem(
             timeline_item_id=stable_id("timeline", project_id, item_type, job_id, created_at),
