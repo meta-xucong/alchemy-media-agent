@@ -4432,7 +4432,8 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
 
 async function runV3GenerationWithRecovery({ projectId, jobId, body }) {
   const endpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/generate`;
-  const generationRequest = request(endpoint, { method: "POST", body });
+  const generationBody = { ...(body || {}), async_background: true };
+  const generationRequest = request(endpoint, { method: "POST", body: generationBody });
   try {
     const generated = await withV3SoftTimeout(generationRequest, v3GenerationSoftTimeoutMs);
     if (generated?.status === "generated" || generated?.status === "selected" || generated?.status === "blocked" || generated?.status === "failed" || v3JobHasVisibleImages(generated)) {

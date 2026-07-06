@@ -506,7 +506,7 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
 
     generated = client.post(
         f"/api/v3/creative-agent/projects/{project_id}/jobs/{created_payload['job_id']}/generate",
-        json={"quality_mode": "standard"},
+        json={"quality_mode": "standard", "sync_wait": True},
     )
     assert generated.status_code == 200
     generated_payload = generated.json()
@@ -636,6 +636,46 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     after_archive_list = client.get("/api/v3/creative-agent/projects?limit=5")
     assert after_archive_list.status_code == 200
     assert project_id not in [item["project_id"] for item in after_archive_list.json()["projects"]]
+
+
+def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypatch) -> None:
+    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    v3_route_handlers.service.job_store = InMemoryProductJobStore()
+    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    client = TestClient(app)
+
+    created_project = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "做一组清爽高级的夏季饮料宣传图"},
+    )
+    assert created_project.status_code == 200
+    project_id = created_project.json()["project"]["project_id"]
+
+    created_job = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "先做一张干净明亮的封面图"},
+    )
+    assert created_job.status_code == 200
+    job_id = created_job.json()["job_id"]
+
+    background_calls: list[tuple[str, str, dict]] = []
+
+    def fake_start_background(project_id_arg: str, job_id_arg: str, payload: dict) -> bool:
+        background_calls.append((project_id_arg, job_id_arg, payload))
+        return True
+
+    monkeypatch.setattr(app_main, "_start_v3_project_generation_background", fake_start_background)
+    generated = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/generate",
+        json={"quality_mode": "standard"},
+    )
+
+    assert generated.status_code == 200
+    generated_payload = generated.json()
+    assert generated_payload["status"] == "planned"
+    assert generated_payload["metadata"]["background_generation_started"] is True
+    assert generated_payload["metadata"]["background_generation_pending"] is True
+    assert background_calls == [(project_id, job_id, {"quality_mode": "standard"})]
 
 
 def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:

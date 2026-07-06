@@ -302,6 +302,15 @@ def _mark_v3_background_generation_response(response: dict, *, started: bool) ->
     return response
 
 
+def _should_run_v3_project_generation_background(payload: dict) -> bool:
+    return payload.get("sync_wait") is not True and payload.get("force_sync") is not True
+
+
+def _v3_generation_payload_without_transport_controls(payload: dict) -> dict:
+    controls = {"async_background", "sync_wait", "force_sync"}
+    return {key: value for key, value in dict(payload or {}).items() if key not in controls}
+
+
 @app.get("/api/v3/creative-agent/scenarios")
 def v3_scenarios_endpoint(request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
@@ -324,7 +333,7 @@ def v3_projects_endpoint(request: Request, limit: int = 20, authorization: str =
 def v3_project_outputs_endpoint(
     request: Request,
     limit: int = 60,
-    compact: bool = False,
+    compact: bool = True,
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
@@ -464,11 +473,12 @@ async def v3_generate_project_job_endpoint(
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
-    if payload.get("async_background") is True:
-        started = _start_v3_project_generation_background(project_id, job_id, payload)
+    generation_payload = _v3_generation_payload_without_transport_controls(payload)
+    if _should_run_v3_project_generation_background(payload):
+        started = _start_v3_project_generation_background(project_id, job_id, generation_payload)
         response = _run_v3_handler(v3_route_handlers.get_job, job_id)
         return _mark_v3_background_generation_response(response, started=started)
-    return await _run_v3_handler_threaded(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
+    return await _run_v3_handler_threaded(v3_route_handlers.post_project_job_generate, project_id, job_id, generation_payload)
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/select")
