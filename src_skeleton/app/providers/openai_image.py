@@ -658,6 +658,9 @@ class OpenAIGPTImageProvider:
             "bad gateway",
             "service unavailable",
             "gateway timeout",
+            "gateway time-out",
+            "504 gateway time-out",
+            "nginx/",
             "rate limit reached",
             "input-images per min",
             "input images per min",
@@ -699,6 +702,9 @@ class OpenAIGPTImageProvider:
                 "connection error",
                 "timeout",
                 "timed out",
+                "gateway time-out",
+                "504 gateway time-out",
+                "nginx/",
             ]
         )
 

@@ -158,6 +158,17 @@ def test_openai_image_provider_retries_gateway_wrapped_openai_error():
     assert provider._is_transient_image_edit_error(exc) is True
 
 
+def test_openai_image_provider_retries_html_gateway_timeout():
+    provider = registry.image("openai_gpt_image")
+    exc = Exception(
+        "<html><head><title>504 Gateway Time-out</title></head>"
+        "<body><center><h1>504 Gateway Time-out</h1></center><hr><center>nginx/1.22.1</center></body></html>"
+    )
+
+    assert provider._is_retryable_error(exc) is True
+    assert provider._is_transient_image_edit_error(exc) is True
+
+
 def test_openai_image_provider_compresses_large_reference_png(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     source = tmp_path / "large-reference.png"
