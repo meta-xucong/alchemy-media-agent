@@ -325,6 +325,7 @@ const v3State = {
   progressTimer: null,
   recoverPollTimer: null,
   recoverPollAttempt: 0,
+  longRunNoticeKey: "",
   presetByScenario: {
     general_creative: "campaign_poster",
     ecommerce: "one_click_product_set",
@@ -4386,18 +4387,37 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
 
 async function runV3GenerationWithRecovery({ projectId, jobId, body }) {
   const endpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/generate`;
+  const generationRequest = request(endpoint, { method: "POST", body });
   try {
-    return await request(endpoint, { method: "POST", body });
+    return await withV3SoftTimeout(generationRequest, v3GenerationSoftTimeoutMs);
   } catch (error) {
-    setV3Progress("recovering", "页面连接刚刚中断，正在核对后台是否已经完成出图。", "warning", { forceNotice: true });
+    const detail = v3IsSoftTimeout(error)
+      ? "后台还在生成，页面正在持续核对结果。"
+      : "页面连接刚刚中断，正在核对后台是否已经完成出图。";
+    setV3Progress("recovering", detail, "warning", { forceNotice: true });
     return await recoverV3GeneratedJob(projectId, jobId, error);
   }
+}
+
+function withV3SoftTimeout(promise, timeoutMs) {
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error("v3_generation_soft_timeout")), timeoutMs);
+  });
+  promise.catch(() => {});
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
+}
+
+function v3IsSoftTimeout(error) {
+  return String(error?.message || error || "").includes("v3_generation_soft_timeout");
 }
 
 async function recoverV3GeneratedJob(projectId, jobId, originalError) {
   clearV3RecoverPolling();
   let lastError = originalError;
-  for (let attempt = 1; attempt <= 90; attempt += 1) {
+  for (let attempt = 1; attempt <= v3RecoveryMaxAttempts; attempt += 1) {
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
     try {
@@ -4522,13 +4542,19 @@ const v3ProgressStages = [
 ];
 
 const v3ProgressByKey = Object.fromEntries(v3ProgressStages.map((stage) => [stage.key, stage]));
+const v3GenerationSoftTimeoutMs = 90000;
+const v3RecoveryMaxAttempts = 240;
 
 function startV3Progress(stageKey = "queued", detail = "") {
   clearV3ProgressTimer();
   v3State.progressStartedAt = Date.now();
   v3State.progressNoticeKey = "";
+  v3State.longRunNoticeKey = "";
   setV3Progress(stageKey, detail, "info", { forceNotice: true });
-  v3State.progressTimer = window.setInterval(renderV3ProjectWorkflow, 1000);
+  v3State.progressTimer = window.setInterval(() => {
+    maybeUpdateV3LongRunningProgress();
+    renderV3ProjectWorkflow();
+  }, 1000);
 }
 
 function clearV3ProgressTimer() {
@@ -4557,6 +4583,34 @@ function setV3Progress(stageKey = "planning", detail = "", type = "info", { forc
     v3State.progressNoticeKey = noticeKey;
     updateV3Notice(`${stage.label} · ${v3State.progressDetail}`, type);
   }
+}
+
+function maybeUpdateV3LongRunningProgress() {
+  if (!v3State.loading || !v3State.progressStartedAt) return;
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - v3State.progressStartedAt) / 1000));
+  let key = "";
+  let detail = "";
+  if (v3State.progressStageKey === "generating") {
+    if (elapsedSeconds >= 300) {
+      key = "generating-300";
+      detail = "上游仍在处理，V3 会继续等后台结果，不会覆盖项目记录。";
+    } else if (elapsedSeconds >= 180) {
+      key = "generating-180";
+      detail = "这次出图比较慢，可能是上游排队或图生图处理时间较长。";
+    } else if (elapsedSeconds >= 90) {
+      key = "generating-90";
+      detail = "页面已切换为后台核对模式，完成后会自动补回图片。";
+    } else if (elapsedSeconds >= 45) {
+      key = "generating-45";
+      detail = "生图引擎还在工作，复杂图片可能需要多等一会儿。";
+    }
+  } else if (v3State.progressStageKey === "recovering" && elapsedSeconds >= 180) {
+    key = "recovering-180";
+    detail = "仍在核对后台结果，可以稍后刷新项目，生成成功的图片会保留在项目里。";
+  }
+  if (!key || key === v3State.longRunNoticeKey) return;
+  v3State.longRunNoticeKey = key;
+  setV3Progress(v3State.progressStageKey, detail, v3State.progressStageKey === "recovering" ? "warning" : "info", { forceNotice: true });
 }
 
 function renderV3Job(job) {
