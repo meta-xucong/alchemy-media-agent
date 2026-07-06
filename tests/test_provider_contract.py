@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +40,63 @@ def test_openai_image_provider_cost_uses_runtime_model():
     )
     assert estimate.provider == "openai_gpt_image"
     assert estimate.model == "gpt-image-2"
+
+
+def test_openai_image_provider_closes_async_client_after_generate(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    original_key = settings.openai_api_key
+    original_base_url = settings.openai_base_url
+    closed = {"value": False}
+
+    class FakeImages:
+        async def generate(self, **kwargs):
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.images = FakeImages()
+
+        async def close(self):
+            closed["value"] = True
+
+    try:
+        settings.openai_api_key = "sk-test"
+        settings.openai_base_url = "https://aiself.example.test/v1"
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+        asyncio.run(provider.generate(ImageGenerationRequest(prompt_plan=ImagePromptPlan(main_subject="test", count=1))))
+    finally:
+        settings.openai_api_key = original_key
+        settings.openai_base_url = original_base_url
+        sys.modules.pop("openai", None)
+        openai_image_provider._openai_image_rate_limiter.reset()
+
+    assert closed["value"] is True
+
+
+def test_v3_threaded_handler_does_not_block_event_loop():
+    from app.main import _run_v3_handler_threaded
+
+    async def probe():
+        def slow_handler():
+            time.sleep(0.15)
+            return {"ok": True}
+
+        task = asyncio.create_task(_run_v3_handler_threaded(slow_handler))
+        await asyncio.sleep(0.02)
+        loop_was_free = not task.done()
+        result = await task
+        return loop_was_free, result
+
+    loop_was_free, result = asyncio.run(probe())
+
+    assert loop_was_free is True
+    assert result == {"ok": True}
 
 
 def test_doubao_image_provider_generates_via_openai_compatible_endpoint(monkeypatch):

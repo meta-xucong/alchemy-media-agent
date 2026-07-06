@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import math
 import re
 import time
@@ -226,14 +227,17 @@ class OpenAIGPTImageProvider:
         # The upstream image gateway may enforce account-level concurrency. Keep
         # image requests serialized in this process so the UI waits in a local
         # queue instead of immediately tripping a provider-side 429.
-        async with _openai_image_generation_lock:
-            for index in range(output_count):
-                if reference_paths:
-                    outputs.extend(await self._generate_one_with_references(client, prompt, plan, reference_paths, index=index))
-                else:
-                    outputs.extend(await self._generate_one(client, prompt, plan, index=index))
-                if len(outputs) >= output_count:
-                    break
+        try:
+            async with _openai_image_generation_lock:
+                for index in range(output_count):
+                    if reference_paths:
+                        outputs.extend(await self._generate_one_with_references(client, prompt, plan, reference_paths, index=index))
+                    else:
+                        outputs.extend(await self._generate_one(client, prompt, plan, index=index))
+                    if len(outputs) >= output_count:
+                        break
+        finally:
+            await self._close_async_client(client)
         outputs = outputs[:output_count]
         return ImageGenerationResult(
             provider=self.name,
@@ -455,8 +459,11 @@ class OpenAIGPTImageProvider:
         )
         plan = request.prompt_plan
         prompt = self._render_prompt(plan)
-        async with _openai_image_generation_lock:
-            outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
+        try:
+            async with _openai_image_generation_lock:
+                outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
+        finally:
+            await self._close_async_client(client)
         outputs = outputs[:1]
         return ImageGenerationResult(
             provider=self.name,
@@ -813,6 +820,16 @@ class OpenAIGPTImageProvider:
     async def _call_with_timeout(self, awaitable, *, image_edit: bool, timeout_seconds: float | None = None):
         timeout = self._client_timeout_seconds(image_edit=image_edit) if timeout_seconds is None else timeout_seconds
         return await asyncio.wait_for(awaitable, timeout=timeout)
+
+    async def _close_async_client(self, client) -> None:
+        for method_name in ("close", "aclose"):
+            close = getattr(client, method_name, None)
+            if close is None:
+                continue
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+            return
 
     def _provider_reference_paths(self, reference_paths: list) -> list:
         return prepare_provider_reference_images(reference_paths)

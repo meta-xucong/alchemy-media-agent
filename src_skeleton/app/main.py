@@ -16,6 +16,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -259,6 +260,10 @@ def _run_v3_handler(handler, *args):
         )
 
 
+async def _run_v3_handler_threaded(handler, *args):
+    return await run_in_threadpool(_run_v3_handler, handler, *args)
+
+
 @app.get("/api/v3/creative-agent/scenarios")
 def v3_scenarios_endpoint(request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
@@ -404,7 +409,7 @@ async def v3_generate_project_job_endpoint(project_id: str, job_id: str, request
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
-    return _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
+    return await _run_v3_handler_threaded(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/select")
@@ -522,7 +527,7 @@ async def v3_generate_job_endpoint(job_id: str, request: Request, authorization:
     user_id = _require_veyra_user_if_enabled(request, authorization)
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
-    return _run_v3_handler(v3_route_handlers.post_generate, job_id, payload)
+    return await _run_v3_handler_threaded(v3_route_handlers.post_generate, job_id, payload)
 
 
 @app.post("/api/v3/creative-agent/jobs/{job_id}/select")
