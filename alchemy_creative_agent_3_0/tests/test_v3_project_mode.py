@@ -1321,6 +1321,55 @@ def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:
     assert {item["output_id"] for item in second_outputs} == {second_record.output_id}
 
 
+def test_project_timeline_reconciles_outputs_written_after_background_disconnect(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Generate a marketplace product suite",
+            "title": "Recovered product suite",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    job = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Make one clean ecommerce image", "template_id": "ecommerce_template"},
+    )
+    record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_recovered_1",
+        asset_id="asset_recovered_1",
+        prompt="clean marketplace product image",
+    )
+
+    timeline = handlers.get_project_timeline(project["project_id"])
+    generated_items = [
+        item for item in timeline["items"] if item["item_type"] == "job_generated" and item["job_id"] == job["job_id"]
+    ]
+    review_items = [
+        item for item in timeline["items"] if item["item_type"] == "visual_review" and item["job_id"] == job["job_id"]
+    ]
+    outputs = timeline["metadata"]["project_outputs"]
+
+    assert len(generated_items) == 1
+    assert generated_items[0]["metadata"]["restored_from_output_store"] is True
+    assert generated_items[0]["metadata"]["output_ids"] == [record.output_id]
+    assert len(review_items) == 1
+    assert review_items[0]["metadata"]["restored_from_output_store"] is True
+    assert [item["job_id"] for item in outputs] == [job["job_id"]]
+
+    timeline_again = handlers.get_project_timeline(project["project_id"])
+    generated_again = [
+        item for item in timeline_again["items"] if item["item_type"] == "job_generated" and item["job_id"] == job["job_id"]
+    ]
+    review_again = [
+        item for item in timeline_again["items"] if item["item_type"] == "visual_review" and item["job_id"] == job["job_id"]
+    ]
+
+    assert len(generated_again) == 1
+    assert len(review_again) == 1
+
+
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(

@@ -4474,6 +4474,18 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
     try {
+      await refreshV3CurrentProject({ silent: true });
+      await loadV3ProjectTimeline(projectId, { silent: true });
+      await loadV3ProjectOutputs({ silent: true, force: true });
+      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
+      if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) {
+        v3State.currentJob = recoveredFromOutputs;
+        return recoveredFromOutputs;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       if (job?.status === "generated" || job?.status === "selected" || v3JobHasVisibleImages(job)) {
         return job;
@@ -4516,6 +4528,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     }
   }
   try {
+    await refreshV3CurrentProject({ silent: true });
     await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);

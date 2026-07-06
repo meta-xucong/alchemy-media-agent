@@ -88,6 +88,8 @@ class V3ProjectModeService:
             for project in self.project_store.list_projects(limit=100)
             if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id)
         ][: max(1, min(int(limit or 20), 100))]
+        for project in projects:
+            self._reconcile_project_outputs(project)
         summaries = [self._memory_summary(project) for project in projects]
         return ProjectListResponse(
             api_namespace=API_NAMESPACE,
@@ -107,6 +109,7 @@ class V3ProjectModeService:
                 continue
             if not self._project_visible_to_owner(project, owner_user_id):
                 continue
+            self._reconcile_project_outputs(project)
             items.extend(
                 self._project_output_items(
                     project,
@@ -171,6 +174,7 @@ class V3ProjectModeService:
 
     def get_project(self, project_id: str) -> ProjectResponse:
         project = self._require_project(project_id)
+        self._reconcile_project_outputs(project)
         project.latest_context = self._build_context(project)
         project.memory_summary = self._memory_summary(project)
         self.project_store.save_project(project)
@@ -178,6 +182,7 @@ class V3ProjectModeService:
 
     def list_timeline(self, project_id: str) -> ProjectTimelineResponse:
         project = self._require_project(project_id)
+        self._reconcile_project_outputs(project)
         items = self.project_store.list_timeline(project.project_id)
         return ProjectTimelineResponse(
             api_namespace=API_NAMESPACE,
@@ -1444,6 +1449,74 @@ class V3ProjectModeService:
             metadata=metadata or {},
         )
         return self.project_store.append_timeline(item)
+
+    def _reconcile_project_outputs(self, project: ProjectRecord) -> bool:
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None or not project.job_ids:
+            return False
+        timeline = self.project_store.list_timeline(project.project_id)
+        generated_jobs = {
+            item.job_id or item.related_job_id
+            for item in timeline
+            if item.item_type == TimelineItemType.JOB_GENERATED and (item.job_id or item.related_job_id)
+        }
+        reviewed_jobs = {
+            item.job_id or item.related_job_id
+            for item in timeline
+            if item.item_type == TimelineItemType.VISUAL_REVIEW and (item.job_id or item.related_job_id)
+        }
+        changed = False
+        for job_id in list(dict.fromkeys(project.job_ids)):
+            try:
+                records = list(output_store.list_by_job(job_id))
+            except Exception:
+                continue
+            if not records:
+                continue
+            records = sorted(records, key=lambda item: item.created_at or "")
+            asset_ids = [record.asset_id for record in records if getattr(record, "asset_id", None)]
+            candidate_ids = [record.candidate_id for record in records if getattr(record, "candidate_id", None)]
+            output_ids = [record.output_id for record in records if getattr(record, "output_id", None)]
+            if job_id not in generated_jobs:
+                self._append_timeline(
+                    project.project_id,
+                    TimelineItemType.JOB_GENERATED,
+                    "生成了一组图片",
+                    "图片已保存到项目里，可以继续查看、选择或再生成。",
+                    job_id=job_id,
+                    asset_ids=asset_ids,
+                    candidate_ids=candidate_ids,
+                    metadata={
+                        "template_id": self._template_id_for_project_job(project, job_id),
+                        "restored_from_output_store": True,
+                        "output_ids": output_ids,
+                    },
+                )
+                generated_jobs.add(job_id)
+                changed = True
+            if job_id not in reviewed_jobs:
+                self._append_timeline(
+                    project.project_id,
+                    TimelineItemType.VISUAL_REVIEW,
+                    "V3 已同步生成结果",
+                    "V3 找到了已经生成的图片，并把它们补回到这个项目。",
+                    job_id=job_id,
+                    asset_ids=asset_ids,
+                    candidate_ids=candidate_ids,
+                    metadata={
+                        "template_id": self._template_id_for_project_job(project, job_id),
+                        "restored_from_output_store": True,
+                        "inspection_count": len(records),
+                        "recommended_output_ids": output_ids,
+                        "hidden_output_ids": [],
+                    },
+                )
+                reviewed_jobs.add(job_id)
+                changed = True
+        if changed:
+            project.memory_summary = self._memory_summary(project)
+            self.project_store.save_project(project)
+        return changed
 
     def _post_generation_review_summary(self, review_package: dict[str, Any]) -> str:
         lines = [str(item).strip() for item in review_package.get("user_visible_summary", []) if str(item).strip()]

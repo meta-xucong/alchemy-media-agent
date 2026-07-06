@@ -204,6 +204,7 @@ Use this map when a Codex implementation task begins from the current stage:
 78 -> Final foundation tuning plan before specialized-template work; long-term subject identity, beautiful realism balance, and facial-feature aesthetic integrity must reach 85%+ without adding vertical package roles to General Template.
 80 -> Provider-reference upload compression authority; large reference images are compressed only for upstream provider input while originals, previews, and archives stay unchanged.
 81 -> Provider-failure retry and Project status sync authority; zero-candidate provider failures receive a bounded fresh provider retry before blocked, while final failures are written to Project timeline and shown clearly in the frontend.
+82 -> Project-output reconciliation authority; generated output files must self-heal back into Project timeline, project output history, and frontend recovery when background generation is interrupted after image files are written.
 ```
 
 Current code-stage priority:
@@ -1058,6 +1059,9 @@ document 66 selected-reference closure and precise retry packaging is implemente
 document 67 visual boundary cleanup and quality reinforcement is implemented
 document 68 casebook-guided photographic recipe tuning is implemented when the
 current phase requires another Lovart-quality pass
+document 82 project-output reconciliation is implemented so interrupted
+background generation cannot leave real output files detached from the Project
+timeline or frontend output board
 ```
 
 ## 17. Strategic Reminder
