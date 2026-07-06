@@ -5,6 +5,7 @@ import base64
 import inspect
 import math
 import re
+import threading
 import time
 from contextlib import ExitStack
 from collections import deque
@@ -21,12 +22,25 @@ from app.services.provider_reference import prepare_provider_reference_image, pr
 from app.storage import media_store
 
 
-_openai_image_generation_lock = asyncio.Lock()
+class _CrossLoopAsyncLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    async def __aenter__(self):
+        await asyncio.to_thread(self._lock.acquire)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._lock.release()
+        return False
+
+
+_openai_image_generation_lock = _CrossLoopAsyncLock()
 
 
 class _OpenAIImageRateLimiter:
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+        self._lock = _CrossLoopAsyncLock()
         self._request_times: deque[float] = deque()
         self._output_times: deque[float] = deque()
         self._cooldown_until = 0.0

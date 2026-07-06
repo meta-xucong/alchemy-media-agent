@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import threading
 from typing import Any
 
 import httpx
@@ -11,7 +12,20 @@ from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationRes
 from app.providers.base import ProviderCapabilities, ProviderNotConfiguredError, ProviderRuntimeError
 
 
-_doubao_image_generation_lock = asyncio.Lock()
+class _CrossLoopAsyncLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    async def __aenter__(self):
+        await asyncio.to_thread(self._lock.acquire)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._lock.release()
+        return False
+
+
+_doubao_image_generation_lock = _CrossLoopAsyncLock()
 
 
 class DoubaoImageProvider:
