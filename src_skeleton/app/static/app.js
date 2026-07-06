@@ -4340,6 +4340,7 @@ async function createV3Job() {
         projectId: v3State.currentProject.project_id,
         jobId: created.job_id,
         body: {
+          async_background: true,
           quality_mode: "standard",
           metadata: {
             frontend_surface: "commercial_v3_project_mode",
@@ -4389,7 +4390,12 @@ async function runV3GenerationWithRecovery({ projectId, jobId, body }) {
   const endpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/generate`;
   const generationRequest = request(endpoint, { method: "POST", body });
   try {
-    return await withV3SoftTimeout(generationRequest, v3GenerationSoftTimeoutMs);
+    const generated = await withV3SoftTimeout(generationRequest, v3GenerationSoftTimeoutMs);
+    if (generated?.status === "generated" || generated?.status === "selected" || generated?.status === "blocked" || generated?.status === "failed" || v3JobHasVisibleImages(generated)) {
+      return generated;
+    }
+    setV3Progress("recovering", "后台已开始生成，页面正在等待图片结果。", "info", { forceNotice: true });
+    return await recoverV3GeneratedJob(projectId, jobId, new Error("v3_background_generation_pending"));
   } catch (error) {
     const detail = v3IsSoftTimeout(error)
       ? "后台还在生成，页面正在持续核对结果。"

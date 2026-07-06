@@ -264,6 +264,13 @@ async def _run_v3_handler_threaded(handler, *args):
     return await run_in_threadpool(_run_v3_handler, handler, *args)
 
 
+def _run_v3_project_generation_background(project_id: str, job_id: str, payload: dict):
+    try:
+        _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
+    except Exception:
+        logger.exception("V3 background project generation failed for project=%s job=%s", project_id, job_id)
+
+
 @app.get("/api/v3/creative-agent/scenarios")
 def v3_scenarios_endpoint(request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
@@ -405,10 +412,24 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/generate")
-async def v3_generate_project_job_endpoint(project_id: str, job_id: str, request: Request, authorization: str = Header(default="")):
+async def v3_generate_project_job_endpoint(
+    project_id: str,
+    job_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(default=""),
+):
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
+    if payload.get("async_background") is True:
+        background_tasks.add_task(_run_v3_project_generation_background, project_id, job_id, payload)
+        response = _run_v3_handler(v3_route_handlers.get_job, job_id)
+        if isinstance(response, dict):
+            metadata = dict(response.get("metadata") or {})
+            metadata["background_generation_started"] = True
+            response["metadata"] = metadata
+        return response
     return await _run_v3_handler_threaded(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
 
 
