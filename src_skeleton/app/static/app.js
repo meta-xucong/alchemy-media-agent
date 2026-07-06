@@ -4575,7 +4575,7 @@ function renderV3ClosureChecks(checks) {
 
 function renderV3Warnings(warnings) {
   if (!els.v3WarningList) return;
-  const items = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  const items = Array.isArray(warnings) ? warnings.filter((item) => !v3IsInternalWarning(item)) : [];
   els.v3WarningList.hidden = items.length === 0;
   els.v3WarningList.innerHTML = "";
   items.slice(0, 4).forEach((item) => {
@@ -4583,6 +4583,20 @@ function renderV3Warnings(warnings) {
     line.textContent = v3PlainWarningText(item);
     els.v3WarningList.appendChild(line);
   });
+}
+
+function v3IsInternalWarning(item) {
+  const text = String(item || "").trim().toLowerCase();
+  if (!text) return true;
+  const internalMarkers = [
+    "output review ran without live image inspection",
+    "no candidate pixels supplied",
+    "review is metadata-only",
+    "metadata-only output review",
+    "marketplace policy guidance is versioned first-pass metadata",
+    "not live legal or platform-policy advice",
+  ];
+  return internalMarkers.some((marker) => text.includes(marker));
 }
 
 function v3PlainWarningText(item) {

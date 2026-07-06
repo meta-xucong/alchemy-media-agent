@@ -86,6 +86,36 @@ GENERAL_CREATIVE_PUBLIC_CONTROLS = [
     "Avoid directions previously rejected in brand history",
 ]
 
+_PUBLIC_WARNING_INTERNAL_MARKERS = (
+    "output review ran without live image inspection",
+    "no candidate pixels supplied",
+    "review is metadata-only",
+    "metadata-only output review",
+    "marketplace policy guidance is versioned first-pass metadata",
+    "not live legal or platform-policy advice",
+)
+
+_PUBLIC_WARNING_USER_ACTION_MARKERS = (
+    "insufficient",
+    "api key",
+    "base url",
+    "not configured",
+    "provider",
+    "timeout",
+    "timed out",
+    "could not be downloaded",
+    "bad_response_status_code",
+    "gateway",
+    "claim",
+    "unsupported",
+    "missing",
+    "failed",
+    "blocked",
+    "too large",
+    "invalid",
+    "policy",
+)
+
 VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "weak_aesthetic_finish",
     "generic_stock_photo_finish",
@@ -2599,7 +2629,7 @@ class V3ProductApiService:
         warnings = [*record.warnings, *output.warnings, *output.critic.warnings]
         if record.capability_run is not None:
             warnings.extend(warning.message for warning in record.capability_run.warnings)
-        return list(dict.fromkeys(self._public_warning_text(str(item)) for item in warnings if str(item).strip()))
+        return self._public_warnings_from(warnings, scenario_id="ecommerce")
 
     def _general_creative_summary(self, record: ProductJobRecord) -> GeneralCreativeCapabilitySummary | None:
         scenario_id = record.scenario_resolution.manifest.scenario_id if record.scenario_resolution else None
@@ -2879,7 +2909,26 @@ class V3ProductApiService:
             warnings.extend(warning.message for warning in record.capability_run.warnings)
             for result in record.capability_run.results:
                 warnings.extend(warning.message for warning in result.warnings)
-        return list(dict.fromkeys(self._public_warning_text(str(item)) for item in warnings if str(item).strip()))
+        return self._public_warnings_from(warnings, scenario_id="general_creative")
+
+    def _public_warnings_from(self, warnings: list[Any], *, scenario_id: str) -> list[str]:
+        public: list[str] = []
+        for item in warnings:
+            text = self._public_warning_text(str(item))
+            if not text or self._is_internal_warning_text(text, scenario_id=scenario_id):
+                continue
+            public.append(text)
+        return list(dict.fromkeys(public))
+
+    def _is_internal_warning_text(self, value: str, *, scenario_id: str) -> bool:
+        text = str(value or "").strip().lower()
+        if not text:
+            return True
+        if any(marker in text for marker in _PUBLIC_WARNING_INTERNAL_MARKERS):
+            return True
+        if scenario_id == "general_creative" and "marketplace" in text:
+            return True
+        return not any(marker in text for marker in _PUBLIC_WARNING_USER_ACTION_MARKERS)
 
     def _public_warning_text(self, value: str) -> str:
         if ": " in value:

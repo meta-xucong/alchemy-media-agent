@@ -16,6 +16,15 @@ def _png_base64(width: int = 320, height: int = 280) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _webp_base64(width: int = 240, height: int = 260) -> str:
+    from PIL import Image
+
+    image = Image.new("RGB", (width, height), color=(224, 218, 206))
+    buffer = BytesIO()
+    image.save(buffer, format="WEBP", quality=88)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def _upload_ready_asset(store: V3UploadedAssetStore) -> str:
     created = store.create_upload(
         {
@@ -54,6 +63,30 @@ def test_v3_uploaded_asset_store_lifecycle_resolves_runtime_asset(tmp_path) -> N
 
     with pytest.raises(ValueError):
         store.create_upload({"filename": "notes.txt", "mime_type": "text/plain", "size_bytes": 10})
+
+
+def test_v3_uploaded_asset_store_accepts_webp_reference(tmp_path) -> None:
+    store = V3UploadedAssetStore(storage_root=tmp_path)
+    payload = _webp_base64()
+    created = store.create_upload(
+        {
+            "filename": "reference.webp",
+            "mime_type": "image/webp",
+            "size_bytes": len(base64.b64decode(payload)),
+            "role": "style_reference",
+        }
+    )
+
+    stored = store.store_content(created.asset_id, {"content_base64": payload, "mime_type": "image/webp"})
+    assert stored is not None
+    ready = store.complete_upload(created.asset_id)
+
+    assert ready is not None
+    assert ready.status == "ready"
+    assert ready.mime_type == "image/webp"
+    resolved = store.resolve_uploaded_assets([ready.asset_id])[0]
+    assert resolved.file_path
+    assert resolved.mime_type == "image/webp"
 
 
 def test_product_api_uses_uploaded_asset_pixels_and_exports_manifest(tmp_path) -> None:

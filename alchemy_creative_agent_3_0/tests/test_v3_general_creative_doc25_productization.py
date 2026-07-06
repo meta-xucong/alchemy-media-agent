@@ -3,6 +3,13 @@ import json
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas import BrandProfile, IndustryCategory
+from alchemy_creative_agent_3_0.app.shared_capabilities import (
+    CapabilityResult,
+    CapabilityRunResult,
+    CapabilityRunStatus,
+    CapabilityStatus,
+    CapabilityWarning,
+)
 
 
 def _service(tmp_path) -> V3ProductApiService:
@@ -117,3 +124,47 @@ def test_general_creative_summary_is_not_used_for_active_ecommerce(tmp_path) -> 
     assert ecommerce.status == ProductJobStatusValue.PLANNED
     assert ecommerce.general_creative is None
     assert ecommerce.ecommerce is not None
+
+
+def test_general_creative_public_warnings_hide_internal_review_and_marketplace_text(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = service.create_job(
+        {
+            "user_input": "Create a clean visual from this uploaded reference.",
+            "scenario_selection": {"scenario_id": "general_creative", "preset_id": "blank"},
+        }
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.warnings.extend(
+        [
+            "Output review ran without live image inspection.",
+            "Marketplace policy guidance is versioned first-pass metadata, not live legal or platform-policy advice.",
+            "provider_error: OpenAI image URL could not be downloaded.",
+        ]
+    )
+    record.capability_run = CapabilityRunResult(
+        status=CapabilityRunStatus.DEGRADED,
+        results=[
+            CapabilityResult(
+                module_id="output_review",
+                version="test",
+                status=CapabilityStatus.WARNING,
+                warnings=[
+                    CapabilityWarning(
+                        code="output_review_metadata_only",
+                        message="Output review ran without live image inspection.",
+                    )
+                ],
+            )
+        ],
+    )
+    service.job_store.save(record)
+
+    status = service.get_job(created.job_id)
+
+    assert status.general_creative is not None
+    warning_text = " ".join(status.general_creative.warnings).lower()
+    assert "live image inspection" not in warning_text
+    assert "marketplace policy" not in warning_text
+    assert "could not be downloaded" in warning_text
