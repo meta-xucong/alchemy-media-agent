@@ -4364,6 +4364,20 @@ async function createV3Job() {
     setV3Progress("planning", "V3 中枢正在理解需求并规划画面。");
     const payload = buildV3JobPayload(uploadedAssets);
     const generationSettings = v3CurrentGenerationSettings();
+    payload.auto_generate = {
+      quality_mode: "standard",
+      metadata: {
+        frontend_surface: "commercial_v3_project_mode",
+        require_real_images: true,
+        requested_image_count: generationSettings.count,
+        requested_image_size: generationSettings.size || null,
+        variation_mode: payload.metadata.variation_mode,
+        inferred_variation_mode: payload.metadata.inferred_variation_mode,
+        effective_variation_mode: payload.metadata.effective_variation_mode,
+        continuation_mode: payload.metadata.continuation_mode,
+        variation_mode_source: payload.metadata.variation_mode_source,
+      },
+    };
     updateV3Notice(copy.planningNotice, "info");
     const projectId = encodeURIComponent(v3State.currentProject.project_id);
     const created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
@@ -4373,26 +4387,8 @@ async function createV3Job() {
     renderV3Job(created);
     await refreshV3CurrentProject({ silent: true });
     if (created.status !== "blocked") {
-      setV3Progress("generating", "V3 已理解需求，正在调用生图引擎。真实出图可能需要几分钟。");
-      const generated = await runV3GenerationWithRecovery({
-        projectId: v3State.currentProject.project_id,
-        jobId: created.job_id,
-        body: {
-          async_background: true,
-          quality_mode: "standard",
-          metadata: {
-            frontend_surface: "commercial_v3_project_mode",
-            require_real_images: true,
-            requested_image_count: generationSettings.count,
-            requested_image_size: generationSettings.size || null,
-            variation_mode: payload.metadata.variation_mode,
-            inferred_variation_mode: payload.metadata.inferred_variation_mode,
-            effective_variation_mode: payload.metadata.effective_variation_mode,
-            continuation_mode: payload.metadata.continuation_mode,
-            variation_mode_source: payload.metadata.variation_mode_source,
-          },
-        },
-      });
+      setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
+      const generated = await recoverV3GeneratedJob(v3State.currentProject.project_id, created.job_id, new Error("v3_background_generation_pending"));
       await completeV3GeneratedJob(generated, uploadedAssets, copy);
       return;
     }
@@ -4479,6 +4475,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     }
     try {
       await refreshV3CurrentProject({ silent: true });
+      await loadV3ProjectTimeline(projectId, { silent: true });
       await loadV3ProjectOutputs({ silent: true, force: true });
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
       if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) {
@@ -4490,11 +4487,14 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     } catch (error) {
       lastError = error;
     }
+    const waitDetail = `后台正在生成或排队，已刷新 ${attempt} 次。`;
+    setV3Progress("recovering", waitDetail, attempt >= 60 ? "warning" : "info", { forceNotice: attempt === 1 || attempt % 12 === 0 });
     if (attempt === 1 || attempt % 5 === 0) {
-      setV3Progress("recovering", `后台仍在处理或刷新中，已核对 ${attempt} 次。`, "warning", { forceNotice: attempt === 1 || attempt % 15 === 0 });
+      renderV3ProjectDetail();
     }
   }
   try {
+    await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) return recoveredFromOutputs;

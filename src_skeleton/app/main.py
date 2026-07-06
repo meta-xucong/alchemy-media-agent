@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import httpx
@@ -9,6 +10,7 @@ import logging
 import os
 from html import escape
 from pathlib import Path
+import threading
 import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
@@ -83,6 +85,12 @@ from app.storage import media_store
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
+_v3_generation_executor = ThreadPoolExecutor(
+    max_workers=max(1, int(os.getenv("V3_BACKGROUND_GENERATION_WORKERS", "2"))),
+    thread_name_prefix="v3-generation",
+)
+_v3_background_generation_jobs: set[str] = set()
+_v3_background_generation_jobs_lock = threading.Lock()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
@@ -269,6 +277,29 @@ def _run_v3_project_generation_background(project_id: str, job_id: str, payload:
         _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
     except Exception:
         logger.exception("V3 background project generation failed for project=%s job=%s", project_id, job_id)
+    finally:
+        with _v3_background_generation_jobs_lock:
+            _v3_background_generation_jobs.discard(f"{project_id}:{job_id}")
+
+
+def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
+    key = f"{project_id}:{job_id}"
+    with _v3_background_generation_jobs_lock:
+        if key in _v3_background_generation_jobs:
+            return False
+        _v3_background_generation_jobs.add(key)
+    _v3_generation_executor.submit(_run_v3_project_generation_background, project_id, job_id, payload)
+    return True
+
+
+def _mark_v3_background_generation_response(response: dict, *, started: bool) -> dict:
+    if not isinstance(response, dict):
+        return response
+    metadata = dict(response.get("metadata") or {})
+    metadata["background_generation_started"] = bool(started)
+    metadata["background_generation_pending"] = True
+    response["metadata"] = metadata
+    return response
 
 
 @app.get("/api/v3/creative-agent/scenarios")
@@ -408,7 +439,13 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
-    return _run_v3_handler(v3_route_handlers.post_project_job, project_id, payload)
+    auto_generate_payload = payload.pop("auto_generate", None)
+    response = _run_v3_handler(v3_route_handlers.post_project_job, project_id, payload)
+    if isinstance(auto_generate_payload, dict) and response.get("job_id") and response.get("status") != "blocked":
+        generate_payload = _v3_payload_with_veyra_owner(dict(auto_generate_payload), user_id)
+        started = _start_v3_project_generation_background(project_id, response["job_id"], generate_payload)
+        return _mark_v3_background_generation_response(response, started=started)
+    return response
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/generate")
@@ -423,13 +460,9 @@ async def v3_generate_project_job_endpoint(
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     if payload.get("async_background") is True:
-        background_tasks.add_task(_run_v3_project_generation_background, project_id, job_id, payload)
+        started = _start_v3_project_generation_background(project_id, job_id, payload)
         response = _run_v3_handler(v3_route_handlers.get_job, job_id)
-        if isinstance(response, dict):
-            metadata = dict(response.get("metadata") or {})
-            metadata["background_generation_started"] = True
-            response["metadata"] = metadata
-        return response
+        return _mark_v3_background_generation_response(response, started=started)
     return await _run_v3_handler_threaded(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
 
 
