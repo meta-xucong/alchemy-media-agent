@@ -4542,7 +4542,7 @@ const v3ProgressStages = [
 ];
 
 const v3ProgressByKey = Object.fromEntries(v3ProgressStages.map((stage) => [stage.key, stage]));
-const v3GenerationSoftTimeoutMs = 90000;
+const v3GenerationSoftTimeoutMs = 180000;
 const v3RecoveryMaxAttempts = 240;
 
 function startV3Progress(stageKey = "queued", detail = "") {
