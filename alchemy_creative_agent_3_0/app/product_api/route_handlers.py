@@ -61,8 +61,8 @@ class V3ProductRouteHandlers:
     def get_projects(self, limit: int = 20, owner_user_id: int | None = None) -> dict[str, Any]:
         return self.project_service.list_projects(limit=limit, owner_user_id=owner_user_id).model_dump(mode="json")
 
-    def get_project_outputs(self, limit: int = 60, owner_user_id: int | None = None) -> dict[str, Any]:
-        return self.project_service.list_project_outputs(limit=limit, owner_user_id=owner_user_id)
+    def get_project_outputs(self, limit: int = 60, owner_user_id: int | None = None, compact: bool = False) -> dict[str, Any]:
+        return self.project_service.list_project_outputs(limit=limit, owner_user_id=owner_user_id, compact=compact)
 
     def post_projects(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.create_project(payload).model_dump(mode="json")

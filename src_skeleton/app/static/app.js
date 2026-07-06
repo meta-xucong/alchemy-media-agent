@@ -2104,7 +2104,7 @@ async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
   v3State.imageHistoryLoading = true;
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
   try {
-    const payload = await request(`${v3ApiBase}/project-outputs?limit=80`);
+    const payload = await request(`${v3ApiBase}/project-outputs?limit=80&compact=true`);
     const items = Array.isArray(payload.items) ? payload.items : [];
     v3State.imageHistory = items;
     v3State.imageHistoryLoaded = true;

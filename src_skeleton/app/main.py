@@ -321,9 +321,14 @@ def v3_projects_endpoint(request: Request, limit: int = 20, authorization: str =
 
 
 @app.get("/api/v3/creative-agent/project-outputs")
-def v3_project_outputs_endpoint(request: Request, limit: int = 60, authorization: str = Header(default="")):
+def v3_project_outputs_endpoint(
+    request: Request,
+    limit: int = 60,
+    compact: bool = False,
+    authorization: str = Header(default=""),
+):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id)
+    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact)
 
 
 @app.post("/api/v3/creative-agent/projects")

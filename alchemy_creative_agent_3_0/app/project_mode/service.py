@@ -101,7 +101,7 @@ class V3ProjectModeService:
             metadata=self._metadata(),
         )
 
-    def list_project_outputs(self, limit: int = 60, owner_user_id: int | None = None) -> dict[str, Any]:
+    def list_project_outputs(self, limit: int = 60, owner_user_id: int | None = None, compact: bool = False) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         items: list[dict[str, Any]] = []
         for project in self.project_store.list_projects(limit=200):
@@ -115,6 +115,7 @@ class V3ProjectModeService:
                     project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
+                    compact=compact,
                 )
             )
         items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
@@ -124,7 +125,7 @@ class V3ProjectModeService:
             "total": len(items),
             "limit": bounded_limit,
             "items": items,
-            "metadata": self._metadata(),
+            "metadata": {**self._metadata(), "compact": bool(compact)},
         }
 
     def create_project(self, request: CreateProjectRequest | dict[str, Any]) -> ProjectResponse:
@@ -2686,6 +2687,7 @@ class V3ProjectModeService:
         limit: int = 60,
         include_hidden: bool = False,
         owner_user_id: int | None = None,
+        compact: bool = False,
     ) -> list[dict[str, Any]]:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
@@ -2715,7 +2717,7 @@ class V3ProjectModeService:
                     }
                 ):
                     continue
-                items.append(self._output_item_from_record(project, record, state))
+                items.append(self._output_item_from_record(project, record, state, compact=compact))
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
@@ -2746,10 +2748,12 @@ class V3ProjectModeService:
         project: ProjectRecord,
         record: Any,
         state: ProjectOutputSelectionStateValue | None,
+        *,
+        compact: bool = False,
     ) -> dict[str, Any]:
         record_metadata = dict(record.metadata or {})
         state_value = (state.value if hasattr(state, "value") else str(state)) if state else "available"
-        return {
+        item = {
             "output_ref_id": stable_id("project_output", project.project_id, record.job_id, record.output_id),
             "source_type": "generated_output",
             "project_id": project.project_id,
@@ -2780,6 +2784,18 @@ class V3ProjectModeService:
                 "layout_notes": record_metadata.get("layout_notes") or [],
             },
         }
+        if compact:
+            item["metadata"] = {
+                "width": record.width,
+                "height": record.height,
+                "format": record.output_format,
+                "provider": record.provider,
+                "model": record.model,
+                "requested_image_count": record_metadata.get("requested_image_count"),
+                "requested_image_size": record_metadata.get("requested_image_size"),
+                "compact": True,
+            }
+        return item
 
     def _output_record_identity(self, record: Any) -> str:
         return str(getattr(record, "output_id", None) or getattr(record, "asset_id", None) or getattr(record, "candidate_id", None) or "")

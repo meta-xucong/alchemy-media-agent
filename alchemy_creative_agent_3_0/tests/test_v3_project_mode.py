@@ -1370,6 +1370,38 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
     assert len(review_again) == 1
 
 
+def test_project_outputs_compact_mode_omits_heavy_prompt_metadata(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create compact history payload",
+            "title": "Compact History",
+        }
+    )["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create a clean image"})
+    record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_compact",
+        asset_id="asset_compact",
+        prompt="very long provider prompt that should not be sent to the V3 home history",
+    )
+
+    full = handlers.get_project_outputs(limit=10, compact=False)["items"][0]
+    compact = handlers.get_project_outputs(limit=10, compact=True)
+    compact_item = compact["items"][0]
+
+    assert full["output_id"] == record.output_id
+    assert full["metadata"]["final_provider_prompt"]
+    assert compact["metadata"]["compact"] is True
+    assert compact_item["output_id"] == record.output_id
+    assert compact_item["thumbnail_url"]
+    assert compact_item["preview_url"]
+    assert "final_provider_prompt" not in compact_item["metadata"]
+    assert "compiled_visual_direction" not in compact_item["metadata"]
+    assert compact_item["metadata"]["compact"] is True
+
+
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(
