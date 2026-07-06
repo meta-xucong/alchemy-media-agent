@@ -2311,8 +2311,8 @@ function renderV3History() {
     return;
   }
   groups.slice(0, 36).forEach((group) => {
-    const previewUrl = v3OutputPreviewImageUrl(group.latestItem);
-    const stackItems = group.items.slice(0, 5);
+    const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem);
+    const stackCount = Math.min(Math.max(Number(group.count || 0), 1), 5);
     const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
     const card = document.createElement("article");
     card.className = "v3-history-card v3-history-project-card";
@@ -2320,10 +2320,7 @@ function renderV3History() {
     card.innerHTML = `
       <button class="v3-history-project-preview" type="button" data-v3-history-project-group="${escapeHtml(group.projectId)}" aria-label="查看项目生成图片">
         <span class="v3-history-stack" aria-hidden="true">
-          ${stackItems.map((item) => {
-            const thumb = v3OutputThumbImageUrl(item) || v3OutputPreviewImageUrl(item);
-            return thumb ? `<span><img alt="" src="${escapeHtml(thumb)}" loading="lazy" decoding="async" /></span>` : "<span></span>";
-          }).join("")}
+          ${Array.from({ length: stackCount }, () => "<span></span>").join("")}
         </span>
         ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : `<span class="v3-history-empty-thumb">图片准备中</span>`}
       </button>
@@ -2452,7 +2449,7 @@ function renderV3ProjectHistoryGrid(group) {
     return;
   }
   items.forEach((item, index) => {
-    const previewUrl = v3OutputPreviewImageUrl(item);
+    const previewUrl = v3OutputStrictThumbImageUrl(item) || v3OutputPreviewImageUrl(item);
     const imageTitle = v3ReadableText(item.title, group.title || `图片 ${index + 1}`);
     const card = document.createElement("article");
     card.className = "v3-project-history-image-card";
@@ -5060,6 +5057,14 @@ function v3OutputPreviewImageUrl(item) {
     metadata.download_url,
     item?.url,
     metadata.url,
+  ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
+}
+
+function v3OutputStrictThumbImageUrl(item) {
+  const metadata = item?.metadata || {};
+  return uniqueNonEmpty([
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
   ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
 }
 
@@ -11737,7 +11742,7 @@ function normalizeHeroHistoryItem(item, source, index) {
     const latest = item.latestItem || item;
     const previewUrl = v3OutputPreviewImageUrl(latest);
     const fullUrl = v3OutputFullImageUrl(latest);
-    const thumbUrl = v3OutputThumbImageUrl(latest) || previewUrl || fullUrl;
+    const thumbUrl = v3OutputStrictThumbImageUrl(latest);
     return {
       id: item.projectId || latest?.project_id || `v3-history-${index}`,
       title: v3ReadableText(item.title || latest?.project_title, `V3 项目图片 ${index + 1}`),
@@ -11745,7 +11750,7 @@ function normalizeHeroHistoryItem(item, source, index) {
       downloadUrl: fullUrl || previewUrl || thumbUrl,
       thumbnailUrl: thumbUrl,
       previewUrl: previewUrl || thumbUrl || fullUrl,
-      imageCandidates: [thumbUrl, previewUrl, fullUrl].filter(Boolean),
+      imageCandidates: [thumbUrl].filter(Boolean),
       format: latest?.metadata?.format || "png",
       meta: `${v3TemplatePlainLabel(item.templateId || latest?.template_id || "general_template")} - ${item.count || 1} 张`,
       promptText: latest?.metadata?.final_prompt || latest?.metadata?.optimized_prompt || "",

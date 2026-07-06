@@ -172,6 +172,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-project-thumb-wrap" in styles.text
     assert ".v3-project-goal-slot" in styles.text
     assert "v3-project-goal-slot" in script.text
+    assert "function v3OutputStrictThumbImageUrl" in script.text
+    assert 'Array.from({ length: stackCount }, () => "<span></span>").join("")' in script.text
+    assert "imageCandidates: [thumbUrl].filter(Boolean)" in script.text
     assert "post_generation_review" in script.text
     assert "v3PostGenerationReviewLines" in script.text
     assert "高级查看：质量复检" in script.text
