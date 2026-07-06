@@ -2645,6 +2645,32 @@ function v3StoredProjectOutputItems(project = v3State.currentProject) {
     : [];
 }
 
+function v3ProjectOutputsForJob(jobId, project = v3State.currentProject) {
+  const targetJobId = String(jobId || "").trim();
+  if (!targetJobId) return [];
+  return v3StoredProjectOutputItems(project).filter((item) => {
+    const metadata = item?.metadata || {};
+    return item?.job_id === targetJobId || metadata.job_id === targetJobId || item?.related_job_id === targetJobId;
+  });
+}
+
+function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
+  const outputs = v3ProjectOutputsForJob(jobId);
+  if (!outputs.length) return null;
+  return {
+    ...(baseJob || {}),
+    job_id: jobId,
+    status: "generated",
+    candidates: outputs,
+    asset_series: outputs,
+    metadata: {
+      ...(baseJob?.metadata || {}),
+      recovered_from_project_outputs: true,
+      project_outputs: outputs,
+    },
+  };
+}
+
 function v3OutputVisibleInProject(item, project = v3State.currentProject) {
   const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
   if (state === "unselected" || state === "rejected") return false;
@@ -3941,12 +3967,24 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
   if (v3State.currentJob?.job_id === jobId && v3JobHasVisibleImages(v3State.currentJob)) {
     return v3State.currentJob;
   }
+  const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
+  if (recoveredFromOutputs) {
+    v3State.currentJob = recoveredFromOutputs;
+    v3State.selectedResult = null;
+    return recoveredFromOutputs;
+  }
   try {
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
     if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
       v3State.currentJob = job;
       v3State.selectedResult = null;
       return job;
+    }
+    const recovered = v3RecoveredJobFromProjectOutputs(jobId, job);
+    if (recovered) {
+      v3State.currentJob = recovered;
+      v3State.selectedResult = null;
+      return recovered;
     }
   } catch (error) {
     if (!silent) showGlobalToast(`V3 project images could not be restored: ${friendlyError(error)}`, "warning");
@@ -4442,6 +4480,11 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     try {
       await refreshV3CurrentProject({ silent: true });
       await loadV3ProjectOutputs({ silent: true, force: true });
+      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
+      if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) {
+        v3State.currentJob = recoveredFromOutputs;
+        return recoveredFromOutputs;
+      }
       const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
       if (restored?.job_id === jobId && v3JobHasVisibleImages(restored)) return restored;
     } catch (error) {
@@ -4450,6 +4493,13 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     if (attempt === 1 || attempt % 5 === 0) {
       setV3Progress("recovering", `后台仍在处理或刷新中，已核对 ${attempt} 次。`, "warning", { forceNotice: attempt === 1 || attempt % 15 === 0 });
     }
+  }
+  try {
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
+    if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) return recoveredFromOutputs;
+  } catch (error) {
+    lastError = error;
   }
   throw lastError || originalError || new Error("V3 generation status could not be restored.");
 }
