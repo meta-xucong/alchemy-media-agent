@@ -175,20 +175,19 @@ def _ecommerce_template_manifest() -> ProjectTemplateManifest:
     return ProjectTemplateManifest(
         template_id=ECOMMERCE_TEMPLATE_ID,
         display_name="\u7535\u5546\u6a21\u677f",
-        short_description="\u4e0a\u4f20\u5546\u54c1\u56fe\uff0c\u8bf4\u4e00\u53e5\u60f3\u8981\u4ec0\u4e48\uff0c\u5728\u9879\u76ee\u91cc\u751f\u6210\u7535\u5546\u5957\u56fe\u3002",
+        short_description="\u5199\u4e00\u53e5\u60f3\u8981\u4ec0\u4e48\u5c31\u80fd\u751f\u6210\u7535\u5546\u5957\u56fe\uff1b\u6709\u5546\u54c1\u56fe\u65f6\u4f1a\u4f18\u5148\u4fdd\u6301\u5b9e\u7269\u4e00\u81f4\u3002",
         scenario_pack_id="ecommerce",
         status=TemplateStatus.ACTIVE,
         allowed_project_types=["ecommerce_visual_project"],
-        required_inputs=[
+        required_inputs=[],
+        optional_inputs=[
             TemplateInputField(
                 field_id="product_image",
                 label="\u4ea7\u54c1\u56fe",
                 field_type=TemplateInputFieldType.IMAGE_UPLOAD,
-                required=True,
-                beginner_copy="\u4e0a\u4f20\u8981\u505a\u7535\u5546\u5957\u56fe\u7684\u4ea7\u54c1\u56fe\u3002",
-            )
-        ],
-        optional_inputs=[
+                required=False,
+                beginner_copy="\u53ef\u9009\u3002\u4e0a\u4f20\u5b9e\u7269\u56fe\u540e\uff0cV3 \u4f1a\u66f4\u7a33\u5730\u4fdd\u6301\u5546\u54c1\u5916\u89c2\uff1b\u4e0d\u4e0a\u4f20\u4e5f\u53ef\u4ee5\u6309\u6587\u5b57\u76f4\u63a5\u751f\u6210\u7535\u5546\u6982\u5ff5\u56fe\u3002",
+            ),
             TemplateInputField(
                 field_id="target_platform",
                 label="\u76ee\u6807\u5e73\u53f0",
@@ -251,13 +250,13 @@ def _ecommerce_template_manifest() -> ProjectTemplateManifest:
             "cross-template pollution tests pass",
         ],
         test_requirements=[
-            "ecommerce project jobs require a product image or product reference",
+            "ecommerce project jobs can run from text only and strengthen consistency when a product reference exists",
             "ecommerce project jobs are created only through the template registry",
             "legacy /jobs ecommerce compatibility remains reachable outside Project Mode",
             "ecommerce workspace does not reuse General Template UI blindly",
         ],
         ui_card={"label": "\u7535\u5546\u6a21\u677f", "icon": "shopping-bag"},
-        metadata={"project_mode_active_document": "42", "requires_product_reference": True},
+        metadata={"project_mode_active_document": "42", "requires_product_reference": False, "supports_text_to_image_fallback": True},
     )
 
 

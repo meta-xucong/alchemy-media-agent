@@ -572,8 +572,10 @@ class V3ProjectModeService:
         job_request = self._coerce_create_project_job_request(request)
         template_manifest = self._ensure_active_template(job_request.template_id)
         uploaded_asset_ids = list(dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids]))
+        ecommerce_text_to_image_fallback = False
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
-            uploaded_asset_ids = self._ensure_ecommerce_product_reference(project, job_request)
+            uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, job_request.uploaded_asset_ids)
+            ecommerce_text_to_image_fallback = not uploaded_asset_ids
             commerce_profile = self._merge_commerce_profile(project, job_request)
         else:
             commerce_profile = None
@@ -593,6 +595,7 @@ class V3ProjectModeService:
             job_request,
             context,
             commerce_profile=commerce_profile,
+            has_product_reference=bool(uploaded_asset_ids),
         )
         product_profile = self._product_profile_for_template(
             project,
@@ -623,6 +626,8 @@ class V3ProjectModeService:
                 "project_mode": True,
                 "apply_brand_memory_update_default": False,
                 "commerce_profile_present": commerce_profile is not None,
+                "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
+                "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
             },
         }
         status = self.product_service.create_job(create_payload)
@@ -640,6 +645,8 @@ class V3ProjectModeService:
                 "project_context_snapshot": context_snapshot,
                 "project_mode": True,
                 "commerce_profile_present": commerce_profile is not None,
+                "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
+                "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
             }
         )
         self._link_job(project, status.job_id, context)
@@ -654,6 +661,8 @@ class V3ProjectModeService:
                 "scenario_pack_id": template_manifest.scenario_pack_id,
                 "project_context_version": context.context_version,
                 "commerce_profile_present": commerce_profile is not None,
+                "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
+                "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
             },
         )
         return status
@@ -888,11 +897,8 @@ class V3ProjectModeService:
     def _ensure_active_template(self, template_id: str | None) -> ProjectTemplateManifest:
         return self.template_registry.ensure_can_create_project_job(template_id or GENERAL_TEMPLATE_ID)
 
-    def _ensure_ecommerce_product_reference(self, project: ProjectRecord, request: CreateProjectJobRequest) -> list[str]:
-        product_asset_ids = self._ecommerce_product_reference_asset_ids(project, request.uploaded_asset_ids)
-        if product_asset_ids:
-            return product_asset_ids
-        raise ValueError("请先上传商品图，或把一张商品参考图保存到这个项目。")
+    def _optional_ecommerce_product_reference(self, project: ProjectRecord, request: CreateProjectJobRequest) -> list[str]:
+        return self._ecommerce_product_reference_asset_ids(project, request.uploaded_asset_ids)
 
     def _project_has_product_reference(self, project: ProjectRecord) -> bool:
         try:
@@ -907,7 +913,6 @@ class V3ProjectModeService:
     ) -> list[str]:
         product_asset_ids: list[str] = []
         invalid_request_ids: list[str] = []
-        invalid_project_ids: list[str] = []
 
         for asset_id in request_asset_ids:
             clean_id = str(asset_id or "").strip()
@@ -921,13 +926,9 @@ class V3ProjectModeService:
         for asset_id in self._project_product_reference_candidates(project):
             if self._is_ready_product_upload(asset_id):
                 product_asset_ids.append(asset_id)
-            else:
-                invalid_project_ids.append(asset_id)
 
         if invalid_request_ids:
             raise ValueError("商品图还没有上传完成或不是有效的商品参考图，请重新上传商品图。")
-        if invalid_project_ids and not product_asset_ids:
-            raise ValueError("项目里的商品参考图不可用，请重新上传商品图。")
         return list(dict.fromkeys(product_asset_ids))
 
     def _project_product_reference_candidates(self, project: ProjectRecord) -> list[str]:
@@ -1006,6 +1007,7 @@ class V3ProjectModeService:
         context: ProjectContextPackage,
         *,
         commerce_profile: ProjectCommerceProfile | None = None,
+        has_product_reference: bool = False,
     ) -> dict[str, Any]:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             preset_id = str(
@@ -1022,6 +1024,8 @@ class V3ProjectModeService:
                 "use_project_context": request.use_project_context,
                 "project_mode": True,
                 "suite_slot_request": list(request.suite_slot_request),
+                "has_product_reference": bool(has_product_reference),
+                "text_to_image_fallback": not bool(has_product_reference),
             }
             requested_count = _bounded_requested_image_count(request.metadata.get("requested_image_count"))
             if requested_count is not None:
@@ -1089,6 +1093,8 @@ class V3ProjectModeService:
             "keywords": list(profile.keywords),
             "competitor_notes": list(profile.competitor_notes),
             "suite_slots_requested": list(profile.suite_slots_requested or request.suite_slot_request),
+            "has_product_reference": bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
+            "text_to_image_fallback": not bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
         }
         return {key: value for key, value in payload.items() if value not in (None, [], {})}
 

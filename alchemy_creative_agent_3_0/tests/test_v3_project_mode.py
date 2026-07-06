@@ -130,7 +130,9 @@ def test_template_registry_contains_ecommerce_active_after_doc42() -> None:
     assert manifests["ecommerce_template"].status == "active"
     assert manifests["ecommerce_template"].scenario_pack_id == "ecommerce"
     assert manifests["ecommerce_template"].context_write_policy.can_create_jobs is True
-    assert manifests["ecommerce_template"].required_inputs[0].field_id == "product_image"
+    assert manifests["ecommerce_template"].required_inputs == []
+    assert manifests["ecommerce_template"].optional_inputs[0].field_id == "product_image"
+    assert manifests["ecommerce_template"].optional_inputs[0].required is False
     assert cards["ecommerce_template"].project_can_create_jobs is True
     assert cards["ecommerce_template"].ui_card["state"] == "active"
     assert cards["ecommerce_template"].metadata["project_mode_active_document"] == "42"
@@ -181,7 +183,8 @@ def test_project_mode_lists_templates_with_general_and_ecommerce_active() -> Non
     assert templates["general_template"]["metadata"]["manifest_version"] == "project_template_manifest_v1"
     assert templates["ecommerce_template"]["project_can_create_jobs"] is True
     assert templates["ecommerce_template"]["status"] == "active"
-    assert templates["ecommerce_template"]["metadata"]["requires_product_reference"] is True
+    assert templates["ecommerce_template"]["metadata"]["requires_product_reference"] is False
+    assert templates["ecommerce_template"]["metadata"]["supports_text_to_image_fallback"] is True
     assert templates["photographer_template"]["project_can_create_jobs"] is False
     assert templates["photographer_template"]["status"] == "placeholder"
     assert templates["new_media_template"]["project_can_create_jobs"] is False
@@ -316,20 +319,20 @@ def test_project_archive_hides_project_from_recent_list_but_keeps_detail() -> No
     assert "归档" in timeline["items"][-1]["title"]
 
 
-def test_project_mode_rejects_ecommerce_project_job_without_product_reference() -> None:
+def test_project_mode_allows_ecommerce_project_job_without_product_reference() -> None:
     handlers = V3ProductRouteHandlers()
     created = handlers.post_projects({"user_goal": "帮我做一个产品宣传项目"})
     project_id = created["project"]["project_id"]
 
-    try:
-        handlers.post_project_job(
-            project_id,
-            {"template_id": "ecommerce_template", "user_input": "做电商套图"},
-        )
-    except ValueError as exc:
-        assert "商品图" in str(exc)
-    else:
-        raise AssertionError("ecommerce_template must require a product image or product reference")
+    job = handlers.post_project_job(
+        project_id,
+        {"template_id": "ecommerce_template", "user_input": "做电商套图"},
+    )
+
+    assert job["status"] == "planned"
+    assert job["scenario"]["scenario_id"] == "ecommerce"
+    assert job["metadata"]["ecommerce_text_to_image_fallback"] is True
+    assert job["metadata"]["has_product_reference"] is False
 
 
 def test_project_mode_rejects_ecommerce_project_job_with_fake_uploaded_asset_id() -> None:
@@ -368,7 +371,7 @@ def test_project_mode_rejects_ecommerce_project_job_with_non_product_upload(tmp_
     except ValueError as exc:
         assert "商品图" in str(exc)
     else:
-        raise AssertionError("ecommerce_template must require product-reference upload roles")
+        raise AssertionError("ecommerce_template must reject explicit non-product uploads")
 
 
 def test_project_mode_rejects_ecommerce_project_job_with_pending_product_upload(tmp_path) -> None:
@@ -410,7 +413,7 @@ def test_project_mode_rejects_fake_saved_product_reference() -> None:
         raise AssertionError("saved product references must point at a real V3 upload")
 
 
-def test_project_mode_rejects_fake_project_create_product_asset() -> None:
+def test_project_mode_ignores_fake_project_create_product_asset_and_falls_back_to_text() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects(
         {
@@ -420,15 +423,14 @@ def test_project_mode_rejects_fake_project_create_product_asset() -> None:
         }
     )["project"]
 
-    try:
-        handlers.post_project_job(
-            project["project_id"],
-            {"template_id": "ecommerce_template", "user_input": "Create an ecommerce image set"},
-        )
-    except ValueError as exc:
-        assert "商品参考图" in str(exc)
-    else:
-        raise AssertionError("project-create product references must still be verified before ecommerce jobs")
+    job = handlers.post_project_job(
+        project["project_id"],
+        {"template_id": "ecommerce_template", "user_input": "Create an ecommerce image set"},
+    )
+
+    assert job["status"] == "planned"
+    assert job["metadata"]["ecommerce_text_to_image_fallback"] is True
+    assert job["metadata"]["has_product_reference"] is False
 
 
 def test_project_mode_uses_ready_project_create_product_asset(tmp_path) -> None:

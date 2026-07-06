@@ -364,7 +364,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "run-progress-step" in script.text
     assert "function v3PlainWarningText" in script.text
     assert "生成电商套图" in script.text
-    assert "上传商品图，写一句需求，生成可用电商图。" in script.text
+    assert "写一句需求即可生成电商图；上传商品图后会更稳地保持实物一致。" in script.text
     assert "function renderV3ClosureChecks" in script.text
     assert "require_real_images: true" in script.text
     assert "function v3OutputImageCandidates" in script.text
@@ -420,7 +420,8 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     assert templates["general_template"]["metadata"]["manifest_version"] == "project_template_manifest_v1"
     assert templates["ecommerce_template"]["project_can_create_jobs"] is True
     assert templates["ecommerce_template"]["status"] == "active"
-    assert templates["ecommerce_template"]["metadata"]["requires_product_reference"] is True
+    assert templates["ecommerce_template"]["metadata"]["requires_product_reference"] is False
+    assert templates["ecommerce_template"]["metadata"]["supports_text_to_image_fallback"] is True
     assert templates["photographer_template"]["project_can_create_jobs"] is False
     assert templates["photographer_template"]["status"] == "placeholder"
     assert templates["new_media_template"]["project_can_create_jobs"] is False
@@ -439,13 +440,20 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     assert project_id.startswith("project_")
     assert project_payload["project"]["primary_template_id"] == "general_template"
 
-    missing_product = client.post(
+    text_only_ecommerce = client.post(
         f"/api/v3/creative-agent/projects/{project_id}/jobs",
         json={"template_id": "ecommerce_template", "user_input": "做一组电商套图"},
     )
-    assert missing_product.status_code == 400
-    assert missing_product.json()["detail"]["code"] == "invalid_v3_request"
-    assert "商品图" in missing_product.json()["detail"]["message"]
+    assert text_only_ecommerce.status_code == 200
+    text_only_payload = text_only_ecommerce.json()
+    assert text_only_payload["status"] == "planned"
+    assert text_only_payload["scenario"]["scenario_id"] == "ecommerce"
+    assert text_only_payload["metadata"]["template_id"] == "ecommerce_template"
+    assert text_only_payload["metadata"]["ecommerce_text_to_image_fallback"] is True
+    assert text_only_payload["metadata"]["has_product_reference"] is False
+    assert text_only_payload["metadata"]["scenario_parameters"]["text_to_image_fallback"] is True
+    assert text_only_payload["metadata"]["scenario_parameters"]["has_product_reference"] is False
+    assert text_only_payload["ecommerce"]["product_truth"]["confidence"]["uploaded_image"] == 0.0
 
     product_asset_id = _create_ready_v3_upload(client, role="product_reference", filename="beverage.png")
     ecommerce_job = client.post(
@@ -530,12 +538,14 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
         "project_created",
         "job_created",
         "job_created",
+        "job_created",
         "job_generated",
         "visual_review",
         "candidate_selected",
     ]
     assert timeline_items[1]["metadata"]["template_id"] == "ecommerce_template"
-    assert timeline_items[2]["metadata"]["template_id"] == "general_template"
+    assert timeline_items[2]["metadata"]["template_id"] == "ecommerce_template"
+    assert timeline_items[3]["metadata"]["template_id"] == "general_template"
 
     project_list = client.get("/api/v3/creative-agent/projects?limit=5")
     assert project_list.status_code == 200

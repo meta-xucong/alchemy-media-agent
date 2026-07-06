@@ -1563,11 +1563,22 @@ function handleV3ScenarioClick(button) {
 function openV3Home({ silent = false } = {}) {
   v3State.view = "home";
   closeV3ProjectSubpage({ silent: true });
+  v3State.currentProject = null;
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  v3State.projectTimeline = [];
+  v3State.activeProjectStep = "compose";
+  v3State.files = [];
+  v3State.uploadedAssets = [];
+  v3State.uploadFingerprints = {};
   renderV3ViewState();
   renderV3ScenarioState();
   renderV3HomeTemplateChooser();
   renderV3Projects();
   renderV3History();
+  renderV3ProjectDetail();
+  renderV3Job(null);
+  window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   if (!v3State.projectsLoaded && !v3State.projectsLoading) {
     loadV3Projects({ silent: true }).catch((error) => {
       if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
@@ -1740,7 +1751,7 @@ function v3HomeTemplateCopy(templateId) {
   if (templateId === "ecommerce_template") {
     return {
       title: "电商套图项目",
-      intro: "适合商品主图、卖点图、详情页配图和上架套图。进入项目后先上传商品图，再写一句需求即可生成。",
+      intro: "适合商品主图、卖点图、详情页配图和上架套图。写一句需求即可生成；有商品图时会优先保持实物一致。",
       goalLabel: "这套商品图想怎么做",
       goalHint: "先写一句目标即可。商品图、参数、关键词和参考风格都可以进项目后再补。",
       button: "创建电商套图项目",
@@ -1845,7 +1856,7 @@ function handleV3HomeTemplateChoice(event) {
 
 function v3ScenarioNotice(scenarioId) {
   if (scenarioId === "ecommerce") {
-    return "电商特调已就绪：上传商品图，写一句需求，就能生成可用套图。";
+    return "电商特调已就绪：写一句需求即可生成套图；上传商品图后会更贴近实物。";
   }
   return "通用创意已就绪：写一句需求，可选上传参考图，就能生成一组图片。";
 }
@@ -1856,12 +1867,12 @@ function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
     return {
       eyebrow: "电商特调",
       title: "电商特调 Agent",
-      intro: "上传商品图，写一句需求，生成可用电商图。",
+      intro: "写一句需求即可生成电商图；上传商品图后会更稳地保持实物一致。",
       promptLabel: "这次想继续做什么",
       promptPlaceholder: "例如：沿用这个项目的清爽高级风格，继续做一组夏季新品电商套图",
       promptHint: "一句话即可，商品信息后面也能补。",
       assetTitle: "上传商品图",
-      assetEmpty: "建议先上传商品图",
+      assetEmpty: "可上传商品图，不传也能生成",
       assetSummaryEmpty: "建议上传商品实拍图；也可以补充风格图、包装图或店铺视觉",
       assetSummaryWithCount: (count) => `${count} 张商品/参考图已加入`,
       brandNameLabel: "品牌或店铺名",
@@ -3829,7 +3840,7 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.value = goal;
       els.v3PromptInput.focus();
     }
-    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "上传商品图并确认这一句需求后，点击生成第一组电商套图。" : "确认这一句需求后，点击生成第一组图片。", "info");
+    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "确认这一句需求后就能生成电商套图；有商品图可在这里补充。" : "确认这一句需求后，点击生成第一组图片。", "info");
   }
 }
 
@@ -4308,9 +4319,7 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   if (!v3ScenarioCanCreate(scenarioId)) {
     throw new Error("这个模板还不能创建新内容。");
   }
-  if (scenarioId === "ecommerce" && !uploadedAssets.length && !v3ProjectHasProductReference(v3State.currentProject)) {
-    throw new Error("请先上传商品图，或在项目里保存一张商品参考图。");
-  }
+  const hasProductReference = scenarioId === "ecommerce" && (uploadedAssets.length > 0 || v3ProjectHasProductReference(v3State.currentProject));
   const brandName = (els.v3BrandNameInput?.value || "").trim();
   const brandTone = (els.v3BrandToneInput?.value || "").trim();
   const generationSettings = v3CurrentGenerationSettings();
@@ -4338,6 +4347,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       requested_image_count: generationSettings.count,
       requested_image_size: generationSettings.size || undefined,
       requested_aspect_label: generationSettings.sizeLabel,
+      has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,
+      ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -4376,6 +4387,8 @@ async function createV3Job() {
         effective_variation_mode: payload.metadata.effective_variation_mode,
         continuation_mode: payload.metadata.continuation_mode,
         variation_mode_source: payload.metadata.variation_mode_source,
+        has_product_reference: payload.metadata.has_product_reference,
+        ecommerce_text_to_image_fallback: payload.metadata.ecommerce_text_to_image_fallback,
       },
     };
     updateV3Notice(copy.planningNotice, "info");

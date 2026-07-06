@@ -529,7 +529,7 @@ The implementation is acceptable only if all answers are yes:
    with the current action?
 6. Are deletes soft and reversible at the storage level?
 7. Does delete/remove affect future context correctly?
-8. Does E-Commerce still require product image evidence?
+8. Does E-Commerce support text-only generation while strengthening consistency when product image evidence exists?
 9. Does General remain policy-neutral?
 10. Does the normal UI hide technical implementation terms?
 11. Do tests cover both successful and adversarial paths?

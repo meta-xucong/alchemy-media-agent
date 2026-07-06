@@ -1026,7 +1026,7 @@ Before moving from V3.9 to V3.10:
 E-Commerce Template is active only through Project Mode
 E-Commerce workspace is visibly different from General Template
 E-Commerce project jobs require project_id
-E-Commerce project jobs require a product image or product reference
+E-Commerce project jobs support text-only generation and use product image/reference evidence as a stronger optional consistency lock
 E-Commerce generated suite outputs are visible and selectable
 General Template remains policy-neutral
 Brand Memory is not updated without confirmation

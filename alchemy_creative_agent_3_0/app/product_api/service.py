@@ -1848,6 +1848,9 @@ class V3ProductApiService:
             "variation_mode_source",
             "variation_mode_label",
             "scenario_parameters",
+            "commerce_profile_present",
+            "ecommerce_text_to_image_fallback",
+            "has_product_reference",
         }
         return {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
 
