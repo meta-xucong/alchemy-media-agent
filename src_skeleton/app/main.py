@@ -334,10 +334,11 @@ def v3_project_outputs_endpoint(
     request: Request,
     limit: int = 60,
     compact: bool = True,
+    project_id: str | None = None,
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact)
+    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact, project_id)
 
 
 @app.post("/api/v3/creative-agent/projects")

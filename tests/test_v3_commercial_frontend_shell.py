@@ -251,7 +251,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert mobile_script.status_code == 200
     assert "limit=1000" not in mobile_script.text
     assert "/project-outputs?limit=18&compact=true" in mobile_script.text
-    assert "/project-outputs?limit=24&compact=true" in mobile_script.text
+    assert "/project-outputs?limit=24&compact=true" not in mobile_script.text
+    assert "project_id=${encodeURIComponent(projectId)}" in mobile_script.text
+    assert "mobileV3SummaryThumbs" in mobile_script.text
+    assert "mobileV3DisplayOutputsForProject" in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text

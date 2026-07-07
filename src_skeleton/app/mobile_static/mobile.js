@@ -2833,8 +2833,10 @@ function renderMobileV3ProjectCards() {
   projects.forEach((project) => {
     const outputs = projectOutputs.get(project.project_id) || [];
     const latest = outputs[0] || null;
-    const thumb = mobileV3ThumbUrl(latest);
-    const stackCount = Math.min(Math.max(Number(outputs.length || 0), 1), 5);
+    const summaryThumbs = mobileV3SummaryThumbs(project);
+    const thumb = mobileV3ThumbUrl(latest) || summaryThumbs[0] || "";
+    const visualCount = outputs.length || summaryThumbs.length || Number(project.job_count || 0);
+    const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
     card.dataset.mobileV3ProjectId = project.project_id;
@@ -2846,7 +2848,7 @@ function renderMobileV3ProjectCards() {
       <div class="v3-mobile-project-copy">
         <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>
         <span>${escapeHtml(mobileV3ProjectGoal(project))}</span>
-        <small>${outputs.length ? `${outputs.length} 张图片 · ${formatDate(latest?.created_at || project.updated_at)}` : `还未出图 · ${formatDate(project.created_at || project.updated_at)}`}</small>
+        <small>${visualCount ? `${visualCount} 张图片 · ${formatDate(latest?.created_at || project.updated_at)}` : `还未出图 · ${formatDate(project.created_at || project.updated_at)}`}</small>
       </div>
       <button class="button compact secondary" type="button" data-mobile-v3-open-project="${escapeHtml(project.project_id)}">查看图片</button>
     `;
@@ -2916,12 +2918,17 @@ function openMobileV3ProjectGallery(project) {
   mobileV3State.activeGalleryProjectId = project?.project_id || "";
   renderMobileV3ProjectGallery(project);
   openMobileSurface("v3-gallery", document.querySelector("#mobileV3ProjectGrid"));
+  loadMobileV3ProjectOutputs(project.project_id, { limit: 80 })
+    .then(() => {
+      if (mobileV3State.activeGalleryProjectId === project.project_id) renderMobileV3ProjectGallery(project);
+    })
+    .catch(() => {});
 }
 
 function renderMobileV3ProjectGallery(project) {
   const grid = document.querySelector("#mobileV3GalleryGrid");
   if (!grid) return;
-  const outputs = mobileV3OutputsForProject(project?.project_id);
+  const outputs = mobileV3DisplayOutputsForProject(project);
   setText("#mobileV3GalleryTitle", mobileV3ProjectTitle(project));
   setText("#mobileV3GalleryGoal", mobileV3ProjectGoal(project));
   setText("#mobileV3GalleryCount", `${outputs.length} 张`);
@@ -2982,13 +2989,19 @@ async function refreshMobileV3ProjectDetail(projectId) {
   const [projectPayload, timelinePayload, outputsPayload] = await Promise.all([
     mobileV3Request(`/projects/${encodeURIComponent(projectId)}`),
     mobileV3Request(`/projects/${encodeURIComponent(projectId)}/timeline`),
-    mobileV3Request("/project-outputs?limit=24&compact=true"),
+    mobileV3Request(`/project-outputs?limit=80&compact=true&project_id=${encodeURIComponent(projectId)}`),
   ]);
   const project = projectPayload.project || projectPayload;
   mobileV3State.currentProject = project;
   mobileV3State.currentTimeline = Array.isArray(timelinePayload.items) ? timelinePayload.items : Array.isArray(timelinePayload.timeline) ? timelinePayload.timeline : [];
-  mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : mobileV3State.outputs;
+  const scopedOutputs = Array.isArray(outputsPayload.items)
+    ? outputsPayload.items
+    : Array.isArray(timelinePayload?.metadata?.project_outputs)
+      ? timelinePayload.metadata.project_outputs
+      : [];
+  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs);
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
+  persistMobileV3Caches();
   renderMobileV3ProjectCards();
   renderMobileV3ProjectMeta(project);
   renderMobileV3ProjectSnapshot(project);
@@ -3000,7 +3013,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
 function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const grid = document.querySelector("#mobileV3OutputGrid");
   if (!grid || !project?.project_id) return;
-  const outputs = mobileV3OutputsForProject(project.project_id);
+  const outputs = mobileV3DisplayOutputsForProject(project);
   setText("#mobileV3OutputCount", `${outputs.length} 张`);
   grid.innerHTML = "";
   grid.classList.toggle("empty-v2-list", outputs.length === 0);
@@ -3125,7 +3138,8 @@ function renderMobileV3Timeline(items = mobileV3State.currentTimeline) {
 function handleMobileV3GalleryPreviewClick(event) {
   const button = event.target.closest("[data-mobile-v3-gallery-preview]");
   if (!button) return;
-  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
+  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview)
+    || mobileV3SummaryThumbOutputs(mobileV3State.currentProject).find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
   if (!item) return;
   openImageLightbox({
     id: mobileV3OutputId(item),
@@ -3155,6 +3169,51 @@ function mobileV3OutputsByProject() {
 
 function mobileV3OutputsForProject(projectId) {
   return mobileV3OutputsByProject().get(projectId) || [];
+}
+
+async function loadMobileV3ProjectOutputs(projectId, { limit = 80 } = {}) {
+  if (!projectId) return [];
+  const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
+  const outputs = Array.isArray(payload.items) ? payload.items : [];
+  mobileV3MergeProjectOutputs(projectId, outputs);
+  persistMobileV3Caches();
+  renderMobileV3ProjectCards();
+  return outputs;
+}
+
+function mobileV3MergeProjectOutputs(projectId, outputs = []) {
+  if (!projectId || !Array.isArray(outputs)) return;
+  const nextOutputs = outputs.filter(Boolean);
+  const rest = (mobileV3State.outputs || []).filter((item) => {
+    const itemProjectId = item.project_id || item.metadata?.project_id;
+    return itemProjectId !== projectId;
+  });
+  mobileV3State.outputs = [...nextOutputs, ...rest];
+}
+
+function mobileV3DisplayOutputsForProject(project = mobileV3State.currentProject) {
+  if (!project?.project_id) return [];
+  const outputs = mobileV3OutputsForProject(project.project_id);
+  return outputs.length ? outputs : mobileV3SummaryThumbOutputs(project);
+}
+
+function mobileV3SummaryThumbs(project) {
+  const direct = Array.isArray(project?.latest_thumbnail_urls) ? project.latest_thumbnail_urls : [];
+  const memory = Array.isArray(project?.memory_summary?.latest_thumbnail_urls) ? project.memory_summary.latest_thumbnail_urls : [];
+  return [...direct, ...memory].map((url) => mobileV3MediaUrl(url)).filter(Boolean);
+}
+
+function mobileV3SummaryThumbOutputs(project) {
+  return mobileV3SummaryThumbs(project).map((url, index) => ({
+    output_id: `summary-thumb-${project?.project_id || "project"}-${index}`,
+    project_id: project?.project_id || "",
+    thumbnail_url: url,
+    preview_url: url,
+    download_url: url,
+    summary: "项目图片",
+    created_at: project?.updated_at || project?.created_at || "",
+    metadata: { summary_only: true },
+  }));
 }
 
 function mobileV3ProjectTitle(project) {

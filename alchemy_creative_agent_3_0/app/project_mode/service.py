@@ -101,9 +101,35 @@ class V3ProjectModeService:
             metadata=self._metadata(),
         )
 
-    def list_project_outputs(self, limit: int = 60, owner_user_id: int | None = None, compact: bool = False) -> dict[str, Any]:
+    def list_project_outputs(
+        self,
+        limit: int = 60,
+        owner_user_id: int | None = None,
+        compact: bool = False,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         items: list[dict[str, Any]] = []
+        if project_id:
+            project = self._require_project(project_id)
+            if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id):
+                self._reconcile_project_outputs(project)
+                items = self._project_output_items(
+                    project,
+                    limit=bounded_limit,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                )
+            items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+            return {
+                "api_namespace": API_NAMESPACE,
+                "route": f"{API_NAMESPACE}/project-outputs",
+                "project_id": project_id,
+                "total": len(items),
+                "limit": bounded_limit,
+                "items": items,
+                "metadata": {**self._metadata(), "compact": bool(compact), "project_scoped": True},
+            }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
         for project in self.project_store.list_projects(limit=project_scan_limit):
             if project.status == ProjectStatus.ARCHIVED:
