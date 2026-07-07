@@ -257,6 +257,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "async function loadV3Projects" in script.text
     assert "async function loadV3ProjectOutputs" in script.text
     assert "/project-outputs?limit=80&compact=true" in script.text
+    assert "function v3RecoveredLatestVisibleProjectOutputs" in script.text
+    assert "recovered_without_exact_job_match" in script.text
+    assert "if (restored && v3JobHasVisibleImages(restored)) return restored;" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text
     assert "v3ReviewRank" in script.text

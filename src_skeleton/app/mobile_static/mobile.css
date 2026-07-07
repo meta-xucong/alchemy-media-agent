@@ -4851,6 +4851,29 @@ body[data-active-module="v3"] .hero-actions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.v3-mobile-action-grid {
+  grid-template-columns: 1fr;
+}
+
+.v3-mobile-primary-entry {
+  border-color: rgba(98, 125, 72, 0.56);
+  background:
+    linear-gradient(180deg, rgba(153, 180, 123, 0.96), rgba(109, 138, 79, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 12px 24px rgba(74, 90, 53, 0.24);
+}
+
+.v3-mobile-primary-entry span {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.v3-mobile-primary-entry strong {
+  color: #fff;
+  font-size: 16px;
+  line-height: 1.28;
+}
+
 .v3-mobile-mode-grid .mobile-entry-card.active {
   border-color: rgba(116, 130, 105, 0.5);
   background: rgba(255, 255, 252, 0.92);
@@ -4862,6 +4885,176 @@ body[data-active-module="v3"] .hero-actions {
   justify-content: space-between;
   gap: 10px;
   padding-top: 4px;
+}
+
+.v3-mobile-project-meta,
+.v3-mobile-project-snapshot,
+.v3-mobile-reference-board,
+.v3-mobile-timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.v3-mobile-project-meta {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.v3-mobile-project-meta-row {
+  display: none;
+}
+
+.v3-mobile-project-meta-row strong,
+.v3-mobile-project-meta-row span {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.v3-mobile-style-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v3-mobile-style-chips span {
+  padding: 6px 10px;
+  border: 1px solid rgba(24, 25, 21, 0.1);
+  border-radius: 999px;
+  background: rgba(250, 248, 241, 0.8);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.v3-mobile-project-snapshot {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.v3-mobile-snapshot-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  min-height: 118px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.v3-mobile-snapshot-card span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.v3-mobile-snapshot-card strong {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.28;
+}
+
+.v3-mobile-snapshot-card small {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.v3-mobile-reference-board {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.v3-mobile-reference-tile {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.v3-mobile-reference-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(250, 248, 241, 0.86);
+  display: grid;
+  place-items: center;
+}
+
+.v3-mobile-reference-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.v3-mobile-reference-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.v3-mobile-reference-copy strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.v3-mobile-reference-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.v3-mobile-timeline-details {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.v3-mobile-timeline-details summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.v3-mobile-timeline-details summary span {
+  font-weight: 700;
+}
+
+.v3-mobile-timeline-details summary small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.v3-mobile-timeline {
+  margin-top: 8px;
+}
+
+.v3-mobile-timeline-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(24, 25, 21, 0.08);
+}
+
+.v3-mobile-timeline-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.v3-mobile-timeline-row strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.v3-mobile-timeline-row span,
+.v3-mobile-timeline-row small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .v3-mobile-progress .run-progress-steps span.active {
@@ -4971,5 +5164,10 @@ body[data-active-module="v3"] .hero-actions {
   .v3-mobile-project-preview,
   .v3-mobile-output-preview {
     width: 96px;
+  }
+
+  .v3-mobile-project-snapshot,
+  .v3-mobile-reference-board {
+    grid-template-columns: 1fr;
   }
 }

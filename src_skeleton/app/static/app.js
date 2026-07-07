@@ -2089,6 +2089,14 @@ async function loadV3History(options = {}) {
 }
 
 async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
+  if (v3State.imageHistoryLoading && force) {
+    syncV3ProjectOutputsFromList(v3State.imageHistory || [], v3State.currentProject?.project_id);
+    renderV3ProjectOutputBoard();
+    renderV3ProjectSnapshot();
+    renderV3StepCards();
+    renderV3ProjectNextActions();
+    return;
+  }
   if (v3State.imageHistoryLoading || (v3State.imageHistoryLoaded && !force)) {
     if (v3State.currentProject?.project_id && Array.isArray(v3State.imageHistory)) {
       syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
@@ -2674,6 +2682,31 @@ function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
     metadata: {
       ...(baseJob?.metadata || {}),
       recovered_from_project_outputs: true,
+      project_outputs: outputs,
+    },
+  };
+}
+
+function v3RecoveredLatestVisibleProjectOutputs(project = v3State.currentProject, baseJob = v3State.currentJob) {
+  const outputs = v3StoredProjectOutputItems(project).filter((item) => v3OutputVisibleInProject(item, project));
+  if (!outputs.length) return null;
+  const inferredJobId =
+    outputs.find((item) => item?.job_id || item?.metadata?.job_id || item?.related_job_id)?.job_id ||
+    outputs.find((item) => item?.metadata?.job_id)?.metadata?.job_id ||
+    outputs.find((item) => item?.related_job_id)?.related_job_id ||
+    v3LatestProjectJobId(project) ||
+    baseJob?.job_id ||
+    "";
+  return {
+    ...(baseJob || {}),
+    job_id: inferredJobId,
+    status: "generated",
+    candidates: outputs,
+    asset_series: outputs,
+    metadata: {
+      ...(baseJob?.metadata || {}),
+      recovered_from_project_outputs: true,
+      recovered_without_exact_job_match: true,
       project_outputs: outputs,
     },
   };
@@ -3981,6 +4014,12 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
     v3State.selectedResult = null;
     return recoveredFromOutputs;
   }
+  const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(project, v3State.currentJob);
+  if (recoveredLatestOutputs) {
+    v3State.currentJob = recoveredLatestOutputs;
+    v3State.selectedResult = null;
+    return recoveredLatestOutputs;
+  }
   try {
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
     if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
@@ -3993,6 +4032,12 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
       v3State.currentJob = recovered;
       v3State.selectedResult = null;
       return recovered;
+    }
+    const recoveredLatest = v3RecoveredLatestVisibleProjectOutputs(project, job);
+    if (recoveredLatest) {
+      v3State.currentJob = recoveredLatest;
+      v3State.selectedResult = null;
+      return recoveredLatest;
     }
   } catch (error) {
     if (!silent) showGlobalToast(`V3 project images could not be restored: ${friendlyError(error)}`, "warning");
@@ -4480,6 +4525,11 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
+      const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
+      if (recoveredLatestOutputs && v3JobHasVisibleImages(recoveredLatestOutputs)) {
+        v3State.currentJob = recoveredLatestOutputs;
+        return recoveredLatestOutputs;
+      }
     } catch (error) {
       lastError = error;
     }
@@ -4514,8 +4564,14 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
+      const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
+      if (recoveredLatestOutputs && v3JobHasVisibleImages(recoveredLatestOutputs)) {
+        v3State.currentJob = recoveredLatestOutputs;
+        return recoveredLatestOutputs;
+      }
       const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
       if (restored?.job_id === jobId && v3JobHasVisibleImages(restored)) return restored;
+      if (restored && v3JobHasVisibleImages(restored)) return restored;
     } catch (error) {
       lastError = error;
     }
@@ -4531,6 +4587,8 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError) {
     await loadV3ProjectOutputs({ silent: true, force: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasVisibleImages(recoveredFromOutputs)) return recoveredFromOutputs;
+    const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
+    if (recoveredLatestOutputs && v3JobHasVisibleImages(recoveredLatestOutputs)) return recoveredLatestOutputs;
   } catch (error) {
     lastError = error;
   }
