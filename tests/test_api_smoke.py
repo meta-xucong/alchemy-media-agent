@@ -2274,11 +2274,12 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260623-asset-append-v1" in h5.text
+    assert "20260707-v3-mobile-h5" in h5.text
     assert h5.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
     assert "V2 Agent" in h5.text
+    assert "V3 creative OS" in h5.text
     assert "Alchemy Lab" in h5.text
     assert "<small>实验室</small>" not in h5.text
     assert 'id="labTab"' in h5.text

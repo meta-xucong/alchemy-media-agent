@@ -136,7 +136,15 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
 
     h5 = client.get("/h5")
     assert h5.status_code == 200
-    assert 'href="/creative-agent-v3"' in h5.text
+    assert 'href="/creative-agent-v3"' not in h5.text
+    assert 'data-tab="v3"' in h5.text
+    assert 'id="v3Tab"' in h5.text
+    assert 'id="mobileV3GoalInput"' in h5.text
+    assert 'id="mobileV3ProjectGrid"' in h5.text
+    assert 'id="mobileV3GenerateBtn"' in h5.text
+    assert 'data-mobile-open="v3-compose"' in h5.text
+    assert 'data-mobile-v3-mode="auto"' in h5.text
+    assert 'data-mobile-v3-size="1024x1536"' in h5.text
     assert "v3-link-tab" in h5.text
     assert "V3 creative OS" in h5.text
     assert h5.text.find("v3-link-tab") < h5.text.find("lab-tab")

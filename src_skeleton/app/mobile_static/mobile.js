@@ -579,6 +579,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   hydrateCachedVeyraAccount();
   bindControls();
   setupH5AdvancedPanels();
+  setupMobileV3Adapter();
   restoreInitialModuleRoute();
   const hadVeyraTicket = new URLSearchParams(window.location.search).has("ticket");
   try {
@@ -993,6 +994,9 @@ function switchTab(tabName) {
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
   } else {
     renderHeroHistory(state.historyItems, { source: "v1" });
+  }
+  if (tabName === "v3") {
+    loadMobileV3Projects({ silent: true }).catch((error) => updateMobileV3Status(`V3 项目加载失败：${friendlyError(error)}`));
   }
 }
 
@@ -2640,6 +2644,406 @@ function createMobileSheet({ id, title, eyebrow, footerLabel, targets }) {
   });
   els.mobileSheetLayer.appendChild(sheet);
   return sheet;
+}
+
+const mobileV3ApiBase = window.ALCHEMY_V3_API_BASE || `${window.location.origin}/api/v3/creative-agent`;
+const mobileV3State = {
+  initialized: false,
+  loaded: false,
+  loading: false,
+  projects: [],
+  outputs: [],
+  selectedTemplate: "general_template",
+  currentProject: null,
+  activeGalleryProjectId: "",
+};
+
+function setupMobileV3Adapter() {
+  const tab = document.querySelector("#v3Tab");
+  if (!tab || mobileV3State.initialized) return;
+  mobileV3State.initialized = true;
+  normalizeMobileV3HomeSurface();
+  ensureMobileV3GallerySurface();
+  createMobileSheet({
+    id: "v3-gallery",
+    title: "项目图片",
+    eyebrow: "V3 Project Gallery",
+    footerLabel: "关闭",
+    targets: [document.querySelector("#mobileV3ProjectGalleryPanel")],
+  });
+  createMobileView({
+    id: "v3-project-detail",
+    title: "项目主页",
+    eyebrow: "V3 creative OS",
+    footerLabel: "返回最近项目",
+    targets: [document.querySelector("#mobileV3ProjectDetail")],
+  });
+  createMobileView({
+    id: "v3-compose",
+    title: "继续项目",
+    eyebrow: "V3 creative OS",
+    footerLabel: "返回项目主页",
+    targets: [document.querySelector("#mobileV3ComposePanel")],
+  });
+  createMobileSheet({
+    id: "v3-workflow",
+    title: "V3 做了什么",
+    eyebrow: "Workflow",
+    footerLabel: "知道了",
+    targets: [document.querySelector("#mobileV3WorkflowPanel")],
+  });
+  tab.addEventListener("click", handleMobileV3Click);
+}
+
+function normalizeMobileV3HomeSurface() {
+  const grid = document.querySelector(".v3-mobile-template-grid");
+  if (grid) {
+    grid.innerHTML = mobileV3TemplateCards().map((template) => {
+      const canCreate = Boolean(template.project_can_create_jobs);
+      const active = template.template_id === mobileV3State.selectedTemplate && canCreate;
+      return `
+        <button class="lab-module-card v3-mobile-template-card${active ? " active" : ""}${canCreate ? "" : " locked"}" data-mobile-v3-template="${escapeHtml(template.template_id)}" type="button" ${canCreate ? "" : "disabled"}>
+          <span>${escapeHtml(template.display_name)}</span>
+          <strong>${escapeHtml(canCreate ? template.short_title : "稍后开放")}</strong>
+          <small>${escapeHtml(template.short_description)}</small>
+        </button>
+      `;
+    }).join("");
+  }
+  setText(".v3-mobile-home-panel h3", "项目式生图");
+  setText(".v3-mobile-home-panel .section-subcopy", "先选模板，再创建项目；后续每次生成都会回到同一个项目里。");
+  setText(".v3-mobile-goal-field > span", "这个项目想做什么");
+  setText(".v3-mobile-projects-panel h3", "最近项目");
+  setText(".v3-mobile-projects-panel .section-subcopy", "按项目展示最近图片。点项目先看整组图片，再进入项目主页继续工作。");
+  setText("#mobileV3CreateProjectBtn", "创建通用创意项目");
+  setText("#mobileV3RefreshBtn", "刷新项目");
+  const goalInput = document.querySelector("#mobileV3GoalInput");
+  if (goalInput) {
+    goalInput.rows = 3;
+    goalInput.placeholder = "例如：做一组清爽高级的夏季饮料宣传图，适合小红书封面";
+  }
+}
+
+function mobileV3TemplateCards() {
+  return [
+    { template_id: "general_template", display_name: "通用模板", short_title: "海报 / 社媒", short_description: "封面、活动图、主视觉", project_can_create_jobs: true },
+    { template_id: "ecommerce_template", display_name: "电商模板", short_title: "商品套图", short_description: "商品图、详情图、场景图", project_can_create_jobs: true },
+    { template_id: "photographer_template", display_name: "摄影师模板", short_title: "稍后开放", short_description: "写真、镜头、布光", project_can_create_jobs: false },
+    { template_id: "brand_ip_template", display_name: "品牌 IP", short_title: "稍后开放", short_description: "长期风格资产", project_can_create_jobs: false },
+    { template_id: "new_media_template", display_name: "新媒体模板", short_title: "稍后开放", short_description: "笔记、封面、栏目图", project_can_create_jobs: false },
+    { template_id: "private_domain_template", display_name: "私域模板", short_title: "稍后开放", short_description: "朋友圈、社群、海报", project_can_create_jobs: false },
+  ];
+}
+
+function ensureMobileV3GallerySurface() {
+  if (document.querySelector("#mobileV3ProjectGalleryPanel")) return;
+  const panel = document.createElement("section");
+  panel.id = "mobileV3ProjectGalleryPanel";
+  panel.className = "panel flow-section v3-mobile-gallery-panel";
+  panel.innerHTML = `
+    <div class="v3-mobile-gallery-summary">
+      <strong id="mobileV3GalleryTitle">项目图片</strong>
+      <span id="mobileV3GalleryCount">0 张</span>
+    </div>
+    <p id="mobileV3GalleryGoal" class="section-subcopy">这个项目生成过的图片会显示在这里。</p>
+    <div id="mobileV3GalleryGrid" class="v3-mobile-gallery-grid empty-v2-list" aria-live="polite"></div>
+    <button id="mobileV3OpenProjectBtn" class="button primary full-width" type="button">进入项目主页</button>
+  `;
+  document.querySelector("#v3Tab .v3-mobile-workbench")?.appendChild(panel);
+}
+
+async function mobileV3Request(path, options = {}) {
+  return await request(`${mobileV3ApiBase}${path}`, options);
+}
+
+async function loadMobileV3Projects({ silent = true, force = false } = {}) {
+  if (mobileV3State.loading) return;
+  if (mobileV3State.loaded && !force) {
+    renderMobileV3ProjectCards();
+    return;
+  }
+  mobileV3State.loading = true;
+  updateMobileV3Status("同步中");
+  try {
+    const [projectsPayload, outputsPayload] = await Promise.all([
+      mobileV3Request("/projects?limit=12"),
+      mobileV3Request("/project-outputs?limit=48&compact=true"),
+    ]);
+    mobileV3State.projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
+    mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
+    mobileV3State.loaded = true;
+    renderMobileV3ProjectCards();
+    if (!silent) updateMobileV3Status(`${mobileV3State.projects.length} 个项目`);
+  } catch (error) {
+    if (!silent) updateMobileV3Status(`加载失败：${friendlyError(error)}`);
+    throw error;
+  } finally {
+    mobileV3State.loading = false;
+    updateMobileV3Status(`${mobileV3State.projects.length} 个项目`);
+  }
+}
+
+function renderMobileV3ProjectCards() {
+  const grid = document.querySelector("#mobileV3ProjectGrid");
+  if (!grid) return;
+  const projectOutputs = mobileV3OutputsByProject();
+  const projects = mobileV3State.projects || [];
+  setText("#mobileV3ProjectCount", `${projects.length} 个项目`);
+  grid.innerHTML = "";
+  grid.classList.toggle("empty-v2-list", projects.length === 0);
+  if (!projects.length) {
+    grid.textContent = "还没有 V3 项目，先写一句需求创建。";
+    return;
+  }
+  projects.forEach((project) => {
+    const outputs = projectOutputs.get(project.project_id) || [];
+    const latest = outputs[0] || null;
+    const thumb = mobileV3ThumbUrl(latest);
+    const stackCount = Math.min(Math.max(Number(outputs.length || 0), 1), 5);
+    const card = document.createElement("article");
+    card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
+    card.dataset.mobileV3ProjectId = project.project_id;
+    card.innerHTML = `
+      <button class="v3-mobile-project-preview" type="button" data-mobile-v3-open-project="${escapeHtml(project.project_id)}" aria-label="查看项目图片">
+        <span class="v3-mobile-history-stack" aria-hidden="true">${Array.from({ length: stackCount }, () => "<span></span>").join("")}</span>
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(mobileV3ProjectTitle(project))}" loading="lazy" decoding="async" />` : `<span class="v3-mobile-empty-thumb">新项目</span>`}
+      </button>
+      <div class="v3-mobile-project-copy">
+        <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>
+        <span>${escapeHtml(mobileV3ProjectGoal(project))}</span>
+        <small>${outputs.length ? `${outputs.length} 张图片 · ${formatDate(latest?.created_at || project.updated_at)}` : `还未出图 · ${formatDate(project.created_at || project.updated_at)}`}</small>
+      </div>
+      <button class="button compact secondary" type="button" data-mobile-v3-open-project="${escapeHtml(project.project_id)}">查看图片</button>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+function handleMobileV3Click(event) {
+  const templateButton = event.target.closest("[data-mobile-v3-template]");
+  if (templateButton) {
+    if (templateButton.disabled) {
+      updateMobileV3Status("这个模板稍后开放，当前先用可用模板。");
+      return;
+    }
+    document.querySelectorAll("[data-mobile-v3-template]").forEach((item) => item.classList.remove("active"));
+    templateButton.classList.add("active");
+    mobileV3State.selectedTemplate = templateButton.dataset.mobileV3Template || "general_template";
+    setText("#mobileV3CreateProjectBtn", mobileV3State.selectedTemplate === "ecommerce_template" ? "创建电商套图项目" : "创建通用创意项目");
+    return;
+  }
+  const openProjectButton = event.target.closest("[data-mobile-v3-open-project]");
+  if (openProjectButton) {
+    const project = mobileV3State.projects.find((item) => item.project_id === openProjectButton.dataset.mobileV3OpenProject);
+    if (project) openMobileV3ProjectGallery(project);
+    return;
+  }
+  if (event.target.closest("#mobileV3RefreshBtn")) {
+    loadMobileV3Projects({ silent: false, force: true }).catch((error) => updateMobileV3Status(`刷新失败：${friendlyError(error)}`));
+    return;
+  }
+  if (event.target.closest("#mobileV3CreateProjectBtn")) {
+    createMobileV3ProjectFromHome();
+    return;
+  }
+}
+
+async function createMobileV3ProjectFromHome() {
+  const goalInput = document.querySelector("#mobileV3GoalInput");
+  const goal = (goalInput?.value || "").trim();
+  if (!goal) {
+    updateMobileV3Status("先写一句这个项目想做什么。");
+    goalInput?.focus();
+    return;
+  }
+  updateMobileV3Status("正在创建项目");
+  try {
+    const payload = await mobileV3Request("/projects", {
+      method: "POST",
+      body: {
+        user_goal: goal,
+        title: goal.slice(0, 32),
+        primary_template_id: mobileV3State.selectedTemplate || "general_template",
+      },
+    });
+    const project = payload.project || payload;
+    mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
+    mobileV3State.loaded = true;
+    renderMobileV3ProjectCards();
+    openMobileV3ProjectDetail(project, { openComposer: true });
+  } catch (error) {
+    updateMobileV3Status(`创建失败：${friendlyError(error)}`);
+  }
+}
+
+function openMobileV3ProjectGallery(project) {
+  mobileV3State.currentProject = project;
+  mobileV3State.activeGalleryProjectId = project?.project_id || "";
+  renderMobileV3ProjectGallery(project);
+  openMobileSurface("v3-gallery", document.querySelector("#mobileV3ProjectGrid"));
+}
+
+function renderMobileV3ProjectGallery(project) {
+  const grid = document.querySelector("#mobileV3GalleryGrid");
+  if (!grid) return;
+  const outputs = mobileV3OutputsForProject(project?.project_id);
+  setText("#mobileV3GalleryTitle", mobileV3ProjectTitle(project));
+  setText("#mobileV3GalleryGoal", mobileV3ProjectGoal(project));
+  setText("#mobileV3GalleryCount", `${outputs.length} 张`);
+  grid.innerHTML = "";
+  grid.classList.toggle("empty-v2-list", outputs.length === 0);
+  if (!outputs.length) {
+    grid.textContent = "这个项目还没有图片，进入项目主页后可以生成第一组。";
+  } else {
+    outputs.forEach((item, index) => {
+      const thumb = mobileV3ThumbUrl(item);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "v3-mobile-gallery-image";
+      button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
+      button.innerHTML = thumb ? `<img src="${escapeHtml(thumb)}" alt="项目图片 ${index + 1}" loading="lazy" decoding="async" />` : `<span>图片 ${index + 1}</span>`;
+      grid.appendChild(button);
+    });
+  }
+  const openButton = document.querySelector("#mobileV3OpenProjectBtn");
+  if (openButton && openButton.dataset.mobileV3Bound !== "true") {
+    openButton.dataset.mobileV3Bound = "true";
+    openButton.addEventListener("click", () => {
+      const projectId = mobileV3State.activeGalleryProjectId;
+      const target = mobileV3State.projects.find((item) => item.project_id === projectId) || mobileV3State.currentProject;
+      if (target) openMobileV3ProjectDetail(target);
+    });
+  }
+  if (grid.dataset.mobileV3Bound !== "true") {
+    grid.dataset.mobileV3Bound = "true";
+    grid.addEventListener("click", handleMobileV3GalleryPreviewClick);
+  }
+}
+
+function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
+  mobileV3State.currentProject = project;
+  setText("#mobileV3ProjectTitle", mobileV3ProjectTitle(project));
+  setText("#mobileV3ProjectGoal", mobileV3ProjectGoal(project));
+  setText("#mobileV3BackToProjectsBtn", "返回最近项目");
+  setText("#mobileV3ProjectDetail [data-mobile-open=\"v3-compose\"] span", "继续项目");
+  setText("#mobileV3ComposeSummary", "进入工作台继续生成");
+  renderMobileV3ProjectOutputs(project);
+  openMobileSurface("v3-project-detail", document.querySelector("#mobileV3ProjectGrid"));
+  const promptInput = document.querySelector("#mobileV3PromptInput");
+  if (promptInput && !promptInput.value.trim()) promptInput.value = mobileV3ProjectGoal(project);
+  if (openComposer) window.setTimeout(() => openMobileSurface("v3-compose", document.querySelector("#mobileV3ProjectDetail")), 160);
+}
+
+function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
+  const grid = document.querySelector("#mobileV3OutputGrid");
+  if (!grid || !project?.project_id) return;
+  const outputs = mobileV3OutputsForProject(project.project_id);
+  setText("#mobileV3OutputCount", `${outputs.length} 张`);
+  grid.innerHTML = "";
+  grid.classList.toggle("empty-v2-list", outputs.length === 0);
+  if (!outputs.length) {
+    grid.textContent = "还没有图片，点“继续项目”生成第一组。";
+    return;
+  }
+  outputs.forEach((item, index) => {
+    const thumb = mobileV3ThumbUrl(item);
+    const card = document.createElement("article");
+    card.className = "v3-mobile-output-card";
+    card.innerHTML = `
+      <button class="v3-mobile-output-preview" type="button" data-mobile-v3-gallery-preview="${escapeHtml(mobileV3OutputId(item))}">
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="项目图片 ${index + 1}" loading="lazy" decoding="async" />` : `<span>图片</span>`}
+      </button>
+      <div class="v3-mobile-output-copy">
+        <strong>项目图片 ${index + 1}</strong>
+        <span>${escapeHtml(mobileV3OutputSummary(item))}</span>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+function handleMobileV3GalleryPreviewClick(event) {
+  const button = event.target.closest("[data-mobile-v3-gallery-preview]");
+  if (!button) return;
+  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
+  if (!item) return;
+  openImageLightbox({
+    id: mobileV3OutputId(item),
+    title: "V3 项目图片",
+    url: mobileV3FullUrl(item),
+    downloadUrl: mobileV3DownloadUrl(item),
+    thumbnailUrl: mobileV3ThumbUrl(item),
+    previewUrl: mobileV3PreviewUrl(item),
+    format: item?.metadata?.format || "png",
+    meta: mobileV3OutputSummary(item),
+    promptText: item?.metadata?.final_prompt || item?.prompt || "",
+  });
+}
+
+function mobileV3OutputsByProject() {
+  const map = new Map();
+  (mobileV3State.outputs || []).forEach((item) => {
+    const projectId = item.project_id || item.metadata?.project_id;
+    if (!projectId) return;
+    const list = map.get(projectId) || [];
+    list.push(item);
+    map.set(projectId, list);
+  });
+  for (const list of map.values()) list.sort((a, b) => new Date(b.created_at || b.updated_at || 0) - new Date(a.created_at || a.updated_at || 0));
+  return map;
+}
+
+function mobileV3OutputsForProject(projectId) {
+  return mobileV3OutputsByProject().get(projectId) || [];
+}
+
+function mobileV3ProjectTitle(project) {
+  return project?.title || project?.short_summary || mobileV3ProjectGoal(project).slice(0, 32) || "V3 项目";
+}
+
+function mobileV3ProjectGoal(project) {
+  return project?.user_goal || project?.goal || project?.short_summary || "继续生成项目图片";
+}
+
+function mobileV3OutputId(item) {
+  return item?.output_id || item?.id || item?.asset_id || item?.candidate_id || "";
+}
+
+function mobileV3OutputSummary(item) {
+  return item?.summary || item?.user_input || item?.metadata?.user_input || item?.metadata?.prompt_summary || "可继续使用";
+}
+
+function mobileV3MediaUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (value.startsWith("/api/v3/creative-agent")) return `${mobileV3ApiBase}${value.slice("/api/v3/creative-agent".length)}`;
+  return value;
+}
+
+function mobileV3ThumbUrl(item) {
+  return mobileV3MediaUrl(item?.thumbnail_url || item?.metadata?.thumbnail_url || item?.preview_url || item?.download_url || "");
+}
+
+function mobileV3PreviewUrl(item) {
+  return mobileV3MediaUrl(item?.preview_url || item?.metadata?.preview_url || item?.thumbnail_url || item?.download_url || "");
+}
+
+function mobileV3FullUrl(item) {
+  return mobileV3MediaUrl(item?.download_url || item?.metadata?.download_url || item?.preview_url || item?.thumbnail_url || "");
+}
+
+function mobileV3DownloadUrl(item) {
+  return mobileV3MediaUrl(item?.download_url || item?.metadata?.download_url || mobileV3FullUrl(item));
+}
+
+function updateMobileV3Status(message) {
+  setText("#mobileV3State", message);
+  setText("#mobileV3Notice", message);
+}
+
+function setText(selector, value) {
+  const node = document.querySelector(selector);
+  if (node) node.textContent = value;
 }
 
 function openMobileSurface(id, opener = null) {
