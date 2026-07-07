@@ -300,7 +300,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         retry_attempt = self._retry_attempt(request)
         if not outputs:
             raise ValueError("V3 production provider returned no image outputs.")
-        for index, output in enumerate(outputs[:1]):
+        for index, output in enumerate(outputs):
             encoded = output.get("b64_json")
             if not encoded:
                 warnings.append("Provider output did not include image bytes and was skipped.")

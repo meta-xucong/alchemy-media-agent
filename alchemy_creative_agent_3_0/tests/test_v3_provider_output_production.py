@@ -294,6 +294,8 @@ def test_production_provider_respects_requested_size_without_multiplying_group_c
             model="test-image-model",
             outputs=[
                 {"b64_json": _png_base64(96, 72), "mime_type": "image/png", "format": "png", "width": 96, "height": 72},
+                {"b64_json": _png_base64(96, 72), "mime_type": "image/png", "format": "png", "width": 96, "height": 72},
+                {"b64_json": _png_base64(96, 72), "mime_type": "image/png", "format": "png", "width": 96, "height": 72},
             ],
         )
 
@@ -308,7 +310,9 @@ def test_production_provider_respects_requested_size_without_multiplying_group_c
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
 
-    assert len(response.candidates) == 1
+    assert len(response.candidates) == 3
+    records = provider.output_store.list_by_job("job_v3_prod")
+    assert len(records) == 3
     assert response.provider_metadata["requested_image_count"] == 3
     assert response.provider_metadata["requested_image_size"] == "1536x1024"
 
