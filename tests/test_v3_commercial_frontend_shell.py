@@ -218,6 +218,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-project-output-board" in styles.text
     assert ".v3-useful-reference-board" in styles.text
     assert ".v3-output-actions" in styles.text
+    assert ".v3-process-output-details" in styles.text
+    assert ".v3-process-output-grid" in styles.text
+    assert '.v3-workspace-view[data-v3-opening="true"]' in styles.text
     assert ".v3-project-output-tile.selected" in styles.text
     assert ".v3-result-card.selected" in styles.text
     assert ".v3-reference-actions" in styles.text
@@ -267,12 +270,18 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "/project-outputs?limit=80&compact=true${cacheBust}" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text
+    assert "function v3ProcessProjectImageItems" in script.text
+    assert "v3State.projectProcessOutputItems = processItems" in script.text
+    assert "过程记录" in script.text
     assert "v3ReviewRank" in script.text
     assert "hidden_output_ids" in script.text
     assert "这次生成的图片已从项目里移除。" in script.text
     assert "function renderV3Projects" in script.text
     assert "function renderV3ProjectDetail" in script.text
     assert "function v3LatestProjectJobId" in script.text
+    assert "function renderV3ProjectOpeningState" in script.text
+    assert "v3State.projectOpening = true" in script.text
+    assert 'els.v3WorkspaceView.dataset.v3Opening = "true"' in script.text
     assert "async function restoreV3LatestProjectJob" in script.text
     assert "await restoreV3LatestProjectJob(v3State.currentProject" in script.text
     assert "/jobs/${encodeURIComponent(jobId)}" in script.text
@@ -368,6 +377,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "commerce_profile_patch" in script.text
     assert "suite_slot_request" in script.text
     assert "async function uploadV3Files" in script.text
+    assert "function v3UploadedAssetRoleForCurrentTask" in script.text
+    assert "function v3LooksLikeHumanReferenceTask" in script.text
+    assert "role: v3UploadedAssetRoleForCurrentTask(file)" in script.text
     assert "async function generateV3Job" in script.text
     assert "await createV3Job();" in script.text
     assert "uploadedAssets.map((asset) => asset.asset_id)" in script.text

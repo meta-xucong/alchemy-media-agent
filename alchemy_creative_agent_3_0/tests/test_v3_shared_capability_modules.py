@@ -65,6 +65,35 @@ def test_asset_role_analyzer_detects_image_metadata_and_product_role(tmp_path) -
     assert result.results[0].constraints[0].constraint_type == "product_identity_preservation"
 
 
+def test_unknown_uploaded_asset_becomes_face_reference_for_human_task(tmp_path) -> None:
+    portrait_path = _image(tmp_path / "uploaded_reference.png", size=(360, 480), color=(210, 190, 176))
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            user_input="Create a same-person East Asian summer portrait photo set with different poses",
+            assets=[
+                UploadedAssetInfo(
+                    asset_id="asset_uploaded_person",
+                    role=AssetRole.UNKNOWN_REFERENCE,
+                    file_path=str(portrait_path),
+                    filename="uploaded_reference.png",
+                )
+            ],
+        ),
+        module_ids=["asset_role_analyzer", "asset_binding_planner"],
+    )
+
+    analysis = result.results[0].facts["asset_analyses"][0]
+    binding = result.results[1].facts["asset_binding_plan"]["bindings"][0]
+    assert analysis["role"] == AssetRole.FACE_REFERENCE.value
+    assert analysis["provider_input_required"] is True
+    assert any(item.constraint_type == "portrait_identity_preservation" for item in result.results[0].constraints)
+    assert binding["constraint_strength"] == "strong"
+    assert binding["provider_input_required"] is True
+
+
 def test_asset_binding_planner_prioritizes_product_and_warns_logo_conflicts(tmp_path) -> None:
     product_path = _image(tmp_path / "product.png")
     logo_a = _image(tmp_path / "logo_a.png", size=(300, 300), color=(250, 250, 250))

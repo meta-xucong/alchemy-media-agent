@@ -134,7 +134,10 @@ class V3ProjectModeService:
         now = _utc_now_iso()
         project_id = f"project_{uuid4().hex[:10]}"
         title = create_request.title or self._title_from_goal(create_request.user_goal)
-        initial_asset_role = "product_reference" if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else "unknown_reference"
+        initial_asset_role = self._initial_uploaded_asset_role(
+            template_id=template_manifest.template_id,
+            user_goal=create_request.user_goal,
+        )
         project = ProjectRecord(
             project_id=project_id,
             title=title,
@@ -1848,6 +1851,10 @@ class V3ProjectModeService:
                 *getattr(project, "confirmed_style_tags", []),
             ]
         ).lower()
+        return self._looks_like_character_text(text)
+
+    def _looks_like_character_text(self, text: str) -> bool:
+        normalized = str(text or "").lower()
         character_tokens = (
             "portrait",
             "person",
@@ -1866,7 +1873,14 @@ class V3ProjectModeService:
             "\u5973\u751f",
             "\u5973\u6027",
         )
-        return any(token in text for token in character_tokens)
+        return any(token in normalized for token in character_tokens)
+
+    def _initial_uploaded_asset_role(self, *, template_id: str, user_goal: str) -> str:
+        if template_id == ECOMMERCE_TEMPLATE_ID:
+            return "product_reference"
+        if self._looks_like_character_text(user_goal):
+            return "face_reference"
+        return "unknown_reference"
 
     def _reference_role_for_policy(self, policy: ProjectReferenceUsePolicy) -> str:
         return {

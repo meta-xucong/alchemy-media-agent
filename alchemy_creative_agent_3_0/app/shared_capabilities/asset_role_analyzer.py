@@ -39,7 +39,7 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
         constraints: list[CapabilityConstraint] = []
 
         for asset in capability_input.uploaded_assets:
-            analysis, asset_warnings = self._analyze_asset(asset)
+            analysis, asset_warnings = self._analyze_asset(asset, capability_input)
             analyses.append(analysis)
             warnings.extend(asset_warnings)
             constraints.extend(self._constraints_for_analysis(analysis))
@@ -57,8 +57,9 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
             audit_trail=[f"analyzed {len(analyses)} uploaded asset(s)"],
         )
 
-    def _analyze_asset(self, asset) -> tuple[dict[str, Any], list[CapabilityWarning]]:
+    def _analyze_asset(self, asset, capability_input: CapabilityInput) -> tuple[dict[str, Any], list[CapabilityWarning]]:
         role = asset.role or self._suggest_role(asset.filename or asset.asset_id, asset.file_path, asset.metadata)
+        role = self._contextual_role(role, asset, capability_input)
         path = Path(asset.file_path) if asset.file_path else None
         warnings: list[CapabilityWarning] = []
         base = {
@@ -171,6 +172,19 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                     source=self.module_id,
                 )
             )
+        if role == AssetRole.FACE_REFERENCE.value:
+            constraints.append(
+                CapabilityConstraint(
+                    target_stage=CapabilityTargetStage.PROMPT_COMPILATION,
+                    constraint_type="portrait_identity_preservation",
+                    strength="strong",
+                    value={
+                        "asset_id": asset_id,
+                        "requirements": analysis.get("identity_requirements", []),
+                    },
+                    source=self.module_id,
+                )
+            )
         if role == AssetRole.NEGATIVE_REFERENCE.value:
             constraints.append(
                 CapabilityConstraint(
@@ -182,6 +196,71 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                 )
             )
         return constraints
+
+    def _contextual_role(self, role: AssetRole, asset, capability_input: CapabilityInput) -> AssetRole:
+        if role != AssetRole.UNKNOWN_REFERENCE:
+            return role
+        if self._looks_like_product_reference_context(capability_input):
+            return AssetRole.PRODUCT_REFERENCE
+        if self._looks_like_human_reference_context(capability_input):
+            return AssetRole.FACE_REFERENCE
+        return role
+
+    def _looks_like_product_reference_context(self, capability_input: CapabilityInput) -> bool:
+        if capability_input.scenario_id == "ecommerce":
+            return True
+        text = self._context_text(capability_input)
+        product_terms = (
+            "product",
+            "sku",
+            "packaging",
+            "listing",
+            "marketplace",
+            "\u5546\u54c1",
+            "\u7535\u5546",
+            "\u5305\u88c5",
+            "\u4e3b\u56fe",
+            "\u4ea7\u54c1",
+        )
+        return any(term in text for term in product_terms)
+
+    def _looks_like_human_reference_context(self, capability_input: CapabilityInput) -> bool:
+        text = self._context_text(capability_input)
+        human_terms = (
+            "portrait",
+            "person",
+            "people",
+            "woman",
+            "girl",
+            "man",
+            "model",
+            "face",
+            "beauty",
+            "headshot",
+            "fashion photo",
+            "\u4eba\u50cf",
+            "\u771f\u4eba",
+            "\u5199\u771f",
+            "\u6444\u5f71",
+            "\u6a21\u7279",
+            "\u7f8e\u5973",
+            "\u4eba\u7269",
+            "\u5973\u6027",
+            "\u5973\u751f",
+            "\u7537\u6027",
+            "\u8138",
+        )
+        return any(term in text for term in human_terms)
+
+    def _context_text(self, capability_input: CapabilityInput) -> str:
+        values = [
+            capability_input.scenario_id,
+            capability_input.user_input,
+            capability_input.product_profile,
+            capability_input.brand_context,
+            capability_input.metadata,
+        ]
+        return " ".join(str(value or "") for value in values).lower()
 
     def _suggest_role(self, name: str, file_path: str | None, metadata: dict[str, Any]) -> AssetRole:
         explicit = str(metadata.get("role") or "").strip()
@@ -210,6 +289,9 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
         mapping = {
             "subject_reference": AssetRole.PRODUCT_REFERENCE,
             "product_reference": AssetRole.PRODUCT_REFERENCE,
+            "portrait_identity": AssetRole.FACE_REFERENCE,
+            "identity_reference": AssetRole.FACE_REFERENCE,
+            "character_reference": AssetRole.FACE_REFERENCE,
             "style_reference": AssetRole.STYLE_REFERENCE,
             "logo_reference": AssetRole.LOGO_REFERENCE,
             "face_reference": AssetRole.FACE_REFERENCE,

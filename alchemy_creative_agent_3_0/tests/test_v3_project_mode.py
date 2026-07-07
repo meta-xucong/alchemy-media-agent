@@ -989,6 +989,18 @@ def test_chinese_portrait_goal_uses_identity_reference_policy() -> None:
     assert handlers.project_service._generated_output_use_policy(project_record).value == "identity"
 
 
+def test_portrait_project_create_marks_uploaded_asset_as_face_reference() -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects(
+        {
+            "user_goal": "\u751f\u6210\u540c\u4e00\u4f4d\u4e1c\u65b9\u7f8e\u5973\u7684\u590f\u65e5\u5199\u771f",
+            "uploaded_asset_ids": ["v3_asset_feedfacefeedface"],
+        }
+    )["project"]
+
+    assert project["uploaded_asset_refs"][0]["role"] == "face_reference"
+
+
 def test_removed_generated_reference_unselects_output_context() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
