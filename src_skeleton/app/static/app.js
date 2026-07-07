@@ -1057,7 +1057,7 @@ function bindControls() {
   if (els.labComparisonGrid) {
     els.labComparisonGrid.addEventListener("click", handleLabComparisonClick);
   }
-  if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.addEventListener("click", () => loadLabHistory({ silent: false, force: true }));
+  if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.addEventListener("click", () => loadLabHistory({ silent: false, force: true, limit: 160 }));
   if (els.labHistoryGrid) els.labHistoryGrid.addEventListener("click", handleLabHistoryClick);
   if (els.labGenerateBtn) els.labGenerateBtn.addEventListener("click", runLabExploration);
   if (els.labResetBtn) els.labResetBtn.addEventListener("click", resetLabExplorer);
@@ -1086,7 +1086,7 @@ function bindControls() {
   if (els.v3BrandMemoryCancelBtn) els.v3BrandMemoryCancelBtn.addEventListener("click", closeV3BrandMemoryModal);
   if (els.v3BrandMemoryForm) els.v3BrandMemoryForm.addEventListener("submit", confirmV3BrandMemoryProposal);
   if (els.v3BackHomeBtn) els.v3BackHomeBtn.addEventListener("click", () => openV3Home());
-  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.addEventListener("click", () => loadV3History({ silent: false, force: true }));
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.addEventListener("click", () => loadV3History({ silent: false, force: true, limit: 80 }));
   if (els.v3HistoryList) els.v3HistoryList.addEventListener("click", handleV3HistoryClick);
   if (els.v3ProjectHistoryCloseBtn) els.v3ProjectHistoryCloseBtn.addEventListener("click", closeV3ProjectHistoryModal);
   if (els.v3ProjectHistoryModal) els.v3ProjectHistoryModal.addEventListener("click", handleV3ProjectHistoryModalClick);
@@ -1238,7 +1238,7 @@ async function loadLabStyles({ force = false } = {}) {
   }
 }
 
-async function loadLabHistory({ silent = true, force = false } = {}) {
+async function loadLabHistory({ silent = true, force = false, limit = 72 } = {}) {
   if (labState.historyLoading) {
     renderLabHistoryLoading();
     return;
@@ -1251,7 +1251,8 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
   renderLabHistoryLoading();
   try {
-    const payload = await request("/api/lab/history?limit=1000");
+    const boundedLimit = Math.max(24, Math.min(Number(limit || 72), 200));
+    const payload = await request(`/api/lab/history?limit=${boundedLimit}`);
     labState.history = Array.isArray(payload.items) ? payload.items : [];
     labState.historyLoaded = true;
     renderLabHistory(labState.history);
@@ -1517,6 +1518,12 @@ async function initV3Shell({ force = false } = {}) {
   }
   v3State.loading = true;
   renderV3ViewState();
+  const localProjects = readV3LocalProjects();
+  if (localProjects.length) {
+    v3State.projects = mergeV3ProjectItems(localProjects, v3State.projects || []);
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+  }
   updateV3Notice("正在读取 V3 项目。", "info");
   try {
     const payload = await request(`${v3ApiBase}/projects?limit=24`);
@@ -1529,7 +1536,13 @@ async function initV3Shell({ force = false } = {}) {
     renderV3ScenarioState();
     renderV3HomeTemplateChooser();
     renderV3Projects();
-    await loadV3ProjectOutputs({ silent: true, force: true });
+    loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })
+      .then(() => {
+        window.setTimeout(() => {
+          loadV3ProjectOutputs({ silent: true, force: true, limit: 80 }).catch(() => {});
+        }, 800);
+      })
+      .catch(() => {});
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
@@ -1585,7 +1598,7 @@ function openV3Home({ silent = false } = {}) {
     });
   }
   if (!v3State.imageHistoryLoaded && !v3State.imageHistoryLoading) {
-    loadV3ProjectOutputs({ silent: true }).catch((error) => {
+    loadV3ProjectOutputs({ silent: true, limit: 18 }).catch((error) => {
       if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
     });
   }
@@ -2088,7 +2101,7 @@ async function loadV3History(options = {}) {
   return loadV3ProjectOutputs(options);
 }
 
-async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
+async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24 } = {}) {
   if (v3State.imageHistoryLoading && force) {
     syncV3ProjectOutputsFromList(v3State.imageHistory || [], v3State.currentProject?.project_id);
     renderV3ProjectOutputBoard();
@@ -2113,7 +2126,8 @@ async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
   try {
     const cacheBust = force ? `&t=${Date.now()}` : "";
-    const payload = await request(`${v3ApiBase}/project-outputs?limit=80&compact=true${cacheBust}`);
+    const boundedLimit = Math.max(12, Math.min(Number(limit || 24), 80));
+    const payload = await request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${cacheBust}`);
     const items = Array.isArray(payload.items) ? payload.items : [];
     v3State.imageHistory = items;
     v3State.imageHistoryLoaded = true;
@@ -4197,7 +4211,13 @@ async function openV3Project(projectId) {
     v3State.activeProjectStep = "compose";
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
-    await loadV3ProjectOutputs({ silent: true, force: true });
+    loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })
+      .then(() => {
+        window.setTimeout(() => {
+          loadV3ProjectOutputs({ silent: true, force: true, limit: 80 }).catch(() => {});
+        }, 800);
+      })
+      .catch(() => {});
     await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
     if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || "";

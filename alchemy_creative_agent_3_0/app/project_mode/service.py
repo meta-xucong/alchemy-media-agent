@@ -104,7 +104,8 @@ class V3ProjectModeService:
     def list_project_outputs(self, limit: int = 60, owner_user_id: int | None = None, compact: bool = False) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         items: list[dict[str, Any]] = []
-        for project in self.project_store.list_projects(limit=200):
+        project_scan_limit = max(12, min(100, bounded_limit * 2))
+        for project in self.project_store.list_projects(limit=project_scan_limit):
             if project.status == ProjectStatus.ARCHIVED:
                 continue
             if not self._project_visible_to_owner(project, owner_user_id):

@@ -259,7 +259,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function openV3ScenarioWorkspace" in script.text
     assert "async function loadV3Projects" in script.text
     assert "async function loadV3ProjectOutputs" in script.text
-    assert "/project-outputs?limit=80&compact=true" in script.text
+    assert "/project-outputs?limit=${boundedLimit}&compact=true" in script.text
+    assert "loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })" in script.text
+    assert "loadV3ProjectOutputs({ silent: true, force: true, limit: 80 })" in script.text
+    assert "/api/lab/history?limit=1000" not in script.text
     assert "function v3RecoveredLatestVisibleProjectOutputs" in script.text
     assert "recovered_without_exact_job_match" in script.text
     assert "function v3JobHasExpectedVisibleImages" in script.text
@@ -267,7 +270,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3JobVisibleImageCount(job) >= v3ExpectedImageCountForJob(job, expectedCount)" in script.text
     assert "expectedCount: generationSettings.count" in script.text
     assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in script.text
-    assert "/project-outputs?limit=80&compact=true${cacheBust}" in script.text
+    assert "/project-outputs?limit=${boundedLimit}&compact=true${cacheBust}" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text
     assert "function v3ProcessProjectImageItems" in script.text
