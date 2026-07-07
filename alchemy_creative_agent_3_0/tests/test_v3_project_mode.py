@@ -1447,3 +1447,25 @@ def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path)
     assert public_record.output_id in second_outputs
     assert private_record.output_id not in first_outputs
     assert private_record.output_id in second_outputs
+
+
+def test_general_project_job_preserves_requested_image_count_and_size() -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects({"user_goal": "Create a bright summer portrait set"})["project"]
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "user_input": "Continue with three same-style portraits",
+            "template_id": "general_template",
+            "metadata": {
+                "requested_image_count": 3,
+                "requested_image_size": "1024x1536",
+                "variation_mode": "delivery_suite",
+                "effective_variation_mode": "delivery_suite",
+            },
+        },
+    )
+
+    assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 3
+    assert job["metadata"]["scenario_parameters"]["requested_image_size"] == "1024x1536"

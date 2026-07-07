@@ -1095,6 +1095,12 @@ class V3ProjectModeService:
             "use_project_context": request.use_project_context,
         }
         parameters.update(variation_contract)
+        requested_count = _bounded_requested_image_count(request.metadata.get("requested_image_count"))
+        if requested_count is not None:
+            parameters["requested_image_count"] = requested_count
+        requested_size = str(request.metadata.get("requested_image_size") or "").strip()
+        if requested_size:
+            parameters["requested_image_size"] = requested_size
         return {
             "scenario_id": manifest.scenario_pack_id,
             "mode_id": "campaign_poster",
