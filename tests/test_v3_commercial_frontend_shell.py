@@ -247,6 +247,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert mobile_styles.status_code == 200
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
+    mobile_script = client.get("/mobile-static/mobile.js")
+    assert mobile_script.status_code == 200
+    assert "limit=1000" not in mobile_script.text
+    assert "/project-outputs?limit=18&compact=true" in mobile_script.text
+    assert "/project-outputs?limit=24&compact=true" in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text

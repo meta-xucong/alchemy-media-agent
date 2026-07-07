@@ -1038,7 +1038,7 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
   renderLabHistoryLoading();
   try {
-    const payload = await request("/api/lab/history?limit=1000");
+    const payload = await request("/api/lab/history?limit=72");
     labState.history = Array.isArray(payload.items) ? payload.items : [];
     labState.historyLoaded = true;
     renderLabHistory(labState.history);
@@ -2769,15 +2769,18 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   mobileV3State.loading = true;
   if (!mobileV3State.projects.length) updateMobileV3Status("同步中");
   try {
-    const [projectsPayload, outputsPayload] = await Promise.all([
-      mobileV3Request("/projects?limit=12"),
-      mobileV3Request("/project-outputs?limit=48&compact=true"),
-    ]);
+    const projectsPayload = await mobileV3Request("/projects?limit=12");
     mobileV3State.projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
-    mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
     mobileV3State.loaded = true;
     persistMobileV3Caches();
     renderMobileV3ProjectCards();
+    mobileV3Request("/project-outputs?limit=18&compact=true")
+      .then((outputsPayload) => {
+        mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
+        persistMobileV3Caches();
+        renderMobileV3ProjectCards();
+      })
+      .catch(() => {});
     if (!silent) updateMobileV3Status(`${mobileV3State.projects.length} 个项目`);
   } catch (error) {
     if (!silent) updateMobileV3Status(`加载失败：${friendlyError(error)}`);
@@ -2979,7 +2982,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
   const [projectPayload, timelinePayload, outputsPayload] = await Promise.all([
     mobileV3Request(`/projects/${encodeURIComponent(projectId)}`),
     mobileV3Request(`/projects/${encodeURIComponent(projectId)}/timeline`),
-    mobileV3Request("/project-outputs?limit=80&compact=true"),
+    mobileV3Request("/project-outputs?limit=24&compact=true"),
   ]);
   const project = projectPayload.project || projectPayload;
   mobileV3State.currentProject = project;
@@ -7139,7 +7142,7 @@ const v2AccountHistoryTimeoutMs = 3500;
 const v2OptionalResourceTimeoutMs = 3500;
 
 function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
-  if (full) return `${basePath}?limit=1000`;
+  if (full) return `${basePath}?limit=160`;
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(Math.max(0, offset || 0)),
@@ -7764,8 +7767,8 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
   try {
     const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
       refreshVeyraAccount(),
-      request("/v1/image/history?limit=1000"),
-      loadV2HistoryResponse({ full: true, timeoutMs: v2AccountHistoryTimeoutMs }),
+      request(`/v1/image/history?limit=${historyFetchPageSize}&offset=0`),
+      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs }),
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);

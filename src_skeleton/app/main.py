@@ -633,6 +633,7 @@ def list_alchemy_lab_history(
     authorization: str = Header(default=""),
 ):
     _require_veyra_user_if_enabled(request, authorization)
+    limit = min(limit, 200)
     return list_lab_history(limit=limit, include_mock=include_mock)
 
 
@@ -1161,6 +1162,7 @@ async def list_image_history(
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
+    limit = min(limit, 200)
     favorite_ids = list_favorite_ids(
         veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
         include_legacy_public=True,
