@@ -271,3 +271,36 @@ def test_doc69_local_inspector_flags_lower_right_generated_mark(tmp_path) -> Non
     assert "lower_right_mark_artifact" in issue_codes
     assert "ai_generated_badge_trace" in issue_codes
     assert any("lower-right" in item for item in marked_report.retry_patch["negative_additions"])
+
+
+def test_doc83_local_inspector_does_not_retry_ambiguous_lower_right_texture(tmp_path) -> None:
+    from PIL import Image, ImageDraw
+
+    textured = tmp_path / "textured.png"
+    image = Image.new("RGB", (512, 512), (236, 245, 248))
+    draw = ImageDraw.Draw(image)
+    for index in range(28):
+        x = 370 + (index * 9) % 120
+        y = 440 + (index * 17) % 50
+        color = (210 - (index % 5) * 8, 190 + (index % 4) * 9, 180 + (index % 3) * 12)
+        draw.ellipse((x, y, x + 26, y + 18), fill=color)
+    image.save(textured)
+
+    report = VisionOutputInspector().inspect(
+        GeneratedOutputResolution(
+            resolution_id="resolution_doc83_texture",
+            job_id="job_doc83_texture",
+            output_id="output_doc83_texture",
+            file_path=str(textured),
+            status="ready",
+            provider="openai_gpt_image",
+            model="gpt-image-2",
+        ),
+        metadata={"vision_inspection_mode": "local_image_heuristic"},
+    )
+
+    issue_codes = [issue["code"] for issue in report.detected_issues]
+    assert report.status == "pass"
+    assert report.retryable is False
+    assert "lower_right_mark_artifact" not in issue_codes
+    assert "ai_generated_badge_trace" not in issue_codes

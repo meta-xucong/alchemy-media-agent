@@ -88,6 +88,7 @@ def _save_project_output(
     asset_id: str,
     owner_user_id: int | None = None,
     prompt: str = "clean commercial image",
+    metadata_override: dict | None = None,
 ):
     metadata = {
         "final_provider_prompt": prompt,
@@ -97,6 +98,8 @@ def _save_project_output(
     }
     if owner_user_id is not None:
         metadata["veyra_user_id"] = owner_user_id
+    if metadata_override:
+        metadata.update(metadata_override)
     return handlers.service.output_store.save_base64_output(
         job_id=job_id,
         candidate_id=candidate_id,
@@ -108,6 +111,31 @@ def _save_project_output(
         output_format="png",
         metadata=metadata,
     )
+
+
+def _save_project_output_batch(
+    handlers: V3ProductRouteHandlers,
+    *,
+    job_id: str,
+    attempt: int,
+    count: int,
+    prefix: str,
+) -> list[str]:
+    output_ids = []
+    for index in range(count):
+        record = _save_project_output(
+            handlers,
+            job_id=job_id,
+            candidate_id=f"{prefix}_candidate_{index}",
+            asset_id=f"{prefix}_asset_{index}",
+            metadata_override={
+                "requested_image_count": count,
+                "visual_auto_retry_attempt": attempt,
+                "visual_retry_reason_codes": ["lower_right_mark_artifact"] if attempt else [],
+            },
+        )
+        output_ids.append(record.output_id)
+    return output_ids
 
 
 def test_template_registry_contains_general_active() -> None:
@@ -1277,6 +1305,84 @@ def test_project_outputs_append_across_jobs_and_delete_hides_only_selected_image
     assert first_record.output_id not in history_ids_after_delete
     assert second_record.output_id in history_ids_after_delete
     assert state_map[first_record.output_id] == "unselected"
+
+
+def test_project_outputs_mark_retry_superseded_and_final_delivery_group(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create four portrait alternatives", "title": "Portrait Batch"})[
+        "project"
+    ]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create 4 matching portraits"})
+
+    original_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=0,
+        count=4,
+        prefix="original",
+    )
+    retry_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=1,
+        count=4,
+        prefix="retry",
+    )
+
+    outputs = [
+        item
+        for item in handlers.get_project_outputs(limit=20, compact=True)["items"]
+        if item["project_id"] == project["project_id"]
+    ]
+    final_outputs = [item for item in outputs if item["delivery_state"] == "final_delivery"]
+    superseded_outputs = [item for item in outputs if item["delivery_state"] == "superseded"]
+
+    assert len(outputs) == 8
+    assert {item["output_id"] for item in final_outputs} == set(retry_ids)
+    assert {item["output_id"] for item in superseded_outputs} == set(original_ids)
+    assert {item["metadata"]["delivery_requested_image_count"] for item in outputs} == {4}
+    assert all(item["metadata"]["delivery_final_attempt_index"] == 1 for item in outputs)
+    assert all(item["metadata"]["retry_superseded"] is True for item in superseded_outputs)
+    assert all(item["metadata"]["retry_superseded"] is False for item in final_outputs)
+
+
+def test_project_outputs_keep_complete_original_when_retry_is_incomplete(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create four complete images", "title": "Incomplete Retry"})[
+        "project"
+    ]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create 4 complete images"})
+
+    original_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=0,
+        count=4,
+        prefix="complete_original",
+    )
+    retry_record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="incomplete_retry_candidate",
+        asset_id="incomplete_retry_asset",
+        metadata_override={
+            "requested_image_count": 4,
+            "visual_auto_retry_attempt": 1,
+            "visual_retry_reason_codes": ["provider_partial_retry"],
+        },
+    )
+
+    outputs = [
+        item
+        for item in handlers.get_project_outputs(limit=20, compact=True)["items"]
+        if item["project_id"] == project["project_id"]
+    ]
+    final_outputs = [item for item in outputs if item["delivery_state"] == "final_delivery"]
+    process_outputs = [item for item in outputs if item["delivery_state"] == "process_only"]
+
+    assert {item["output_id"] for item in final_outputs} == set(original_ids)
+    assert [item["output_id"] for item in process_outputs] == [retry_record.output_id]
+    assert all(item["metadata"]["delivery_final_attempt_index"] == 0 for item in outputs)
 
 
 def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:

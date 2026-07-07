@@ -29,6 +29,8 @@ Hard rules:
 7. Before changing V3 visual generation, state whether the work is foundation, General Template, or specialized template work, and add tests proving it does not leak into the wrong layer.
 8. Real visual review and aesthetic stability tuning must extend the V3 foundation review/provider/retry paths; it must not create vertical deliverable maps inside General Template.
 9. Long-term human identity and beautiful realism tuning must preserve attractive facial-feature design, including eyes, brows, nose-mouth relationship, jaw/chin direction, skin/lighting realism, and natural variation; never make a face less beautiful merely to make it look realistic.
+10. Retry outputs are append-only internally, but beginner-facing V3 result surfaces must show only final delivery outputs up to the requested count; retry-superseded originals belong in folded workflow/history details.
+11. When an uploaded portrait is used as a same-person reference, identity-critical traits from the image override conflicting prompt aesthetics unless the user explicitly asks to redesign or change the person.
 
 Short form:
 

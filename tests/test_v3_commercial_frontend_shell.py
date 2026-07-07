@@ -339,6 +339,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function renderV3HeroHistory" in script.text
     assert "function v3ProjectImageGroups" in script.text
     assert "function v3HistoryOutputVisible" in script.text
+    assert "function v3OutputDeliveryState" in script.text
+    assert "function v3DeliveryDisplayItems" in script.text
+    assert 'v3OutputDeliveryState(item) !== "superseded"' in script.text
+    assert "const finals = list.filter((item) => v3OutputDeliveryState(item) === \"final_delivery\")" in script.text
     assert "function openV3ProjectHistoryModal" in script.text
     assert "function renderV3ProjectHistoryGrid" in script.text
     assert "function handleV3ProjectHistoryGridClick" in script.text

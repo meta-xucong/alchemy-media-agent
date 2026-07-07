@@ -146,6 +146,33 @@ def _human_generation_request() -> GenerationRequest:
     )
 
 
+def test_uploaded_portrait_reference_gets_identity_priority_over_prompt(tmp_path) -> None:
+    reference_path = _reference_image(tmp_path / "portrait_reference.png")
+    request = _human_generation_request()
+    request.metadata["uploaded_assets"] = [
+        {
+            "asset_id": "uploaded_portrait_ref",
+            "role": "style_reference",
+            "filename": reference_path.name,
+            "mime_type": "image/png",
+            "file_path": str(reference_path),
+        }
+    ]
+    request.prompt_compilation.visual_prompt = (
+        "Create a summer portrait in a different outfit and evening fountain scene with fresh beauty mood"
+    )
+
+    provider = ProductionImageGenerationProvider()
+    reference_assets = provider._reference_assets(request)  # noqa: SLF001
+    asset_plan = provider._asset_plan(request, reference_assets)  # noqa: SLF001
+    prompt = provider._generation_prompt(request, reference_assets)  # noqa: SLF001
+
+    assert "same-person portrait identity reference" in asset_plan["assets"][0]["prompt_constraints"][0]
+    assert "Uploaded portrait reference priority" in prompt
+    assert "higher priority for identity" in prompt
+    assert "must not replace facial feature relationships" in prompt
+
+
 def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

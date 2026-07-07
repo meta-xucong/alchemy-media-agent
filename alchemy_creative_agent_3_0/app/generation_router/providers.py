@@ -775,14 +775,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _asset_plan(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> dict[str, Any]:
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
+        human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         closure = self._strong_reference_closure_package(request)
         do_not_inherit_rules = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
+        reference_conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
         closure_provider_ids = set(self._string_list(closure.get("provider_reference_required_ids")))
         closure_prompt_rules = self._string_list(closure.get("provider_prompt_rules"))
         closure_negative_rules = self._string_list(closure.get("negative_prompt_rules"))
         prompt_constraint = (
             "Use this uploaded image as visual evidence for product identity, material, style, or composition."
             if allow_product_language
+            else "Use this uploaded image as a same-person identity reference first, then as style, lighting, composition, or mood evidence."
+            if human_photo_context
             else "Use this uploaded image as visual evidence for subject style, lighting, composition, or mood."
         )
         assets = []
@@ -805,6 +809,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 )
                 if do_not_inherit_rules:
                     reference_constraint = f"{reference_constraint} Do not inherit: {'; '.join(do_not_inherit_rules[:4])}."
+            elif human_photo_context:
+                reference_constraint = (
+                    "Use as a same-person portrait identity reference; preserve recognizable facial feature "
+                    "relationships, face shape direction, age impression, body type, skin-tone direction, and broad "
+                    "hair/wardrobe direction. The written prompt may change scene, pose, expression, camera angle, "
+                    "and outfit styling, but it must not replace the person's identity."
+                )
             elif "brand" in use_policy or "logo" in role:
                 reference_constraint = "Use as a strong brand asset reference; preserve brand colors, symbol shape, and placement logic."
             else:
@@ -813,6 +824,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Lock: {', '.join(lock_targets[:5])}."
             if closure_prompt_rules and (asset["asset_id"] in closure_provider_ids or not closure_provider_ids):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
+            if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
+                reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
             assets.append(
                 {
                     "asset_id": asset["asset_id"],
@@ -937,6 +950,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 for index, asset in enumerate(reference_assets)
             ]
             parts.append("Uploaded reference images must guide the result:\n" + "\n".join(reference_lines))
+            conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
+            if conflict_rules:
+                parts.append("Uploaded portrait reference priority:\n" + "\n".join(conflict_rules[:6]))
             strong_reference_rules = []
             for asset in reference_assets:
                 use_policy = str(asset.get("use_policy") or asset.get("role") or "")
@@ -947,6 +963,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 elif "identity" in use_policy:
                     strong_reference_rules.append(
                         "Preserve the selected person's broad face shape, eye shape and spacing, nose-mouth relationship, jawline direction, age impression, body type, broad hair/wardrobe direction, and light; do not copy the exact same expression, pose, head angle, camera angle, or crop across the batch."
+                    )
+                elif human_photo_context and not any(token in use_policy for token in ["brand", "logo"]):
+                    strong_reference_rules.append(
+                        "Treat uploaded portrait-style references as same-person identity anchors; prompt adjectives may guide mood, wardrobe, pose, and scene, but must not replace facial feature relationships, face-shape direction, body type, or natural skin-tone direction."
                     )
                 elif "brand" in use_policy:
                     strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
@@ -967,6 +987,45 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if max_chars is None or max_chars <= 0:
             return raw_prompt
         return self._compact_provider_prompt(raw_prompt, max_chars=max_chars)
+
+    def _reference_identity_conflict_rules(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+    ) -> list[str]:
+        if not reference_assets:
+            return []
+        if self._product_language_allowed(request, reference_assets):
+            return []
+        if not (self._human_photorealism_guidance(request) or self._looks_like_human_photo_request(request)):
+            return []
+        prompt_text = " ".join(
+            str(value or "")
+            for value in [
+                request.prompt_compilation.visual_prompt,
+                request.prompt_compilation.negative_prompt,
+                " ".join(request.prompt_compilation.hard_constraints or []),
+            ]
+        )
+        strict_face_terms = [
+            "different face",
+            "new face",
+            "replace face",
+            "change identity",
+            "\u6362\u8138",
+            "\u6362\u4e00\u4e2a\u4eba",
+            "\u6539\u6210\u53e6\u4e00\u4e2a\u4eba",
+        ]
+        lower = prompt_text.lower()
+        rules = [
+            "The uploaded portrait reference has higher priority for identity than generic beauty words in the written prompt.",
+            "Preserve the same recognizable person: face shape direction, eye shape and spacing, nose-mouth relationship, jaw/chin direction, age impression, body type, and natural skin-tone direction.",
+            "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and wardrobe styling unless the user explicitly asks for exact copy.",
+            "Do not force a new facial geometry, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, or location.",
+        ]
+        if any(term in lower or term in prompt_text for term in strict_face_terms):
+            rules.append("If the prompt explicitly asks to replace the identity, follow only when it is clear; otherwise keep the uploaded reference identity.")
+        return rules
 
     def _compact_provider_prompt(self, raw_prompt: str, *, max_chars: int | None = None) -> str:
         lines = self._normalised_unique_prompt_lines(raw_prompt)

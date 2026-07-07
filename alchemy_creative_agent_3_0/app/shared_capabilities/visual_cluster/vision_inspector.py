@@ -1134,13 +1134,30 @@ def _lower_right_mark_risk(path: Path) -> tuple[bool, dict[str, Any]]:
             edge_ratio = _threshold_ratio(edges, 35, pixel_count)
             strong_edge_ratio = _threshold_ratio(edges, 65, pixel_count)
             local_std = float(ImageStat.Stat(strip).stddev[0])
+            horizontal_band_ratio = _horizontal_text_band_ratio(edges)
+            compact_mark_score = (strong_edge_ratio * 0.55) + (horizontal_band_ratio * 0.45)
             # Generated marks usually appear as compact semi-transparent text
-            # in the lower-right corner. Keep this deliberately narrow.
-            risk = edge_ratio >= 0.10 and strong_edge_ratio >= 0.065 and 6.0 <= local_std <= 55.0
+            # or a small logo in the lower-right corner. Flower edges, fabric
+            # folds and bokeh can be busy but rarely form repeated horizontal
+            # text-like bands, so only high-confidence evidence may trigger
+            # automatic retry.
+            text_like_edge = edge_ratio >= 0.145 and strong_edge_ratio >= 0.12
+            band_like_edge = strong_edge_ratio >= 0.095 and horizontal_band_ratio >= 0.17
+            risk = (
+                edge_ratio >= 0.145
+                and strong_edge_ratio >= 0.095
+                and (text_like_edge or band_like_edge)
+                and 8.0 <= local_std <= 48.0
+                and (text_like_edge or compact_mark_score >= 0.125)
+            )
+            confidence = "high" if risk else "low"
             return risk, {
                 "lower_right_mark_scan": "done",
                 "lower_right_edge_ratio": round(edge_ratio, 4),
                 "lower_right_strong_edge_ratio": round(strong_edge_ratio, 4),
+                "lower_right_horizontal_band_ratio": round(horizontal_band_ratio, 4),
+                "lower_right_mark_confidence": confidence,
+                "lower_right_mark_evidence_type": "compact_text_or_logo_like" if risk else "ambiguous_texture",
                 "lower_right_luma_std": round(local_std, 2),
             }
     except Exception:
@@ -1151,3 +1168,35 @@ def _threshold_ratio(image: Any, threshold: int, pixel_count: int) -> float:
     mask = image.point(lambda value: 255 if value > threshold else 0)
     histogram = mask.histogram()
     return float(histogram[255]) / float(pixel_count)
+
+
+def _horizontal_text_band_ratio(image: Any) -> float:
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return 0.0
+    rows = []
+    pixels = image.load()
+    for y in range(height):
+        active = 0
+        for x in range(width):
+            if pixels[x, y] > 65:
+                active += 1
+        ratio = active / float(width)
+        if 0.08 <= ratio <= 0.55:
+            rows.append(1)
+        else:
+            rows.append(0)
+    if not rows:
+        return 0.0
+    clustered = 0
+    run = 0
+    for value in rows:
+        if value:
+            run += 1
+            continue
+        if 2 <= run <= 12:
+            clustered += run
+        run = 0
+    if 2 <= run <= 12:
+        clustered += run
+    return clustered / float(height)

@@ -2678,13 +2678,104 @@ class V3ProjectModeService:
                 records = output_store.list_by_job(job_id)
             except Exception:
                 continue
+            delivery = self._delivery_annotations_for_records(records)
+            has_final_delivery = any(
+                item.get("delivery_state") == "final_delivery"
+                for item in delivery.values()
+            )
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
+                delivery_state = delivery.get(self._output_record_identity(record), {}).get("delivery_state")
+                if delivery_state == "superseded" or (has_final_delivery and delivery_state != "final_delivery"):
+                    continue
                 url = record.thumbnail_url or record.preview_url or record.download_url
                 if url and not str(url).startswith("mock://"):
                     urls.append(str(url))
                     if len(dict.fromkeys(urls)) >= limit:
                         return list(dict.fromkeys(urls))[:limit]
         return list(dict.fromkeys(urls))[:limit]
+
+    def _delivery_annotations_for_records(self, records: list[Any]) -> dict[str, dict[str, Any]]:
+        usable_records = [record for record in records if self._output_record_has_usable_image(record)]
+        if not usable_records:
+            return {}
+        requested_count = self._delivery_requested_image_count(usable_records)
+        attempt_groups: dict[int, list[Any]] = {}
+        for record in usable_records:
+            attempt_groups.setdefault(self._output_record_retry_attempt(record), []).append(record)
+        if not attempt_groups:
+            return {}
+        for group in attempt_groups.values():
+            group.sort(key=lambda item: item.created_at or "")
+        sorted_attempts = sorted(attempt_groups)
+        complete_attempts = [
+            attempt
+            for attempt in sorted_attempts
+            if len(attempt_groups.get(attempt, [])) >= requested_count
+        ]
+        final_attempt = complete_attempts[-1] if complete_attempts else max(
+            sorted_attempts,
+            key=lambda attempt: (len(attempt_groups.get(attempt, [])), attempt),
+        )
+        final_records = attempt_groups.get(final_attempt, [])[:requested_count]
+        final_ids = {self._output_record_identity(record) for record in final_records}
+        annotations: dict[str, dict[str, Any]] = {}
+        for attempt, group in attempt_groups.items():
+            retry_codes = self._delivery_retry_reason_codes(group)
+            for record in group:
+                identity = self._output_record_identity(record)
+                if not identity:
+                    continue
+                delivery_state = "final_delivery" if identity in final_ids else "process_only"
+                if attempt < final_attempt and final_ids:
+                    delivery_state = "superseded"
+                annotations[identity] = {
+                    "delivery_state": delivery_state,
+                    "delivery_attempt_index": attempt,
+                    "delivery_final_attempt_index": final_attempt,
+                    "delivery_requested_image_count": requested_count,
+                    "delivery_group_output_count": len(group),
+                    "retry_superseded": delivery_state == "superseded",
+                    "retry_reason_codes": retry_codes,
+                }
+        return annotations
+
+    def _delivery_requested_image_count(self, records: list[Any]) -> int:
+        values: list[int] = []
+        for record in records:
+            metadata = dict(getattr(record, "metadata", None) or {})
+            raw = metadata.get("requested_image_count")
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                values.append(parsed)
+        return max(1, min(8, max(values) if values else len(records) or 1))
+
+    def _output_record_retry_attempt(self, record: Any) -> int:
+        metadata = dict(getattr(record, "metadata", None) or {})
+        raw = metadata.get("visual_auto_retry_attempt", metadata.get("retry_attempt", 0))
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _output_record_has_usable_image(self, record: Any) -> bool:
+        return any(
+            str(getattr(record, field, "") or "").strip()
+            and not str(getattr(record, field, "") or "").startswith("mock://")
+            for field in ("download_url", "preview_url", "thumbnail_url")
+        )
+
+    def _delivery_retry_reason_codes(self, records: list[Any]) -> list[str]:
+        codes: list[str] = []
+        for record in records:
+            metadata = dict(getattr(record, "metadata", None) or {})
+            for key in ("visual_retry_reason_codes", "retry_reason_codes", "issue_codes"):
+                value = metadata.get(key)
+                if isinstance(value, list):
+                    codes.extend(str(item).strip() for item in value if str(item).strip())
+        return list(dict.fromkeys(codes))
 
     def _project_output_items(
         self,
@@ -2706,6 +2797,7 @@ class V3ProjectModeService:
                 records = output_store.list_by_job(job_id)
             except Exception:
                 continue
+            delivery = self._delivery_annotations_for_records(records)
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
                 if not self._output_record_visible_to_owner(record, owner_user_id):
                     continue
@@ -2723,7 +2815,15 @@ class V3ProjectModeService:
                     }
                 ):
                     continue
-                items.append(self._output_item_from_record(project, record, state, compact=compact))
+                items.append(
+                    self._output_item_from_record(
+                        project,
+                        record,
+                        state,
+                        compact=compact,
+                        delivery=delivery.get(identity),
+                    )
+                )
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
@@ -2756,9 +2856,12 @@ class V3ProjectModeService:
         state: ProjectOutputSelectionStateValue | None,
         *,
         compact: bool = False,
+        delivery: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         record_metadata = dict(record.metadata or {})
         state_value = (state.value if hasattr(state, "value") else str(state)) if state else "available"
+        delivery_metadata = dict(delivery or {})
+        delivery_state = str(delivery_metadata.get("delivery_state") or "final_delivery")
         item = {
             "output_ref_id": stable_id("project_output", project.project_id, record.job_id, record.output_id),
             "source_type": "generated_output",
@@ -2776,6 +2879,7 @@ class V3ProjectModeService:
             "created_at": record.created_at,
             "selection_state": state_value,
             "selected": state == ProjectOutputSelectionStateValue.SELECTED,
+            "delivery_state": delivery_state,
             "metadata": {
                 "width": record.width,
                 "height": record.height,
@@ -2788,6 +2892,7 @@ class V3ProjectModeService:
                 "compiled_visual_direction": record_metadata.get("compiled_visual_direction"),
                 "style_notes": record_metadata.get("style_notes") or [],
                 "layout_notes": record_metadata.get("layout_notes") or [],
+                **delivery_metadata,
             },
         }
         if compact:
@@ -2800,6 +2905,7 @@ class V3ProjectModeService:
                 "requested_image_count": record_metadata.get("requested_image_count"),
                 "requested_image_size": record_metadata.get("requested_image_size"),
                 "compact": True,
+                **delivery_metadata,
             }
         return item
 
