@@ -2112,7 +2112,8 @@ async function loadV3ProjectOutputs({ silent = false, force = false } = {}) {
   v3State.imageHistoryLoading = true;
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
   try {
-    const payload = await request(`${v3ApiBase}/project-outputs?limit=80&compact=true`);
+    const cacheBust = force ? `&t=${Date.now()}` : "";
+    const payload = await request(`${v3ApiBase}/project-outputs?limit=80&compact=true${cacheBust}`);
     const items = Array.isArray(payload.items) ? payload.items : [];
     v3State.imageHistory = items;
     v3State.imageHistoryLoaded = true;
@@ -2752,6 +2753,19 @@ function v3RecoveredLatestVisibleProjectOutputs(project = v3State.currentProject
       project_outputs: outputs,
     },
   };
+}
+
+function syncV3CurrentJobFromProjectOutputs({ preferLatest = false } = {}) {
+  const baseJob = v3State.currentJob;
+  const jobId = baseJob?.job_id || (preferLatest ? v3LatestProjectJobId(v3State.currentProject) : "");
+  const recovered =
+    (jobId ? v3RecoveredJobFromProjectOutputs(jobId, baseJob) : null) ||
+    (preferLatest ? v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, baseJob) : null);
+  if (!recovered) return false;
+  if (v3JobVisibleImageCount(recovered) <= v3JobVisibleImageCount(baseJob)) return false;
+  v3State.currentJob = recovered;
+  v3State.selectedResult = null;
+  return true;
 }
 
 function v3OutputVisibleInProject(item, project = v3State.currentProject) {
@@ -4101,6 +4115,7 @@ async function openV3Project(projectId) {
     v3State.activeProjectStep = "compose";
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
     await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
     if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || "";
@@ -4140,6 +4155,7 @@ async function refreshV3CurrentProject({ silent = true } = {}) {
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
     await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
     renderV3ProjectDetail();
   } catch (error) {
@@ -4509,6 +4525,9 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   renderV3Job(generated);
   await refreshV3CurrentProject({ silent: true });
   await loadV3ProjectOutputs({ silent: true, force: true });
+  if (syncV3CurrentJobFromProjectOutputs({ preferLatest: true })) {
+    renderV3Job(v3State.currentJob);
+  }
   await maybePersistV3UploadedReferences(uploadedAssets);
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
