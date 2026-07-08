@@ -260,12 +260,14 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-mobile-upload-list.empty-v2-list::before" in mobile_styles.text
     assert ".v3-mobile-loading-layer" in mobile_styles.text
     assert "position: fixed" in mobile_styles.text
-    assert "rgba(246, 243, 235, 0.82)" in mobile_styles.text
+    assert "rgba(246, 243, 235, 0.6)" in mobile_styles.text
     assert ".v3-mobile-full-prompt-dialog" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "limit=1000" not in mobile_script.text
-    assert "/project-outputs?limit=18&compact=true" in mobile_script.text
+    assert "mobileV3ProjectFetchLimit = 80" in mobile_script.text
+    assert "mobileV3ProjectPageSize = 4" in mobile_script.text
+    assert "project-outputs?limit=${mobileV3ProjectPageSize}&compact=true" in mobile_script.text
     assert "/project-outputs?limit=24&compact=true" not in mobile_script.text
     assert "project_id=${encodeURIComponent(projectId)}" in mobile_script.text
     assert "mobileV3SummaryThumbs" in mobile_script.text
@@ -292,7 +294,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "const v3ProjectStorageKey" in script.text
     assert "const v3HistoryStorageKey" in script.text
     assert "/api/v3/creative-agent" in script.text
-    assert "/projects?limit=24" in script.text
+    assert "v3ProjectFetchLimit = 80" in script.text
+    assert "v3ProjectHomePageSize = 12" in script.text
     assert "/history?limit=24" not in script.text
     assert "function openV3Home" in script.text
     assert "function openV3ScenarioWorkspace" in script.text
@@ -312,7 +315,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "await waitForV3Paint()" in script.text
     assert "v3-page-loading-overlay" in styles.text
     assert "v3-page-loading-active" in styles.text
-    assert "rgba(247, 244, 236, 0.82)" in styles.text
+    assert "rgba(247, 244, 236, 0.6)" in styles.text
     assert "if (v3State.projectOpening) return;" in script.text
     assert 'data-v3-output-action="prompt"' in script.text
     assert "promptOpen = false" in script.text

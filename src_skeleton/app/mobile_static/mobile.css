@@ -4727,7 +4727,7 @@ body[data-active-module="v3"] .hero-actions {
   padding: 28px;
   border: 0;
   border-radius: 0;
-  background: rgba(246, 243, 235, 0.82);
+  background: rgba(246, 243, 235, 0.6);
   box-shadow: none;
   backdrop-filter: blur(22px) saturate(1.12);
   -webkit-backdrop-filter: blur(22px) saturate(1.12);
@@ -4815,6 +4815,24 @@ body.v3-mobile-loading-active {
 .v3-mobile-project-card > .button,
 .v3-mobile-output-card > .button {
   grid-column: 1 / -1;
+}
+
+.v3-mobile-load-more-preview {
+  color: var(--muted);
+  font-weight: 780;
+  text-align: center;
+}
+
+.v3-mobile-load-more-preview span {
+  width: 46px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(47, 90, 69, 0.08);
+  color: rgba(47, 90, 69, 0.88);
+  font-size: 15px;
+  font-weight: 840;
 }
 
 .v3-mobile-project-preview,

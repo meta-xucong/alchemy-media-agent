@@ -989,6 +989,55 @@ def test_chinese_portrait_goal_uses_identity_reference_policy() -> None:
     assert handlers.project_service._generated_output_use_policy(project_record).value == "identity"
 
 
+def test_uploaded_portrait_reference_is_promoted_and_kept_before_selected_output(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    upload_id = _ready_upload(handlers, tmp_path, role="face_reference", filename="prototype-face.png")
+    project = handlers.post_projects(
+        {"user_goal": "\u751f\u6210\u540c\u4e00\u4f4d\u4e1c\u65b9\u7f8e\u5973\u7684\u590f\u65e5\u5199\u771f"}
+    )["project"]
+    saved = handlers.post_project_reference(
+        project["project_id"],
+        {"asset_ref_id": upload_id, "source_type": "uploaded", "use_policy": "general"},
+    )["reference"]
+
+    assert saved["use_policy"] == "identity"
+
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Generate a bright portrait variation"})
+    generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
+    selected = handlers.post_project_job_select(
+        project["project_id"],
+        generated["job_id"],
+        {"selected_candidate_id": generated["candidates"][0]["candidate_id"]},
+    )
+    context = selected["context"]
+
+    assert context["selected_visual_references"][0]["source_type"] == "uploaded"
+    assert context["selected_visual_references"][0]["asset_ref_id"] == upload_id
+    assert context["selected_visual_references"][0]["use_policy"] == "identity"
+    assert any(item.get("source_type") == "selected_output" for item in context["selected_visual_references"])
+    assert context["strong_reference_bindings"][0]["source_type"] == "uploaded"
+    assert context["strong_reference_bindings"][0]["use_policy"] == "identity"
+
+
+def test_uploaded_portrait_job_asset_enters_context_before_generation(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    upload_id = _ready_upload(handlers, tmp_path, role="face_reference", filename="prototype-face.png")
+    project = handlers.post_projects(
+        {"user_goal": "\u751f\u6210\u540c\u4e00\u4f4d\u4e1c\u65b9\u7f8e\u5973\u7684\u590f\u65e5\u5199\u771f"}
+    )["project"]
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Use the uploaded prototype face as the identity source", "uploaded_asset_ids": [upload_id]},
+    )
+    snapshot = job["metadata"]["project_context_snapshot"]
+
+    assert any(item.get("asset_ref_id") == upload_id and item.get("use_policy") == "identity" for item in snapshot["uploaded_reference_assets"])
+    assert snapshot["selected_visual_references"][0]["asset_ref_id"] == upload_id
+    assert snapshot["strong_reference_bindings"][0]["source_type"] == "uploaded"
+    assert snapshot["identity_lock_profiles"][0]["subject_type"] == "character"
+
+
 def test_portrait_project_create_marks_uploaded_asset_as_face_reference() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects(

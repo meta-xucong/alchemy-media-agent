@@ -618,6 +618,13 @@ class V3ProjectModeService:
         if template_manifest.template_id not in project.allowed_template_ids:
             project.allowed_template_ids.append(template_manifest.template_id)
         project.primary_template_id = template_manifest.template_id
+        user_input = job_request.user_input or project.user_goal
+        self._persist_job_uploaded_references(
+            project,
+            uploaded_asset_ids,
+            template_id=template_manifest.template_id,
+            user_input=user_input,
+        )
         context = self._build_context(
             project,
             continuation_instruction=job_request.user_input,
@@ -625,7 +632,6 @@ class V3ProjectModeService:
             commerce_profile=commerce_profile,
         )
         context_snapshot = context.model_dump(mode="json")
-        user_input = job_request.user_input or project.user_goal
         scenario_selection = self._scenario_selection_for_template(
             template_manifest,
             job_request,
@@ -1614,6 +1620,13 @@ class V3ProjectModeService:
         reference_metadata = dict(metadata or {})
         if source_type == ProjectReferenceSourceType.UPLOADED:
             reference_metadata.setdefault("v3_upload_lookup", "ready")
+            use_policy = self._effective_uploaded_reference_use_policy(
+                project,
+                upload_record,
+                requested_policy=use_policy,
+                metadata=reference_metadata,
+            )
+            reference_metadata.setdefault("effective_use_policy", use_policy.value)
         existing = next((item for item in project.reference_assets if item.reference_id == reference_id), None)
         if existing is None:
             existing = ProjectReferenceAsset(
@@ -1642,6 +1655,77 @@ class V3ProjectModeService:
         if source_type == ProjectReferenceSourceType.UPLOADED:
             self._ensure_legacy_uploaded_ref(project, existing)
         return existing
+
+    def _persist_job_uploaded_references(
+        self,
+        project: ProjectRecord,
+        uploaded_asset_ids: list[str],
+        *,
+        template_id: str,
+        user_input: str,
+    ) -> None:
+        now = _utc_now_iso()
+        seen: set[str] = set()
+        for asset_id in uploaded_asset_ids:
+            clean_id = str(asset_id or "").strip()
+            if not clean_id or clean_id in seen:
+                continue
+            seen.add(clean_id)
+            requested_policy = (
+                ProjectReferenceUsePolicy.PRODUCT
+                if template_id == ECOMMERCE_TEMPLATE_ID
+                else ProjectReferenceUsePolicy.GENERAL
+            )
+            try:
+                self._upsert_project_reference(
+                    project,
+                    source_type=ProjectReferenceSourceType.UPLOADED,
+                    asset_ref_id=clean_id,
+                    now=now,
+                    label="Job uploaded reference",
+                    user_note="Uploaded for this project job and kept as project context.",
+                    use_policy=requested_policy,
+                    metadata={
+                        "persisted_from_project_job": True,
+                        "template_id": template_id,
+                        "user_input_preview": self._short_text(user_input, 120),
+                    },
+                )
+            except ValueError:
+                if template_id != ECOMMERCE_TEMPLATE_ID:
+                    continue
+                raise
+
+    def _effective_uploaded_reference_use_policy(
+        self,
+        project: ProjectRecord,
+        upload_record: V3UploadedAssetRecord | None,
+        *,
+        requested_policy: ProjectReferenceUsePolicy,
+        metadata: dict[str, Any] | None = None,
+    ) -> ProjectReferenceUsePolicy:
+        if upload_record is None:
+            return requested_policy
+        role = str(upload_record.role or "").strip().lower()
+        requested = requested_policy
+        if requested in {
+            ProjectReferenceUsePolicy.PRODUCT,
+            ProjectReferenceUsePolicy.PRODUCT_IDENTITY,
+            ProjectReferenceUsePolicy.IDENTITY,
+            ProjectReferenceUsePolicy.BRAND_ASSET,
+        }:
+            return requested
+        if role in ECOMMERCE_PRODUCT_UPLOAD_ROLES:
+            return ProjectReferenceUsePolicy.PRODUCT
+        character_roles = {"face_reference", "portrait_identity", "identity_reference"}
+        possible_subject_roles = {"unknown_reference", "subject_reference", "general", ""}
+        if role in character_roles:
+            return ProjectReferenceUsePolicy.IDENTITY
+        if self._looks_like_character_project(project) and role in possible_subject_roles:
+            if metadata is not None:
+                metadata.setdefault("identity_policy_inferred_from", "character_project_uploaded_reference")
+            return ProjectReferenceUsePolicy.IDENTITY
+        return requested if requested != ProjectReferenceUsePolicy.GENERAL else ProjectReferenceUsePolicy.GENERAL
 
     def _upsert_generated_reference(self, project: ProjectRecord, ref: OutputRef, now: str) -> ProjectReferenceAsset:
         return self._upsert_project_reference(
@@ -2185,6 +2269,42 @@ class V3ProjectModeService:
         active_uploaded_references: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         references: list[dict[str, Any]] = []
+        strong_uploaded_references: list[dict[str, Any]] = []
+        soft_uploaded_references: list[dict[str, Any]] = []
+        for item in active_uploaded_references:
+            try:
+                policy = ProjectReferenceUsePolicy(str(item.get("use_policy") or "general"))
+            except ValueError:
+                policy = ProjectReferenceUsePolicy.GENERAL
+            if policy == ProjectReferenceUsePolicy.PRODUCT and template_id == ECOMMERCE_TEMPLATE_ID:
+                policy = ProjectReferenceUsePolicy.PRODUCT_IDENTITY
+            payload = dict(item)
+            payload.setdefault("source_type", ProjectReferenceSourceType.UPLOADED.value)
+            payload["use_policy"] = policy.value
+            payload.setdefault("role", self._reference_role_for_policy(policy))
+            payload.setdefault(
+                "strength",
+                "hard"
+                if policy
+                in {
+                    ProjectReferenceUsePolicy.IDENTITY,
+                    ProjectReferenceUsePolicy.PRODUCT_IDENTITY,
+                    ProjectReferenceUsePolicy.PRODUCT,
+                    ProjectReferenceUsePolicy.BRAND_ASSET,
+                }
+                else "medium",
+            )
+            payload.setdefault("lock_targets", self._lock_targets_for_policy(policy))
+            if policy in {
+                ProjectReferenceUsePolicy.IDENTITY,
+                ProjectReferenceUsePolicy.PRODUCT_IDENTITY,
+                ProjectReferenceUsePolicy.PRODUCT,
+                ProjectReferenceUsePolicy.BRAND_ASSET,
+            }:
+                strong_uploaded_references.append(payload)
+            else:
+                soft_uploaded_references.append(payload)
+        references.extend(strong_uploaded_references)
         generated_by_id = {
             str(
                 item.get("output_id")
@@ -2222,7 +2342,7 @@ class V3ProjectModeService:
             payload["use_policy"] = selected_policy.value
             payload["role"] = self._reference_role_for_policy(selected_policy)
             references.append(payload)
-        for item in [*active_generated_references, *active_uploaded_references]:
+        for item in [*active_generated_references, *soft_uploaded_references]:
             references.append(dict(item))
         return self._dedupe_visual_reference_payloads(references)
 
@@ -2431,8 +2551,8 @@ class V3ProjectModeService:
         )
         prompt_additions = self._dedupe_text(
             [
-                "use selected project output as the strongest positive reference",
-                "preserve selected identity/style anchor while creating additional outputs",
+                "use active project reference images as the strongest positive references",
+                "preserve uploaded prototype identity/product details before extending selected generated style",
                 *[rule for anchor in anchors for rule in anchor.get("identity_keep_rules", [])],
                 *[rule for anchor in anchors for rule in anchor.get("style_keep_rules", [])],
             ]

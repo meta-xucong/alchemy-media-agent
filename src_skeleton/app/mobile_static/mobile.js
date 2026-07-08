@@ -27,8 +27,11 @@ const defaultImageCount = "1";
 const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
-const historyFetchPageSize = 72;
+const historyFetchPageSize = 48;
 const heroHistoryPageSize = 8;
+const mobileV3ProjectPageSize = 4;
+const mobileV3ProjectFetchLimit = 80;
+const mobileV3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 10;
 const v2TemplateEagerImageCount = 4;
 const v2HistoryPageSize = 24;
@@ -2661,6 +2664,7 @@ const mobileV3State = {
   uploadedAssets: [],
   uploadFingerprints: {},
   projects: [],
+  projectRenderLimit: mobileV3ProjectPageSize,
   outputs: [],
   selectedTemplate: "general_template",
   currentProject: null,
@@ -2804,7 +2808,7 @@ function hydrateMobileV3Caches() {
 
 function persistMobileV3Caches() {
   try {
-    window.localStorage.setItem(mobileV3ProjectsCacheKey, JSON.stringify((mobileV3State.projects || []).slice(0, 20)));
+    window.localStorage.setItem(mobileV3ProjectsCacheKey, JSON.stringify((mobileV3State.projects || []).slice(0, mobileV3ProjectCacheLimit)));
     window.localStorage.setItem(mobileV3OutputsCacheKey, JSON.stringify((mobileV3State.outputs || []).slice(0, 80)));
   } catch (_error) {
   }
@@ -2821,7 +2825,7 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   setMobileV3LoadingLayer(true, "正在同步项目", "先显示项目框架，再分批加载图片预览。");
   updateMobileV3Status("同步中");
   try {
-    const projectsPayload = await mobileV3Request("/projects?limit=24");
+    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}`);
     mobileV3State.projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
     mobileV3State.outputsLoaded = false;
     mobileV3State.outputs = [];
@@ -2829,7 +2833,7 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     persistMobileV3Caches();
     updateMobileV3Status("正在补图片");
     renderMobileV3ProjectCards({ deferImages: true });
-    mobileV3Request("/project-outputs?limit=18&compact=true")
+    mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)
       .then((outputsPayload) => {
         mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
         mobileV3State.outputsLoaded = true;
@@ -2873,6 +2877,29 @@ function setMobileV3LoadingLayer(visible, title = "", detail = "") {
   document.body.classList.toggle("v3-mobile-loading-active", Boolean(visible));
   setText("#mobileV3LoadingTitle", title || "正在同步项目");
   setText("#mobileV3LoadingDetail", detail || "先显示框架，再分批加载项目和图片。");
+}
+
+function ensureMobilePageLoadingLayer() {
+  let layer = document.querySelector("#mobilePageLoadingLayer");
+  if (layer) return layer;
+  layer = document.createElement("div");
+  layer.id = "mobilePageLoadingLayer";
+  layer.className = "v3-mobile-loading-layer mobile-page-loading-layer";
+  layer.hidden = true;
+  layer.innerHTML = `
+    <strong id="mobilePageLoadingTitle">正在加载</strong>
+    <small id="mobilePageLoadingDetail">正在读取页面数据。</small>
+  `;
+  document.body.appendChild(layer);
+  return layer;
+}
+
+function setMobilePageLoading(visible, title = "", detail = "") {
+  const layer = ensureMobilePageLoadingLayer();
+  layer.hidden = !visible;
+  document.body.classList.toggle("v3-mobile-loading-active", Boolean(visible));
+  setText("#mobilePageLoadingTitle", title || "正在加载");
+  setText("#mobilePageLoadingDetail", detail || "正在读取页面数据。");
 }
 
 function renderMobileV3ProjectSkeletons(count = 6) {
@@ -2941,8 +2968,34 @@ function mobileV3RecentProjectGroups() {
     .sort((a, b) => mobileV3OutputTime(b.latestItem) - mobileV3OutputTime(a.latestItem));
 }
 
+function mobileV3RecentProjectGroupMap() {
+  return new Map(mobileV3RecentProjectGroups().map((group) => [String(group.projectId), group]));
+}
+
+function mobileV3GroupFromProject(project, outputGroup = null) {
+  const summaryOutputs = mobileV3SummaryThumbOutputs(project);
+  const latestItem = outputGroup?.latestItem || summaryOutputs[0] || null;
+  return {
+    projectId: String(project.project_id || ""),
+    project,
+    items: outputGroup?.items || [],
+    latestItem,
+    latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
+    count: outputGroup?.count || Number(project.generated_output_count || project.output_count || project.selected_asset_count || summaryOutputs.length || 0),
+  };
+}
+
+function mobileV3ProjectGroupsFromProjects() {
+  const outputGroups = mobileV3RecentProjectGroupMap();
+  const projects = (mobileV3State.projects || [])
+    .filter((project) => project?.project_id && project.status !== "archived")
+    .sort((a, b) => (Date.parse(b?.updated_at || b?.created_at || "") || 0) - (Date.parse(a?.updated_at || a?.created_at || "") || 0));
+  if (!projects.length) return mobileV3RecentProjectGroups();
+  return projects.map((project) => mobileV3GroupFromProject(project, outputGroups.get(String(project.project_id))));
+}
+
 function mobileV3VisibleProjects() {
-  return mobileV3RecentProjectGroups().map((group) => group.project);
+  return mobileV3ProjectGroupsFromProjects().map((group) => group.project);
 }
 
 function mobileV3FindProject(projectId) {
@@ -2955,7 +3008,8 @@ function mobileV3FindProject(projectId) {
 function renderMobileV3ProjectCards({ deferImages = false } = {}) {
   const grid = document.querySelector("#mobileV3ProjectGrid");
   if (!grid) return;
-  const groups = mobileV3RecentProjectGroups();
+  const groups = mobileV3ProjectGroupsFromProjects();
+  const visibleGroups = groups.slice(0, mobileV3State.projectRenderLimit || mobileV3ProjectPageSize);
   setText("#mobileV3ProjectCount", `${groups.length} 个项目`);
   grid.innerHTML = "";
   grid.classList.toggle("empty-v2-list", groups.length === 0);
@@ -2963,7 +3017,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     grid.textContent = mobileV3State.outputsLoaded ? "还没有生成过图片的项目。" : "正在整理最近项目。";
     return;
   }
-  groups.forEach((group) => {
+  visibleGroups.forEach((group) => {
     const project = group.project;
     const finalOutputs = group.items;
     const latest = group.latestItem || finalOutputs[0] || null;
@@ -2988,6 +3042,22 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     `;
     grid.appendChild(card);
   });
+  if (groups.length > visibleGroups.length) {
+    const card = document.createElement("article");
+    card.className = "v3-mobile-project-card v3-mobile-project-load-more";
+    card.innerHTML = `
+      <button class="v3-mobile-project-preview v3-mobile-load-more-preview" type="button" data-mobile-v3-load-more-projects aria-label="加载更多项目">
+        <span>${groups.length - visibleGroups.length}</span>
+      </button>
+      <div class="v3-mobile-project-copy">
+        <strong>查看更多项目</strong>
+        <span>首页只加载项目封面缩略图</span>
+        <small>点进去后再加载整组图片</small>
+      </div>
+      <button class="button compact secondary" type="button" data-mobile-v3-load-more-projects>加载更多</button>
+    `;
+    grid.appendChild(card);
+  }
 }
 
 function handleMobileV3Click(event) {
@@ -3041,6 +3111,11 @@ function handleMobileV3Click(event) {
   if (openProjectButton) {
     const project = mobileV3FindProject(openProjectButton.dataset.mobileV3OpenProject);
     if (project) openMobileV3ProjectGallery(project);
+    return;
+  }
+  if (event.target.closest("[data-mobile-v3-load-more-projects]")) {
+    mobileV3State.projectRenderLimit += mobileV3ProjectPageSize;
+    renderMobileV3ProjectCards();
     return;
   }
   if (event.target.closest("#mobileV3RefreshBtn")) {
@@ -5499,6 +5574,8 @@ async function initV2({ silent = true, force = false } = {}) {
   }
   v2State.loading = true;
   toggleV2Loading(true);
+  const showPageOverlay = activePanelName() === "v2" || !silent;
+  if (showPageOverlay) setMobilePageLoading(true, "正在加载 V2", "正在读取历史、模板和中枢状态。");
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
   try {
     const [
@@ -5558,6 +5635,7 @@ async function initV2({ silent = true, force = false } = {}) {
   } finally {
     v2State.loading = false;
     toggleV2Loading(false);
+    if (showPageOverlay) setMobilePageLoading(false);
   }
 }
 
@@ -9269,6 +9347,8 @@ async function refreshHistory({ silent = false, append = false } = {}) {
   const offset = append ? state.historyItems.length : 0;
   if (!append) els.refreshHistoryBtn.disabled = true;
   else state.historyLoadingMore = true;
+  const showPageOverlay = !append && (activePanelName() === "image" || !silent);
+  if (showPageOverlay) setMobilePageLoading(true, "正在加载 V1", "正在读取最近生成记录和缩略图。");
   try {
     const history = await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
     const nextItems = history.items || [];
@@ -9293,6 +9373,7 @@ async function refreshHistory({ silent = false, append = false } = {}) {
   } finally {
     if (append) state.historyLoadingMore = false;
     if (!append) els.refreshHistoryBtn.disabled = false;
+    if (showPageOverlay) setMobilePageLoading(false);
     renderHistory(state.historyItems);
   }
 }
