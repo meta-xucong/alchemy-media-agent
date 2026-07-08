@@ -3014,7 +3014,8 @@ function renderMobileV3ReferenceUploads() {
   const list = document.querySelector("#mobileV3ReferenceUploadList");
   if (!list) return;
   list.innerHTML = "";
-  list.classList.toggle("empty-v2-list", mobileV3State.files.length === 0);
+  list.classList.remove("empty-v2-list");
+  list.classList.toggle("is-empty", mobileV3State.files.length === 0);
   if (!mobileV3State.files.length) {
     list.textContent = "还没有上传参考图";
     return;

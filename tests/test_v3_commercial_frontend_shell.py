@@ -142,6 +142,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="mobileV3GoalInput"' in h5.text
     assert 'id="mobileV3ProjectGrid"' in h5.text
     assert 'id="mobileV3GenerateBtn"' in h5.text
+    assert 'id="mobileV3ReferenceInput"' in h5.text
+    assert 'class="v3-mobile-upload-list is-empty"' in h5.text
     assert 'data-mobile-open="v3-compose"' in h5.text
     assert 'data-mobile-v3-mode="auto"' in h5.text
     assert 'data-mobile-v3-size="1024x1536"' in h5.text
@@ -247,6 +249,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert mobile_styles.status_code == 200
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
+    assert ".v3-mobile-upload-button::before" in mobile_styles.text
+    assert ".v3-mobile-upload-button input" in mobile_styles.text
+    assert "inset: 0" in mobile_styles.text
+    assert ".v3-mobile-upload-list.is-empty" in mobile_styles.text
+    assert ".v3-mobile-upload-list.empty-v2-list::before" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "limit=1000" not in mobile_script.text
@@ -259,6 +266,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "generateMobileV3Job" in mobile_script.text
     assert "data-mobile-v3-mode" in mobile_script.text
     assert "data-mobile-v3-size" in mobile_script.text
+    assert 'list.classList.remove("empty-v2-list")' in mobile_script.text
+    assert 'list.classList.toggle("is-empty"' in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text
