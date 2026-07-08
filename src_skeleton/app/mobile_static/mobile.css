@@ -4727,10 +4727,10 @@ body[data-active-module="v3"] .hero-actions {
   padding: 28px;
   border: 0;
   border-radius: 0;
-  background: rgba(246, 243, 235, 0.58);
+  background: rgba(246, 243, 235, 0.82);
   box-shadow: none;
-  backdrop-filter: blur(18px) saturate(1.08);
-  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
   text-align: center;
   pointer-events: auto;
 }

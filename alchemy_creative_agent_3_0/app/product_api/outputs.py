@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
 from uuid import uuid4
 
 
@@ -48,6 +49,10 @@ class V3GeneratedOutputStore:
 
     def __init__(self, storage_root: str | Path | None = None) -> None:
         self.storage_root = Path(storage_root) if storage_root else _default_storage_root()
+        self._cache_lock = threading.RLock()
+        self._records_cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._records_cache: list[V3GeneratedOutputRecord] | None = None
+        self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
 
     def save_base64_output(
         self,
@@ -102,6 +107,7 @@ class V3GeneratedOutputStore:
             metadata={**(metadata or {}), "v3_owned_output": True},
         )
         self._write_record(record)
+        self._invalidate_cache()
         return record
 
     def get_output(self, output_id: str) -> V3GeneratedOutputRecord | None:
@@ -117,20 +123,17 @@ class V3GeneratedOutputStore:
             return None
 
     def list_outputs(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
-        records: list[V3GeneratedOutputRecord] = []
-        for path in self.storage_root.glob("v3_output_*/output.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                records.append(V3GeneratedOutputRecord(**data))
-            except Exception:
-                continue
-        return sorted(records, key=lambda record: record.created_at or "", reverse=True)[: max(1, int(limit or 100))]
+        records = self._read_records_cached()
+        return records[: max(1, int(limit or 100))]
 
     def list_by_job(self, job_id: str) -> list[V3GeneratedOutputRecord]:
         target = str(job_id or "").strip()
         if not target:
             return []
-        return [record for record in self.list_outputs(limit=500) if record.job_id == target]
+        self._read_records_cached()
+        with self._cache_lock:
+            by_job = self._records_by_job_cache or {}
+            return list(by_job.get(target, []))
 
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
         record = self.get_output(output_id)
@@ -163,6 +166,47 @@ class V3GeneratedOutputStore:
 
     def _record_path(self, output_id: str) -> Path:
         return self.storage_root / output_id / "output.json"
+
+    def _invalidate_cache(self) -> None:
+        with self._cache_lock:
+            self._records_cache_signature = None
+            self._records_cache = None
+            self._records_by_job_cache = None
+
+    def _record_paths_signature(self) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int], ...]]:
+        paths = sorted(self.storage_root.glob("v3_output_*/output.json"))
+        signature_items: list[tuple[str, int, int]] = []
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signature_items.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
+        return tuple(paths), tuple(signature_items)
+
+    def _read_records_cached(self) -> list[V3GeneratedOutputRecord]:
+        paths, signature = self._record_paths_signature()
+        with self._cache_lock:
+            if signature == self._records_cache_signature and self._records_cache is not None:
+                return list(self._records_cache)
+
+        records: list[V3GeneratedOutputRecord] = []
+        for path in paths:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                records.append(V3GeneratedOutputRecord(**data))
+            except Exception:
+                continue
+        records = sorted(records, key=lambda record: record.created_at or "", reverse=True)
+        by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
+        for record in records:
+            by_job.setdefault(str(record.job_id or ""), []).append(record)
+
+        with self._cache_lock:
+            self._records_cache_signature = signature
+            self._records_cache = list(records)
+            self._records_by_job_cache = {key: list(value) for key, value in by_job.items()}
+        return list(records)
 
 
 def download_route(output_id: str) -> str:

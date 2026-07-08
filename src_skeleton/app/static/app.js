@@ -1519,6 +1519,7 @@ async function initV3Shell({ force = false } = {}) {
     return;
   }
   v3State.loading = true;
+  setV3PageLoading(true, "正在同步最近项目", "先显示项目框架，再读取最新图片。");
   renderV3ViewState();
   const localProjects = readV3LocalProjects();
   if (localProjects.length) {
@@ -1528,6 +1529,7 @@ async function initV3Shell({ force = false } = {}) {
   }
   updateV3Notice("正在读取 V3 项目。", "info");
   try {
+    await waitForV3Paint();
     const payload = await request(`${v3ApiBase}/projects?limit=24`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
@@ -1538,13 +1540,7 @@ async function initV3Shell({ force = false } = {}) {
     renderV3ScenarioState();
     renderV3HomeTemplateChooser();
     renderV3Projects();
-    loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })
-      .then(() => {
-        window.setTimeout(() => {
-          loadV3ProjectOutputs({ silent: true, force: true, limit: 80 }).catch(() => {});
-        }, 800);
-      })
-      .catch(() => {});
+    loadV3ProjectOutputs({ silent: true, force: true, limit: 18 }).catch(() => {});
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
@@ -1560,6 +1556,7 @@ async function initV3Shell({ force = false } = {}) {
     }
   } finally {
     v3State.loading = false;
+    setV3PageLoading(false);
     renderV3ScenarioState();
   }
 }
@@ -1594,20 +1591,24 @@ function openV3Home({ silent = false } = {}) {
   renderV3ProjectDetail();
   renderV3Job(null);
   window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
-  const loadTasks = [];
-  if (!v3State.projectsLoaded && !v3State.projectsLoading) {
-    loadTasks.push(loadV3Projects({ silent: true }).catch((error) => {
-      if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
-    }));
-  }
-  if (!v3State.imageHistoryLoaded && !v3State.imageHistoryLoading) {
-    loadTasks.push(loadV3ProjectOutputs({ silent: true, limit: 18 }).catch((error) => {
-      if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
-    }));
-  }
-  if (loadTasks.length) {
+  const shouldLoadProjects = !v3State.projectsLoaded && !v3State.projectsLoading;
+  const shouldLoadHistory = !v3State.imageHistoryLoaded && !v3State.imageHistoryLoading;
+  if (shouldLoadProjects || shouldLoadHistory) {
     setV3PageLoading(true, "正在同步最近项目", "先读取项目，再分批加载图片预览。");
-    Promise.allSettled(loadTasks).finally(() => setV3PageLoading(false));
+    window.setTimeout(() => {
+      const loadTasks = [];
+      if (shouldLoadProjects) {
+        loadTasks.push(loadV3Projects({ silent: true }).catch((error) => {
+          if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
+        }));
+      }
+      if (shouldLoadHistory) {
+        loadTasks.push(loadV3ProjectOutputs({ silent: true, limit: 18 }).catch((error) => {
+          if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
+        }));
+      }
+      Promise.allSettled(loadTasks).finally(() => setV3PageLoading(false));
+    }, 40);
   }
 }
 
@@ -5011,6 +5012,12 @@ function setV3PageLoading(visible, title = "", detail = "") {
   const detailNode = overlay.querySelector("#v3PageLoadingDetail");
   if (titleNode) titleNode.textContent = title || "正在进入项目";
   if (detailNode) detailNode.textContent = detail || "正在读取项目图片、记录和上下文。";
+}
+
+function waitForV3Paint() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+  });
 }
 
 const v3ProgressStages = [

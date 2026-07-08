@@ -260,6 +260,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-mobile-upload-list.empty-v2-list::before" in mobile_styles.text
     assert ".v3-mobile-loading-layer" in mobile_styles.text
     assert "position: fixed" in mobile_styles.text
+    assert "rgba(246, 243, 235, 0.82)" in mobile_styles.text
     assert ".v3-mobile-full-prompt-dialog" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
@@ -284,6 +285,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "data-mobile-v3-remove-upload" in mobile_script.text
     assert "function removeMobileV3ReferenceUpload" in mobile_script.text
     assert "mobileV3State.uploadFingerprints = {}" in mobile_script.text
+    assert "网络有点慢，稍后点刷新项目" in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text
@@ -306,8 +308,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3JobHasExpectedVisibleImages" in script.text
     assert "function syncV3CurrentJobFromProjectOutputs" in script.text
     assert "function setV3PageLoading" in script.text
+    assert "function waitForV3Paint" in script.text
+    assert "await waitForV3Paint()" in script.text
     assert "v3-page-loading-overlay" in styles.text
     assert "v3-page-loading-active" in styles.text
+    assert "rgba(247, 244, 236, 0.82)" in styles.text
     assert "if (v3State.projectOpening) return;" in script.text
     assert 'data-v3-output-action="prompt"' in script.text
     assert "promptOpen = false" in script.text

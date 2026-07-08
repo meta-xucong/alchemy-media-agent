@@ -2846,8 +2846,17 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
   } catch (error) {
     setMobileV3LoadingLayer(false);
-    if (!silent) updateMobileV3Status(`加载失败：${friendlyError(error)}`);
-    throw error;
+    mobileV3State.loaded = true;
+    mobileV3State.outputsLoaded = true;
+    renderMobileV3ProjectCards();
+    const fallbackCount = mobileV3VisibleProjects().length;
+    updateMobileV3Status(
+      fallbackCount
+        ? `网络有点慢，已显示本地 ${fallbackCount} 个项目`
+        : "网络有点慢，稍后点刷新项目",
+    );
+    if (!silent) updateMobileV3Status(`网络有点慢，稍后点刷新项目`);
+    return;
   } finally {
     mobileV3State.loading = false;
     if (mobileV3State.outputsLoaded) {
