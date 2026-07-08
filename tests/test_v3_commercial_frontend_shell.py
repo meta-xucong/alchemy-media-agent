@@ -144,6 +144,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="mobileV3GenerateBtn"' in h5.text
     assert 'id="mobileV3ReferenceInput"' in h5.text
     assert 'class="v3-mobile-upload-list is-empty"' in h5.text
+    assert 'id="mobileV3ShowFullPromptBtn"' in h5.text
+    assert 'id="mobileV3FullPromptDialog"' in h5.text
     assert 'data-mobile-open="v3-compose"' in h5.text
     assert 'data-mobile-v3-mode="auto"' in h5.text
     assert 'data-mobile-v3-size="1024x1536"' in h5.text
@@ -226,6 +228,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-project-output-tile.selected" in styles.text
     assert ".v3-result-card.selected" in styles.text
     assert ".v3-reference-actions" in styles.text
+    assert ".v3-asset-row button" in styles.text
+    assert ".v3-asset-file-copy" in styles.text
     assert ".v3-project-workflow" in styles.text
     assert ".v3-project-next-actions" in styles.text
     assert ".v3-continuation-panel" in styles.text
@@ -254,6 +258,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "inset: 0" in mobile_styles.text
     assert ".v3-mobile-upload-list.is-empty" in mobile_styles.text
     assert ".v3-mobile-upload-list.empty-v2-list::before" in mobile_styles.text
+    assert ".v3-mobile-loading-layer" in mobile_styles.text
+    assert "position: fixed" in mobile_styles.text
+    assert ".v3-mobile-full-prompt-dialog" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "limit=1000" not in mobile_script.text
@@ -268,6 +275,15 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "data-mobile-v3-size" in mobile_script.text
     assert 'list.classList.remove("empty-v2-list")' in mobile_script.text
     assert 'list.classList.toggle("is-empty"' in mobile_script.text
+    assert "mobileV3VisibleProjects" in mobile_script.text
+    assert "mobileV3RecentProjectGroups" in mobile_script.text
+    assert "mobileV3ProjectFromOutputGroup" in mobile_script.text
+    assert "syncMobileV3PromptFromProject" in mobile_script.text
+    assert "openMobileV3FullPrompt" in mobile_script.text
+    assert "data-mobile-v3-output-prompt" in mobile_script.text
+    assert "data-mobile-v3-remove-upload" in mobile_script.text
+    assert "function removeMobileV3ReferenceUpload" in mobile_script.text
+    assert "mobileV3State.uploadFingerprints = {}" in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text
@@ -289,6 +305,14 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "recovered_without_exact_job_match" in script.text
     assert "function v3JobHasExpectedVisibleImages" in script.text
     assert "function syncV3CurrentJobFromProjectOutputs" in script.text
+    assert "function setV3PageLoading" in script.text
+    assert "v3-page-loading-overlay" in styles.text
+    assert "v3-page-loading-active" in styles.text
+    assert "if (v3State.projectOpening) return;" in script.text
+    assert 'data-v3-output-action="prompt"' in script.text
+    assert "promptOpen = false" in script.text
+    assert "promptOpen: true" in script.text
+    assert "els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || \"\"" in script.text
     assert "v3JobVisibleImageCount(job) >= v3ExpectedImageCountForJob(job, expectedCount)" in script.text
     assert "expectedCount: generationSettings.count" in script.text
     assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in script.text
@@ -302,6 +326,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "hidden_output_ids" in script.text
     assert "这次生成的图片已从项目里移除。" in script.text
     assert "function renderV3Projects" in script.text
+    assert "function handleV3AssetListClick" in script.text
+    assert "function removeV3AssetFile" in script.text
+    assert "data-v3-remove-upload" in script.text
     assert "function renderV3ProjectDetail" in script.text
     assert "function v3LatestProjectJobId" in script.text
     assert "function renderV3ProjectOpeningState" in script.text

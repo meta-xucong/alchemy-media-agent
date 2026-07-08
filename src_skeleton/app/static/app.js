@@ -1096,10 +1096,12 @@ function bindControls() {
       const projectId = els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject || "";
       closeV3ProjectHistoryModal();
       releaseV3ScrollLockIfNoModal();
+      if (v3State.projectOpening) return;
       if (projectId) openV3Project(projectId);
     });
   }
   if (els.v3AssetInput) els.v3AssetInput.addEventListener("change", handleV3AssetFiles);
+  if (els.v3AssetList) els.v3AssetList.addEventListener("click", handleV3AssetListClick);
   if (els.v3CountInput) {
     els.v3CountInput.addEventListener("input", () => {
       v3State.generationCount = v3BoundedGenerationCount(els.v3CountInput.value);
@@ -1592,15 +1594,20 @@ function openV3Home({ silent = false } = {}) {
   renderV3ProjectDetail();
   renderV3Job(null);
   window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+  const loadTasks = [];
   if (!v3State.projectsLoaded && !v3State.projectsLoading) {
-    loadV3Projects({ silent: true }).catch((error) => {
+    loadTasks.push(loadV3Projects({ silent: true }).catch((error) => {
       if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
-    });
+    }));
   }
   if (!v3State.imageHistoryLoaded && !v3State.imageHistoryLoading) {
-    loadV3ProjectOutputs({ silent: true, limit: 18 }).catch((error) => {
+    loadTasks.push(loadV3ProjectOutputs({ silent: true, limit: 18 }).catch((error) => {
       if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
-    });
+    }));
+  }
+  if (loadTasks.length) {
+    setV3PageLoading(true, "正在同步最近项目", "先读取项目，再分批加载图片预览。");
+    Promise.allSettled(loadTasks).finally(() => setV3PageLoading(false));
   }
 }
 
@@ -2935,6 +2942,7 @@ function renderV3ProjectOutputBoard() {
         ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
       </div>
       <div class="v3-output-actions">
+        <button type="button" data-v3-output-action="prompt" data-v3-output-index="${index}">提示词</button>
         <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
         <button type="button" data-v3-output-action="delete" data-v3-output-index="${index}">删除这张</button>
       </div>
@@ -2991,7 +2999,13 @@ async function handleV3ProjectOutputBoardClick(event) {
   const item = v3State.projectOutputItems[Number(actionButton.dataset.v3OutputIndex || 0)];
   if (!item) return;
   const action = actionButton.dataset.v3OutputAction;
-  if (action === "select") {
+  if (action === "prompt") {
+    openV3OutputLightbox(item, {
+      title: "项目图片提示词",
+      meta: "这张图片的生成提示词",
+      promptOpen: true,
+    });
+  } else if (action === "select") {
     await selectV3OutputItem(item);
   } else if (action === "delete") {
     await deleteV3OutputItem(item);
@@ -4107,18 +4121,22 @@ async function archiveV3Project(projectId) {
 function handleV3ProjectClick(event) {
   const actionButton = event.target.closest("[data-v3-project-action]");
   if (actionButton) {
+    event.preventDefault();
+    event.stopPropagation();
     const projectId = actionButton.dataset.v3ProjectId || "";
     if (actionButton.dataset.v3ProjectAction === "archive_project") {
       archiveV3Project(projectId);
       return;
     }
     if (actionButton.dataset.v3ProjectAction === "open_project") {
+      if (v3State.projectOpening) return;
       openV3Project(projectId);
       return;
     }
   }
   const card = event.target.closest("[data-v3-project-id]");
   if (!card) return;
+  if (v3State.projectOpening) return;
   openV3Project(card.dataset.v3ProjectId);
 }
 
@@ -4126,6 +4144,9 @@ function handleV3HistoryClick(event) {
   const projectButton = event.target.closest("[data-v3-history-project]");
   const directProjectId = projectButton?.dataset.v3HistoryProject || "";
   if (directProjectId) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (v3State.projectOpening) return;
     openV3Project(directProjectId);
     return;
   }
@@ -4194,9 +4215,11 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
 
 async function openV3Project(projectId) {
   if (!projectId) return;
+  if (v3State.projectOpening) return;
   v3State.view = "workspace";
   v3State.projectOpening = true;
   if (els.v3WorkspaceView) els.v3WorkspaceView.dataset.v3Opening = "true";
+  setV3PageLoading(true, "正在进入项目", "正在读取项目图片、记录和上下文。");
   closeV3ProjectSubpage({ silent: true });
   renderV3ViewState();
   renderV3ProjectOpeningState(projectId);
@@ -4221,11 +4244,14 @@ async function openV3Project(projectId) {
       })
       .catch(() => {});
     await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
-    if (els.v3PromptInput && !els.v3PromptInput.value.trim()) {
-      els.v3PromptInput.value = v3State.currentProject?.user_goal || "";
+    if (els.v3PromptInput) {
+      els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
     }
     const scenarioId = v3ScenarioForTemplate(v3State.currentProject?.primary_template_id);
     openV3ScenarioWorkspace(scenarioId, { fromHistory: true });
+    if (els.v3PromptInput) {
+      els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
+    }
     releaseV3ScrollLockIfNoModal();
     updateV3Notice("项目已打开，可以继续同风格生成。", "success");
   } catch (error) {
@@ -4233,6 +4259,7 @@ async function openV3Project(projectId) {
   }
   v3State.projectOpening = false;
   if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
+  setV3PageLoading(false);
   setV3Busy(false);
 }
 
@@ -4351,7 +4378,29 @@ function handleV3AssetFiles(event) {
   v3State.uploadedAssets = [];
   v3State.uploadFingerprints = {};
   renderV3Assets();
+  if (event.target) event.target.value = "";
   updateV3Notice(v3State.files.length ? `已添加 ${v3State.files.length} 张参考图，V3 会自动判断用途。` : "参考图已清空。", "info");
+}
+
+function handleV3AssetListClick(event) {
+  const button = event.target.closest("[data-v3-remove-upload]");
+  if (!button) return;
+  removeV3AssetFile(Number(button.dataset.v3RemoveUpload));
+}
+
+function removeV3AssetFile(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= v3State.files.length) return;
+  v3State.files = v3State.files.filter((_, itemIndex) => itemIndex !== index);
+  v3State.uploadedAssets = [];
+  v3State.uploadFingerprints = {};
+  if (els.v3AssetInput) els.v3AssetInput.value = "";
+  renderV3Assets();
+  updateV3Notice(
+    v3State.files.length
+      ? `已移除这张参考图，当前还有 ${v3State.files.length} 张。`
+      : "参考图已清空。",
+    "info",
+  );
 }
 
 function renderV3Assets() {
@@ -4370,8 +4419,11 @@ function renderV3Assets() {
     const row = document.createElement("div");
     row.className = "v3-asset-row";
     row.innerHTML = `
-      <strong>${escapeHtml(file.name || `参考图 ${index + 1}`)}</strong>
-      <span>${escapeHtml(v3FileSizeText(file.size))}</span>
+      <span class="v3-asset-file-copy">
+        <strong>${escapeHtml(file.name || `参考图 ${index + 1}`)}</strong>
+        <small>${escapeHtml(v3FileSizeText(file.size))}</small>
+      </span>
+      <button type="button" data-v3-remove-upload="${index}" aria-label="移除这张参考图">移除</button>
     `;
     els.v3AssetList.appendChild(row);
   });
@@ -4936,6 +4988,31 @@ function setV3Busy(isBusy, label = "") {
   renderV3ScenarioState();
 }
 
+function ensureV3PageLoadingOverlay() {
+  let overlay = document.querySelector("#v3PageLoadingOverlay");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "v3PageLoadingOverlay";
+  overlay.className = "v3-page-loading-overlay";
+  overlay.hidden = true;
+  overlay.innerHTML = `
+    <strong id="v3PageLoadingTitle">正在进入项目</strong>
+    <small id="v3PageLoadingDetail">正在读取项目图片、记录和上下文。</small>
+  `;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function setV3PageLoading(visible, title = "", detail = "") {
+  const overlay = ensureV3PageLoadingOverlay();
+  overlay.hidden = !visible;
+  document.body.classList.toggle("v3-page-loading-active", Boolean(visible));
+  const titleNode = overlay.querySelector("#v3PageLoadingTitle");
+  const detailNode = overlay.querySelector("#v3PageLoadingDetail");
+  if (titleNode) titleNode.textContent = title || "正在进入项目";
+  if (detailNode) detailNode.textContent = detail || "正在读取项目图片、记录和上下文。";
+}
+
 const v3ProgressStages = [
   { key: "queued", percent: 12, label: "准备项目" },
   { key: "uploading", percent: 22, label: "上传参考" },
@@ -5383,7 +5460,7 @@ function v3OutputThumbImageUrl(item) {
   ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
 }
 
-function openV3OutputLightbox(item, { title = "V3 生成图片", meta = "", promptText = "" } = {}) {
+function openV3OutputLightbox(item, { title = "V3 生成图片", meta = "", promptText = "", promptOpen = false } = {}) {
   const metadata = item?.metadata || {};
   const fullUrl = v3OutputFullImageUrl(item);
   const previewUrl = v3OutputPreviewImageUrl(item);
@@ -5404,6 +5481,7 @@ function openV3OutputLightbox(item, { title = "V3 生成图片", meta = "", prom
     meta,
     promptText: promptText || metadata.final_prompt || metadata.optimized_prompt || "",
   });
+  if (promptOpen && els.lightboxPromptPanel?.hidden) toggleLightboxPrompt();
 }
 
 function v3MediaUrl(url) {

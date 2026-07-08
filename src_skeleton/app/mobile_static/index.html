@@ -9,7 +9,7 @@
     <meta property="og:description" content="AI 自动优化创作表达，快速生成高质感视觉内容。" />
     <meta property="og:image" content="/mobile-static/showcase/city-poster.jpg" />
     <title>Verya Alchemy H5</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260708-v3-mobile-upload-ui-fix" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260708-v3-mobile-project-prompt-loading-fix" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -1133,6 +1133,7 @@
                 <span>这次想继续做什么</span>
                 <textarea id="mobileV3PromptInput" rows="5" placeholder="一句话即可，V3 会沿用本项目方向。"></textarea>
               </label>
+              <button id="mobileV3ShowFullPromptBtn" class="v3-mobile-full-prompt-button" type="button" hidden>点击显示完整提示词</button>
 
               <div class="v3-mobile-reference-upload">
                 <label class="v3-mobile-upload-button" for="mobileV3ReferenceInput">
@@ -1639,6 +1640,17 @@
       </div>
     </section>
 
+    <div id="mobileV3FullPromptDialog" class="v3-mobile-full-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="mobileV3FullPromptTitle" hidden>
+      <div class="v3-mobile-full-prompt-card">
+        <div class="v3-mobile-full-prompt-head">
+          <span>完整提示词</span>
+          <button id="mobileV3FullPromptCloseBtn" class="modal-close" type="button" aria-label="关闭完整提示词">×</button>
+        </div>
+        <h3 id="mobileV3FullPromptTitle">这次项目的完整要求</h3>
+        <pre id="mobileV3FullPromptText"></pre>
+      </div>
+    </div>
+
     <template id="outputTemplate">
       <article class="output-card">
         <button class="output-preview" type="button"></button>
@@ -1649,6 +1661,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260708-v3-mobile-upload-ui-fix" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260708-v3-mobile-project-prompt-loading-fix" defer></script>
   </body>
 </html>
