@@ -9,7 +9,7 @@
     <meta property="og:description" content="AI 自动优化创作表达，快速生成高质感视觉内容。" />
     <meta property="og:image" content="/mobile-static/showcase/city-poster.jpg" />
     <title>Verya Alchemy H5</title>
-    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260708-v3-project-scoped-mobile" />
+    <link rel="stylesheet" href="/mobile-static/mobile.css?v=20260708-v3-mobile-workbench-fix" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -1057,6 +1057,11 @@
                 <button id="mobileV3CreateProjectBtn" class="button primary" type="button">创建通用创意项目</button>
                 <button id="mobileV3RefreshBtn" class="button ghost" type="button">刷新项目</button>
               </div>
+              <div id="mobileV3LoadingLayer" class="v3-mobile-loading-layer" hidden>
+                <span class="thinking-spinner" aria-hidden="true"></span>
+                <strong id="mobileV3LoadingTitle">正在同步项目</strong>
+                <small id="mobileV3LoadingDetail">先显示框架，再分批加载项目和图片。</small>
+              </div>
             </section>
 
             <section class="panel flow-section v3-mobile-projects-panel">
@@ -1128,6 +1133,15 @@
                 <span>这次想继续做什么</span>
                 <textarea id="mobileV3PromptInput" rows="5" placeholder="一句话即可，V3 会沿用本项目方向。"></textarea>
               </label>
+
+              <div class="v3-mobile-reference-upload">
+                <label class="v3-mobile-upload-button" for="mobileV3ReferenceInput">
+                  <input id="mobileV3ReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                  <span>上传参考图</span>
+                  <small>可选，人物、产品、风格、构图都可以</small>
+                </label>
+                <div id="mobileV3ReferenceUploadList" class="v3-mobile-upload-list empty-v2-list">还没有上传参考图</div>
+              </div>
 
               <div class="mobile-summary-grid v3-mobile-mode-grid">
                 <button class="mobile-entry-card active" data-mobile-v3-mode="auto" type="button">
@@ -1635,6 +1649,6 @@
       </article>
     </template>
 
-    <script src="/mobile-static/mobile.js?v=20260708-v3-project-scoped-mobile" defer></script>
+    <script src="/mobile-static/mobile.js?v=20260708-v3-mobile-workbench-fix" defer></script>
   </body>
 </html>

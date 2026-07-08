@@ -2101,7 +2101,8 @@ async function loadV3History(options = {}) {
   return loadV3ProjectOutputs(options);
 }
 
-async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24 } = {}) {
+async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24, projectId = "" } = {}) {
+  const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
   if (v3State.imageHistoryLoading && force) {
     syncV3ProjectOutputsFromList(v3State.imageHistory || [], v3State.currentProject?.project_id);
     renderV3ProjectOutputBoard();
@@ -2111,7 +2112,7 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24 
     return;
   }
   if (v3State.imageHistoryLoading || (v3State.imageHistoryLoaded && !force)) {
-    if (v3State.currentProject?.project_id && Array.isArray(v3State.imageHistory)) {
+    if (scopedProjectId && Array.isArray(v3State.imageHistory)) {
       syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
     }
     renderV3History();
@@ -2126,13 +2127,14 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24 
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
   try {
     const cacheBust = force ? `&t=${Date.now()}` : "";
-    const boundedLimit = Math.max(12, Math.min(Number(limit || 24), 80));
-    const payload = await request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${cacheBust}`);
+    const boundedLimit = Math.max(12, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
+    const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
+    const payload = await request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
     const items = Array.isArray(payload.items) ? payload.items : [];
-    v3State.imageHistory = items;
+    if (!scopedProjectId) v3State.imageHistory = items;
     v3State.imageHistoryLoaded = true;
-    if (v3State.currentProject?.project_id) {
-      syncV3ProjectOutputsFromList(items, v3State.currentProject.project_id);
+    if (scopedProjectId) {
+      syncV3ProjectOutputsFromList(items, scopedProjectId);
     }
     renderV3History();
     renderV3HeroHistory();
@@ -2417,7 +2419,7 @@ function v3OutputItemTime(item) {
 function v3HistoryOutputVisible(item) {
   const state = item?.selection_state || item?.metadata?.selection_state || "";
   if (state === "unselected" || state === "rejected") return false;
-  return v3OutputDeliveryState(item) !== "superseded";
+  return !["superseded", "process_only"].includes(v3OutputDeliveryState(item));
 }
 
 function v3ProjectImageGroup(projectId) {
@@ -2788,7 +2790,7 @@ function syncV3CurrentJobFromProjectOutputs({ preferLatest = false } = {}) {
 function v3OutputVisibleInProject(item, project = v3State.currentProject) {
   const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
   if (state === "unselected" || state === "rejected") return false;
-  if (v3OutputDeliveryState(item) === "superseded") return false;
+  if (["superseded", "process_only"].includes(v3OutputDeliveryState(item))) return false;
   const identity = v3OutputItemIdentity(item);
   return !v3ReviewOutputIdSet("hidden_output_ids").has(identity);
 }
