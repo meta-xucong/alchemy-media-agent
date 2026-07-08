@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...creative_core.prompt_language import product_language_allowed
+from ...creative_core.prompt_language import (
+    looks_like_human_structured_appearance_context,
+    product_language_allowed,
+)
 from ...creative_core.rules import stable_id
 from ..base import SharedCapabilityModule
 from ..contracts import (
@@ -136,6 +139,14 @@ GENERAL_VISUAL_FORBIDDEN_TERMS = (
     "product identity",
     "product claims",
 )
+
+
+def _structured_appearance_rules() -> list[str]:
+    return [
+        "preserve the same structured appearance asset when styling defines the project",
+        "keep silhouette, layer order, neckline or collar direction, sleeve or cuff shape, closure or sash direction, material behavior, and transparency family coherent",
+        "keep pattern family, trim placement, accessory placement, and color-block relationships coherent when visible in the reference or selected frame",
+    ]
 ANTI_AI_FACE_ISSUE_CODES = {
     "ai_face_render",
     "plastic_skin",
@@ -539,6 +550,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
             subject_type=subject_type,
+            user_input=capability_input.user_input,
             requested_count=requested_count,
             selected_outputs=selected_outputs,
             strong_bindings=strong_bindings,
@@ -1256,6 +1268,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         project_id: str | None,
         job_id: str | None,
         subject_type: str,
+        user_input: str,
         requested_count: int,
         selected_outputs: list[dict[str, Any]],
         strong_bindings: list[StrongReferenceBinding],
@@ -1304,6 +1317,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             source_priority = "none"
             status = "not_applicable"
             applies = False
+        structured_appearance = looks_like_human_structured_appearance_context(user_input)
 
         identity_keep_rules = [
             "preserve broad face shape, face width/length ratio, age impression, and individual facial temperament",
@@ -1311,6 +1325,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "preserve nose-mouth relationship, lip shape, jawline direction, chin scale, cheek volume, and neck/shoulder balance",
             "preserve body type, natural head-to-body proportion, broad hair length/color/style, and wardrobe category when it defines the project",
         ]
+        appearance_structure_rules = _structured_appearance_rules() if structured_appearance else []
         facial_feature_integrity_rules = [
             "keep facial features attractive and harmonious; realism must not make the face less beautiful",
             "keep clean attractive eyebrow design, clear awake eyes, natural flattering eyelid detail, and pleasant lip shape",
@@ -1334,6 +1349,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "scene",
             "lighting micro-variation",
             "hair movement",
+            "small fabric motion",
         ]
         forbidden_drift = [
             "identity feature drift",
@@ -1345,11 +1361,25 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "beauty-filter face replacement",
             "generic AI influencer identity",
         ]
+        if structured_appearance:
+            forbidden_drift.extend(
+                [
+                    "appearance asset replacement",
+                    "garment structure drift",
+                    "pattern family drift",
+                    "layering drift",
+                    "trim or accessory placement drift",
+                ]
+            )
         prompt_additions = [
             "Subject identity card: preserve identity-critical traits while allowing new expression, pose, camera angle, crop, scene, and hair movement.",
             "Facial-feature aesthetic integrity: preserve attractive eye shape/spacing, eyebrow design, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, and neck/shoulder balance.",
             "Beautiful realism balance: keep the face beautiful; make it realistic through skin texture, light/shadow, hair, fabric, camera detail, and natural asymmetry, not by degrading facial proportions.",
         ]
+        if structured_appearance:
+            prompt_additions.append(
+                "Structured appearance lock: keep the same appearance asset structure across the batch; vary pose, camera, expression, crop, and scene without redesigning the garment or styling system."
+            )
         if human_photorealism and human_photorealism.applies:
             prompt_additions.extend(human_photorealism.reference_preserve_rules[:2])
         negative_additions = [
@@ -1365,12 +1395,24 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "generic AI influencer face",
             "beauty-filter face replacement",
         ]
+        if structured_appearance:
+            negative_additions.extend(
+                [
+                    "appearance asset redesign",
+                    "new garment cut or layer architecture",
+                    "new pattern family",
+                    "new trim placement",
+                    "unrequested accessory relocation",
+                ]
+            )
         review_checks = [
             "same-person recognizability remains strong",
             "eyes, eyebrows, nose-mouth relationship, jaw/chin direction, and face ratio remain attractive",
             "skin and light feel real without making the subject look dull, dark, tired, or rough",
             "pose, expression, head angle, and camera angle vary without replacing identity",
         ]
+        if structured_appearance:
+            review_checks.append("structured appearance asset stays coherent across the set")
         return SubjectIdentityCard(
             card_id=stable_id(
                 "subject_identity_card",
@@ -1394,6 +1436,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_keep_rules=_dedupe(identity_keep_rules),
             facial_feature_integrity_rules=_dedupe(facial_feature_integrity_rules),
             beautiful_realism_rules=_dedupe(beautiful_realism_rules),
+            appearance_structure_rules=_dedupe(appearance_structure_rules),
             allowed_variations=_dedupe(allowed_variations),
             forbidden_drift=_dedupe(forbidden_drift),
             reference_requirements=_dedupe(source_asset_ids + source_output_ids + source_binding_ids + source_anchor_ids),
@@ -1407,6 +1450,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ],
             metadata={
                 "doc": "78",
+                "doc84_structured_appearance_lock": structured_appearance,
                 "requested_count": requested_count,
                 "identity_hero_plan_id": identity_hero_plan.plan_id if identity_hero_plan else None,
                 "user_reference_priority": bool(selected_outputs),
@@ -1432,6 +1476,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     *recipe.must_keep_rules,
                     *card.identity_keep_rules[:3],
                     *card.facial_feature_integrity_rules[:3],
+                    *card.appearance_structure_rules[:3],
                 ]
             )
             must_not = _dedupe([*recipe.must_not_rules, *card.forbidden_drift[:5]])
@@ -1848,6 +1893,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if not strong_bindings and not profile.style_signals:
             return []
         policy_lock = str(template_policy.get("identity_lock_default") or "generic")
+        structured_appearance = looks_like_human_structured_appearance_context(capability_input.user_input)
         if allow_product_language or policy_lock == "product":
             subject_type = "product"
             keep_rules = [
@@ -1856,6 +1902,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ]
             forbidden = ["product identity drift", "unrelated product object", "distorted material or logo"]
             product_lock = {"source": "selected_reference_or_project_context", "priority": "product truth"}
+            appearance_structure_lock = {}
         elif policy_lock == "character":
             subject_type = "character"
             keep_rules = [
@@ -1864,6 +1911,32 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ]
             forbidden = ["face identity drift", "random hairstyle change", "outfit direction drift"]
             product_lock = {}
+            appearance_structure_lock = (
+                {
+                    "preserve": True,
+                    "level": "structured_asset",
+                    "confidence": 0.74,
+                    "preserve_specific_design": True,
+                    "preserve_layering": True,
+                    "preserve_material_behavior": True,
+                    "preserve_pattern_family": True,
+                    "preserve_accessory_placement": True,
+                }
+                if structured_appearance
+                else {}
+            )
+            if structured_appearance:
+                keep_rules.append(
+                    "keep the same appearance asset structure: silhouette, layer order, neckline/collar, sleeve/cuff, closure or sash, material behavior, pattern family, trim placement, and accessory placement coherent"
+                )
+                forbidden.extend(
+                    [
+                        "appearance asset replacement",
+                        "garment structure drift",
+                        "pattern family drift",
+                        "trim or accessory placement drift",
+                    ]
+                )
         else:
             subject_type = "generic"
             keep_rules = [
@@ -1872,6 +1945,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ]
             forbidden = ["style drift", "unrelated object drift", "composition mismatch"]
             product_lock = {}
+            appearance_structure_lock = {}
         binding_ids = [binding.binding_id for binding in strong_bindings]
         prompt_constraints = _dedupe([*keep_rules, *profile.composition_rules[:3], *profile.lighting_notes[:3]])
         negative_constraints = _dedupe([*forbidden, *profile.negative_rules[:4]])
@@ -1891,6 +1965,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 face_lock={"preserve": subject_type == "character", "confidence": 0.62 if subject_type == "character" else 0.0},
                 hair_lock={"preserve": subject_type == "character", "confidence": 0.58 if subject_type == "character" else 0.0},
                 wardrobe_lock={"preserve": subject_type == "character", "confidence": 0.55 if subject_type == "character" else 0.0},
+                appearance_structure_lock=appearance_structure_lock,
                 product_lock=product_lock,
                 camera_lock={"rules": profile.lens_notes[:4]},
                 lighting_lock={"rules": profile.lighting_notes[:4]},

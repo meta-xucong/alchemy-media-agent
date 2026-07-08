@@ -718,7 +718,9 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             negative_additions.extend(["collage", "split screen", "multi-panel layout"])
             composition_repair.append("generate one complete single-frame image")
         elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
-            identity_reinforcement.append("preserve the selected subject identity direction, hair, outfit category, lens, and lighting")
+            identity_reinforcement.append(
+                "preserve the selected subject identity direction, hair, outfit category, lens, and lighting; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
+            )
         elif code == "reference_guard_ignored":
             identity_reinforcement.append("use the selected reference as the main truth source and preserve the requested identity, object, camera, and style anchors")
             product_reinforcement.append("if a product or object reference exists, preserve its silhouette, proportions, material, label/logo placement, and visible text shapes")

@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..creative_core.prompt_language import product_language_allowed
+from ..creative_core.prompt_language import looks_like_human_structured_appearance_context, product_language_allowed
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
@@ -962,11 +962,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     )
                 elif "identity" in use_policy:
                     strong_reference_rules.append(
-                        "Preserve the selected person's broad face shape, eye shape and spacing, nose-mouth relationship, jawline direction, age impression, body type, broad hair/wardrobe direction, and light; do not copy the exact same expression, pose, head angle, camera angle, or crop across the batch."
+                        "Preserve the selected person's broad face shape, eye shape and spacing, nose-mouth relationship, jawline direction, age impression, body type, broad hair or wardrobe direction, and light; when styling defines the project, keep the same appearance asset structure, material behavior, pattern family, trim placement, and accessory placement across the batch; do not copy the exact same expression, pose, head angle, camera angle, or crop across the batch."
                     )
                 elif human_photo_context and not any(token in use_policy for token in ["brand", "logo"]):
                     strong_reference_rules.append(
-                        "Treat uploaded portrait-style references as same-person identity anchors; prompt adjectives may guide mood, wardrobe, pose, and scene, but must not replace facial feature relationships, face-shape direction, body type, or natural skin-tone direction."
+                        "Treat uploaded portrait-style references as same-person identity anchors; prompt adjectives may guide mood, pose, scene, and limited styling variation, but must not replace facial feature relationships, face-shape direction, body type, natural skin-tone direction, or the core appearance asset structure when styling defines the project."
                     )
                 elif "brand" in use_policy:
                     strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
@@ -1017,10 +1017,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "\u6539\u6210\u53e6\u4e00\u4e2a\u4eba",
         ]
         lower = prompt_text.lower()
+        structured_appearance = looks_like_human_structured_appearance_context(
+            " ".join([prompt_text, str(request.metadata.get("user_input") or "")])
+        )
         rules = [
             "The uploaded portrait reference has higher priority for identity than generic beauty words in the written prompt.",
             "Preserve the same recognizable person: face shape direction, eye shape and spacing, nose-mouth relationship, jaw/chin direction, age impression, body type, and natural skin-tone direction.",
-            "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and wardrobe styling unless the user explicitly asks for exact copy.",
+            (
+                "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and limited fabric motion; do not redesign the core appearance asset unless the user explicitly asks for a new one."
+                if structured_appearance
+                else "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and wardrobe styling unless the user explicitly asks for exact copy."
+            ),
             "Do not force a new facial geometry, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, or location.",
         ]
         if any(term in lower or term in prompt_text for term in strict_face_terms):
@@ -1188,12 +1195,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
             keep_rules = self._string_list(subject_identity_card.get("identity_keep_rules"))
             feature_rules = self._string_list(subject_identity_card.get("facial_feature_integrity_rules"))
             realism_rules = self._string_list(subject_identity_card.get("beautiful_realism_rules"))
+            appearance_rules = self._string_list(subject_identity_card.get("appearance_structure_rules"))
             allowed_variations = self._string_list(subject_identity_card.get("allowed_variations"))
             forbidden_drift = self._string_list(subject_identity_card.get("forbidden_drift"))
             if keep_rules or feature_rules:
                 lines.append("Subject identity card: " + "; ".join([*keep_rules[:4], *feature_rules[:4]]))
             if realism_rules:
                 lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:4]))
+            if appearance_rules:
+                lines.append("Structured appearance lock: " + "; ".join(appearance_rules[:4]))
             if allowed_variations:
                 lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:6]))
             if forbidden_drift:

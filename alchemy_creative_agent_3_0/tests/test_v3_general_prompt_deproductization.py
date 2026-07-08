@@ -33,6 +33,12 @@ GENERAL_SUMMER_PORTRAIT_PROMPT = (
     "\u672c\u8272\uff0c\u67d3\u8272\u6210\u7684\u7eff\u8272\uff0c\u4e0e"
     "\u590f\u65e5\u3001\u6e05\u51c9\u7684\u98ce\u683c\u642d\u914d"
 )
+STRUCTURED_APPEARANCE_PORTRAIT_PROMPT = (
+    "Create a same-person portrait suite for social cover use. "
+    "The woman wears one layered translucent ceremonial outfit with visible collar direction, "
+    "sleeve shape, sash structure, embroidered pattern family, and trim placement that must stay "
+    "consistent across the set. Keep it real-camera, clean, and atmospheric."
+)
 
 
 PRODUCT_TERMS = (
@@ -120,6 +126,37 @@ def test_general_template_final_prompt_stays_subject_focused_not_product_ad() ->
     assert "split screen" in final_provider_prompt.lower()
     assert "contact sheet" in final_provider_prompt.lower()
     assert "multi-panel layout" in (prompt.negative_prompt or "").lower()
+
+
+def test_structured_human_appearance_prompt_stays_on_general_path() -> None:
+    result = run_creative_planning(
+        STRUCTURED_APPEARANCE_PORTRAIT_PROMPT,
+        optional_template_id="general_template",
+        runtime_metadata={"template_id": "general_template", "scenario_id": "general_creative"},
+    )
+
+    prompt = result.prompt_compilations[0]
+    final_provider_prompt = _provider_prompt_for_planning_result(result)
+    model_facing_text = " ".join(
+        [
+            prompt.visual_prompt,
+            prompt.negative_prompt or "",
+            " ".join(prompt.hard_constraints),
+            " ".join(prompt.layout_notes),
+            result.brand_profile.layout_preference or "",
+            final_provider_prompt,
+        ]
+    ).lower()
+
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.commercial_brief.industry.value == "unknown"
+    assert prompt.metadata["product_language_allowed"] is False
+    assert "commercial product image asset" not in final_provider_prompt
+    assert "ecommerce_generic" not in model_facing_text
+    assert "product hero" not in model_facing_text
+    assert "feature label" not in model_facing_text
+    assert "pattern family" in final_provider_prompt.lower()
+    assert "trim placement" in final_provider_prompt.lower()
 
 
 def test_explicit_product_or_ecommerce_context_keeps_product_language() -> None:
@@ -221,7 +258,7 @@ def test_general_reference_asset_plan_uses_neutral_subject_language() -> None:
     )
 
     constraints = " ".join(plan["assets"][0]["prompt_constraints"]).lower()
-    assert "subject style" in constraints
+    assert "identity reference" in constraints or "subject style" in constraints
     assert "product" not in constraints
 
 

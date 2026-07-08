@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...creative_core.prompt_language import looks_like_human_structured_appearance_context
 from ...creative_core.rules import stable_id
 from .contracts import HumanIdentityAnchorProfile, HumanNaturalVariationPlan
 
@@ -82,6 +83,7 @@ class HumanNaturalVariationPolicy:
         exact_copy = self._has_exact_copy_request(text)
         mode = self._normalize_mode(variation_mode)
         has_reference = bool(selected_outputs or selected_references or uploaded_references or identity_lock_profiles)
+        structured_appearance = self._has_structured_appearance_lock(text, identity_lock_profiles)
         applies = bool(is_human and requested_image_count >= 2)
         identity_strength, diversity_strength = MODE_DIVERSITY.get(mode, MODE_DIVERSITY["delivery_suite"])
         if not has_reference and identity_strength == "strong":
@@ -110,6 +112,11 @@ class HumanNaturalVariationPolicy:
                 "same professional visual world",
                 "consistent lighting and palette language",
                 "same broad styling category",
+                *(
+                    ["same structured appearance asset when styling defines the project"]
+                    if structured_appearance
+                    else []
+                ),
             ]
             if applies
             else [],
@@ -118,6 +125,11 @@ class HumanNaturalVariationPolicy:
                 "body type and proportions",
                 "major hair color and broad length range",
                 "major wardrobe category when relevant",
+                *(
+                    ["same appearance asset structure, pattern family, layer logic, and accessory placement"]
+                    if structured_appearance
+                    else []
+                ),
             ]
             if applies
             else [],
@@ -128,6 +140,16 @@ class HumanNaturalVariationPolicy:
                 "ethnicity or person identity drift",
                 "large body type change",
                 "major hair color or length change unless requested",
+                *(
+                    [
+                        "appearance asset replacement",
+                        "garment structure drift",
+                        "pattern family drift",
+                        "trim or accessory placement drift",
+                    ]
+                    if structured_appearance
+                    else []
+                ),
                 "cloned stills across the whole batch",
             ]
             if applies
@@ -144,8 +166,8 @@ class HumanNaturalVariationPolicy:
             variation_mode=mode,
             identity_strength=identity_strength,
             diversity_strength=diversity_strength,
-            per_image_variation_axes=self._variation_axes(mode, exact_copy) if applies else [],
-            prompt_additions=self._prompt_additions(mode, has_reference, exact_copy) if applies else [],
+            per_image_variation_axes=self._variation_axes(mode, exact_copy, structured_appearance) if applies else [],
+            prompt_additions=self._prompt_additions(mode, has_reference, exact_copy, structured_appearance) if applies else [],
             negative_additions=self._negative_additions(exact_copy) if applies else [],
             batch_review_rules=self._batch_review_rules(mode, exact_copy) if applies else [],
             user_visible_summary=[
@@ -159,6 +181,7 @@ class HumanNaturalVariationPolicy:
                 "policy_id": stable_id("human_natural_variation", project_id, job_id, text, mode, requested_image_count),
                 "has_reference": has_reference,
                 "exact_copy_request": exact_copy,
+                "structured_appearance_lock": structured_appearance,
                 "doc": "56",
             },
         )
@@ -212,18 +235,36 @@ class HumanNaturalVariationPolicy:
             return "identity_lock_profile"
         return "prompt_only"
 
-    def _variation_axes(self, mode: str, exact_copy: bool) -> list[str]:
+    def _variation_axes(self, mode: str, exact_copy: bool, structured_appearance: bool = False) -> list[str]:
         if exact_copy:
             return ["crop", "format", "minor lighting polish"]
         if mode == "format_layout_adaptation":
             return ["crop", "camera distance", "negative space", "subject scale", "layout balance"]
         if mode == "creative_exploration":
-            return ["expression", "gaze", "pose", "head angle", "scene mood", "camera language", "styling idea"]
+            return [
+                "expression",
+                "gaze",
+                "pose",
+                "head angle",
+                "scene mood",
+                "camera language",
+                "fabric motion" if structured_appearance else "styling idea",
+            ]
         if mode == "selection_candidates":
             return ["expression", "gaze", "pose", "head angle", "hand placement", "crop", "camera distance"]
-        return ["expression", "gaze", "pose", "body turn", "head angle", "camera distance", "framing", "small hair movement"]
+        return [
+            "expression",
+            "gaze",
+            "pose",
+            "body turn",
+            "head angle",
+            "camera distance",
+            "framing",
+            "small hair movement",
+            *(["small fabric motion"] if structured_appearance else []),
+        ]
 
-    def _prompt_additions(self, mode: str, has_reference: bool, exact_copy: bool) -> list[str]:
+    def _prompt_additions(self, mode: str, has_reference: bool, exact_copy: bool, structured_appearance: bool = False) -> list[str]:
         if exact_copy:
             return [
                 "Follow the user's exact-copy instruction while preserving the same recognizable person and body type.",
@@ -239,6 +280,10 @@ class HumanNaturalVariationPolicy:
             additions.append(
                 "Use the reference as an identity and style anchor, not as an instruction to copy the exact same expression, pose, head angle, or crop."
             )
+        if structured_appearance:
+            additions.append(
+                "Keep the same structured appearance asset across the set: preserve garment silhouette, layer order, material behavior, pattern family, trim placement, and accessory placement unless the user explicitly asks for a new design."
+            )
         if mode == "selection_candidates":
             additions.append("Create close alternatives with small but visible differences so the user can pick the best frame.")
         elif mode == "delivery_suite":
@@ -248,6 +293,15 @@ class HumanNaturalVariationPolicy:
         elif mode == "format_layout_adaptation":
             additions.append("Prioritize layout, crop, and negative-space variation while keeping the person consistent.")
         return additions
+
+    def _has_structured_appearance_lock(self, text: str, identity_lock_profiles: list[dict[str, Any]]) -> bool:
+        if looks_like_human_structured_appearance_context(text):
+            return True
+        for profile in identity_lock_profiles:
+            lock = profile.get("appearance_structure_lock") if isinstance(profile, dict) else {}
+            if isinstance(lock, dict) and lock.get("preserve"):
+                return True
+        return False
 
     def _negative_additions(self, exact_copy: bool) -> list[str]:
         values = [

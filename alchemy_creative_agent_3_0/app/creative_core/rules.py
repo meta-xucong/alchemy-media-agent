@@ -10,6 +10,7 @@ from hashlib import sha1
 import re
 
 from ..schemas import AssetType, IndustryCategory, Platform
+from .prompt_language import contains_explicit_ecommerce_context, looks_like_human_subject_context
 
 
 RULE_VERSION = "v3.0-foundation-rules-001"
@@ -291,6 +292,12 @@ CREATIVE_DEFAULTS: dict[IndustryCategory, dict[str, object]] = {
 def detect_industry(normalized_input: str) -> IndustryCategory:
     for industry, keywords in INDUSTRY_KEYWORDS:
         if industry == IndustryCategory.LOCAL_SERVICE_BEAUTY and _is_portrait_beauty_context(normalized_input):
+            continue
+        if (
+            industry == IndustryCategory.ECOMMERCE_PRODUCT
+            and looks_like_human_subject_context(normalized_input)
+            and not contains_explicit_ecommerce_context(normalized_input)
+        ):
             continue
         if _contains_any(normalized_input, keywords):
             return industry

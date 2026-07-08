@@ -4,6 +4,7 @@ from typing import Any
 
 from .base import VerticalAgentPack
 from ..creative_core.rules import stable_id
+from ..creative_core.prompt_language import contains_explicit_ecommerce_context, looks_like_human_subject_context
 from ..scenario_packs.ecommerce import EcommerceScenarioPackPlanner
 from ..schemas import AssetSpec, AssetType, IndustryCategory, Platform
 from ..shared_capabilities.visual_cluster.casebook_recipes import apply_role_recipe_casebook_overlay
@@ -15,10 +16,29 @@ class EcommerceAgentFamily(VerticalAgentPack):
     supported_scenarios = ["new_product_promotion", "generic_promotion", "brand_or_commercial_poster"]
 
     def match(self, creative_job, commercial_brief=None) -> float:
-        score = 0.8 if self._industry_value(commercial_brief) in self.supported_industries else 0.0
-        if creative_job and str(creative_job.metadata.get("scenario_id") or "") == "ecommerce":
-            score = max(score, 1.0)
         text = self._job_text(creative_job)
+        template_id = str(
+            (creative_job.metadata.get("template_id") if creative_job else "")
+            or (getattr(creative_job, "optional_template_id", "") or "")
+        ).strip().lower()
+        scenario_id = str(creative_job.metadata.get("scenario_id") or "") if creative_job else ""
+        explicit_ecommerce = bool(
+            template_id == "ecommerce_template"
+            or scenario_id == "ecommerce"
+            or contains_explicit_ecommerce_context(text)
+            or (
+                commercial_brief
+                and any(
+                    platform in {Platform.TAOBAO, Platform.JD, Platform.ECOMMERCE_GENERIC}
+                    for platform in commercial_brief.target_platforms
+                )
+            )
+        )
+        if looks_like_human_subject_context(text) and not explicit_ecommerce:
+            return 0.0
+        score = 0.8 if self._industry_value(commercial_brief) in self.supported_industries else 0.0
+        if creative_job and scenario_id == "ecommerce":
+            score = max(score, 1.0)
         if self._contains_any(
             text,
             (
@@ -37,13 +57,8 @@ class EcommerceAgentFamily(VerticalAgentPack):
             ),
         ):
             score = max(score, 0.9)
-        if commercial_brief and any(
-            platform
-            in {
-                Platform.TAOBAO,
-                Platform.JD,
-                Platform.ECOMMERCE_GENERIC,
-            }
+        if explicit_ecommerce and commercial_brief and any(
+            platform in {Platform.TAOBAO, Platform.JD, Platform.ECOMMERCE_GENERIC}
             for platform in commercial_brief.target_platforms
         ):
             score = max(score, 0.86)

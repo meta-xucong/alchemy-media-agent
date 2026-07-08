@@ -77,3 +77,26 @@ def test_beverage_request_with_delivery_channel_does_not_select_restaurant_pack(
     selected_pack = registry.select_pack(beverage_job, beverage_brief)
 
     assert selected_pack.name == "default_commercial_pack"
+
+
+def test_human_styling_request_does_not_select_ecommerce_pack_from_soft_apparel_words() -> None:
+    registry = VerticalAgentRegistry()
+    misclassified_brief = CommercialBrief(
+        brief_id="brief_human_style",
+        job_id="job_human_style",
+        industry=IndustryCategory.ECOMMERCE_PRODUCT,
+        scenario="brand_or_commercial_poster",
+        business_goal="test",
+        target_platforms=[Platform.GENERIC_SOCIAL],
+    )
+    human_style_job = CreativeJob(
+        job_id="job_human_style",
+        raw_user_input=(
+            "Create a same-person portrait series with one layered translucent outfit, "
+            "embroidered pattern family, sash, sleeve shape, and collar detail."
+        ),
+        optional_template_id="general_template",
+        metadata={"template_id": "general_template", "scenario_id": "general_creative"},
+    )
+
+    assert registry.select_pack(human_style_job, misclassified_brief).name == "default_commercial_pack"

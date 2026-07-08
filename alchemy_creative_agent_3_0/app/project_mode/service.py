@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..app_shell.routes import API_NAMESPACE
+from ..creative_core.prompt_language import looks_like_human_structured_appearance_context
 from ..creative_core.rules import stable_id
 from ..product_api import V3ProductApiService
 from ..product_api.contracts import (
@@ -1964,6 +1965,18 @@ class V3ProjectModeService:
         ).lower()
         return self._looks_like_character_text(text)
 
+    def _looks_like_structured_appearance_project(self, project: ProjectRecord) -> bool:
+        text = " ".join(
+            str(item or "")
+            for item in [
+                project.user_goal,
+                project.short_summary,
+                project.confirmed_style_summary,
+                *getattr(project, "confirmed_style_tags", []),
+            ]
+        )
+        return looks_like_human_structured_appearance_context(text)
+
     def _looks_like_character_text(self, text: str) -> bool:
         normalized = str(text or "").lower()
         character_tokens = (
@@ -2437,12 +2450,25 @@ class V3ProjectModeService:
         if not strong_reference_bindings:
             return []
         subject_type = str(template_policy.get("identity_lock_default") or "generic")
+        structured_appearance = self._looks_like_structured_appearance_project(project)
         if subject_type == "character":
             keep_rules = [
                 "keep the selected person's recognizable vibe",
                 "keep hair, outfit direction, camera distance, and lighting coherent",
             ]
             avoid_rules = ["face drift", "random hairstyle change", "outfit direction drift"]
+            if structured_appearance:
+                keep_rules.append(
+                    "keep the same appearance asset structure: silhouette, layer order, neckline or collar direction, sleeve or cuff shape, closure or sash logic, material behavior, pattern family, trim placement, and accessory placement coherent"
+                )
+                avoid_rules.extend(
+                    [
+                        "appearance asset replacement",
+                        "garment structure drift",
+                        "pattern family drift",
+                        "trim or accessory placement drift",
+                    ]
+                )
         elif subject_type == "product":
             keep_rules = [
                 "keep product shape, material, color, and proportions",
@@ -2474,7 +2500,7 @@ class V3ProjectModeService:
                     *[str(item) for item in visual_snapshot.get("negative_directions", [])[:4]],
                 ],
                 "user_visible_summary": self._identity_lock_user_summary(subject_type),
-                "metadata": {"template_policy": template_policy},
+                "metadata": {"template_policy": template_policy, "structured_appearance_lock": structured_appearance},
             }
         ]
 
@@ -2553,6 +2579,13 @@ class V3ProjectModeService:
             [
                 "use active project reference images as the strongest positive references",
                 "preserve uploaded prototype identity/product details before extending selected generated style",
+                *(
+                    [
+                        "when styling defines the project, preserve the same appearance asset structure: silhouette, layer order, collar or neckline direction, sleeve or cuff shape, closure or sash logic, material behavior, pattern family, trim placement, and accessory placement"
+                    ]
+                    if self._looks_like_structured_appearance_project(project)
+                    else []
+                ),
                 *[rule for anchor in anchors for rule in anchor.get("identity_keep_rules", [])],
                 *[rule for anchor in anchors for rule in anchor.get("style_keep_rules", [])],
             ]
@@ -2560,6 +2593,15 @@ class V3ProjectModeService:
         negative_additions = self._dedupe_text(
             [
                 "do not use unselected candidates as positive references",
+                *(
+                    [
+                        "do not redesign the appearance asset",
+                        "do not change garment structure or layer logic",
+                        "do not replace pattern family, trim placement, or accessory placement without a user request",
+                    ]
+                    if self._looks_like_structured_appearance_project(project)
+                    else []
+                ),
                 *[rule for anchor in anchors for rule in anchor.get("forbidden_drift", [])],
             ]
         )[:12]

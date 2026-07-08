@@ -188,6 +188,56 @@ def test_doc78_provider_prompt_consumes_subject_card_and_beautiful_realism_rules
     assert "beauty is the visual goal" in final_prompt
 
 
+def test_doc84_structured_appearance_rules_enter_subject_card_and_provider_prompt() -> None:
+    result = SharedCapabilityRegistry.with_default_modules().run(
+        CapabilityInput(
+            job_id="job_doc84",
+            scenario_id="general_creative",
+            user_input=(
+                "Create a same-person portrait suite with one layered translucent ceremonial outfit, "
+                "embroidered pattern family, sash structure, sleeve shape, collar direction, and trim placement. "
+                "Keep the same appearance asset while changing pose and camera angle."
+            ),
+            metadata={
+                "requested_image_count": 4,
+                "requested_image_size": "1024x1536",
+                "effective_variation_mode": "delivery_suite",
+                "template_id": "general_template",
+                "project_context_snapshot": {
+                    "project_id": "project_doc84",
+                    "template_id": "general_template",
+                    "selected_reference_assets": [
+                        {
+                            "asset_ref_id": "appearance_anchor_asset",
+                            "asset_id": "appearance_anchor_asset",
+                            "output_id": "appearance_anchor_output",
+                            "file_path": "D:/AI/mock_appearance_identity.png",
+                            "use_policy": "identity",
+                        }
+                    ],
+                },
+            },
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+    card = cluster["subject_identity_card"]
+
+    assert card["metadata"]["doc84_structured_appearance_lock"] is True
+    assert any("pattern family" in rule for rule in card["appearance_structure_rules"])
+    assert any("trim placement" in rule for rule in card["appearance_structure_rules"])
+
+    request = _request_from_cluster(cluster)
+    request.metadata["user_input"] = (
+        "Create a same-person portrait suite with one layered translucent ceremonial outfit and keep the same appearance asset."
+    )
+    final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
+
+    assert "Structured appearance lock:" in final_prompt
+    assert "pattern family" in final_prompt
+    assert "trim placement" in final_prompt
+
+
 def test_doc78_beautiful_realism_issues_create_quality_report_and_retry_decision() -> None:
     cluster = _cluster(
         {

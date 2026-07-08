@@ -20,6 +20,106 @@ PRODUCT_REFERENCE_ROLES = {
     "sku_reference",
     "packaging_reference",
 }
+HUMAN_SUBJECT_CONTEXT_KEYWORDS = (
+    "portrait",
+    "photo",
+    "photography",
+    "model",
+    "woman",
+    "girl",
+    "man",
+    "boy",
+    "face",
+    "fashion",
+    "editorial",
+    "people",
+    "person",
+    "real person",
+    "\u4eba\u50cf",
+    "\u5199\u771f",
+    "\u6444\u5f71",
+    "\u7167\u7247",
+    "\u6a21\u7279",
+    "\u7f8e\u5973",
+    "\u4eba\u7269",
+    "\u5973\u6027",
+    "\u5973\u751f",
+    "\u7537\u6027",
+    "\u771f\u4eba",
+    "\u8138",
+)
+STRUCTURED_APPEARANCE_KEYWORDS = (
+    "outfit",
+    "garment",
+    "dress",
+    "robe",
+    "gown",
+    "uniform",
+    "costume",
+    "sleeve",
+    "cuff",
+    "collar",
+    "neckline",
+    "layered",
+    "layering",
+    "sheer",
+    "translucent",
+    "fabric",
+    "embroidery",
+    "pattern",
+    "motif",
+    "trim",
+    "sash",
+    "belt",
+    "pleat",
+    "drape",
+    "wardrobe",
+    "\u670d\u88c5",
+    "\u7a7f\u642d",
+    "\u88d9",
+    "\u957f\u88d9",
+    "\u5916\u642d",
+    "\u6750\u8d28",
+    "\u534a\u900f\u660e",
+    "\u900f\u660e",
+    "\u9886\u53e3",
+    "\u8863\u9886",
+    "\u8896",
+    "\u8896\u53e3",
+    "\u8170\u5e26",
+    "\u8170\u5c01",
+    "\u7eb9\u6837",
+    "\u56fe\u6848",
+    "\u523a\u7ee3",
+    "\u5c42\u6b21",
+    "\u53e0\u7a7f",
+    "\u8919",
+    "\u76b1",
+    "\u9762\u6599",
+    "\u98d8\u9038",
+)
+EXPLICIT_ECOMMERCE_CONTEXT_KEYWORDS = (
+    "ecommerce",
+    "e-commerce",
+    "product image",
+    "main image",
+    "detail page",
+    "marketplace",
+    "amazon listing",
+    "sku",
+    "shopify",
+    "taobao",
+    "jd",
+    "\u7535\u5546",
+    "\u4e3b\u56fe",
+    "\u8be6\u60c5\u9875",
+    "\u8be6\u60c5\u56fe",
+    "\u5546\u54c1\u56fe",
+    "\u4ea7\u54c1\u56fe",
+    "\u6dd8\u5b9d",
+    "\u4eac\u4e1c",
+    "\u4e9a\u9a6c\u900a",
+)
 
 PRODUCT_INTENT_KEYWORDS = (
     "商品",
@@ -112,6 +212,23 @@ NEGATED_PRODUCT_CLAUSE_MARKERS = (
     "do not include ",
 )
 NEGATED_PRODUCT_CLAUSE_BOUNDARIES = ("，", "。", "；", "\n", ",", ".", ";")
+
+
+def looks_like_human_subject_context(value: Any) -> bool:
+    normalized = str(value or "").lower()
+    return any(keyword.lower() in normalized for keyword in HUMAN_SUBJECT_CONTEXT_KEYWORDS)
+
+
+def looks_like_human_structured_appearance_context(value: Any) -> bool:
+    normalized = str(value or "").lower()
+    return looks_like_human_subject_context(normalized) and any(
+        keyword.lower() in normalized for keyword in STRUCTURED_APPEARANCE_KEYWORDS
+    )
+
+
+def contains_explicit_ecommerce_context(value: Any) -> bool:
+    normalized = _strip_negated_product_phrases(str(value or "")).lower()
+    return any(keyword.lower() in normalized for keyword in EXPLICIT_ECOMMERCE_CONTEXT_KEYWORDS)
 
 
 def product_language_allowed(
