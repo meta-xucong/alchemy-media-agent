@@ -1556,6 +1556,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         styling_rules = self._string_list(styling.get("prompt_rules")) if isinstance(styling, dict) else []
         lines = [
             "Same person under changed styling; not a similar-looking new model.",
+            "Styling may change; preserve the reference face without redesigning the face.",
             *prompt_rules[:3],
             "Bone structure to preserve: " + "; ".join(bone_traits[:6]) if bone_traits else "",
             "Facial-feature relationships to preserve: " + "; ".join(feature_traits[:6]) if feature_traits else "",

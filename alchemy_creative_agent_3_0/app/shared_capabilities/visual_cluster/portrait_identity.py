@@ -94,7 +94,7 @@ class PortraitBoneStructureIdentityLayer:
             "Preserve underlying bone structure and facial-feature relationships from the reference.",
             "Treat makeup, wardrobe, hairstyle, lighting, pose, expression, and scene as surface styling changes only.",
             "Do not reshape face, eyes, nose, mouth, jaw, chin, or age impression to fit a generic beauty archetype.",
-            "If the prompt asks for period, fantasy, editorial, or cinematic styling, apply it to costume, makeup, light, and atmosphere without redesigning the face.",
+            "If the prompt asks for any portrait styling change, apply it to costume, makeup, hair, light, scene, mood, camera, and atmosphere without redesigning the face.",
         ]
         review_checks = [
             "ignore allowed makeup, wardrobe, lighting, expression, pose, camera, and scene changes",
@@ -152,7 +152,7 @@ class PortraitBoneStructureIdentityLayer:
         prompt_rules = [
             "Styling delta policy: requested style changes are surface-level changes only.",
             "Modern makeup to period makeup is allowed; changing facial geometry is not.",
-            "If the prompt asks for period, fantasy, editorial, or cinematic styling, apply it to costume, makeup, light, and atmosphere without redesigning the face.",
+            "Any portrait style request, including modern, lifestyle, commercial, period, fantasy, editorial, or cinematic styling, is surface-level unless the user explicitly asks to change identity.",
             "Ancient, fantasy, editorial, premium, delicate, or beautiful style words must not override the reference person's bone structure.",
         ]
         return StylingDeltaPolicy(

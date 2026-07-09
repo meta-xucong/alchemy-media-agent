@@ -35,12 +35,13 @@ DOC86_CODES = [
 ]
 
 
-def _cluster(metadata: dict | None = None) -> dict:
+def _cluster(metadata: dict | None = None, *, user_input: str | None = None) -> dict:
     result = SharedCapabilityRegistry.with_default_modules().run(
         CapabilityInput(
             job_id="job_doc86",
             scenario_id="general_creative",
-            user_input=(
+            user_input=user_input
+            or (
                 "Create a period-style portrait of the same uploaded woman. "
                 "Change makeup, wardrobe, lighting, and mood, but keep the same person."
             ),
@@ -128,6 +129,28 @@ def test_doc86_uploaded_portrait_reference_creates_bone_structure_lock() -> None
     assert "portrait_bone_structure_identity_lock" in cluster["child_module_ids"]
 
 
+def test_doc86_is_general_for_modern_portrait_scenes_not_keyword_specific() -> None:
+    cluster = _cluster(
+        user_input=(
+            "Create a modern summer lifestyle portrait of the same uploaded woman in a new city cafe scene. "
+            "Change pose, expression, outfit styling, light, and camera angle, but keep her recognizable as the same person."
+        )
+    )
+    prompt = ProductionImageGenerationProvider()._generation_prompt(_request_from_cluster(cluster), [])  # noqa: SLF001
+
+    lock = cluster["portrait_bone_structure_lock"]
+    styling = cluster["styling_delta_policy"]
+
+    assert lock["applies"] is True
+    assert styling["applies"] is True
+    assert "face width/length ratio" in lock["stable_bone_traits"]
+    assert "expression, gaze, pose, and head angle" in lock["allowed_surface_changes"]
+    assert "Any portrait style request" in " ".join(styling["prompt_rules"])
+    assert "Portrait identity contract:" in prompt
+    assert "Same person under changed styling" in prompt
+    assert "Bone structure to preserve" in prompt
+
+
 def test_doc86_provider_prompt_places_identity_contract_before_visual_direction() -> None:
     cluster = _cluster()
     prompt = ProductionImageGenerationProvider()._generation_prompt(_request_from_cluster(cluster), [])  # noqa: SLF001
@@ -137,7 +160,7 @@ def test_doc86_provider_prompt_places_identity_contract_before_visual_direction(
     assert "Bone structure to preserve" in prompt
     assert "Visual direction:" in prompt
     assert prompt.index("Portrait identity contract:") < prompt.index("Visual direction:")
-    assert "period, fantasy, editorial, or cinematic styling" in prompt
+    assert "without redesigning the face" in prompt
 
 
 def test_doc86_same_type_not_same_person_triggers_retry_patch() -> None:
