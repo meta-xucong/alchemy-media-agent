@@ -156,6 +156,16 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "archetype_overrode_reference_identity",
     "same_type_not_same_person",
     "identity_reference_underweighted",
+    "source_lighting_overinherited",
+    "source_color_temperature_overinherited",
+    "source_scene_overinherited",
+    "source_wardrobe_overinherited",
+    "source_camera_mood_overinherited",
+    "reference_used_as_style_when_identity_only",
+    "prompt_style_underweighted",
+    "makeup_changed_face_geometry",
+    "hair_change_replaced_identity",
+    "retry_repaired_artifact_but_changed_identity",
     "identity_card_missing",
     "identity_card_not_applied",
     "identity_feature_drift",
@@ -1268,6 +1278,44 @@ class V3ProductApiService:
                         "jaw or chin remodeling",
                         "age impression drift",
                         "style changed face geometry",
+                    ]
+                )
+            elif code in {
+                "source_lighting_overinherited",
+                "source_color_temperature_overinherited",
+                "source_scene_overinherited",
+                "source_wardrobe_overinherited",
+                "source_camera_mood_overinherited",
+                "reference_used_as_style_when_identity_only",
+                "prompt_style_underweighted",
+                "makeup_changed_face_geometry",
+                "hair_change_replaced_identity",
+                "retry_repaired_artifact_but_changed_identity",
+            }:
+                prompt_additions.extend(
+                    [
+                        "Doc87 reference-boundary repair: preserve the same person's face geometry from the portrait reference, but follow the current prompt for image direction",
+                        "use the reference for identity only unless the user explicitly marked it as style guidance",
+                        "do not copy source lighting, source color temperature, source scene, source wardrobe, source camera mood, or the original shoot style",
+                        "follow the current prompt's lighting, color grade, background, camera angle, mood, wardrobe, and art direction",
+                    ]
+                )
+                identity_reinforcement.extend(
+                    [
+                        "preserve the same person's face geometry while changing prompt-owned style channels",
+                        "artifact or watermark repair must not replace the face with a cleaner generic beauty face",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "copied source lighting",
+                        "copied source color temperature",
+                        "copied source scene",
+                        "copied source camera mood",
+                        "copied source wardrobe",
+                        "reference used as full style template",
+                        "prompt style ignored",
+                        "same type but different person after cleanup",
                     ]
                 )
             elif code in {"product_identity_drift", "brand_asset_drift"}:

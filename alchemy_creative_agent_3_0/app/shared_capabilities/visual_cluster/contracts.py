@@ -630,6 +630,59 @@ class StylingDeltaPolicy(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortraitReferenceInfluencePolicy(V3BaseModel):
+    policy_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    identity_truth_strength: str = "hard"
+    makeup_style_strength: str = "prompt_controlled"
+    hair_strength: str = "medium_preserve"
+    wardrobe_structure_strength: str = "prompt_controlled"
+    lighting_color_scene_strength: str = "prompt_owned"
+    camera_composition_strength: str = "prompt_owned"
+    inherited_reference_channels: list[str] = Field(default_factory=list)
+    blocked_reference_channels: list[str] = Field(default_factory=list)
+    prompt_owned_channels: list[str] = Field(default_factory=list)
+    prompt_rules: list[str] = Field(default_factory=list)
+    review_checks: list[str] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReferenceOverinheritanceRetryPatch(V3BaseModel):
+    patch_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+    prompt_additions: list[str] = Field(default_factory=list)
+    negative_additions: list[str] = Field(default_factory=list)
+    identity_reinforcement: list[str] = Field(default_factory=list)
+    preserve_identity_truth: bool = True
+    block_source_style_channels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortraitIdentityStyleSeparationReview(V3BaseModel):
+    review_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    output_id: str | None = None
+    reference_asset_id: str | None = None
+    status: str = "not_applicable"
+    prompt_style_obedience_score: int | None = None
+    lighting_color_scene_obedience_score: int | None = None
+    beauty_realism_score: int | None = None
+    reference_overinheritance_penalty: int | None = None
+    issue_codes: list[str] = Field(default_factory=list)
+    prompt_owned_pass_notes: list[str] = Field(default_factory=list)
+    reference_boundary_notes: list[str] = Field(default_factory=list)
+    retry_patch: dict[str, Any] = Field(default_factory=dict)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PortraitIdentitySimilarityReview(V3BaseModel):
     review_id: str
     project_id: str | None = None
@@ -702,8 +755,11 @@ class VisualCapabilityClusterResult(V3BaseModel):
     strict_visual_review_policy: StrictVisualReviewPolicy | None = None
     portrait_bone_structure_lock: PortraitBoneStructureLock | None = None
     styling_delta_policy: StylingDeltaPolicy | None = None
+    portrait_reference_influence_policy: PortraitReferenceInfluencePolicy | None = None
     portrait_identity_similarity_review: PortraitIdentitySimilarityReview | None = None
+    portrait_identity_style_separation_review: PortraitIdentityStyleSeparationReview | None = None
     bone_structure_retry_patch: BoneStructureRetryPatch | None = None
+    reference_overinheritance_retry_patch: ReferenceOverinheritanceRetryPatch | None = None
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)
     template_consistency_policy: dict[str, Any] = Field(default_factory=dict)
     has_visual_evidence: bool = False

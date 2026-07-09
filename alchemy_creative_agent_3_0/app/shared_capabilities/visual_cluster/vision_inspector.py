@@ -72,10 +72,24 @@ _DOC86_PORTRAIT_IDENTITY_ISSUES = {
     "identity_reference_underweighted",
 }
 
+_DOC87_REFERENCE_BOUNDARY_ISSUES = {
+    "source_lighting_overinherited",
+    "source_color_temperature_overinherited",
+    "source_scene_overinherited",
+    "source_wardrobe_overinherited",
+    "source_camera_mood_overinherited",
+    "reference_used_as_style_when_identity_only",
+    "prompt_style_underweighted",
+    "makeup_changed_face_geometry",
+    "hair_change_replaced_identity",
+    "retry_repaired_artifact_but_changed_identity",
+}
+
 RETRYABLE_ISSUE_CODES = {
     *_AESTHETIC_STABILITY_ISSUES,
     *_BEAUTIFUL_REALISM_ISSUES,
     *_DOC86_PORTRAIT_IDENTITY_ISSUES,
+    *_DOC87_REFERENCE_BOUNDARY_ISSUES,
     "visible_text_artifact",
     "watermark_or_signature",
     "faint_corner_watermark",
@@ -738,10 +752,11 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 "preserve the exact uploaded portrait identity truth if present: face ratio, eye shape and spacing, eyebrow arc, nose-mouth relationship, jaw/chin direction, natural age impression, body identity direction, and skin-tone direction; use selected generated references only as continuation support when an uploaded truth source exists"
             )
             identity_reinforcement.append(
-                "preserve hair and outfit category, lens, and lighting; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
+                "preserve broad hair direction and outfit category; follow the current prompt for lens, lighting, scene, and camera mood unless they are explicitly locked as style guidance; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
             )
         elif code == "reference_guard_ignored":
             identity_reinforcement.append("use uploaded portrait identity truth as the main source when present; do not let the written prompt or a selected generated frame replace the person's facial identity")
+            identity_reinforcement.append("selected reference should remain the identity or product truth source instead of being treated as optional decoration")
             product_reinforcement.append("if a product or object reference exists, preserve its exact silhouette, proportions, material, label/logo placement, packaging surface, and visible text shapes from the uploaded product truth source")
             negative_additions.extend(["reference ignored", "changed reference subject", "changed reference object"])
         elif code in _DOC86_PORTRAIT_IDENTITY_ISSUES:
@@ -772,6 +787,33 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "jaw or chin remodeling",
                     "age impression drift",
                     "style changed face geometry",
+                ]
+            )
+        elif code in _DOC87_REFERENCE_BOUNDARY_ISSUES:
+            prompt_additions.extend(
+                [
+                    "Doc87 reference-boundary repair: preserve the same person's face geometry from the portrait reference, but follow the current prompt for image direction",
+                    "use the reference for identity only unless the user explicitly marked it as style guidance",
+                    "do not copy source lighting, source color temperature, source scene, source wardrobe, source camera mood, or the original shoot style",
+                    "follow the current prompt's lighting, color grade, background, camera angle, mood, wardrobe, and art direction",
+                ]
+            )
+            identity_reinforcement.extend(
+                [
+                    "preserve the same person's face geometry while changing prompt-owned style channels",
+                    "artifact or watermark repair must not replace the face with a cleaner generic beauty face",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "copied source lighting",
+                    "copied source color temperature",
+                    "copied source scene",
+                    "copied source camera mood",
+                    "copied source wardrobe",
+                    "reference used as full style template",
+                    "prompt style ignored",
+                    "same type but different person after cleanup",
                 ]
             )
         elif code in {"product_identity_drift", "brand_asset_drift"}:

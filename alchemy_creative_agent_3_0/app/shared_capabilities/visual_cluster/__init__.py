@@ -22,8 +22,11 @@ from .contracts import (
     ModeRoleRecipe,
     PostGenerationReviewPackage,
     PortraitBoneStructureLock,
+    PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
+    PortraitReferenceInfluencePolicy,
     ProjectIdentityAnchor,
+    ReferenceOverinheritanceRetryPatch,
     RealReviewCandidateSignal,
     RealReviewSignalPackage,
     RoleSpecificGenerationPlan,
@@ -70,7 +73,11 @@ from .identity_anchor import ProjectIdentityAnchorBuilder
 from .module import VISUAL_CAPABILITY_CLUSTER_ID, VISUAL_CLUSTER_CHILD_MODULE_IDS, VisualCapabilityClusterModule
 from .human_variation import HumanNaturalVariationPolicy
 from .mode_role_director import ModeAwareRoleDirector
-from .portrait_identity import DOC86_IDENTITY_ISSUE_CODES, PortraitBoneStructureIdentityLayer
+from .portrait_identity import (
+    DOC86_IDENTITY_ISSUE_CODES,
+    DOC87_REFERENCE_BOUNDARY_ISSUE_CODES,
+    PortraitBoneStructureIdentityLayer,
+)
 from .quality_review import OutputQualityReviewMerger
 from .strong_reference_loop import StrongReferenceLoopPlanner
 from .vision_inspector import VisionOutputInspector
@@ -119,10 +126,13 @@ __all__ = [
     "PostGenerationReviewPackage",
     "PortraitBoneStructureIdentityLayer",
     "PortraitBoneStructureLock",
+    "PortraitIdentityStyleSeparationReview",
     "PortraitIdentitySimilarityReview",
+    "PortraitReferenceInfluencePolicy",
     "ProjectIdentityAnchor",
     "ProjectIdentityAnchorBuilder",
     "ProjectVisualGrammarSnapshot",
+    "ReferenceOverinheritanceRetryPatch",
     "apply_role_recipe_casebook_overlay",
     "human_photorealism_casebook",
     "prompt_atom_recipe",
@@ -141,6 +151,7 @@ __all__ = [
     "StylingDeltaPolicy",
     "SubjectIdentityCard",
     "DOC86_IDENTITY_ISSUE_CODES",
+    "DOC87_REFERENCE_BOUNDARY_ISSUE_CODES",
     "VISUAL_CAPABILITY_CLUSTER_ID",
     "VISUAL_CLUSTER_CHILD_MODULE_IDS",
     "VisualCapabilityClusterModule",

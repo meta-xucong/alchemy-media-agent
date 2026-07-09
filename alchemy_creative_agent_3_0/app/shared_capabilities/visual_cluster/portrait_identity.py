@@ -8,7 +8,10 @@ from ...creative_core.rules import stable_id
 from .contracts import (
     BoneStructureRetryPatch,
     PortraitBoneStructureLock,
+    PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
+    PortraitReferenceInfluencePolicy,
+    ReferenceOverinheritanceRetryPatch,
     StrongReferenceBinding,
     StylingDeltaPolicy,
     SubjectIdentityCard,
@@ -28,6 +31,19 @@ DOC86_IDENTITY_ISSUE_CODES = {
     "archetype_overrode_reference_identity",
     "same_type_not_same_person",
     "identity_reference_underweighted",
+}
+
+DOC87_REFERENCE_BOUNDARY_ISSUE_CODES = {
+    "source_lighting_overinherited",
+    "source_color_temperature_overinherited",
+    "source_scene_overinherited",
+    "source_wardrobe_overinherited",
+    "source_camera_mood_overinherited",
+    "reference_used_as_style_when_identity_only",
+    "prompt_style_underweighted",
+    "makeup_changed_face_geometry",
+    "hair_change_replaced_identity",
+    "retry_repaired_artifact_but_changed_identity",
 }
 
 
@@ -83,16 +99,18 @@ class PortraitBoneStructureIdentityLayer:
         ]
         allowed_surface_changes = [
             "makeup color and intensity",
-            "hair styling, hair movement, and accessories",
-            "wardrobe or costume",
-            "lighting, color grade, and atmosphere",
+            "hair styling, hair movement, and accessories when requested or required by target style",
+            "wardrobe or costume according to the prompt unless the wardrobe is explicitly the reference truth",
+            "lighting, color grade, and atmosphere according to the current prompt",
             "expression, gaze, pose, and head angle",
-            "scene, lens, crop, and camera treatment",
+            "scene, lens, crop, and camera treatment according to the current prompt",
         ]
         prompt_rules = [
             "Portrait identity contract: use the reference as the same person's identity source before applying style or beauty words.",
+            "Doc87 reference boundary: identity comes from the reference; direction comes from the current prompt.",
             "Preserve underlying bone structure and facial-feature relationships from the reference.",
-            "Treat makeup, wardrobe, hairstyle, lighting, pose, expression, and scene as surface styling changes only.",
+            "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
+            "Treat makeup, wardrobe, hairstyle, lighting, pose, expression, and scene as prompt-owned styling channels that must not redesign the face.",
             "Do not reshape face, eyes, nose, mouth, jaw, chin, or age impression to fit a generic beauty archetype.",
             "If the prompt asks for any portrait styling change, apply it to costume, makeup, hair, light, scene, mood, camera, and atmosphere without redesigning the face.",
         ]
@@ -101,6 +119,7 @@ class PortraitBoneStructureIdentityLayer:
             "judge whether the underlying face bone structure still reads as the same person",
             "penalize same-type-not-same-person outputs even when commercial beauty is high",
             "fail identity when eye/nose/mouth/jaw/chin relationships are remodeled by style words",
+            "fail style-boundary review when source lighting, source color, source scene, or source camera mood overrides the prompt",
         ]
         return PortraitBoneStructureLock(
             lock_id=stable_id("portrait_bone_structure_lock", project_id, job_id, source_asset_id, source_output_id),
@@ -123,6 +142,7 @@ class PortraitBoneStructureIdentityLayer:
             ],
             metadata={
                 "doc": "86",
+                "extends": ["87"],
                 "uploaded_truth_source": uploaded_truth,
                 "subject_identity_card_id": subject_identity_card.card_id,
                 "source_priority": subject_identity_card.source_priority,
@@ -154,6 +174,7 @@ class PortraitBoneStructureIdentityLayer:
             "Modern makeup to period makeup is allowed; changing facial geometry is not.",
             "Any portrait style request, including modern, lifestyle, commercial, period, fantasy, editorial, or cinematic styling, is surface-level unless the user explicitly asks to change identity.",
             "Ancient, fantasy, editorial, premium, delicate, or beautiful style words must not override the reference person's bone structure.",
+            "Source-reference lighting, source color temperature, source scene, and source camera mood are not inherited unless explicitly requested.",
         ]
         return StylingDeltaPolicy(
             policy_id=stable_id("styling_delta_policy", project_id, job_id, lock.lock_id, user_input),
@@ -165,7 +186,88 @@ class PortraitBoneStructureIdentityLayer:
             style_prompt_scope="surface_only",
             prompt_rules=prompt_rules,
             user_visible_summary=["V3 can change styling without changing the person."],
-            metadata={"doc": "86", "portrait_bone_structure_lock_id": lock.lock_id},
+            metadata={"doc": "86", "extends": ["87"], "portrait_bone_structure_lock_id": lock.lock_id},
+        )
+
+    def build_reference_influence_policy(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        lock: PortraitBoneStructureLock | None,
+        styling_policy: StylingDeltaPolicy | None,
+    ) -> PortraitReferenceInfluencePolicy | None:
+        if lock is None or not lock.applies:
+            return None
+        inherited = [
+            "bone structure",
+            "facial-feature relationships",
+            "natural age impression",
+            "broad hair direction unless prompt/template asks for a change",
+            "distinctive identity marks when visible",
+        ]
+        blocked = [
+            "source lighting",
+            "source color temperature",
+            "source scene",
+            "source camera mood",
+            "source wardrobe unless explicitly marked as wardrobe truth",
+            "whole-image style template",
+            "beauty-camera bias",
+        ]
+        prompt_owned = [
+            "makeup",
+            "wardrobe",
+            "lighting",
+            "color grade",
+            "scene",
+            "mood",
+            "camera",
+            "composition",
+            "art direction",
+        ]
+        prompt_rules = [
+            "Reference inheritance boundary: Identity comes from the reference; direction comes from the prompt.",
+            "Use the uploaded portrait as identity truth by default, not style truth.",
+            "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
+            "Follow the current prompt for lighting, color grade, scene, mood, camera, composition, wardrobe, and art direction.",
+            "Preserve the same person's face geometry while allowing prompt-directed styling changes.",
+            "Hair is medium-preserve: keep broad direction and distinctive marks unless the prompt or template asks for a change.",
+        ]
+        if styling_policy and styling_policy.applies:
+            prompt_rules.extend(styling_policy.prompt_rules[-2:])
+        review_checks = [
+            "identity source is preserved as the same person",
+            "prompt lighting/color/scene/camera direction is followed",
+            "source lighting/color/scene/camera mood does not override the prompt",
+            "artifact or watermark cleanup does not replace the face",
+            "beautiful output still fails if it is only the same beauty type",
+        ]
+        return PortraitReferenceInfluencePolicy(
+            policy_id=stable_id("portrait_reference_influence_policy", project_id, job_id, lock.lock_id),
+            project_id=project_id,
+            job_id=job_id,
+            applies=True,
+            identity_truth_strength=lock.priority if lock.priority == "hard" else "medium",
+            makeup_style_strength="prompt_controlled",
+            hair_strength="medium_preserve",
+            wardrobe_structure_strength="prompt_controlled",
+            lighting_color_scene_strength="prompt_owned",
+            camera_composition_strength="prompt_owned",
+            inherited_reference_channels=inherited,
+            blocked_reference_channels=blocked,
+            prompt_owned_channels=prompt_owned,
+            prompt_rules=_dedupe(prompt_rules),
+            review_checks=review_checks,
+            user_visible_summary=[
+                "V3 will keep the person, not copy the old photo style.",
+                "Lighting and scene follow your current request.",
+            ],
+            metadata={
+                "doc": "87",
+                "portrait_bone_structure_lock_id": lock.lock_id,
+                "ordinary_portrait_reference_defaults_to_identity_truth": True,
+            },
         )
 
     def build_review(
@@ -226,6 +328,113 @@ class PortraitBoneStructureIdentityLayer:
                 "The image looked good, but it did not keep the reference person's face closely enough.",
             ],
             metadata={"doc": "86", "confidence": confidence, "lock_id": lock.lock_id},
+        )
+
+    def build_style_separation_review(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        output_id: str | None,
+        lock: PortraitBoneStructureLock | None,
+        reference_policy: PortraitReferenceInfluencePolicy | None,
+        issue_codes: list[str],
+        confidence: float = 0.9,
+    ) -> PortraitIdentityStyleSeparationReview | None:
+        if lock is None or not lock.applies or reference_policy is None or not reference_policy.applies:
+            return None
+        relevant = [code for code in _dedupe(issue_codes) if code in DOC87_REFERENCE_BOUNDARY_ISSUE_CODES]
+        if not relevant:
+            return PortraitIdentityStyleSeparationReview(
+                review_id=stable_id("portrait_identity_style_separation_review", project_id, job_id, output_id, lock.lock_id, "pass"),
+                project_id=project_id,
+                job_id=job_id,
+                output_id=output_id,
+                reference_asset_id=lock.source_asset_id,
+                status="pass",
+                prompt_style_obedience_score=88,
+                lighting_color_scene_obedience_score=88,
+                beauty_realism_score=86,
+                reference_overinheritance_penalty=0,
+                prompt_owned_pass_notes=list(reference_policy.prompt_owned_channels[:6]),
+                reference_boundary_notes=list(reference_policy.blocked_reference_channels[:6]),
+                user_visible_summary=["V3 checked that the new prompt controls style and scene."],
+                metadata={"doc": "87", "confidence": confidence, "policy_id": reference_policy.policy_id},
+            )
+        patch = self.build_reference_overinheritance_retry_patch(
+            project_id=project_id,
+            job_id=job_id,
+            lock=lock,
+            reference_policy=reference_policy,
+            reason_codes=relevant,
+        )
+        return PortraitIdentityStyleSeparationReview(
+            review_id=stable_id("portrait_identity_style_separation_review", project_id, job_id, output_id, lock.lock_id, ",".join(relevant)),
+            project_id=project_id,
+            job_id=job_id,
+            output_id=output_id,
+            reference_asset_id=lock.source_asset_id,
+            status="fail_retryable" if confidence >= 0.65 else "manual_review",
+            prompt_style_obedience_score=64,
+            lighting_color_scene_obedience_score=60,
+            beauty_realism_score=78,
+            reference_overinheritance_penalty=35,
+            issue_codes=relevant,
+            prompt_owned_pass_notes=list(reference_policy.prompt_owned_channels[:8]),
+            reference_boundary_notes=list(reference_policy.blocked_reference_channels[:8]),
+            retry_patch=patch.model_dump(mode="json") if patch.applies and confidence >= 0.65 else {},
+            user_visible_summary=[
+                "The face direction can stay, but the image copied too much of the old reference style.",
+            ],
+            metadata={"doc": "87", "confidence": confidence, "policy_id": reference_policy.policy_id},
+        )
+
+    def build_reference_overinheritance_retry_patch(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        lock: PortraitBoneStructureLock,
+        reference_policy: PortraitReferenceInfluencePolicy,
+        reason_codes: list[str],
+    ) -> ReferenceOverinheritanceRetryPatch:
+        prompt_additions = [
+            "Doc87 reference-boundary repair: preserve the same person's face geometry from the portrait reference, but follow the current prompt for the image direction.",
+            "Use the reference for identity only unless the user explicitly marked it as style guidance.",
+            "do not copy source lighting, source color temperature, source scene, source wardrobe, source camera mood, or the original shoot style.",
+            "Follow the current prompt's lighting, color grade, background, camera angle, mood, wardrobe, and art direction.",
+            "When cleaning artifacts, preserve the same face; do not replace the person with a cleaner generic beauty face.",
+        ]
+        if lock.source_asset_id:
+            prompt_additions.append(f"Use reference asset {lock.source_asset_id} as identity truth, not whole-image style truth.")
+        negative_additions = [
+            "copied source lighting",
+            "copied source color temperature",
+            "copied source scene",
+            "copied source camera mood",
+            "copied source wardrobe",
+            "reference used as full style template",
+            "prompt style ignored",
+            "same type but different person after cleanup",
+            "cleaner generic replacement face",
+        ]
+        identity_reinforcement = [
+            "preserve the same person's face geometry while changing prompt-owned style channels",
+            "identity lock stays hard during style-boundary retry",
+            "artifact repair must not change bone structure, eye spacing, nose-mouth relationship, jaw/chin direction, lip contour, or age impression",
+        ]
+        return ReferenceOverinheritanceRetryPatch(
+            patch_id=stable_id("reference_overinheritance_retry_patch", project_id, job_id, ",".join(reason_codes), lock.lock_id),
+            project_id=project_id,
+            job_id=job_id,
+            applies=bool(reason_codes),
+            reason_codes=_dedupe(reason_codes),
+            prompt_additions=_dedupe(prompt_additions),
+            negative_additions=_dedupe(negative_additions),
+            identity_reinforcement=_dedupe(identity_reinforcement),
+            preserve_identity_truth=True,
+            block_source_style_channels=list(reference_policy.blocked_reference_channels[:8]),
+            metadata={"doc": "87", "portrait_reference_influence_policy_id": reference_policy.policy_id},
         )
 
     def build_retry_patch(

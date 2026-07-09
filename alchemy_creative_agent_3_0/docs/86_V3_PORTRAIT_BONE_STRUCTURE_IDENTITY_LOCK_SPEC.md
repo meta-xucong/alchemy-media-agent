@@ -22,6 +22,26 @@ Makeup, wardrobe, styling, lighting, pose, expression, and scene may change.
 Bone structure and facial-feature relationships must not change.
 ```
 
+Doc87 is the current superseding standard for portrait reference inheritance
+boundaries. Doc86 remains the implementation baseline for bone-structure locks,
+identity issue codes, and identity-drift retry patches, but Doc87 wins whenever
+there is a conflict about what an uploaded portrait reference should influence.
+
+Doc87 clarification:
+
+```text
+An ordinary uploaded portrait reference is identity truth by default, not style
+truth.
+
+Inherit bone structure and facial-feature relationships.
+Do not inherit source lighting, color temperature, scene, camera, wardrobe, or
+shoot mood by default.
+Let the current prompt control lighting, color grade, scene, mood, camera, and
+art direction unless the user explicitly marks the reference as style guidance.
+Hair is medium-preserve: keep broad direction and distinctive marks unless the
+prompt or template asks for a change.
+```
+
 Short product rule:
 
 ```text
@@ -62,7 +82,7 @@ provider-reference compression
 bounded retry guardrails
 ```
 
-Doc86 is the latest authority for:
+Doc86 remains the implementation baseline for:
 
 ```text
 portrait identity scoring when an uploaded or selected face reference exists
@@ -73,6 +93,13 @@ identity-drift retry patches for human image-to-image generation
 
 If earlier documents imply that "similar vibe", "same beauty family", or
 "same archetype" is enough for a referenced portrait, Doc86 wins.
+
+If Doc86 or earlier documents imply that a portrait reference should control
+source lighting, source color temperature, source scene, source camera, source
+wardrobe, or whole-image style by default, Doc87 wins.
+
+If Doc86 or earlier documents imply that retry may remove artifacts by replacing
+the face with a cleaner but less recognizable face, Doc87 wins.
 
 ## 3. Product Standard
 
@@ -878,4 +905,3 @@ Run focused Doc86 tests plus Doc77/78/85 regressions, compile checks, frontend
 static checks, and one real image-to-image validation when provider availability
 allows.
 ```
-

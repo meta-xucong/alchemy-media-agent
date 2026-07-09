@@ -143,7 +143,7 @@ class StrongReferenceClosureBuilder:
         if subject_type == "product":
             lead = "Use selected references as product truth: preserve product shape, material, color, proportions, label/logo placement, and package silhouette."
         elif subject_type == "character":
-            lead = "Use selected references as identity truth: preserve recognizable person direction, broad face shape, age direction, body type, hair direction, wardrobe category, lighting, and style world."
+            lead = "Use selected references as identity truth: preserve recognizable person direction, broad face shape, age direction, body type, broad hair direction, and wardrobe category; follow the current prompt for lighting, scene, camera mood, and style unless the reference is explicitly style guidance."
         else:
             lead = "Use selected references as visual truth: preserve the selected style world, composition language, lighting, and subject direction."
         rules = [

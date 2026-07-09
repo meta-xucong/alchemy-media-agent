@@ -1522,6 +1522,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 700
         if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
             return 520
+        if "Reference inheritance boundary" in line:
+            return 720
         if "Portrait identity" in line or "bone-structure" in line:
             return 700
         if "Strict visual" in line or "Suite director rules" in line or "Subject identity" in line:
@@ -1546,6 +1548,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         styling = plan_metadata.get("styling_delta_policy")
         if not isinstance(styling, dict) or not styling.get("applies"):
             styling = cluster.get("styling_delta_policy") if isinstance(cluster.get("styling_delta_policy"), dict) else {}
+        reference_policy = plan_metadata.get("portrait_reference_influence_policy")
+        if not isinstance(reference_policy, dict) or not reference_policy.get("applies"):
+            reference_policy = (
+                cluster.get("portrait_reference_influence_policy")
+                if isinstance(cluster.get("portrait_reference_influence_policy"), dict)
+                else {}
+            )
         if not isinstance(lock, dict) or not lock.get("applies"):
             return ""
         prompt_rules = self._string_list(lock.get("prompt_rules"))
@@ -1554,7 +1563,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
         allowed = self._string_list(lock.get("allowed_surface_changes"))
         forbidden = self._string_list(lock.get("forbidden_geometry_drift"))
         styling_rules = self._string_list(styling.get("prompt_rules")) if isinstance(styling, dict) else []
+        reference_rules = (
+            self._string_list(reference_policy.get("prompt_rules")) if isinstance(reference_policy, dict) else []
+        )
+        blocked_channels = (
+            self._string_list(reference_policy.get("blocked_reference_channels"))
+            if isinstance(reference_policy, dict)
+            else []
+        )
+        prompt_owned = (
+            self._string_list(reference_policy.get("prompt_owned_channels")) if isinstance(reference_policy, dict) else []
+        )
         lines = [
+            "Reference inheritance boundary: Identity comes from the reference; direction comes from the prompt."
+            if reference_rules
+            else "",
+            *reference_rules[:3],
+            "Prompt-owned channels: " + "; ".join(prompt_owned[:8]) if prompt_owned else "",
+            "Do not inherit from source reference: " + "; ".join(blocked_channels[:8]) if blocked_channels else "",
             "Same person under changed styling; not a similar-looking new model.",
             "Styling may change; preserve the reference face without redesigning the face.",
             *prompt_rules[:3],
@@ -1615,6 +1641,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
         subject_identity_card = plan_metadata.get("subject_identity_card") if isinstance(plan_metadata, dict) else {}
         portrait_bone_lock = plan_metadata.get("portrait_bone_structure_lock") if isinstance(plan_metadata, dict) else {}
         styling_delta_policy = plan_metadata.get("styling_delta_policy") if isinstance(plan_metadata, dict) else {}
+        portrait_reference_policy = (
+            plan_metadata.get("portrait_reference_influence_policy") if isinstance(plan_metadata, dict) else {}
+        )
+        if isinstance(portrait_reference_policy, dict) and portrait_reference_policy.get("applies"):
+            policy_rules = self._string_list(portrait_reference_policy.get("prompt_rules"))
+            prompt_owned = self._string_list(portrait_reference_policy.get("prompt_owned_channels"))
+            blocked = self._string_list(portrait_reference_policy.get("blocked_reference_channels"))
+            lines.append("Reference inheritance boundary: " + "; ".join(policy_rules[:4]))
+            if prompt_owned:
+                lines.append("Prompt-owned style channels: " + "; ".join(prompt_owned[:8]))
+            if blocked:
+                lines.append("Do not inherit source reference channels: " + "; ".join(blocked[:8]))
         if isinstance(portrait_bone_lock, dict) and portrait_bone_lock.get("applies"):
             prompt_rules = self._string_list(portrait_bone_lock.get("prompt_rules"))
             bone_traits = self._string_list(portrait_bone_lock.get("stable_bone_traits"))
@@ -1658,6 +1696,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
             pass_conditions = self._string_list(strict_policy.get("pass_conditions"))
             if pass_conditions:
                 lines.append("Strict visual pass conditions: " + "; ".join(pass_conditions[:5]))
+            negative_rules = self._string_list(strict_policy.get("negative_additions"))
+            if negative_rules:
+                priority_negative_rules = [
+                    rule
+                    for rule in negative_rules
+                    if rule
+                    in {
+                        "Korean glass skin",
+                        "oily shiny face",
+                        "nose-tip highlight",
+                        "silicone face",
+                        "over-smoothed skin",
+                        "plastic texture",
+                        "same type but different person",
+                        "style changed face geometry",
+                        "3D render",
+                    }
+                ]
+                lines.append("Strict visual avoid: " + "; ".join(_dedupe([*priority_negative_rules, *negative_rules[:16]])[:24]))
             strict_avoid = self._string_list(strict_policy.get("negative_additions"))
             if strict_avoid:
                 lines.append("Strict visual avoid: " + "; ".join(strict_avoid[:16]))
