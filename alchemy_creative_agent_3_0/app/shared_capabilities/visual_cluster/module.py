@@ -83,6 +83,7 @@ from .strong_reference_loop import StrongReferenceLoopPlanner
 
 
 VISUAL_CAPABILITY_CLUSTER_ID = "visual_capability_cluster"
+ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID = "advanced_reference_priority_controls"
 VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "asset_role_analyzer",
     "asset_binding_planner",
@@ -111,6 +112,7 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "portrait_bone_structure_identity_lock",
     "portrait_reference_identity_style_separator",
     "portrait_reference_balance_policy",
+    ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID,
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
     MODE_QUALITY_PROFILE_MODULE_ID,
@@ -242,6 +244,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "visual_capability_cluster": cluster.model_dump(mode="json"),
                 "visual_grammar_profile": cluster.profile.model_dump(mode="json"),
                 "project_visual_grammar_snapshot": cluster.project_snapshot.model_dump(mode="json"),
+                "advanced_reference_controls": dict(cluster.metadata.get("advanced_reference_controls") or {}),
                 "visual_reference_binding_profile": cluster.reference_binding_profile.model_dump(mode="json"),
                 "strong_reference_bindings": list(cluster.reference_binding_profile.strong_bindings),
                 "visual_identity_lock_profiles": [item.model_dump(mode="json") for item in cluster.identity_lock_profiles],
@@ -369,6 +372,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "project_id": cluster.project_id,
                 "context_version": cluster.context_version,
                 "v3_native_visual_capability_cluster": True,
+                "advanced_reference_controls": dict(cluster.metadata.get("advanced_reference_controls") or {}),
             },
         )
 
@@ -525,6 +529,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         requested_count = self._requested_image_count(capability_input, project_context)
         variation_mode = self._effective_variation_mode(capability_input, project_context)
         subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
+        advanced_reference_controls = self._advanced_reference_controls(
+            capability_input=capability_input,
+            project_context=project_context,
+            strong_bindings=strong_bindings,
+            subject_type=subject_type,
+        )
         human_photorealism = self.human_photorealism_layer.build(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -548,6 +558,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             anchors=project_identity_anchors,
             identity_locks=identity_locks,
             human_photorealism=human_photorealism,
+        )
+        strong_reference_closure = self._apply_advanced_reference_controls_to_closure(
+            strong_reference_closure,
+            advanced_reference_controls,
         )
         mode_quality_profile = self.mode_quality_profile_builder.build(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -599,6 +613,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_hero_plan=identity_hero_plan,
             human_photorealism=human_photorealism,
         )
+        subject_identity_card = self._apply_advanced_reference_controls_to_subject_identity_card(
+            subject_identity_card,
+            advanced_reference_controls,
+        )
         portrait_bone_lock = self.portrait_identity_layer.build_lock(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -637,6 +655,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             portrait_reference_policy,
             portrait_balance_policy,
         )
+        role_specific_plan = self._apply_advanced_reference_controls_to_role_plan(
+            role_specific_plan,
+            advanced_reference_controls,
+        )
         beautiful_realism_review = self._beautiful_realism_balance_review(
             capability_input=capability_input,
             project_id=str(project_context.get("project_id") or "") or None,
@@ -658,6 +680,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             beautiful_realism_review=beautiful_realism_review,
             human_photorealism=human_photorealism,
             role_specific_plan=role_specific_plan,
+            advanced_reference_controls=advanced_reference_controls,
         )
         role_specific_plan = self._apply_strict_visual_review_policy_to_role_plan(
             role_specific_plan,
@@ -800,6 +823,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "portrait_reference_balance_policy"
                 if portrait_balance_policy and portrait_balance_policy.applies
                 else "",
+                ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID
+                if advanced_reference_controls.get("applies")
+                else "",
                 "anti_ai_face_review" if anti_ai_face_review and anti_ai_face_review.applies else "",
                 "commercial_quality_review",
             ]
@@ -891,6 +917,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "portrait_reference_balance_status": portrait_balance_review.status if portrait_balance_review else None,
                 "quality_review_report_count": len(quality_reports),
                 "auto_retry_decision_count": len(retry_decisions),
+                "advanced_reference_controls": advanced_reference_controls,
+                "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
                 "doc67_default_role_count_aligned": True,
             },
         )
@@ -1834,6 +1862,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         beautiful_realism_review: BeautifulRealismBalanceReview | None,
         human_photorealism: HumanPhotorealismGuidance | None,
         role_specific_plan: RoleSpecificGenerationPlan,
+        advanced_reference_controls: dict[str, Any] | None = None,
     ) -> StrictVisualReviewPolicy:
         applies = bool(role_specific_plan.role_recipes)
         retryable = [
@@ -1988,6 +2017,52 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if human_photorealism and human_photorealism.applies:
             prompt_additions.extend(human_photorealism.review_targets[:4])
             negative_additions.extend(human_photorealism.negative_prompt_fragments[:8])
+        advanced_reference_controls = dict(advanced_reference_controls or {})
+        if advanced_reference_controls.get("preserve_person_identity"):
+            retryable.extend(
+                [
+                    "beauty_archetype_overrode_reference",
+                    "same_type_but_different_person",
+                    "prompt_face_description_replaced_reference_geometry",
+                    "generic_sweet_model_replaced_reference",
+                ]
+            )
+            prompt_additions.extend(
+                [
+                    "Doc90 person priority check: prompt beauty-archetype wording must not replace the uploaded person's facial geometry.",
+                    "If the result is merely the same type of attractive person but not the uploaded person, treat it as identity drift.",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "beauty archetype overrode reference identity",
+                    "same type but different person",
+                    "prompt face description replaced uploaded face geometry",
+                    "generic sweet model replacing the reference person",
+                ]
+            )
+        if advanced_reference_controls.get("preserve_product_appearance"):
+            retryable.extend(
+                [
+                    "product_silhouette_drift",
+                    "label_or_pattern_drift",
+                    "material_structure_drift",
+                    "generic_product_replacement",
+                ]
+            )
+            prompt_additions.append("Doc90 product priority check: referenced object appearance must not be replaced by a generic product.")
+            negative_additions.extend(["product silhouette drift", "label or pattern drift", "material structure drift"])
+        if advanced_reference_controls.get("preserve_scene_consistency"):
+            retryable.extend(
+                [
+                    "scene_identity_drift",
+                    "background_space_drift",
+                    "camera_mood_drift",
+                    "reference_scene_replaced",
+                ]
+            )
+            prompt_additions.append("Doc90 scene priority check: referenced background and space continuity must not be replaced.")
+            negative_additions.extend(["scene identity drift", "background space drift", "camera mood drift", "reference scene replaced"])
         pass_conditions = [
             "identity master exists or user reference is respected",
             "suite roles are visually distinguishable for the selected mode",
@@ -2002,6 +2077,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "human subjects avoid plastic skin, beauty-app geometry, and cloned expressions",
             "outputs remain directly usable as a polished creative visual set",
         ]
+        if advanced_reference_controls.get("preserve_person_identity"):
+            pass_conditions.append("prompt face archetypes guide styling only and do not replace uploaded facial geometry")
+        if advanced_reference_controls.get("preserve_product_appearance"):
+            pass_conditions.append("referenced object/product appearance remains recognizable when product preservation is enabled")
+        if advanced_reference_controls.get("preserve_scene_consistency"):
+            pass_conditions.append("reference scene continuity remains recognizable when scene preservation is enabled")
         return StrictVisualReviewPolicy(
             policy_id=stable_id("strict_visual_review_policy", project_id, job_id, subject_type, variation_mode),
             project_id=project_id,
@@ -2031,7 +2112,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ],
             metadata={
                 "doc": "77",
-                "extends": ["53", "58", "59", "64", "65", "73", "74", "75", "76", "77", "78"],
+                "extends": ["53", "58", "59", "64", "65", "73", "74", "75", "76", "77", "78", "90"],
                 "identity_hero_plan_id": identity_hero_plan.plan_id if identity_hero_plan else None,
                 "subject_identity_card_id": subject_identity_card.card_id
                 if subject_identity_card and subject_identity_card.applies
@@ -2045,6 +2126,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "portrait_reference_influence_policy_id": portrait_reference_policy.policy_id
                 if portrait_reference_policy and portrait_reference_policy.applies
                 else None,
+                "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
+                "advanced_reference_controls": advanced_reference_controls,
             },
         )
 
@@ -2286,6 +2369,213 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if subject_type == "product":
             return ["会保持商品形状、材质、颜色和比例", "会避免无关商品和错误标签"]
         return ["会保持已选视觉风格、构图、色彩和光感"]
+
+    def _advanced_reference_controls(
+        self,
+        *,
+        capability_input: CapabilityInput,
+        project_context: dict[str, Any],
+        strong_bindings: list[StrongReferenceBinding],
+        subject_type: str,
+    ) -> dict[str, Any]:
+        template_id = str(project_context.get("template_id") or capability_input.metadata.get("template_id") or "")
+        scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
+        project_metadata = _as_dict(project_context.get("metadata"))
+        raw_controls: dict[str, Any] = {}
+        for source in (
+            project_metadata.get("advanced_reference_controls"),
+            scenario_parameters.get("advanced_reference_controls"),
+            capability_input.metadata.get("advanced_reference_controls"),
+        ):
+            raw_controls.update(_clean_advanced_reference_controls(source))
+        has_identity_binding = any(self._binding_is_person_identity(binding) for binding in strong_bindings)
+        has_any_binding = bool(strong_bindings)
+        if template_id != "general_template":
+            return {
+                "applies": False,
+                "template_scope": template_id or "unknown",
+                "doc": "90",
+                "reason": "doc90_currently_general_template_only",
+            }
+        defaults = {
+            "preserve_person_identity": bool(has_identity_binding or (subject_type == "character" and has_any_binding)),
+            "preserve_product_appearance": False,
+            "preserve_scene_consistency": False,
+        }
+        controls = {
+            key: bool(raw_controls[key]) if key in raw_controls else default
+            for key, default in defaults.items()
+        }
+        applies = bool(has_any_binding and any(controls.values()))
+        return {
+            **controls,
+            "applies": applies,
+            "template_scope": "general_template",
+            "doc": "90",
+            "source": "manual" if raw_controls else "general_template_defaults",
+            "has_reference_binding": has_any_binding,
+            "has_identity_binding": has_identity_binding,
+            "subject_type": subject_type,
+        }
+
+    def _binding_is_person_identity(self, binding: StrongReferenceBinding) -> bool:
+        role = str(binding.role or "").lower()
+        use_policy = str(binding.use_policy or "").lower()
+        lock_targets = {str(item or "").lower() for item in binding.lock_targets}
+        return bool(
+            use_policy == "identity"
+            or role in {"identity_reference", "portrait_identity", "face_reference"}
+            or {"face_identity", "portrait_identity"} & lock_targets
+        )
+
+    def _apply_advanced_reference_controls_to_closure(
+        self,
+        closure: StrongReferenceClosurePackage,
+        controls: dict[str, Any],
+    ) -> StrongReferenceClosurePackage:
+        if not controls.get("applies"):
+            return closure
+        prompt_rules, negative_rules, keep_rules = self._advanced_reference_control_rules(controls)
+        return closure.model_copy(
+            update={
+                "identity_keep_rules": _dedupe([*closure.identity_keep_rules, *keep_rules])[:18],
+                "provider_prompt_rules": _dedupe([*prompt_rules, *closure.provider_prompt_rules])[:14],
+                "negative_prompt_rules": _dedupe([*closure.negative_prompt_rules, *negative_rules])[:24],
+                "forbidden_drift": _dedupe([*closure.forbidden_drift, *negative_rules])[:18],
+                "metadata": {
+                    **dict(closure.metadata),
+                    "doc90_advanced_reference_controls": True,
+                    "advanced_reference_controls": controls,
+                },
+            }
+        )
+
+    def _apply_advanced_reference_controls_to_subject_identity_card(
+        self,
+        card: SubjectIdentityCard | None,
+        controls: dict[str, Any],
+    ) -> SubjectIdentityCard | None:
+        if card is None or not controls.get("applies") or not controls.get("preserve_person_identity"):
+            return card
+        prompt_rules, negative_rules, keep_rules = self._advanced_reference_control_rules(controls)
+        review_checks = [
+            "uploaded face remains the first identity source when prompt face wording conflicts",
+            "beauty archetype words affect styling only, not facial geometry",
+        ]
+        return card.model_copy(
+            update={
+                "identity_keep_rules": _dedupe([*keep_rules, *card.identity_keep_rules])[:12],
+                "prompt_additions": _dedupe([*prompt_rules, *card.prompt_additions])[:12],
+                "negative_additions": _dedupe([*card.negative_additions, *negative_rules])[:18],
+                "review_checks": _dedupe([*card.review_checks, *review_checks])[:10],
+                "metadata": {
+                    **dict(card.metadata),
+                    "doc90_advanced_reference_controls": True,
+                    "advanced_reference_controls": controls,
+                },
+            }
+        )
+
+    def _apply_advanced_reference_controls_to_role_plan(
+        self,
+        plan: RoleSpecificGenerationPlan,
+        controls: dict[str, Any],
+    ) -> RoleSpecificGenerationPlan:
+        if not controls.get("applies"):
+            return plan
+        prompt_rules, negative_rules, keep_rules = self._advanced_reference_control_rules(controls)
+        updated_recipes = []
+        for recipe in plan.role_recipes:
+            updated_recipes.append(
+                recipe.model_copy(
+                    update={
+                        "must_keep_rules": _dedupe([*recipe.must_keep_rules, *keep_rules])[:16],
+                        "must_not_rules": _dedupe([*recipe.must_not_rules, *negative_rules])[:18],
+                        "review_checks": _dedupe(
+                            [
+                                *recipe.review_checks,
+                                "Doc90 priority controls are respected when reference and prompt conflict",
+                            ]
+                        )[:14],
+                        "metadata": {
+                            **dict(recipe.metadata),
+                            "doc90_advanced_reference_controls": True,
+                        },
+                    }
+                )
+            )
+        return plan.model_copy(
+            update={
+                "role_recipes": updated_recipes,
+                "prompt_additions": _dedupe([*prompt_rules, *plan.prompt_additions])[:40],
+                "metadata": {
+                    **dict(plan.metadata),
+                    "doc90_advanced_reference_controls": True,
+                    "advanced_reference_controls": controls,
+                    "doc90_batch_review_rules": [
+                        "Doc90 advanced reference priority controls must be honored across the set."
+                    ],
+                },
+            }
+        )
+
+    def _advanced_reference_control_rules(
+        self,
+        controls: dict[str, Any],
+    ) -> tuple[list[str], list[str], list[str]]:
+        prompt_rules: list[str] = []
+        negative_rules: list[str] = []
+        keep_rules: list[str] = []
+        if controls.get("preserve_person_identity"):
+            prompt_rules.extend(
+                [
+                    "Doc90 person priority: use the uploaded or selected person as the exact identity source when the prompt describes a human subject.",
+                    "Doc90 conflict rule: prompt face-archetype words such as oval face, sweet style, young woman, or generic beauty type may guide makeup, styling, expression, and mood only; they must not replace the reference person's facial geometry.",
+                    "Doc90 identity geometry: preserve face width/length relationship, eye spacing and eye-shape direction, nose-mouth relationship, cheek-jaw-chin direction, age direction, and recognizable same-person impression.",
+                ]
+            )
+            keep_rules.extend(
+                [
+                    "uploaded person identity has highest priority over generic prompt face descriptions",
+                    "prompt person descriptors guide styling and mood only, not face geometry",
+                    "preserve same-person bone structure and facial feature relationships",
+                ]
+            )
+            negative_rules.extend(
+                [
+                    "beauty archetype overrode reference identity",
+                    "same type but different person",
+                    "prompt face description replaced uploaded face geometry",
+                    "generic sweet model replacing the reference person",
+                ]
+            )
+        if controls.get("preserve_product_appearance"):
+            prompt_rules.append(
+                "Doc90 product priority: preserve the uploaded object's silhouette, proportions, material direction, pattern family, label area, and distinctive structure; prompt product-category words must not replace the referenced object."
+            )
+            keep_rules.append("uploaded object or product appearance has priority over generic prompt product wording")
+            negative_rules.extend(
+                [
+                    "product silhouette drift",
+                    "label or pattern drift",
+                    "material structure drift",
+                    "generic product replacement",
+                ]
+            )
+        if controls.get("preserve_scene_consistency"):
+            prompt_rules.append(
+                "Doc90 scene priority: preserve the reference background, spatial layout, camera mood, and scene continuity; new prompt wording may refine the same world but should not replace the environment."
+            )
+            keep_rules.append("uploaded scene and space continuity have priority over unrelated environment changes")
+            negative_rules.extend(
+                [
+                    "scene identity drift",
+                    "background space drift",
+                    "camera mood drift",
+                    "reference scene replaced",
+                ]
+            )
+        return _dedupe(prompt_rules), _dedupe(negative_rules), _dedupe(keep_rules)
 
     def _human_variation_profiles(
         self,
@@ -3484,6 +3774,17 @@ def _as_dict(value: Any) -> dict[str, Any]:
         except Exception:
             return {}
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _clean_advanced_reference_controls(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "preserve_person_identity",
+        "preserve_product_appearance",
+        "preserve_scene_consistency",
+    }
+    return {key: bool(value[key]) for key in allowed if key in value}
 
 
 def _dict_list(value: Any) -> list[dict[str, Any]]:

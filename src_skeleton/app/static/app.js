@@ -566,6 +566,11 @@ const els = {
   v3AssetTitle: document.querySelector("#v3AssetTitle"),
   v3AssetSummary: document.querySelector("#v3AssetSummary"),
   v3AssetList: document.querySelector("#v3AssetList"),
+  v3AdvancedReferenceControls: document.querySelector("#v3AdvancedReferenceControls"),
+  v3ReferencePriorityStatus: document.querySelector("#v3ReferencePriorityStatus"),
+  v3PreservePersonIdentityInput: document.querySelector("#v3PreservePersonIdentityInput"),
+  v3PreserveProductAppearanceInput: document.querySelector("#v3PreserveProductAppearanceInput"),
+  v3PreserveSceneConsistencyInput: document.querySelector("#v3PreserveSceneConsistencyInput"),
   v3BrandNameLabel: document.querySelector("#v3BrandNameLabel"),
   v3BrandNameInput: document.querySelector("#v3BrandNameInput"),
   v3BrandToneLabel: document.querySelector("#v3BrandToneLabel"),
@@ -1112,6 +1117,13 @@ function bindControls() {
   }
   if (els.v3AssetInput) els.v3AssetInput.addEventListener("change", handleV3AssetFiles);
   if (els.v3AssetList) els.v3AssetList.addEventListener("click", handleV3AssetListClick);
+  [
+    els.v3PreservePersonIdentityInput,
+    els.v3PreserveProductAppearanceInput,
+    els.v3PreserveSceneConsistencyInput,
+  ].forEach((input) => {
+    if (input) input.addEventListener("change", updateV3ReferencePriorityStatus);
+  });
   if (els.v3CountInput) {
     els.v3CountInput.addEventListener("input", () => {
       v3State.generationCount = v3BoundedGenerationCount(els.v3CountInput.value);
@@ -2014,6 +2026,10 @@ function renderV3ScenarioState() {
   if (els.v3EcommerceFields) els.v3EcommerceFields.hidden = selected !== "ecommerce";
   if (els.v3EcommerceAdvanced && selected !== "ecommerce") els.v3EcommerceAdvanced.open = false;
   if (els.v3CommercePanel) els.v3CommercePanel.hidden = selected !== "ecommerce";
+  if (els.v3AdvancedReferenceControls) {
+    els.v3AdvancedReferenceControls.hidden = selected !== "general_creative";
+    if (selected !== "general_creative") els.v3AdvancedReferenceControls.open = false;
+  }
   if (els.v3VariationModeRow) els.v3VariationModeRow.hidden = selected !== "general_creative";
   if (els.v3GeneralPresetRow) els.v3GeneralPresetRow.hidden = selected !== "general_creative";
   if (els.v3EcommercePresetRow) els.v3EcommercePresetRow.hidden = selected !== "ecommerce";
@@ -2024,6 +2040,7 @@ function renderV3ScenarioState() {
     button.hidden = button.dataset.v3PresetScope !== selected;
   });
   renderV3Assets();
+  updateV3ReferencePriorityStatus();
   renderV3ProjectDetail();
   if (!v3State.currentJob) {
     if (selected === "ecommerce") {
@@ -4601,6 +4618,7 @@ function renderV3Assets() {
   els.v3AssetList.classList.toggle("empty-v3-list", v3State.files.length === 0);
   if (!v3State.files.length) {
     els.v3AssetList.textContent = copy.assetEmpty;
+    updateV3ReferencePriorityStatus();
     return;
   }
   v3State.files.forEach((file, index) => {
@@ -4615,6 +4633,7 @@ function renderV3Assets() {
     `;
     els.v3AssetList.appendChild(row);
   });
+  updateV3ReferencePriorityStatus();
 }
 
 function v3FileSizeText(size) {
@@ -4819,6 +4838,37 @@ function v3CurrentGenerationSettings() {
   };
 }
 
+function v3AdvancedReferenceControlsPayload() {
+  return {
+    preserve_person_identity: Boolean(els.v3PreservePersonIdentityInput?.checked),
+    preserve_product_appearance: Boolean(els.v3PreserveProductAppearanceInput?.checked),
+    preserve_scene_consistency: Boolean(els.v3PreserveSceneConsistencyInput?.checked),
+  };
+}
+
+function updateV3ReferencePriorityStatus() {
+  if (!els.v3ReferencePriorityStatus) return;
+  const hasReference = Boolean(
+    (v3State.files && v3State.files.length)
+      || (v3State.uploadedAssets && v3State.uploadedAssets.length)
+      || v3UsefulReferenceItems(v3State.currentProject).length
+  );
+  const controls = v3AdvancedReferenceControlsPayload();
+  if (!hasReference) {
+    els.v3ReferencePriorityStatus.textContent = "上传参考图后，可优先保持人物、物品或场景一致";
+    return;
+  }
+  if (controls.preserve_person_identity) {
+    els.v3ReferencePriorityStatus.textContent = "已优先保持人物长相";
+    return;
+  }
+  if (controls.preserve_product_appearance || controls.preserve_scene_consistency) {
+    els.v3ReferencePriorityStatus.textContent = "已开启参考图一致性";
+    return;
+  }
+  els.v3ReferencePriorityStatus.textContent = "参考图会作为普通画面参考";
+}
+
 function v3SizeLabel(size) {
   const labels = {
     "1024x1536": "竖版",
@@ -4850,14 +4900,17 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const selectedVariationMode = scenarioId === "general_creative" ? (v3State.selectedVariationMode || "auto") : "";
   const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
+  const advancedReferenceControls = scenarioId === "general_creative" ? v3AdvancedReferenceControlsPayload() : undefined;
   const payload = {
     user_input: userInput,
     template_id: templateId,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id),
     use_project_context: true,
+    advanced_reference_controls: advancedReferenceControls,
     metadata: {
       frontend_surface: "commercial_v3_project_mode",
       interaction_style: "project_card_module",
+      advanced_reference_controls: advancedReferenceControls,
       selected_mode_id: v3State.selectedPreset,
       selected_preset_id: v3State.selectedPreset,
       variation_mode: scenarioId === "general_creative" ? selectedVariationMode : undefined,
@@ -4906,6 +4959,7 @@ async function createV3Job() {
         require_real_images: true,
         requested_image_count: generationSettings.count,
         requested_image_size: generationSettings.size || null,
+        advanced_reference_controls: payload.metadata.advanced_reference_controls,
         variation_mode: payload.metadata.variation_mode,
         inferred_variation_mode: payload.metadata.inferred_variation_mode,
         effective_variation_mode: payload.metadata.effective_variation_mode,

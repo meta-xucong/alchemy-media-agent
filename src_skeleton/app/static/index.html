@@ -1544,6 +1544,36 @@
                       <div id="v3AssetList" class="v3-asset-list empty-v3-list">还没有上传图片</div>
                     </div>
 
+                    <details id="v3AdvancedReferenceControls" class="v3-optional-details v3-reference-priority-controls">
+                      <summary>
+                        <span>高级</span>
+                        <small id="v3ReferencePriorityStatus">上传参考图后，可优先保持人物、物品或场景一致</small>
+                      </summary>
+                      <div class="v3-reference-priority-grid">
+                        <label class="v3-reference-priority-option">
+                          <input id="v3PreservePersonIdentityInput" type="checkbox" checked />
+                          <span>
+                            <strong>保持人物长相</strong>
+                            <small>上传人物图时推荐开启，优先保留原图里的脸和骨相</small>
+                          </span>
+                        </label>
+                        <label class="v3-reference-priority-option">
+                          <input id="v3PreserveProductAppearanceInput" type="checkbox" />
+                          <span>
+                            <strong>保持产品外观</strong>
+                            <small>需要同一个物品、衣服、包装更像原图时开启</small>
+                          </span>
+                        </label>
+                        <label class="v3-reference-priority-option">
+                          <input id="v3PreserveSceneConsistencyInput" type="checkbox" />
+                          <span>
+                            <strong>保持原图场景</strong>
+                            <small>需要延续同一个背景、空间和氛围时开启</small>
+                          </span>
+                        </label>
+                      </div>
+                    </details>
+
                     <div class="v3-brand-grid">
                       <label class="field">
                         <span id="v3BrandNameLabel">品牌或项目名</span>

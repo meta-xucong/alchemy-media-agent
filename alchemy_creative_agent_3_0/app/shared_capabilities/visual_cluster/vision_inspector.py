@@ -94,12 +94,28 @@ _DOC88_REFERENCE_BALANCE_ISSUES = {
     "scenario_specific_negative_overfit",
 }
 
+_DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES = {
+    "beauty_archetype_overrode_reference",
+    "same_type_but_different_person",
+    "prompt_face_description_replaced_reference_geometry",
+    "generic_sweet_model_replaced_reference",
+    "product_silhouette_drift",
+    "label_or_pattern_drift",
+    "material_structure_drift",
+    "generic_product_replacement",
+    "scene_identity_drift",
+    "background_space_drift",
+    "camera_mood_drift",
+    "reference_scene_replaced",
+}
+
 RETRYABLE_ISSUE_CODES = {
     *_AESTHETIC_STABILITY_ISSUES,
     *_BEAUTIFUL_REALISM_ISSUES,
     *_DOC86_PORTRAIT_IDENTITY_ISSUES,
     *_DOC87_REFERENCE_BOUNDARY_ISSUES,
     *_DOC88_REFERENCE_BALANCE_ISSUES,
+    *_DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES,
     "visible_text_artifact",
     "watermark_or_signature",
     "faint_corner_watermark",
@@ -851,6 +867,54 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "scenario-specific template face",
                 ]
             )
+        elif code in _DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES:
+            if code in {
+                "beauty_archetype_overrode_reference",
+                "same_type_but_different_person",
+                "prompt_face_description_replaced_reference_geometry",
+                "generic_sweet_model_replaced_reference",
+            }:
+                prompt_additions.extend(
+                    [
+                        "Doc90 advanced reference priority repair: use the uploaded or selected person as the exact identity source",
+                        "prompt face-archetype words may guide makeup, expression, mood, and styling only; they must not replace facial geometry",
+                    ]
+                )
+                identity_reinforcement.extend(
+                    [
+                        "preserve face width/length relationship, eye spacing and eye-shape direction, nose-mouth relationship, cheek-jaw-chin direction, age direction, and recognizable same-person impression",
+                        "same-person identity beats generic beauty type when the advanced person-preservation control is active",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "beauty archetype overrode reference identity",
+                        "same type but different person",
+                        "prompt face description replaced uploaded face geometry",
+                        "generic sweet model replacing the reference person",
+                    ]
+                )
+            if code in {
+                "product_silhouette_drift",
+                "label_or_pattern_drift",
+                "material_structure_drift",
+                "generic_product_replacement",
+            }:
+                product_reinforcement.extend(
+                    [
+                        "Doc90 generic object/product repair: preserve the uploaded object's silhouette, proportions, material direction, pattern family, label area, and distinctive structure",
+                        "prompt product-category wording must not replace the referenced object with a generic new item",
+                    ]
+                )
+                negative_additions.extend(["generic product replacement", "changed product silhouette", "changed label or pattern"])
+            if code in {"scene_identity_drift", "background_space_drift", "camera_mood_drift", "reference_scene_replaced"}:
+                composition_repair.extend(
+                    [
+                        "Doc90 scene continuity repair: preserve the reference background, broad space, camera mood, and scene continuity",
+                        "refine the same world instead of replacing the environment with an unrelated new background",
+                    ]
+                )
+                negative_additions.extend(["reference scene replaced", "background space drift", "camera mood drift"])
         elif code in {"product_identity_drift", "brand_asset_drift"}:
             product_reinforcement.append("preserve the supplied product or brand asset truth source exactly: same instance, shape, colors, material, proportions, surface finish, packaging silhouette, and logo/label placement")
         elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:

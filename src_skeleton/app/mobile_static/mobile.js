@@ -2718,6 +2718,13 @@ function setupMobileV3Adapter() {
   });
   document.querySelector("#mobileV3CountInput")?.addEventListener("input", handleMobileV3CountInput);
   document.querySelector("#mobileV3ReferenceInput")?.addEventListener("change", handleMobileV3ReferenceFiles);
+  [
+    "#mobileV3PreservePersonIdentityInput",
+    "#mobileV3PreserveProductAppearanceInput",
+    "#mobileV3PreserveSceneConsistencyInput",
+  ].forEach((selector) => {
+    document.querySelector(selector)?.addEventListener("change", updateMobileV3ReferencePriorityStatus);
+  });
   document.querySelector("#mobileV3PromptInput")?.addEventListener("input", () => {
     mobileV3State.promptEdited = true;
     updateMobileV3FullPromptButton();
@@ -3256,6 +3263,7 @@ function renderMobileV3ReferenceUploads() {
   list.innerHTML = "";
   list.classList.remove("empty-v2-list");
   list.classList.toggle("is-empty", mobileV3State.files.length === 0);
+  updateMobileV3ReferencePriorityStatus();
   if (!mobileV3State.files.length) {
     list.textContent = "还没有上传参考图";
     return;
@@ -3390,6 +3398,38 @@ function mobileV3UploadRole(file = null) {
   return "unknown_reference";
 }
 
+function mobileV3AdvancedReferenceControlsPayload() {
+  return {
+    preserve_person_identity: Boolean(document.querySelector("#mobileV3PreservePersonIdentityInput")?.checked),
+    preserve_product_appearance: Boolean(document.querySelector("#mobileV3PreserveProductAppearanceInput")?.checked),
+    preserve_scene_consistency: Boolean(document.querySelector("#mobileV3PreserveSceneConsistencyInput")?.checked),
+  };
+}
+
+function updateMobileV3ReferencePriorityStatus() {
+  const status = document.querySelector("#mobileV3ReferencePriorityStatus");
+  if (!status) return;
+  const hasReference = Boolean(
+    mobileV3State.files?.length
+      || mobileV3State.uploadedAssets?.length
+      || mobileV3UsefulReferences(mobileV3State.currentProject).length
+  );
+  const controls = mobileV3AdvancedReferenceControlsPayload();
+  if (!hasReference) {
+    status.textContent = "上传参考图后，可优先保持人物、物品或场景一致";
+    return;
+  }
+  if (controls.preserve_person_identity) {
+    status.textContent = "已优先保持人物长相";
+    return;
+  }
+  if (controls.preserve_product_appearance || controls.preserve_scene_consistency) {
+    status.textContent = "已开启参考图一致性";
+    return;
+  }
+  status.textContent = "参考图会作为普通画面参考";
+}
+
 async function uploadMobileV3Files() {
   if (!mobileV3State.files.length) {
     mobileV3State.uploadedAssets = [];
@@ -3449,14 +3489,17 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const inferredMode = scenarioId === "general_creative" ? mobileV3InferVariationMode(userInput) : "";
   const effectiveMode = scenarioId === "general_creative" ? mobileV3BackendVariationMode(selectedMode, userInput) : "";
   const size = mobileV3State.selectedSize || "";
+  const advancedReferenceControls = scenarioId === "general_creative" ? mobileV3AdvancedReferenceControlsPayload() : undefined;
   return {
     user_input: userInput,
     template_id: templateId,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id).filter(Boolean),
     use_project_context: true,
+    advanced_reference_controls: advancedReferenceControls,
     metadata: {
       frontend_surface: "mobile_v3_project_mode",
       interaction_style: "mobile_project_card",
+      advanced_reference_controls: advancedReferenceControls,
       variation_mode: scenarioId === "general_creative" ? selectedMode : undefined,
       inferred_variation_mode: scenarioId === "general_creative" ? inferredMode : undefined,
       effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
@@ -3482,6 +3525,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
         require_real_images: true,
         requested_image_count: count,
         requested_image_size: size || null,
+        advanced_reference_controls: advancedReferenceControls,
         variation_mode: scenarioId === "general_creative" ? selectedMode : undefined,
         inferred_variation_mode: scenarioId === "general_creative" ? inferredMode : undefined,
         effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
@@ -3645,6 +3689,12 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   mobileV3State.currentProject = project;
   mobileV3State.selectedTemplate = project?.primary_template_id || mobileV3State.selectedTemplate || "general_template";
   mobileV3State.promptEdited = false;
+  const advancedPanel = document.querySelector("#mobileV3AdvancedReferenceControls");
+  if (advancedPanel) {
+    const isGeneralTemplate = mobileV3ScenarioForTemplate(mobileV3State.selectedTemplate) === "general_creative";
+    advancedPanel.hidden = !isGeneralTemplate;
+    if (!isGeneralTemplate) advancedPanel.open = false;
+  }
   const detailPanel = document.querySelector("#mobileV3ProjectDetail");
   if (detailPanel) detailPanel.hidden = false;
   mobileV3State.currentTimeline = [];
@@ -3661,6 +3711,7 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   renderMobileV3ProjectOutputs(project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline([]);
+  updateMobileV3ReferencePriorityStatus();
   updateMobileV3ControlState();
   openMobileSurface("v3-project-detail", document.querySelector("#mobileV3ProjectGrid"));
   syncMobileV3PromptFromProject(project, { force: true });
@@ -3695,6 +3746,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
   renderMobileV3ProjectOutputs(project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline(mobileV3State.currentTimeline);
+  updateMobileV3ReferencePriorityStatus();
   syncMobileV3PromptFromProject(project);
 }
 

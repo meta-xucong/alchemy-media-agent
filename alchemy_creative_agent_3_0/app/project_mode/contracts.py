@@ -391,6 +391,7 @@ class CreateProjectJobRequest(ProjectModeBase):
     use_project_context: bool = True
     commerce_profile_patch: ProjectCommerceProfile | None = None
     suite_slot_request: list[str] = Field(default_factory=list)
+    advanced_reference_controls: dict[str, bool] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("user_input", "template_id")
@@ -407,6 +408,16 @@ class CreateProjectJobRequest(ProjectModeBase):
     @classmethod
     def clean_text_list(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if str(item).strip()]
+
+    @field_validator("advanced_reference_controls")
+    @classmethod
+    def clean_advanced_reference_controls(cls, value: dict[str, bool]) -> dict[str, bool]:
+        allowed = {
+            "preserve_person_identity",
+            "preserve_product_appearance",
+            "preserve_scene_consistency",
+        }
+        return {key: bool(value[key]) for key in allowed if key in value}
 
 
 class ProjectReferenceRequest(ProjectModeBase):

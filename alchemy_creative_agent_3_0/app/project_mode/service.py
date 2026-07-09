@@ -684,6 +684,11 @@ class V3ProjectModeService:
             template_id=template_manifest.template_id,
             user_input=user_input,
         )
+        advanced_reference_controls = self._advanced_reference_controls_for_template(
+            project=project,
+            request=job_request,
+            template_id=template_manifest.template_id,
+        )
         context = self._build_context(
             project,
             continuation_instruction=job_request.user_input,
@@ -697,6 +702,7 @@ class V3ProjectModeService:
             context,
             commerce_profile=commerce_profile,
             has_product_reference=bool(uploaded_asset_ids),
+            advanced_reference_controls=advanced_reference_controls,
         )
         product_profile = self._product_profile_for_template(
             project,
@@ -704,6 +710,7 @@ class V3ProjectModeService:
             job_request,
             template_manifest,
             commerce_profile=commerce_profile,
+            advanced_reference_controls=advanced_reference_controls,
         )
         project_job_sequence = len(project.job_ids) + 1
         create_payload = {
@@ -725,6 +732,8 @@ class V3ProjectModeService:
                 "project_context_version": context.context_version,
                 "project_context_snapshot": context_snapshot,
                 "project_mode": True,
+                "advanced_reference_controls": advanced_reference_controls,
+                "doc90_advanced_reference_controls": bool(advanced_reference_controls),
                 "apply_brand_memory_update_default": False,
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
@@ -745,6 +754,8 @@ class V3ProjectModeService:
                 "project_context_version": context.context_version,
                 "project_context_snapshot": context_snapshot,
                 "project_mode": True,
+                "advanced_reference_controls": advanced_reference_controls,
+                "doc90_advanced_reference_controls": bool(advanced_reference_controls),
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
@@ -761,6 +772,8 @@ class V3ProjectModeService:
                 "template_id": template_manifest.template_id,
                 "scenario_pack_id": template_manifest.scenario_pack_id,
                 "project_context_version": context.context_version,
+                "advanced_reference_controls": advanced_reference_controls,
+                "doc90_advanced_reference_controls": bool(advanced_reference_controls),
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
@@ -1148,6 +1161,7 @@ class V3ProjectModeService:
         *,
         commerce_profile: ProjectCommerceProfile | None = None,
         has_product_reference: bool = False,
+        advanced_reference_controls: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             preset_id = str(
@@ -1190,6 +1204,8 @@ class V3ProjectModeService:
             "use_project_context": request.use_project_context,
         }
         parameters.update(variation_contract)
+        if advanced_reference_controls:
+            parameters["advanced_reference_controls"] = dict(advanced_reference_controls)
         requested_count = _bounded_requested_image_count(request.metadata.get("requested_image_count"))
         if requested_count is not None:
             parameters["requested_image_count"] = requested_count
@@ -1211,6 +1227,7 @@ class V3ProjectModeService:
         manifest: ProjectTemplateManifest,
         *,
         commerce_profile: ProjectCommerceProfile | None,
+        advanced_reference_controls: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         base = {
             "brand_or_project_name": project.title,
@@ -1219,6 +1236,8 @@ class V3ProjectModeService:
         }
         if manifest.template_id == GENERAL_TEMPLATE_ID:
             base.update(self._general_variation_contract(request.metadata))
+            if advanced_reference_controls:
+                base["advanced_reference_controls"] = dict(advanced_reference_controls)
         if manifest.template_id != ECOMMERCE_TEMPLATE_ID:
             return base
         profile = commerce_profile or project.commerce_profile or ProjectCommerceProfile(project_id=project.project_id)
@@ -1278,6 +1297,64 @@ class V3ProjectModeService:
             "inferred_variation_mode": inferred or None,
             "variation_mode_source": source,
         }
+
+    def _advanced_reference_controls_for_template(
+        self,
+        *,
+        project: ProjectRecord,
+        request: CreateProjectJobRequest,
+        template_id: str,
+    ) -> dict[str, Any]:
+        if template_id != GENERAL_TEMPLATE_ID:
+            return {}
+        raw_controls = {
+            **self._clean_advanced_reference_controls(request.metadata.get("advanced_reference_controls")),
+            **self._clean_advanced_reference_controls(request.advanced_reference_controls),
+        }
+        has_identity_reference = self._project_has_active_identity_reference(project)
+        has_reference = self._project_has_active_reference(project)
+        defaults = {
+            "preserve_person_identity": bool(has_identity_reference),
+            "preserve_product_appearance": False,
+            "preserve_scene_consistency": False,
+        }
+        controls = {
+            key: bool(raw_controls[key]) if key in raw_controls else default
+            for key, default in defaults.items()
+        }
+        return {
+            **controls,
+            "template_scope": GENERAL_TEMPLATE_ID,
+            "doc": "90",
+            "has_active_reference": has_reference,
+            "has_identity_reference": has_identity_reference,
+            "source": "manual" if raw_controls else "general_template_defaults",
+        }
+
+    def _clean_advanced_reference_controls(self, value: Any) -> dict[str, bool]:
+        if not isinstance(value, dict):
+            return {}
+        allowed = {
+            "preserve_person_identity",
+            "preserve_product_appearance",
+            "preserve_scene_consistency",
+        }
+        return {key: bool(value[key]) for key in allowed if key in value}
+
+    def _project_has_active_reference(self, project: ProjectRecord) -> bool:
+        return any(reference.status == ProjectReferenceStatus.ACTIVE for reference in project.reference_assets)
+
+    def _project_has_active_identity_reference(self, project: ProjectRecord) -> bool:
+        identity_policies = {
+            ProjectReferenceUsePolicy.IDENTITY,
+            ProjectReferenceUsePolicy.PRODUCT_IDENTITY,
+        }
+        if any(
+            reference.status == ProjectReferenceStatus.ACTIVE and reference.use_policy in identity_policies
+            for reference in project.reference_assets
+        ):
+            return True
+        return bool(self._project_has_active_reference(project) and self._looks_like_character_project(project))
 
     def _job_created_title(self, manifest: ProjectTemplateManifest) -> str:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:

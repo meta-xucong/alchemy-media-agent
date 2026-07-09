@@ -156,6 +156,10 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "archetype_overrode_reference_identity",
     "same_type_not_same_person",
     "identity_reference_underweighted",
+    "beauty_archetype_overrode_reference",
+    "same_type_but_different_person",
+    "prompt_face_description_replaced_reference_geometry",
+    "generic_sweet_model_replaced_reference",
     "source_lighting_overinherited",
     "source_color_temperature_overinherited",
     "source_scene_overinherited",
@@ -186,12 +190,20 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "real_but_unflattering",
     "skin_texture_beauty_balance_failure",
     "product_identity_drift",
+    "product_silhouette_drift",
+    "label_or_pattern_drift",
+    "material_structure_drift",
+    "generic_product_replacement",
     "product_label_drift",
     "product_label_unreadable",
     "product_logo_or_label_obscured",
     "brand_asset_drift",
     "lighting_mismatch",
     "composition_mismatch",
+    "scene_identity_drift",
+    "background_space_drift",
+    "camera_mood_drift",
+    "reference_scene_replaced",
     "bad_hands_or_body",
     "face_artifact",
     "ai_face_render",
@@ -1260,12 +1272,17 @@ class V3ProductApiService:
                 "archetype_overrode_reference_identity",
                 "same_type_not_same_person",
                 "identity_reference_underweighted",
+                "beauty_archetype_overrode_reference",
+                "same_type_but_different_person",
+                "prompt_face_description_replaced_reference_geometry",
+                "generic_sweet_model_replaced_reference",
             }:
                 identity_reinforcement.extend(
                     [
                         "Doc86 same-person repair: use the uploaded portrait reference as the face-geometry truth source, not merely a beauty-style reference",
                         "preserve underlying bone structure: face width/length ratio, cheek volume, jawline slope, chin scale, eye spacing/base eye shape, eyebrow-eye relationship, nose-mouth relationship, lip contour, and age impression",
                         "allow makeup, wardrobe, hairstyle, lighting, pose, expression, and scene changes only as surface styling changes",
+                        "Doc90 advanced reference priority repair: prompt face archetype wording may guide makeup, mood, and styling only; it must not replace uploaded facial geometry",
                     ]
                 )
                 prompt_additions.append(
@@ -1359,6 +1376,26 @@ class V3ProductApiService:
                 product_reinforcement.append(
                     "preserve the supplied product or brand asset truth source exactly: same instance, shape, material, colors, proportions, surface finish, label/logo placement, and packaging silhouette"
                 )
+            elif code in {
+                "product_silhouette_drift",
+                "label_or_pattern_drift",
+                "material_structure_drift",
+                "generic_product_replacement",
+            }:
+                product_reinforcement.extend(
+                    [
+                        "Doc90 generic object/product repair: keep the uploaded object's silhouette, proportions, material direction, pattern family, label area, and distinctive structure",
+                        "prompt product-category words must not replace the referenced object with a generic new item",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "generic product replacement",
+                        "changed product silhouette",
+                        "changed label or pattern",
+                        "changed material structure",
+                    ]
+                )
             elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:
                 product_reinforcement.append(
                     "preserve the existing product label/logo exactly from the reference when visible; keep it readable, high-contrast, and unobscured"
@@ -1376,6 +1413,14 @@ class V3ProductApiService:
                 )
             elif code in {"lighting_mismatch", "composition_mismatch", "project_continuity_warning", "quality_warning"}:
                 prompt_additions.append("follow the project visual direction more closely with clean lighting and consistent composition")
+            elif code in {"scene_identity_drift", "background_space_drift", "camera_mood_drift", "reference_scene_replaced"}:
+                composition_repair.extend(
+                    [
+                        "Doc90 scene continuity repair: preserve the reference background, broad space, camera mood, and scene continuity when scene preservation is enabled",
+                        "refine the same world instead of replacing the environment with an unrelated new background",
+                    ]
+                )
+                negative_additions.extend(["reference scene replaced", "background space drift", "camera mood drift"])
             elif code in {"bad_hands_or_body", "face_artifact"}:
                 artifact_repair.append("prioritize natural anatomy, clean facial structure, and realistic body details")
                 negative_additions.extend(["distorted hands", "face artifacts", "warped anatomy"])

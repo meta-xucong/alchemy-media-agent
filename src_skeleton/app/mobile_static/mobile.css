@@ -5250,6 +5250,73 @@ body.v3-mobile-loading-active {
   background: rgba(138, 58, 43, 0.08);
 }
 
+.v3-mobile-advanced-reference-controls {
+  display: grid;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(47, 90, 69, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.v3-mobile-advanced-reference-controls summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.v3-mobile-advanced-reference-controls summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+}
+
+.v3-mobile-reference-priority-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.v3-mobile-reference-priority-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid rgba(47, 90, 69, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.v3-mobile-reference-priority-list input {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+}
+
+.v3-mobile-reference-priority-list span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.v3-mobile-reference-priority-list strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.v3-mobile-reference-priority-list small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .v3-mobile-output-head {
   display: flex;
   align-items: center;

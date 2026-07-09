@@ -1510,6 +1510,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
             return 0
+        if "doc90" in lowered or "advanced reference priority" in lowered:
+            return 0
         if "doc88 prompt truth" in lowered or "doc88 balance contract" in lowered:
             return 0
         if "portrait identity contract" in lowered or "bone-structure identity" in lowered:
@@ -1541,6 +1543,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 1200
         if line.startswith("Avoid:"):
             return 700
+        if "Doc90" in line or "advanced reference priority" in line:
+            return 900
         if line.startswith("Reference truth layering contract") or "portrait identity truth" in line:
             return 760
         if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
