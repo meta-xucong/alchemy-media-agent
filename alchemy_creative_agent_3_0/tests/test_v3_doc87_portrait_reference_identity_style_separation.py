@@ -131,6 +131,12 @@ def test_doc87_provider_prompt_blocks_source_style_before_visual_direction() -> 
     assert "Identity comes from the reference; direction comes from the prompt." in prompt
     assert "Do not copy the reference image's original lighting" in prompt
     assert "source lighting" in prompt
+    assert "original facial outline width" in prompt
+    assert "temple-cheek-jaw contour" in prompt
+    assert "eye size family" in prompt
+    assert "mouth scale" in prompt
+    assert "same archetype is not enough" in prompt
+    assert "narrow-faced" in prompt or "narrower" in prompt
     assert "Visual direction:" in prompt
     assert prompt.index("Reference inheritance boundary:") < prompt.index("Visual direction:")
 

@@ -76,26 +76,32 @@ class PortraitBoneStructureIdentityLayer:
             "forehead-to-midface-to-lower-face proportion",
             "cheek volume and cheekbone direction",
             "jaw width, jawline slope, and chin scale",
+            "temple-cheek-jaw contour and original facial outline width",
             "natural age impression",
             "overall facial bone-structure family",
         ]
         stable_feature_relationships = [
             "eye spacing and base eye shape",
+            "eye size family without beauty-filter enlargement",
             "eyelid direction and brow-eye relationship",
             "eyebrow base shape, thickness family, and visual temperament",
             "nose bridge, nose tip, nose wing, and mouth relationship",
+            "mouth scale relative to nose, chin, and face width",
             "philtrum, mouth width, lip contour, and lip fullness family",
             "midface temperament",
         ]
         forbidden_geometry_drift = [
             "face slimming or V-shaped jaw replacement",
+            "narrower, sharper, or longer target-style template face",
             "eye enlargement or eye-spacing drift",
             "nose reshaping",
+            "smaller-mouth beauty-template replacement",
             "lip reshaping",
             "jaw or chin remodeling",
             "age-band shift",
             "generic beauty-face replacement",
             "same beauty type but different person",
+            "period, fantasy, or editorial archetype face replacing the reference identity",
         ]
         allowed_surface_changes = [
             "makeup color and intensity",
@@ -108,10 +114,12 @@ class PortraitBoneStructureIdentityLayer:
         prompt_rules = [
             "Portrait identity contract: use the reference as the same person's identity source before applying style or beauty words.",
             "Doc87 reference boundary: identity comes from the reference; direction comes from the current prompt.",
-            "Preserve underlying bone structure and facial-feature relationships from the reference.",
+            "Preserve underlying bone structure and facial-feature relationships from the reference; same archetype is not enough.",
             "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
             "Treat makeup, wardrobe, hairstyle, lighting, pose, expression, and scene as prompt-owned styling channels that must not redesign the face.",
             "Do not reshape face, eyes, nose, mouth, jaw, chin, or age impression to fit a generic beauty archetype.",
+            "Do not make the reference person more narrow-faced, pointed-chinned, larger-eyed, or smaller-mouthed to fit a period, fantasy, editorial, premium, delicate, or ethereal style.",
+            "The result must still be readable as the uploaded person after makeup, costume, lighting, and scene change; same archetype is not enough.",
             "If the prompt asks for any portrait styling change, apply it to costume, makeup, hair, light, scene, mood, camera, and atmosphere without redesigning the face.",
         ]
         review_checks = [
@@ -202,6 +210,8 @@ class PortraitBoneStructureIdentityLayer:
         inherited = [
             "bone structure",
             "facial-feature relationships",
+            "temple-cheek-jaw contour, cheek fullness, and face width/length direction",
+            "base eye size/spacing and mouth scale relative to the face",
             "natural age impression",
             "broad hair direction unless prompt/template asks for a change",
             "distinctive identity marks when visible",
@@ -214,6 +224,8 @@ class PortraitBoneStructureIdentityLayer:
             "source wardrobe unless explicitly marked as wardrobe truth",
             "whole-image style template",
             "beauty-camera bias",
+            "period/fantasy/editorial archetype face",
+            "face-slimming, V-chin, enlarged-eye, or smaller-mouth beauty filter",
         ]
         prompt_owned = [
             "makeup",
@@ -232,6 +244,7 @@ class PortraitBoneStructureIdentityLayer:
             "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
             "Follow the current prompt for lighting, color grade, scene, mood, camera, composition, wardrobe, and art direction.",
             "Preserve the same person's face geometry while allowing prompt-directed styling changes.",
+            "Beautiful, delicate, ancient, fantasy, editorial, premium, or ethereal style words may polish makeup and atmosphere, but they must not remodel the reference person's facial outline or feature scale.",
             "Hair is medium-preserve: keep broad direction and distinctive marks unless the prompt or template asks for a change.",
         ]
         if styling_policy and styling_policy.applies:
@@ -404,6 +417,7 @@ class PortraitBoneStructureIdentityLayer:
             "do not copy source lighting, source color temperature, source scene, source wardrobe, source camera mood, or the original shoot style.",
             "Follow the current prompt's lighting, color grade, background, camera angle, mood, wardrobe, and art direction.",
             "When cleaning artifacts, preserve the same face; do not replace the person with a cleaner generic beauty face.",
+            "Do not repair toward a narrower face, sharper chin, larger eyes, smaller mouth, or more generic period/fantasy/editorial beauty archetype.",
         ]
         if lock.source_asset_id:
             prompt_additions.append(f"Use reference asset {lock.source_asset_id} as identity truth, not whole-image style truth.")
@@ -417,11 +431,15 @@ class PortraitBoneStructureIdentityLayer:
             "prompt style ignored",
             "same type but different person after cleanup",
             "cleaner generic replacement face",
+            "narrower target-style template face",
+            "pointed period/fantasy beauty chin",
+            "smaller-mouth beauty template",
         ]
         identity_reinforcement = [
             "preserve the same person's face geometry while changing prompt-owned style channels",
             "identity lock stays hard during style-boundary retry",
             "artifact repair must not change bone structure, eye spacing, nose-mouth relationship, jaw/chin direction, lip contour, or age impression",
+            "style repair must keep face contour width, cheek fullness, base eye size, mouth scale, and lip family from the reference",
         ]
         return ReferenceOverinheritanceRetryPatch(
             patch_id=stable_id("reference_overinheritance_retry_patch", project_id, job_id, ",".join(reason_codes), lock.lock_id),
@@ -449,8 +467,10 @@ class PortraitBoneStructureIdentityLayer:
         prompt_additions = [
             "Doc86 same-person repair: regenerate as the same person from the portrait reference, not merely the same beauty type.",
             "Keep face width/length ratio, cheek volume, jawline slope, chin scale, eye spacing/base eye shape, eyebrow-eye relationship, nose-mouth relationship, lip contour, and age impression.",
+            "Keep temple-cheek-jaw contour, face-outline width, base eye size, mouth scale relative to the face, and lip fullness family from the reference.",
             "Apply style only to makeup, wardrobe, hair styling, lighting, pose, expression, scene, and atmosphere.",
             "Reduce generic beauty archetype pressure; do not let ancient, delicate, editorial, or premium style words remodel the face.",
+            "A good-looking but narrower, sharper, smaller-mouthed, larger-eyed, or more template-like styled model is still an identity failure.",
         ]
         if lock.source_asset_id:
             prompt_additions.append(f"Use reference asset {lock.source_asset_id} as the face-geometry truth source.")
@@ -459,18 +479,22 @@ class PortraitBoneStructureIdentityLayer:
             "generic AI beauty replacement",
             "face slimming",
             "V-shaped jaw replacement",
+            "narrower sharper style-template face",
             "eye enlargement",
             "eye spacing drift",
             "nose reshaping",
+            "smaller mouth than the reference",
             "lip reshaping",
             "jaw or chin remodeling",
             "age impression drift",
             "style changed face geometry",
+            "period/fantasy/editorial archetype replaced the reference person",
         ]
         identity_reinforcement = [
             "same person from the portrait reference; not merely the same beauty type",
             "bone structure beats styling: preserve facial geometry first, then apply makeup, costume, lighting, and mood",
             "same person under changed styling; not a similar-looking new model",
+            "makeup and styling may change, but the viewer should recognize the original person's bone structure and feature scale",
         ]
         if styling_policy and styling_policy.applies:
             prompt_additions.extend(styling_policy.prompt_rules[:2])

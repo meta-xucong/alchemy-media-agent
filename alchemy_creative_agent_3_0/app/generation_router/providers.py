@@ -839,12 +839,23 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "darkening, cropping, or covering the label/logo."
                 )
             elif "identity" in use_policy or "face" in role:
-                reference_constraint = (
-                    "Use as a strong identity and style anchor; preserve broad face shape, eye shape and spacing, "
-                    "nose-mouth relationship, jawline direction, age impression, body type, broad hair color/length, "
-                    "wardrobe category, and lighting language while allowing natural expression, pose, head angle, "
-                    "camera angle, crop, and small hair styling variation."
-                )
+                if "portrait_identity_truth" in truth_layers:
+                    reference_constraint = (
+                        "Use as exact same-person portrait identity truth, not as a whole-image style, lighting, scene, "
+                        "or beauty-template anchor. Preserve face outline width, face width/length ratio, temple-cheek-jaw "
+                        "contour, cheek fullness, eye spacing and base eye size, eyebrow-eye relationship, nose-mouth "
+                        "relationship, mouth scale, lip contour family, jaw/chin direction, age impression, body type, "
+                        "and natural skin-tone direction. The prompt may change makeup, wardrobe, hair styling, lighting, "
+                        "pose, expression, head angle, camera angle, crop, scene, and mood, but it must not turn the person "
+                        "into a narrower, sharper, larger-eyed, smaller-mouthed, or generic period/fantasy/editorial beauty model."
+                    )
+                else:
+                    reference_constraint = (
+                        "Use as a strong identity anchor; preserve broad face shape, eye shape and spacing, "
+                        "nose-mouth relationship, jawline direction, age impression, body type, and broad hair color/length "
+                        "while allowing natural expression, pose, head angle, camera angle, crop, small hair styling variation, "
+                        "and prompt-owned lighting or scene changes."
+                    )
                 if do_not_inherit_rules:
                     reference_constraint = f"{reference_constraint} Do not inherit: {'; '.join(do_not_inherit_rules[:4])}."
             elif human_photo_context:
@@ -1147,10 +1158,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if layer == "portrait_identity_truth":
             return (
                 f"Reference truth layer from {filename}: exact portrait identity truth. Preserve the same recognizable person, "
-                "including face width/length ratio, eye shape and spacing, eyelid direction, eyebrow arc and thickness, "
-                "nose-mouth relationship, jaw/chin direction, midface temperament, natural age impression, body identity direction, "
-                "and natural skin-tone direction. The prompt may change expression, gaze, pose, head angle, camera angle, crop, scene, and lighting, "
-                "but must not replace the face with a generic AI beauty model."
+                "including face outline width, face width/length ratio, temple-cheek-jaw contour, cheek fullness, eye shape and spacing, "
+                "base eye size, eyelid direction, eyebrow arc and thickness, nose-mouth relationship, mouth scale, lip contour family, "
+                "jaw/chin direction, midface temperament, natural age impression, body identity direction, and natural skin-tone direction. "
+                "The prompt may change expression, gaze, pose, head angle, camera angle, crop, scene, lighting, makeup, and costume, "
+                "but must not replace the face with a narrower, sharper, larger-eyed, smaller-mouthed, V-chin, or generic AI beauty model."
             )
         if layer == "product_identity_truth":
             return (
@@ -1355,6 +1367,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; vary only expression, gaze, pose, head angle, camera angle, crop, scene, light, and small hair movement."
             )
             lines.append(
+                "Same-person identity is stricter than same archetype: do not narrow or sharpen the face, make a V-shaped chin, enlarge eyes, shrink the mouth, reshape lips, or recast the reference into a period/fantasy/editorial beauty template."
+            )
+            lines.append(
                 "Forbidden portrait drift: generic AI beauty replacement, beauty-app face, face slimming, enlarged eyes, V-chin distortion, new ethnicity direction, new age band, forced tan/darkened skin, or washing the uploaded person into a merely similar model."
             )
         if any("product_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
@@ -1410,13 +1425,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
         rules = [
             "The uploaded portrait reference has higher priority for identity than generic beauty words in the written prompt.",
-            "Preserve the same recognizable person: face shape direction, eye shape and spacing, nose-mouth relationship, jaw/chin direction, age impression, body type, and natural skin-tone direction.",
+            "Preserve the same recognizable person: face outline width, face width/length ratio, temple-cheek-jaw contour, cheek fullness, eye shape and spacing, base eye size, nose-mouth relationship, mouth scale, lip contour family, jaw/chin direction, age impression, body type, and natural skin-tone direction.",
             (
                 "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and limited fabric motion; do not redesign the core appearance asset unless the user explicitly asks for a new one."
                 if structured_appearance
                 else "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and wardrobe styling unless the user explicitly asks for exact copy."
             ),
-            "Do not force a new facial geometry, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, or location.",
+            "Do not force a new facial geometry, narrower/sharper face, V-shaped chin, enlarged eyes, smaller mouth, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, period styling, fantasy styling, or location.",
         ]
         if any(term in lower or term in prompt_text for term in strict_face_terms):
             rules.append("If the prompt explicitly asks to replace the identity, follow only when it is clear; otherwise keep the uploaded reference identity.")
@@ -1497,6 +1512,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 0
         if "portrait identity contract" in lowered or "bone-structure identity" in lowered:
             return 0
+        if line.startswith("Reference truth layering contract") or line.startswith("Uploaded portrait reference priority"):
+            return 0
+        if "portrait identity truth" in lowered or "same-person identity is stricter" in lowered:
+            return 1
         if "human realism" in lowered or "photoreal human" in lowered or "east asian portrait" in lowered:
             return 1
         if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
@@ -1520,6 +1539,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 1200
         if line.startswith("Avoid:"):
             return 700
+        if line.startswith("Reference truth layering contract") or "portrait identity truth" in line:
+            return 760
         if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
             return 520
         if "Reference inheritance boundary" in line:

@@ -168,6 +168,19 @@ def test_doc85_uploaded_portrait_truth_beats_selected_generated_reference(tmp_pa
     assert "Reference truth layering contract" in prompt
     assert "Uploaded truth sources remain identity-critical" in prompt
     assert "generic AI beauty replacement" in prompt
+    assert "Same-person identity is stricter than same archetype" in prompt
+    assert "mouth scale" in prompt
+    original_reference = next(
+        item
+        for item in asset_plan["assets"]
+        if item.get("asset_id") == "uploaded_portrait_truth" and not item.get("provider_reference_derivative")
+    )
+    original_constraint = " ".join(original_reference["prompt_constraints"])
+    assert "exact same-person portrait identity truth" in original_constraint
+    assert "not as a whole-image style, lighting, scene" in original_constraint
+    assert "beauty-template anchor" in original_constraint
+    assert "strong identity and style anchor" not in original_constraint
+    assert "lighting language" not in original_constraint
 
 
 def test_doc85_product_truth_derivative_and_metadata_are_persisted(tmp_path, monkeypatch) -> None:
