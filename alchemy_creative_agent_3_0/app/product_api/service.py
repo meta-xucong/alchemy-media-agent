@@ -1206,10 +1206,15 @@ class V3ProductApiService:
                 object_removal_instruction.append("remove unrelated props or objects that were not requested")
                 negative_additions.extend(["unrelated props", "unrequested objects", "random product"])
             elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
-                identity_reinforcement.append("preserve the selected subject direction, hair, outfit category, camera distance, and natural proportions")
+                identity_reinforcement.append(
+                    "preserve the exact uploaded portrait identity truth if present: face ratio, eye shape and spacing, eyebrow arc, nose-mouth relationship, jaw/chin direction, natural age impression, body identity direction, and skin-tone direction"
+                )
+                identity_reinforcement.append(
+                    "use selected generated references only as continuation support when an uploaded identity truth source exists; keep hair, outfit category, camera distance, and natural proportions consistent"
+                )
             elif code in {"product_identity_drift", "brand_asset_drift"}:
                 product_reinforcement.append(
-                    "preserve the supplied product or brand asset identity, shape, material, colors, proportions, label/logo placement, and packaging silhouette"
+                    "preserve the supplied product or brand asset truth source exactly: same instance, shape, material, colors, proportions, surface finish, label/logo placement, and packaging silhouette"
                 )
             elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:
                 product_reinforcement.append(

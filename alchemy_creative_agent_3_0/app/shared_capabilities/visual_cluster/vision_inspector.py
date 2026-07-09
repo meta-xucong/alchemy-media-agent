@@ -719,14 +719,17 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             composition_repair.append("generate one complete single-frame image")
         elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
             identity_reinforcement.append(
-                "preserve the selected subject identity direction, hair, outfit category, lens, and lighting; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
+                "preserve the exact uploaded portrait identity truth if present: face ratio, eye shape and spacing, eyebrow arc, nose-mouth relationship, jaw/chin direction, natural age impression, body identity direction, and skin-tone direction; use selected generated references only as continuation support when an uploaded truth source exists"
+            )
+            identity_reinforcement.append(
+                "preserve hair and outfit category, lens, and lighting; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
             )
         elif code == "reference_guard_ignored":
-            identity_reinforcement.append("use the selected reference as the main truth source and preserve the requested identity, object, camera, and style anchors")
-            product_reinforcement.append("if a product or object reference exists, preserve its silhouette, proportions, material, label/logo placement, and visible text shapes")
+            identity_reinforcement.append("use uploaded portrait identity truth as the main source when present; do not let the written prompt or a selected generated frame replace the person's facial identity")
+            product_reinforcement.append("if a product or object reference exists, preserve its exact silhouette, proportions, material, label/logo placement, packaging surface, and visible text shapes from the uploaded product truth source")
             negative_additions.extend(["reference ignored", "changed reference subject", "changed reference object"])
         elif code in {"product_identity_drift", "brand_asset_drift"}:
-            product_reinforcement.append("preserve the supplied product or brand asset identity, shape, colors, material, proportions, and logo placement")
+            product_reinforcement.append("preserve the supplied product or brand asset truth source exactly: same instance, shape, colors, material, proportions, surface finish, packaging silhouette, and logo/label placement")
         elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:
             product_reinforcement.append(
                 "preserve the existing product label/logo exactly from the reference when visible; keep it readable, high-contrast, and unobscured"

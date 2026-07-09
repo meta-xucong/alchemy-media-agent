@@ -175,6 +175,12 @@ long-term identity and beautiful realism:
   skin, light, hair, fabric, camera texture, and natural asymmetry rather than
   making the face less beautiful.
 
+reference-image closure and structured appearance truth:
+  Doc83 wins for uploaded-reference priority and retry delivery layering; Doc84
+  wins for structured-appearance continuity and prompt purity; Doc85 wins for
+  image-to-image identity transfer precision and reference-truth layering for
+  people, products, and structured appearance assets.
+
 E-Commerce product truth:
   Doc60 wins unless Doc68/Doc69 only strengthen product lifestyle/context,
   product-truth, or review wording
@@ -208,6 +214,7 @@ beginner UI wording:
 | `76` | Current accepted governance phase: foundation vs specialized template placement. |
 | `77` | Current accepted implementation phase: real visual review and aesthetic stability foundation. |
 | `78` | Current accepted final planning phase: long-term identity and beautiful realism foundation tuning. |
+| `80`-`85` | Current accepted reference-image closure chain: provider-reference compression, provider-failure recovery, output reconciliation, uploaded-reference conflict closure, structured-appearance prompt purity, and image-to-image identity/product truth transfer. |
 
 ## 4. Current Runtime Status
 

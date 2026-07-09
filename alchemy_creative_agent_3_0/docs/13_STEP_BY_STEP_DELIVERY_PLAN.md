@@ -205,6 +205,9 @@ Use this map when a Codex implementation task begins from the current stage:
 80 -> Provider-reference upload compression authority; large reference images are compressed only for upstream provider input while originals, previews, and archives stay unchanged.
 81 -> Provider-failure retry and Project status sync authority; zero-candidate provider failures receive a bounded fresh provider retry before blocked, while final failures are written to Project timeline and shown clearly in the frontend.
 82 -> Project-output reconciliation authority; generated output files must self-heal back into Project timeline, project output history, and frontend recovery when background generation is interrupted after image files are written.
+83 -> Retry delivery and uploaded-reference conflict closure; final delivery layering, uploaded-reference priority, and retry confidence become explicit.
+84 -> Structured appearance and prompt-purity closure; General Template styling language must not be misread as ecommerce, and complex appearance assets must gain structure-level continuity rules.
+85 -> Image-to-image identity-transfer and reference-truth closure; uploaded portraits, products, and structured appearance assets must preserve exact truth sources through provider-reference layering rather than prompt-only continuity.
 ```
 
 Current code-stage priority:
@@ -238,7 +241,8 @@ Current code-stage priority:
 26. Apply 78 as the final foundation-quality tuning pass before V3.10: improve long-term identity continuity and beautiful realism balance, preserve facial-feature beauty, and keep implementation inside the existing foundation layers.
 27. Apply 80 when uploaded or selected reference images are sent to image-edit providers; provider input copies may be compressed but user-facing originals must remain untouched.
 28. Apply 81 whenever real provider generation can fail before any candidate image exists; this is provider-failure recovery, not visual-quality retry, and must stay bounded under Doc53 loop-safety rules.
-29. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+29. Apply 83-85 as the next reference-image closure chain: 83 governs uploaded-reference priority and retry delivery; 84 governs prompt purity and structure-level appearance continuity; 85 governs true image-to-image identity transfer and reference-truth layering for people, products, and structured appearance assets.
+30. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 
 ## 2. V3.0 Foundation

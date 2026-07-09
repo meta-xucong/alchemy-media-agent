@@ -276,6 +276,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         app_request, provider_name, reference_assets = self._build_app_request(request)
+        asset_plan = app_request.prompt_plan.variables.get("asset_plan") if getattr(app_request.prompt_plan, "variables", None) else {}
+        asset_plan = asset_plan if isinstance(asset_plan, dict) else {}
+        provider_input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan.get("provider_input_plan"), dict) else {}
+        provider_reference_image_count = int(provider_input_plan.get("reference_image_count") or 0)
+        reference_truth_package = provider_input_plan.get("reference_truth_package") if isinstance(provider_input_plan.get("reference_truth_package"), dict) else {}
+        provider_reference_assets = self._provider_reference_asset_summary(asset_plan)
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
@@ -335,6 +341,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                     "condition_plan_id": request.condition_plan.condition_plan_id,
                     "reference_asset_count": len(reference_assets),
+                    "provider_reference_image_count": provider_reference_image_count,
+                    "provider_input_plan": provider_input_plan,
+                    "reference_truth_package": reference_truth_package,
+                    "provider_reference_assets": provider_reference_assets,
                     "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                     "final_provider_prompt": final_provider_prompt,
                     "negative_constraints": negative_constraints,
@@ -346,6 +356,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "shared_capabilities": shared_capabilities,
                     "visual_capability_cluster": visual_cluster,
                     "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                    "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
+                    "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
                     "provider_failure_retry": provider_failure_retry,
                     "api_operation": output.get("api_operation"),
@@ -396,6 +408,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "width": record.width,
                         "height": record.height,
                         "reference_asset_count": len(reference_assets),
+                        "provider_reference_image_count": provider_reference_image_count,
+                        "provider_input_plan": provider_input_plan,
+                        "reference_truth_package": reference_truth_package,
+                        "provider_reference_assets": provider_reference_assets,
                         "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                         "final_provider_prompt": final_provider_prompt,
                         "negative_constraints": negative_constraints,
@@ -407,7 +423,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "shared_capabilities": shared_capabilities,
                         "visual_capability_cluster": visual_cluster,
                         "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                        "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
+                        "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                         "provider_failure_retry": provider_failure_retry,
+                        "api_operation": output.get("api_operation"),
+                        "request_index": output.get("request_index"),
                         "v3_owned_output": True,
                         "requested_image_count": requested_group_count,
                         "requested_image_size": app_request.prompt_plan.size,
@@ -442,7 +462,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "actual_provider": str(getattr(result, "provider", provider_name)),
                 "actual_model": str(getattr(result, "model", "") or ""),
                 "reference_asset_count": len(reference_assets),
+                "provider_reference_image_count": provider_reference_image_count,
+                "provider_input_plan": provider_input_plan,
+                "reference_truth_package": reference_truth_package,
+                "provider_reference_assets": provider_reference_assets,
                 "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
+                "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                 "llm_brain": llm_brain,
                 "shared_capabilities": shared_capabilities,
                 "visual_capability_cluster": visual_cluster,
@@ -459,6 +485,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "strong_reference_closure_package": strong_reference_closure,
                 "mode_quality_profile": mode_quality_profile,
                 "provider_failure_retry": provider_failure_retry,
+                "api_operations": [output.get("api_operation") for output in outputs if output.get("api_operation")],
             },
             warnings=warnings,
         )
@@ -758,6 +785,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 {
                     "asset_id": str(data.get("asset_id") or data.get("source_id") or data.get("output_id") or file_path.stem),
                     "role": str(data.get("role") or data.get("use_policy") or "unknown_reference"),
+                    "source_type": str(data.get("source_type") or (data.get("metadata") or {}).get("source_type") or ""),
+                    "asset_ref_id": data.get("asset_ref_id") or data.get("reference_id"),
+                    "output_id": data.get("output_id"),
                     "filename": data.get("filename") or file_path.name,
                     "mime_type": data.get("mime_type"),
                     "file_path": str(file_path),
@@ -776,6 +806,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
+        truth_package = self._reference_truth_package(
+            request,
+            reference_assets,
+            allow_product_language=allow_product_language,
+            human_photo_context=human_photo_context,
+        )
         closure = self._strong_reference_closure_package(request)
         do_not_inherit_rules = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
         reference_conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
@@ -793,6 +829,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         for index, asset in enumerate(reference_assets):
             role = str(asset.get("role") or "")
             use_policy = str(asset.get("use_policy") or role)
+            truth_entry = dict((truth_package.get("sources") or {}).get(asset["asset_id"]) or {})
+            truth_layers = self._string_list(truth_entry.get("truth_layers"))
             lock_targets = [str(item) for item in asset.get("lock_targets", []) if str(item).strip()]
             if "product" in use_policy:
                 reference_constraint = (
@@ -826,11 +864,33 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
                 reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
+            for derivative in self._reference_truth_derivatives(asset, truth_layers):
+                assets.append(
+                    {
+                        "asset_id": f"{asset['asset_id']}::{derivative['derivative_kind']}",
+                        "source_asset_id": asset["asset_id"],
+                        "role": self._truth_layer_provider_role(derivative.get("truth_layer"), asset.get("role")),
+                        "priority": self._truth_layer_priority(derivative.get("truth_layer"), asset, index),
+                        "provider_input_mode": "reference_image",
+                        "storage_path": derivative["path"],
+                        "filename": derivative.get("path_name") or asset.get("filename"),
+                        "mime_type": "image/jpeg",
+                        "prompt_constraints": [self._truth_layer_constraint(derivative.get("truth_layer"), asset)],
+                        "negative_constraints": closure_negative_rules[:8],
+                        "strength": asset.get("strength"),
+                        "use_policy": asset.get("use_policy"),
+                        "reference_truth_layer": derivative.get("truth_layer"),
+                        "truth_layers": truth_layers,
+                        "provider_reference_derivative": True,
+                        "derivative_kind": derivative.get("derivative_kind"),
+                        "fallback_to_original": bool(derivative.get("fallback_to_original")),
+                    }
+                )
             assets.append(
                 {
                     "asset_id": asset["asset_id"],
                     "role": _v1_reference_role(asset.get("role")),
-                    "priority": 120 - index if asset.get("strength") == "hard" else 100 - index,
+                    "priority": self._original_reference_priority(asset, truth_layers, index),
                     "provider_input_mode": "reference_image",
                     "storage_path": asset["file_path"],
                     "filename": asset.get("filename"),
@@ -839,8 +899,21 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "negative_constraints": closure_negative_rules[:8],
                     "strength": asset.get("strength"),
                     "use_policy": asset.get("use_policy"),
+                    "source_type": asset.get("source_type"),
+                    "reference_truth_layer": "style_context_truth" if truth_layers else None,
+                    "truth_layers": truth_layers,
+                    "provider_reference_derivative": False,
                 }
             )
+        truth_package = {
+            **truth_package,
+            "truth_derivative_ids": [
+                item["asset_id"]
+                for item in assets
+                if item.get("provider_reference_derivative") and item.get("provider_input_mode") == "reference_image"
+            ],
+            "provider_reference_image_count": len(assets),
+        }
         return {
             "asset_mode": "advanced",
             "assets": assets,
@@ -849,9 +922,269 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "operation": "image_edit_with_reference_images" if assets else "generate",
                 "reference_image_asset_ids": [item["asset_id"] for item in assets],
                 "reference_image_count": len(assets),
+                "original_reference_asset_ids": [asset["asset_id"] for asset in reference_assets],
+                "reference_truth_layers": [
+                    {
+                        "asset_id": item.get("asset_id"),
+                        "source_asset_id": item.get("source_asset_id") or item.get("asset_id"),
+                        "role": item.get("role"),
+                        "truth_layer": item.get("reference_truth_layer"),
+                        "truth_layers": item.get("truth_layers") or [],
+                        "derivative_kind": item.get("derivative_kind"),
+                        "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                        "fallback_to_original": bool(item.get("fallback_to_original")),
+                    }
+                    for item in assets
+                    if item.get("provider_input_mode") == "reference_image"
+                ],
+                "reference_truth_package": truth_package,
                 "requires_image_reference": bool(assets),
             },
         }
+
+    def _reference_truth_package(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+        *,
+        allow_product_language: bool,
+        human_photo_context: bool,
+    ) -> dict[str, Any]:
+        if not reference_assets:
+            return {}
+        structured_context = looks_like_human_structured_appearance_context(
+            " ".join(
+                [
+                    str(request.metadata.get("user_input") or ""),
+                    str(request.prompt_compilation.visual_prompt or ""),
+                    str(request.prompt_compilation.negative_prompt or ""),
+                    " ".join(request.prompt_compilation.hard_constraints or []),
+                ]
+            )
+        )
+        has_uploaded_human_truth = any(
+            self._is_uploaded_truth_source(asset)
+            and self._is_human_truth_reference(asset, human_photo_context=human_photo_context, allow_product_language=allow_product_language)
+            for asset in reference_assets
+        )
+        has_uploaded_product_truth = any(
+            self._is_uploaded_truth_source(asset)
+            and self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
+            for asset in reference_assets
+        )
+        sources: dict[str, dict[str, Any]] = {}
+        source_order: list[str] = []
+        truth_source_ids: list[str] = []
+        for index, asset in enumerate(reference_assets):
+            asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
+            source_order.append(asset_id)
+            is_selected = self._is_selected_generated_source(asset)
+            is_product = self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
+            is_human = self._is_human_truth_reference(
+                asset,
+                human_photo_context=human_photo_context,
+                allow_product_language=allow_product_language,
+            )
+            layers: list[str] = []
+            priority_note = "style_or_context_reference"
+            if is_product:
+                if is_selected and has_uploaded_product_truth:
+                    layers = ["style_context_truth"]
+                    priority_note = "selected_output_context_below_uploaded_product_truth"
+                else:
+                    layers = ["product_identity_truth", "style_context_truth"]
+                    priority_note = "product_truth_source"
+            elif is_human:
+                if is_selected and has_uploaded_human_truth:
+                    layers = ["style_context_truth"]
+                    priority_note = "selected_output_context_below_uploaded_portrait_truth"
+                else:
+                    layers = ["portrait_identity_truth", "style_context_truth"]
+                    priority_note = "portrait_identity_truth_source"
+                    if structured_context or self._asset_mentions_structured_appearance(asset):
+                        layers.insert(1, "structured_appearance_truth")
+                        priority_note = "portrait_and_structured_appearance_truth_source"
+            else:
+                layers = ["style_context_truth"]
+            if any(layer.endswith("_truth") and layer != "style_context_truth" for layer in layers):
+                truth_source_ids.append(asset_id)
+            sources[asset_id] = {
+                "asset_id": asset_id,
+                "source_type": asset.get("source_type") or "",
+                "role": asset.get("role") or "",
+                "use_policy": asset.get("use_policy") or "",
+                "truth_layers": layers,
+                "priority_note": priority_note,
+                "uploaded_truth_source": self._is_uploaded_truth_source(asset),
+                "selected_generated_source": is_selected,
+                "source_rank": index + 1,
+            }
+        return {
+            "version": "doc85_reference_truth_v1",
+            "active": bool(sources),
+            "source_order": source_order,
+            "truth_source_ids": truth_source_ids,
+            "truth_derivative_ids": [],
+            "sources": sources,
+            "priority_rules": [
+                "uploaded human or product truth remains highest for identity-critical details",
+                "selected generated outputs reinforce continuation, style, composition, and mood unless no uploaded truth exists",
+                "reference truth beats generic archetype wording",
+            ],
+            "structured_appearance_context": structured_context,
+        }
+
+    def _reference_truth_derivatives(self, asset: dict[str, Any], truth_layers: list[str]) -> list[dict[str, Any]]:
+        provider_layers = [layer for layer in truth_layers if layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"}]
+        if not provider_layers:
+            return []
+        try:
+            from app.services.provider_reference import prepare_reference_truth_derivatives
+
+            return prepare_reference_truth_derivatives(
+                asset.get("file_path"),
+                asset_id=str(asset.get("asset_id") or ""),
+                truth_layers=provider_layers,
+            )
+        except Exception:
+            return []
+
+    def _is_uploaded_truth_source(self, asset: dict[str, Any]) -> bool:
+        source_type = str(asset.get("source_type") or "").lower()
+        if "upload" in source_type:
+            return True
+        if asset.get("asset_ref_id") and not asset.get("output_id"):
+            return True
+        asset_id = str(asset.get("asset_id") or "").lower()
+        return asset_id.startswith("v3_asset") or asset_id.startswith("uploaded")
+
+    def _is_selected_generated_source(self, asset: dict[str, Any]) -> bool:
+        source_type = str(asset.get("source_type") or "").lower()
+        if "selected" in source_type or "generated" in source_type:
+            return True
+        asset_id = str(asset.get("asset_id") or "").lower()
+        return bool(asset.get("output_id")) or asset_id.startswith("v3_output")
+
+    def _is_product_truth_reference(self, asset: dict[str, Any], *, allow_product_language: bool) -> bool:
+        text = self._asset_reference_text(asset)
+        if "product" in text or "packaging" in text or "logo" in text or "brand" in text:
+            return allow_product_language or "product" in text
+        return False
+
+    def _is_human_truth_reference(
+        self,
+        asset: dict[str, Any],
+        *,
+        human_photo_context: bool,
+        allow_product_language: bool,
+    ) -> bool:
+        text = self._asset_reference_text(asset)
+        if any(term in text for term in ["portrait", "identity", "face", "character", "person", "human"]):
+            return not self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
+        return human_photo_context and not allow_product_language and "logo" not in text and "brand" not in text
+
+    def _asset_mentions_structured_appearance(self, asset: dict[str, Any]) -> bool:
+        text = self._asset_reference_text(asset)
+        terms = [
+            "outfit",
+            "wardrobe",
+            "garment",
+            "clothing",
+            "dress",
+            "robe",
+            "collar",
+            "sleeve",
+            "sash",
+            "belt",
+            "layer",
+            "pattern",
+            "embroidery",
+            "trim",
+            "accessory",
+        ]
+        return any(term in text for term in terms)
+
+    def _asset_reference_text(self, asset: dict[str, Any]) -> str:
+        parts = [
+            asset.get("role"),
+            asset.get("use_policy"),
+            asset.get("strength"),
+            asset.get("filename"),
+            asset.get("source_type"),
+            " ".join(str(item) for item in asset.get("lock_targets", []) if str(item).strip()),
+        ]
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        parts.extend(str(value) for value in metadata.values() if isinstance(value, (str, int, float)))
+        return " ".join(str(part or "") for part in parts).lower()
+
+    def _truth_layer_provider_role(self, truth_layer: Any, fallback_role: Any) -> str:
+        layer = str(truth_layer or "")
+        if layer == "portrait_identity_truth":
+            return "portrait_identity"
+        if layer in {"product_identity_truth", "structured_appearance_truth"}:
+            return "subject_reference"
+        return _v1_reference_role(str(fallback_role or "unknown_reference"))
+
+    def _truth_layer_priority(self, truth_layer: Any, asset: dict[str, Any], index: int) -> int:
+        layer = str(truth_layer or "")
+        source_bonus = 40 if self._is_uploaded_truth_source(asset) else 0
+        base = {
+            "portrait_identity_truth": 260,
+            "product_identity_truth": 255,
+            "structured_appearance_truth": 250,
+        }.get(layer, 180)
+        return base + source_bonus - index
+
+    def _original_reference_priority(self, asset: dict[str, Any], truth_layers: list[str], index: int) -> int:
+        source_bonus = 30 if self._is_uploaded_truth_source(asset) else 0
+        if any(layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"} for layer in truth_layers):
+            return 170 + source_bonus - index
+        return (120 if asset.get("strength") == "hard" else 100) + source_bonus - index
+
+    def _truth_layer_constraint(self, truth_layer: Any, asset: dict[str, Any]) -> str:
+        layer = str(truth_layer or "")
+        filename = asset.get("filename") or asset.get("asset_id") or "uploaded reference"
+        if layer == "portrait_identity_truth":
+            return (
+                f"Reference truth layer from {filename}: exact portrait identity truth. Preserve the same recognizable person, "
+                "including face width/length ratio, eye shape and spacing, eyelid direction, eyebrow arc and thickness, "
+                "nose-mouth relationship, jaw/chin direction, midface temperament, natural age impression, body identity direction, "
+                "and natural skin-tone direction. The prompt may change expression, gaze, pose, head angle, camera angle, crop, scene, and lighting, "
+                "but must not replace the face with a generic AI beauty model."
+            )
+        if layer == "product_identity_truth":
+            return (
+                f"Reference truth layer from {filename}: exact product truth. Preserve the same product instance, shape, proportions, material identity, "
+                "color identity, packaging silhouette, surface finish, and visible label/logo placement. The scene, crop, camera angle, and lighting may change, "
+                "but do not invent a new product or drift label/logo positions."
+            )
+        if layer == "structured_appearance_truth":
+            return (
+                f"Reference truth layer from {filename}: exact structured appearance truth. Preserve silhouette, layer order, collar or neckline logic, "
+                "sleeve and cuff logic, closure/sash/belt logic, material behavior, transparency family, pattern or embroidery family, trim placement, "
+                "and accessory placement while allowing pose, crop, camera, scene, and fabric motion to vary."
+            )
+        return f"Use {filename} as style and context truth only."
+
+    def _provider_reference_asset_summary(self, asset_plan: dict[str, Any]) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for item in asset_plan.get("assets", []) if isinstance(asset_plan, dict) else []:
+            if item.get("provider_input_mode") != "reference_image":
+                continue
+            summaries.append(
+                {
+                    "asset_id": item.get("asset_id"),
+                    "source_asset_id": item.get("source_asset_id") or item.get("asset_id"),
+                    "role": item.get("role"),
+                    "truth_layer": item.get("reference_truth_layer"),
+                    "truth_layers": item.get("truth_layers") or [],
+                    "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                    "derivative_kind": item.get("derivative_kind"),
+                    "fallback_to_original": bool(item.get("fallback_to_original")),
+                    "filename": item.get("filename"),
+                }
+            )
+        return summaries
 
     def _generation_prompt(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> str:
         prompt = request.prompt_compilation
@@ -972,12 +1305,65 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
             if strong_reference_rules:
                 parts.append("Strong reference rules: " + " ".join(dict.fromkeys(strong_reference_rules)))
+            truth_prompt = self._reference_truth_prompt(
+                request,
+                reference_assets,
+                allow_product_language=allow_product_language,
+                human_photo_context=human_photo_context,
+            )
+            if truth_prompt:
+                parts.append(truth_prompt)
         retry_guidance = self._retry_prompt_guidance(request)
         if retry_guidance:
             parts.append("Retry repair guidance: " + " ".join(retry_guidance))
         if prompt.negative_prompt:
             parts.append(f"Avoid: {prompt.negative_prompt}")
         return self._provider_prompt_for_delivery("\n".join(part for part in parts if str(part or "").strip()))
+
+    def _reference_truth_prompt(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+        *,
+        allow_product_language: bool,
+        human_photo_context: bool,
+    ) -> str:
+        package = self._reference_truth_package(
+            request,
+            reference_assets,
+            allow_product_language=allow_product_language,
+            human_photo_context=human_photo_context,
+        )
+        sources = package.get("sources") if isinstance(package, dict) else {}
+        if not isinstance(sources, dict) or not sources:
+            return ""
+        lines = [
+            "Reference truth layering contract:",
+            "Reference truth has priority over generic archetype wording in the text prompt.",
+            "Uploaded truth sources remain identity-critical; selected generated references only reinforce continuation/style/composition unless no uploaded truth exists.",
+        ]
+        for asset_id, item in sources.items():
+            layers = self._string_list(item.get("truth_layers"))
+            if not layers:
+                continue
+            label = str(item.get("priority_note") or "reference")
+            lines.append(f"- {asset_id}: {', '.join(layers)} ({label})")
+        if any("portrait_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
+            lines.append(
+                "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; vary only expression, gaze, pose, head angle, camera angle, crop, scene, light, and small hair movement."
+            )
+            lines.append(
+                "Forbidden portrait drift: generic AI beauty replacement, beauty-app face, face slimming, enlarged eyes, V-chin distortion, new ethnicity direction, new age band, forced tan/darkened skin, or washing the uploaded person into a merely similar model."
+            )
+        if any("product_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
+            lines.append(
+                "For product identity truth, preserve exact product shape, proportions, material, color, packaging silhouette, surface finish, and visible label/logo placement; vary scene, crop, camera angle, and lighting without inventing a new product."
+            )
+        if any("structured_appearance_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
+            lines.append(
+                "For structured appearance truth, preserve silhouette, layer order, collar/neckline, sleeve/cuff, closure/sash/belt, material behavior, transparency family, pattern/embroidery family, trim placement, and accessory placement while changing pose, camera, crop, scene, and fabric motion."
+            )
+        return "\n".join(lines)
 
     def _provider_prompt_for_delivery(self, raw_prompt: str) -> str:
         raw_prompt = str(raw_prompt or "").strip()

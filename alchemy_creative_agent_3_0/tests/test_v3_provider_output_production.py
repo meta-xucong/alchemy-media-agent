@@ -167,7 +167,13 @@ def test_uploaded_portrait_reference_gets_identity_priority_over_prompt(tmp_path
     asset_plan = provider._asset_plan(request, reference_assets)  # noqa: SLF001
     prompt = provider._generation_prompt(request, reference_assets)  # noqa: SLF001
 
-    assert "same-person portrait identity reference" in asset_plan["assets"][0]["prompt_constraints"][0]
+    constraints = " ".join(
+        constraint
+        for item in asset_plan["assets"]
+        for constraint in item.get("prompt_constraints", [])
+    )
+    assert "same-person portrait identity reference" in constraints or "exact portrait identity truth" in constraints
+    assert any(item.get("derivative_kind") == "portrait_identity_crop" for item in asset_plan["assets"])
     assert "Uploaded portrait reference priority" in prompt
     assert "higher priority for identity" in prompt
     assert "must not replace facial feature relationships" in prompt
@@ -184,8 +190,17 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
         assert provider_name == "openai_gpt_image"
         assert app_request.asset_mode == "advanced"
-        assert app_request.asset_plan["provider_input_plan"]["reference_image_count"] == 1
-        assert "strong product identity reference" in app_request.asset_plan["assets"][0]["prompt_constraints"][0]
+        assert app_request.asset_plan["provider_input_plan"]["reference_image_count"] >= 2
+        constraints = " ".join(
+            constraint
+            for item in app_request.asset_plan["assets"]
+            for constraint in item.get("prompt_constraints", [])
+        )
+        assert "strong product identity reference" in constraints or "exact product truth" in constraints
+        assert any(
+            item.get("truth_layer") == "product_identity_truth"
+            for item in app_request.asset_plan["provider_input_plan"]["reference_truth_layers"]
+        )
         return ImageGenerationResult(
             provider="openai_gpt_image",
             model="test-image-model",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from app.providers.base import ProviderCapabilities, ProviderCapabilityMismatchError
@@ -234,12 +235,20 @@ def reference_image_paths(asset_plan: dict[str, Any] | None, *, max_images: int 
     if not asset_plan:
         return []
     paths = []
+    seen_paths: set[str] = set()
     candidates = sorted(asset_plan.get("assets", []), key=lambda item: item.get("priority", 0), reverse=True)
     for item in candidates:
         if item.get("provider_input_mode") != "reference_image":
             continue
         path = _reference_path_for_asset_item(item)
+        path_key = ""
         if path:
+            try:
+                path_key = str(Path(str(path)).resolve())
+            except Exception:
+                path_key = str(path)
+        if path and path_key not in seen_paths:
+            seen_paths.add(path_key)
             paths.append(path)
         if len(paths) >= max_images:
             break
@@ -710,6 +719,19 @@ def _provider_input_plan(assets: list[dict[str, Any]], requirements: dict[str, A
         "operation": operation,
         "reference_image_asset_ids": reference_ids,
         "reference_image_count": len(reference_ids),
+        "reference_truth_layers": [
+            {
+                "asset_id": item.get("asset_id"),
+                "source_asset_id": item.get("source_asset_id"),
+                "role": item.get("role"),
+                "truth_layer": item.get("reference_truth_layer"),
+                "derivative_kind": item.get("derivative_kind"),
+                "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                "fallback_to_original": bool(item.get("fallback_to_original")),
+            }
+            for item in assets
+            if item.get("provider_input_mode") == "reference_image"
+        ],
         "edit_source_asset_ids": edit_source_ids,
         "postprocess_asset_ids": postprocess_ids,
         "requires_image_reference": bool(requirements.get("needs_image_reference")),
