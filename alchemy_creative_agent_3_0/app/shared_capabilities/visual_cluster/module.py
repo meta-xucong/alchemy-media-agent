@@ -2390,16 +2390,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             raw_controls.update(_clean_advanced_reference_controls(source))
         has_identity_binding = any(self._binding_is_person_identity(binding) for binding in strong_bindings)
         has_any_binding = bool(strong_bindings)
-        if template_id != "general_template":
+        if template_id not in {"general_template", "ecommerce_template"}:
             return {
                 "applies": False,
                 "template_scope": template_id or "unknown",
                 "doc": "90",
-                "reason": "doc90_currently_general_template_only",
+                "reason": "doc90_currently_general_or_ecommerce_only",
             }
         defaults = {
             "preserve_person_identity": bool(has_identity_binding or (subject_type == "character" and has_any_binding)),
-            "preserve_product_appearance": False,
+            "preserve_product_appearance": bool(template_id == "ecommerce_template" and has_any_binding),
             "preserve_scene_consistency": False,
         }
         controls = {
@@ -2410,9 +2410,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         return {
             **controls,
             "applies": applies,
-            "template_scope": "general_template",
+            "template_scope": template_id,
             "doc": "90",
-            "source": "manual" if raw_controls else "general_template_defaults",
+            "source": "manual" if raw_controls else f"{template_id}_defaults",
             "has_reference_binding": has_any_binding,
             "has_identity_binding": has_identity_binding,
             "subject_type": subject_type,

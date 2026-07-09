@@ -3489,7 +3489,9 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const inferredMode = scenarioId === "general_creative" ? mobileV3InferVariationMode(userInput) : "";
   const effectiveMode = scenarioId === "general_creative" ? mobileV3BackendVariationMode(selectedMode, userInput) : "";
   const size = mobileV3State.selectedSize || "";
-  const advancedReferenceControls = scenarioId === "general_creative" ? mobileV3AdvancedReferenceControlsPayload() : undefined;
+  const advancedReferenceControls = ["general_creative", "ecommerce"].includes(scenarioId)
+    ? mobileV3AdvancedReferenceControlsPayload()
+    : undefined;
   return {
     user_input: userInput,
     template_id: templateId,
@@ -3691,9 +3693,10 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   mobileV3State.promptEdited = false;
   const advancedPanel = document.querySelector("#mobileV3AdvancedReferenceControls");
   if (advancedPanel) {
-    const isGeneralTemplate = mobileV3ScenarioForTemplate(mobileV3State.selectedTemplate) === "general_creative";
-    advancedPanel.hidden = !isGeneralTemplate;
-    if (!isGeneralTemplate) advancedPanel.open = false;
+    const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.selectedTemplate);
+    const supportsAdvancedReference = scenarioId === "general_creative" || scenarioId === "ecommerce";
+    advancedPanel.hidden = !supportsAdvancedReference;
+    if (!supportsAdvancedReference) advancedPanel.open = false;
   }
   const detailPanel = document.querySelector("#mobileV3ProjectDetail");
   if (detailPanel) detailPanel.hidden = false;

@@ -567,10 +567,17 @@ const els = {
   v3AssetSummary: document.querySelector("#v3AssetSummary"),
   v3AssetList: document.querySelector("#v3AssetList"),
   v3AdvancedReferenceControls: document.querySelector("#v3AdvancedReferenceControls"),
+  v3GeneralAdvancedFieldsSlot: document.querySelector("#v3GeneralAdvancedFieldsSlot"),
+  v3EcommerceAdvancedFieldsSlot: document.querySelector("#v3EcommerceAdvancedFieldsSlot"),
+  v3SharedBrandFields: document.querySelector("#v3SharedBrandFields"),
   v3ReferencePriorityStatus: document.querySelector("#v3ReferencePriorityStatus"),
   v3PreservePersonIdentityInput: document.querySelector("#v3PreservePersonIdentityInput"),
   v3PreserveProductAppearanceInput: document.querySelector("#v3PreserveProductAppearanceInput"),
   v3PreserveSceneConsistencyInput: document.querySelector("#v3PreserveSceneConsistencyInput"),
+  v3EcommerceReferencePriorityStatus: document.querySelector("#v3EcommerceReferencePriorityStatus"),
+  v3EcommercePreservePersonIdentityInput: document.querySelector("#v3EcommercePreservePersonIdentityInput"),
+  v3EcommercePreserveProductAppearanceInput: document.querySelector("#v3EcommercePreserveProductAppearanceInput"),
+  v3EcommercePreserveSceneConsistencyInput: document.querySelector("#v3EcommercePreserveSceneConsistencyInput"),
   v3BrandNameLabel: document.querySelector("#v3BrandNameLabel"),
   v3BrandNameInput: document.querySelector("#v3BrandNameInput"),
   v3BrandToneLabel: document.querySelector("#v3BrandToneLabel"),
@@ -1121,8 +1128,11 @@ function bindControls() {
     els.v3PreservePersonIdentityInput,
     els.v3PreserveProductAppearanceInput,
     els.v3PreserveSceneConsistencyInput,
+    els.v3EcommercePreservePersonIdentityInput,
+    els.v3EcommercePreserveProductAppearanceInput,
+    els.v3EcommercePreserveSceneConsistencyInput,
   ].forEach((input) => {
-    if (input) input.addEventListener("change", updateV3ReferencePriorityStatus);
+    if (input) input.addEventListener("change", updateV3ReferencePriorityStatuses);
   });
   if (els.v3CountInput) {
     els.v3CountInput.addEventListener("input", () => {
@@ -2026,6 +2036,7 @@ function renderV3ScenarioState() {
   if (els.v3EcommerceFields) els.v3EcommerceFields.hidden = selected !== "ecommerce";
   if (els.v3EcommerceAdvanced && selected !== "ecommerce") els.v3EcommerceAdvanced.open = false;
   if (els.v3CommercePanel) els.v3CommercePanel.hidden = selected !== "ecommerce";
+  syncV3SharedAdvancedFieldPlacement(selected);
   if (els.v3AdvancedReferenceControls) {
     els.v3AdvancedReferenceControls.hidden = selected !== "general_creative";
     if (selected !== "general_creative") els.v3AdvancedReferenceControls.open = false;
@@ -2040,7 +2051,7 @@ function renderV3ScenarioState() {
     button.hidden = button.dataset.v3PresetScope !== selected;
   });
   renderV3Assets();
-  updateV3ReferencePriorityStatus();
+  updateV3ReferencePriorityStatuses();
   renderV3ProjectDetail();
   if (!v3State.currentJob) {
     if (selected === "ecommerce") {
@@ -4618,7 +4629,7 @@ function renderV3Assets() {
   els.v3AssetList.classList.toggle("empty-v3-list", v3State.files.length === 0);
   if (!v3State.files.length) {
     els.v3AssetList.textContent = copy.assetEmpty;
-    updateV3ReferencePriorityStatus();
+    updateV3ReferencePriorityStatuses();
     return;
   }
   v3State.files.forEach((file, index) => {
@@ -4633,7 +4644,7 @@ function renderV3Assets() {
     `;
     els.v3AssetList.appendChild(row);
   });
-  updateV3ReferencePriorityStatus();
+  updateV3ReferencePriorityStatuses();
 }
 
 function v3FileSizeText(size) {
@@ -4846,27 +4857,63 @@ function v3AdvancedReferenceControlsPayload() {
   };
 }
 
-function updateV3ReferencePriorityStatus() {
-  if (!els.v3ReferencePriorityStatus) return;
-  const hasReference = Boolean(
+function v3EcommerceAdvancedReferenceControlsPayload() {
+  return {
+    preserve_person_identity: Boolean(els.v3EcommercePreservePersonIdentityInput?.checked),
+    preserve_product_appearance: Boolean(els.v3EcommercePreserveProductAppearanceInput?.checked),
+    preserve_scene_consistency: Boolean(els.v3EcommercePreserveSceneConsistencyInput?.checked),
+  };
+}
+
+function v3AdvancedReferenceControlsPayloadForScenario(scenarioId = v3State.selectedScenario) {
+  if (scenarioId === "ecommerce") return v3EcommerceAdvancedReferenceControlsPayload();
+  if (scenarioId === "general_creative") return v3AdvancedReferenceControlsPayload();
+  return undefined;
+}
+
+function v3HasActiveReferenceForAdvancedControls() {
+  return Boolean(
     (v3State.files && v3State.files.length)
       || (v3State.uploadedAssets && v3State.uploadedAssets.length)
       || v3UsefulReferenceItems(v3State.currentProject).length
+      || v3ProjectHasProductReference(v3State.currentProject)
   );
-  const controls = v3AdvancedReferenceControlsPayload();
-  if (!hasReference) {
-    els.v3ReferencePriorityStatus.textContent = "上传参考图后，可优先保持人物、物品或场景一致";
-    return;
+}
+
+function v3ReferencePriorityStatusText(controls, hasReference) {
+  if (!hasReference) return "上传参考图后，可优先保持人物、物品或场景一致";
+  if (controls.preserve_person_identity) return "已优先保持人物长相";
+  if (controls.preserve_product_appearance || controls.preserve_scene_consistency) return "已开启参考图一致性";
+  return "参考图会作为普通画面参考";
+}
+
+function updateV3ReferencePriorityStatus() {
+  if (!els.v3ReferencePriorityStatus) return;
+  els.v3ReferencePriorityStatus.textContent = v3ReferencePriorityStatusText(
+    v3AdvancedReferenceControlsPayload(),
+    v3HasActiveReferenceForAdvancedControls()
+  );
+}
+
+function updateV3EcommerceReferencePriorityStatus() {
+  if (!els.v3EcommerceReferencePriorityStatus) return;
+  els.v3EcommerceReferencePriorityStatus.textContent = v3ReferencePriorityStatusText(
+    v3EcommerceAdvancedReferenceControlsPayload(),
+    v3HasActiveReferenceForAdvancedControls()
+  );
+}
+
+function updateV3ReferencePriorityStatuses() {
+  updateV3ReferencePriorityStatus();
+  updateV3EcommerceReferencePriorityStatus();
+}
+
+function syncV3SharedAdvancedFieldPlacement(selected = v3State.selectedScenario) {
+  const targetSlot = selected === "ecommerce" ? els.v3EcommerceAdvancedFieldsSlot : els.v3GeneralAdvancedFieldsSlot;
+  if (!targetSlot || !els.v3SharedBrandFields) return;
+  if (els.v3SharedBrandFields.parentElement !== targetSlot) {
+    targetSlot.appendChild(els.v3SharedBrandFields);
   }
-  if (controls.preserve_person_identity) {
-    els.v3ReferencePriorityStatus.textContent = "已优先保持人物长相";
-    return;
-  }
-  if (controls.preserve_product_appearance || controls.preserve_scene_consistency) {
-    els.v3ReferencePriorityStatus.textContent = "已开启参考图一致性";
-    return;
-  }
-  els.v3ReferencePriorityStatus.textContent = "参考图会作为普通画面参考";
 }
 
 function v3SizeLabel(size) {
@@ -4900,7 +4947,7 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const selectedVariationMode = scenarioId === "general_creative" ? (v3State.selectedVariationMode || "auto") : "";
   const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
-  const advancedReferenceControls = scenarioId === "general_creative" ? v3AdvancedReferenceControlsPayload() : undefined;
+  const advancedReferenceControls = v3AdvancedReferenceControlsPayloadForScenario(scenarioId);
   const payload = {
     user_input: userInput,
     template_id: templateId,

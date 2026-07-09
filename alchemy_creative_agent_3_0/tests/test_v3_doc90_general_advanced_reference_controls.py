@@ -195,6 +195,28 @@ def test_doc90_product_and_scene_controls_are_generic_general_template_helpers()
         assert code in review_codes
 
 
+def test_doc90_ecommerce_template_accepts_product_reference_priority_controls() -> None:
+    cluster = _cluster(
+        {
+            "advanced_reference_controls": {
+                "preserve_person_identity": False,
+                "preserve_product_appearance": True,
+                "preserve_scene_consistency": False,
+            }
+        },
+        template_id="ecommerce_template",
+    )
+    controls = cluster["metadata"]["advanced_reference_controls"]
+    role_plan_text = " ".join(cluster["role_specific_generation_plan"]["prompt_additions"])
+
+    assert controls["template_scope"] == "ecommerce_template"
+    assert controls["preserve_product_appearance"] is True
+    assert controls["applies"] is True
+    assert "Doc90 product priority" in role_plan_text
+    for code in DOC90_PRODUCT_CODES:
+        assert code in cluster["strict_visual_review_policy"]["retryable_issue_codes"]
+
+
 def test_doc90_retry_issue_codes_flow_through_inspector_and_product_api_patch() -> None:
     for code in [*DOC90_PERSON_CODES, *DOC90_PRODUCT_CODES, *DOC90_SCENE_CODES]:
         assert code in VISUAL_AUTO_RETRY_RETRYABLE_ISSUES

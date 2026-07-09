@@ -1236,8 +1236,8 @@ class V3ProjectModeService:
         }
         if manifest.template_id == GENERAL_TEMPLATE_ID:
             base.update(self._general_variation_contract(request.metadata))
-            if advanced_reference_controls:
-                base["advanced_reference_controls"] = dict(advanced_reference_controls)
+        if advanced_reference_controls:
+            base["advanced_reference_controls"] = dict(advanced_reference_controls)
         if manifest.template_id != ECOMMERCE_TEMPLATE_ID:
             return base
         profile = commerce_profile or project.commerce_profile or ProjectCommerceProfile(project_id=project.project_id)
@@ -1305,7 +1305,7 @@ class V3ProjectModeService:
         request: CreateProjectJobRequest,
         template_id: str,
     ) -> dict[str, Any]:
-        if template_id != GENERAL_TEMPLATE_ID:
+        if template_id not in {GENERAL_TEMPLATE_ID, ECOMMERCE_TEMPLATE_ID}:
             return {}
         raw_controls = {
             **self._clean_advanced_reference_controls(request.metadata.get("advanced_reference_controls")),
@@ -1315,7 +1315,7 @@ class V3ProjectModeService:
         has_reference = self._project_has_active_reference(project)
         defaults = {
             "preserve_person_identity": bool(has_identity_reference),
-            "preserve_product_appearance": False,
+            "preserve_product_appearance": bool(template_id == ECOMMERCE_TEMPLATE_ID and has_reference),
             "preserve_scene_consistency": False,
         }
         controls = {
@@ -1324,11 +1324,11 @@ class V3ProjectModeService:
         }
         return {
             **controls,
-            "template_scope": GENERAL_TEMPLATE_ID,
+            "template_scope": template_id,
             "doc": "90",
             "has_active_reference": has_reference,
             "has_identity_reference": has_identity_reference,
-            "source": "manual" if raw_controls else "general_template_defaults",
+            "source": "manual" if raw_controls else f"{template_id}_defaults",
         }
 
     def _clean_advanced_reference_controls(self, value: Any) -> dict[str, bool]:

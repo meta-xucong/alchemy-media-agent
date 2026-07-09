@@ -1544,7 +1544,7 @@
                       <div id="v3AssetList" class="v3-asset-list empty-v3-list">还没有上传图片</div>
                     </div>
 
-                    <details id="v3AdvancedReferenceControls" class="v3-optional-details v3-reference-priority-controls">
+                    <details id="v3AdvancedReferenceControls" class="v3-optional-details v3-reference-priority-controls v3-general-advanced-controls">
                       <summary>
                         <span>高级</span>
                         <small id="v3ReferencePriorityStatus">上传参考图后，可优先保持人物、物品或场景一致</small>
@@ -1572,18 +1572,19 @@
                           </span>
                         </label>
                       </div>
+                      <div id="v3GeneralAdvancedFieldsSlot" class="v3-shared-advanced-fields-slot">
+                        <div id="v3SharedBrandFields" class="v3-brand-grid v3-shared-brand-fields">
+                          <label class="field">
+                            <span id="v3BrandNameLabel">品牌或项目名</span>
+                            <input id="v3BrandNameInput" type="text" maxlength="80" placeholder="可选，例如：Mint Lab" />
+                          </label>
+                          <label class="field">
+                            <span id="v3BrandToneLabel">希望的感觉</span>
+                            <input id="v3BrandToneInput" type="text" maxlength="120" placeholder="可选，例如：清爽、克制、明亮、有品质感" />
+                          </label>
+                        </div>
+                      </div>
                     </details>
-
-                    <div class="v3-brand-grid">
-                      <label class="field">
-                        <span id="v3BrandNameLabel">品牌或项目名</span>
-                        <input id="v3BrandNameInput" type="text" maxlength="80" placeholder="可选，例如：Mint Lab" />
-                      </label>
-                      <label class="field">
-                        <span id="v3BrandToneLabel">希望的感觉</span>
-                        <input id="v3BrandToneInput" type="text" maxlength="120" placeholder="可选，例如：清爽、克制、明亮、有品质感" />
-                      </label>
-                    </div>
 
                     <div id="v3EcommerceFields" class="v3-ecommerce-fields" hidden>
                       <div class="v3-brand-grid">
@@ -1608,6 +1609,36 @@
                           <span>补充商品信息（可选）</span>
                           <small>不填也能生成；填了会更稳</small>
                         </summary>
+                        <section class="v3-ecommerce-reference-controls" aria-label="参考图保持方式">
+                          <div class="v3-ecommerce-reference-head">
+                            <strong>参考图保持方式</strong>
+                            <small id="v3EcommerceReferencePriorityStatus">上传参考图后，可优先保持人物、物品或场景一致</small>
+                          </div>
+                          <div class="v3-reference-priority-grid v3-reference-priority-grid-compact">
+                            <label class="v3-reference-priority-option">
+                              <input id="v3EcommercePreservePersonIdentityInput" type="checkbox" />
+                              <span>
+                                <strong>保持人物长相</strong>
+                                <small>上传人物图时推荐开启，优先保留原图里的脸和骨相</small>
+                              </span>
+                            </label>
+                            <label class="v3-reference-priority-option">
+                              <input id="v3EcommercePreserveProductAppearanceInput" type="checkbox" checked />
+                              <span>
+                                <strong>保持产品外观</strong>
+                                <small>需要同一个物品、衣服、包装更像原图时开启</small>
+                              </span>
+                            </label>
+                            <label class="v3-reference-priority-option">
+                              <input id="v3EcommercePreserveSceneConsistencyInput" type="checkbox" />
+                              <span>
+                                <strong>保持原图场景</strong>
+                                <small>需要延续同一个背景、空间和氛围时开启</small>
+                              </span>
+                            </label>
+                          </div>
+                        </section>
+                        <div id="v3EcommerceAdvancedFieldsSlot" class="v3-shared-advanced-fields-slot"></div>
                         <label class="field">
                           <span>产品参数 / 必须保留事实</span>
                           <textarea id="v3EcommerceSpecsInput" rows="3" placeholder="可选：材质、颜色、尺寸、功能、套装数量、不能改错的事实"></textarea>
