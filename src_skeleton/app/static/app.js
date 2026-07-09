@@ -5349,23 +5349,49 @@ function v3ImageLoaded(image) {
   return Boolean(image?.complete && image.naturalWidth > 0);
 }
 
+function markV3HomePreviewImageFailed(image) {
+  if (!image) return;
+  image.dataset.v3HomeThumbFailed = "true";
+  image.classList.add("image-load-failed");
+}
+
+function v3ImageSettled(image) {
+  return v3ImageLoaded(image) || image?.dataset?.v3HomeThumbFailed === "true";
+}
+
 function waitForV3HomePreviewImages() {
   const images = v3HomePreviewImages();
   if (!images.length) return Promise.resolve();
-  if (images.every(v3ImageLoaded)) return Promise.resolve();
+  images.forEach((image) => {
+    if (image.complete && image.naturalWidth === 0) markV3HomePreviewImageFailed(image);
+  });
+  if (images.every(v3ImageSettled)) return Promise.resolve();
   setV3PageLoading(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
   return new Promise((resolve) => {
     const cleanup = [];
+    const timeout = window.setTimeout(() => {
+      images.forEach((image) => {
+        if (!v3ImageLoaded(image)) markV3HomePreviewImageFailed(image);
+      });
+      check();
+    }, 12000);
     const check = () => {
-      if (!images.every(v3ImageLoaded)) return;
+      if (!images.every(v3ImageSettled)) return;
       cleanup.forEach((release) => release());
+      window.clearTimeout(timeout);
       resolve();
     };
     images.forEach((image) => {
-      if (v3ImageLoaded(image)) return;
+      if (v3ImageSettled(image)) return;
       const onLoad = () => check();
+      const onError = () => {
+        markV3HomePreviewImageFailed(image);
+        check();
+      };
       image.addEventListener("load", onLoad);
+      image.addEventListener("error", onError);
       cleanup.push(() => image.removeEventListener("load", onLoad));
+      cleanup.push(() => image.removeEventListener("error", onError));
     });
     check();
   });

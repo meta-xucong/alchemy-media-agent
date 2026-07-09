@@ -14,6 +14,6 @@ services:
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "${APP_PORT:-8017}"]
     volumes:
       - ./src_skeleton/.env:/app/.env
-      - ${V1_MEDIA_STORAGE_DIR:-./src_skeleton/.media_storage}:/app/.media_storage
+      - ${V1_MEDIA_STORAGE_DIR:-/var/lib/alchemy/v1/media_storage}:/app/.media_storage
       - ${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}:${V2_STORAGE_DIR:-/var/lib/alchemy/v2/storage}:ro
     restart: unless-stopped

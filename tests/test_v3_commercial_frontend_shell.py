@@ -269,6 +269,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
     assert "waitForMobileV3HomePreviewImages" in mobile_script.text
+    assert "markMobileV3HomePreviewImageFailed" in mobile_script.text
     assert "limit=1000" not in mobile_script.text
     assert "mobileV3ProjectFetchLimit = 80" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
@@ -324,6 +325,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3-page-loading-active" in styles.text
     assert "rgba(247, 244, 236, 0.34)" in styles.text
     assert "waitForV3HomePreviewImages" in script.text
+    assert "markV3HomePreviewImageFailed" in script.text
     assert "if (v3State.projectOpening) return;" in script.text
     assert 'data-v3-output-action="prompt"' in script.text
     assert "promptOpen = false" in script.text

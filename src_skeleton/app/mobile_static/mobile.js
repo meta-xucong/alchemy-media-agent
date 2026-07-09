@@ -2898,23 +2898,49 @@ function mobileV3ImageLoaded(image) {
   return Boolean(image?.complete && image.naturalWidth > 0);
 }
 
+function markMobileV3HomePreviewImageFailed(image) {
+  if (!image) return;
+  image.dataset.mobileV3HomeThumbFailed = "true";
+  image.classList.add("image-load-failed");
+}
+
+function mobileV3ImageSettled(image) {
+  return mobileV3ImageLoaded(image) || image?.dataset?.mobileV3HomeThumbFailed === "true";
+}
+
 function waitForMobileV3HomePreviewImages() {
   const images = mobileV3HomePreviewImages();
   if (!images.length) return Promise.resolve();
-  if (images.every(mobileV3ImageLoaded)) return Promise.resolve();
+  images.forEach((image) => {
+    if (image.complete && image.naturalWidth === 0) markMobileV3HomePreviewImageFailed(image);
+  });
+  if (images.every(mobileV3ImageSettled)) return Promise.resolve();
   setMobileV3LoadingLayer(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
   return new Promise((resolve) => {
     const cleanup = [];
+    const timeout = window.setTimeout(() => {
+      images.forEach((image) => {
+        if (!mobileV3ImageLoaded(image)) markMobileV3HomePreviewImageFailed(image);
+      });
+      check();
+    }, 12000);
     const check = () => {
-      if (!images.every(mobileV3ImageLoaded)) return;
+      if (!images.every(mobileV3ImageSettled)) return;
       cleanup.forEach((release) => release());
+      window.clearTimeout(timeout);
       resolve();
     };
     images.forEach((image) => {
-      if (mobileV3ImageLoaded(image)) return;
+      if (mobileV3ImageSettled(image)) return;
       const onLoad = () => check();
+      const onError = () => {
+        markMobileV3HomePreviewImageFailed(image);
+        check();
+      };
       image.addEventListener("load", onLoad);
+      image.addEventListener("error", onError);
       cleanup.push(() => image.removeEventListener("load", onLoad));
+      cleanup.push(() => image.removeEventListener("error", onError));
     });
     check();
   });
