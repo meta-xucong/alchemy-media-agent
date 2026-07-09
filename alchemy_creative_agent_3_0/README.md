@@ -443,6 +443,8 @@ Document 68: current casebook-guided recipe tuning authority for improving photo
 Documents 69-78: prompt-atom absorption, anti-AI-face tuning, East Asian fair-complexion/proportion guardrails, complex prompt fidelity, identity anchors, and foundation-vs-specialized governance.
 Documents 80-82: provider reference upload compression, provider failure retry/status sync, and project output reconciliation/frontend recovery.
 Document 83: retry-delivery presentation and uploaded portrait reference conflict-closure authority. Main result surfaces must respect requested image count, show final delivery outputs only, keep retry-superseded originals in folded history, and let uploaded portrait identity-critical traits win over conflicting prompt aesthetics unless the user explicitly requests a new identity.
+Documents 84-90: structured appearance identity, image-to-image reference truth, portrait bone-structure locks, identity/style separation, portrait reference balance, portrait stability testing, and General Template advanced reference priority controls.
+Document 91: current Human Realism Plugin governance. Real-human rendering, anti-AI-face rules, child/model realism, and cross-template human realism activation belong in the shared Visual Capability Cluster; identity truth remains owned by the portrait identity/reference modules.
 V3.8 Project Mode: current accepted architecture.
 General Template: first active project template.
 E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.

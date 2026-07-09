@@ -17,6 +17,7 @@ from .contracts import AntiAIFaceReviewResult, HumanPhotorealismGuidance
 
 HUMAN_PHOTOREALISM_MODULE_ID = "human_photorealism_layer"
 ANTI_AI_FACE_REVIEW_MODULE_ID = "anti_ai_face_review"
+HUMAN_REALISM_PLUGIN_METADATA_KEY = "human_realism_plugin"
 
 _HUMAN_TERMS = {
     "portrait",
@@ -34,6 +35,20 @@ _HUMAN_TERMS = {
     "lifestyle photo",
     "editorial portrait",
     "beauty portrait",
+    "fashion model",
+    "child model",
+    "kid model",
+    "kidswear",
+    "baby",
+    "boy",
+    "child",
+    "children",
+    "person wearing",
+    "wearing the product",
+    "model wearing",
+    "hand holding",
+    "holding the product",
+    "skin detail",
 }
 
 _CHINESE_HUMAN_TERMS = {
@@ -51,6 +66,15 @@ _CHINESE_HUMAN_TERMS = {
     "\u534a\u8eab",
     "\u5168\u8eab",
     "\u8857\u62cd",
+    "\u7537\u5b69",
+    "\u513f\u7ae5",
+    "\u5c0f\u670b\u53cb",
+    "\u5b9d\u5b9d",
+    "\u7ae5\u88c5",
+    "\u7a7f\u7740",
+    "\u4e0a\u8eab",
+    "\u624b",
+    "\u76ae\u80a4",
 }
 
 _STYLIZED_TERMS = {
@@ -63,6 +87,10 @@ _STYLIZED_TERMS = {
     "cgi",
     "3d render",
     "game character",
+    "toy figure",
+    "vinyl toy",
+    "mascot",
+    "clay figure",
 }
 
 _CHINESE_STYLIZED_TERMS = {
@@ -73,6 +101,120 @@ _CHINESE_STYLIZED_TERMS = {
     "\u4e8c\u6b21\u5143",
     "\u6e32\u67d3",
     "\u4e09\u7ef4",
+    "\u73a9\u5076",
+    "\u516c\u4ed4",
+    "\u5409\u7965\u7269",
+}
+
+_NEGATION_TERMS = {
+    "avoid",
+    "no",
+    "not",
+    "without",
+    "reject",
+    "remove",
+    "prevent",
+    "不要",
+    "避免",
+    "拒绝",
+    "不能",
+    "不要有",
+    "不是",
+}
+
+_PRODUCT_WITH_HUMAN_TERMS = {
+    "apparel",
+    "clothing",
+    "clothes",
+    "kidswear",
+    "childrenswear",
+    "fashion",
+    "garment",
+    "dress",
+    "skirt",
+    "shirt",
+    "jacket",
+    "coat",
+    "pants",
+    "shoes",
+    "accessory",
+    "accessories",
+    "beauty",
+    "makeup",
+    "skincare",
+    "fitness",
+    "lifestyle",
+    "wearing",
+    "on model",
+    "model shot",
+    "product in use",
+    "handheld",
+    "hand-held",
+}
+
+_CHINESE_PRODUCT_WITH_HUMAN_TERMS = {
+    "\u670d\u88c5",
+    "\u7ae5\u88c5",
+    "\u5973\u88c5",
+    "\u7537\u88c5",
+    "\u6c49\u670d",
+    "\u88d9",
+    "\u5916\u5957",
+    "\u978b",
+    "\u914d\u9970",
+    "\u7f8e\u5986",
+    "\u62a4\u80a4",
+    "\u5065\u8eab",
+    "\u751f\u6d3b\u65b9\u5f0f",
+    "\u4e0a\u8eab",
+    "\u7a7f\u7740",
+    "\u624b\u6301",
+    "\u624b\u62ff",
+}
+
+_CHILD_TERMS = {
+    "child",
+    "children",
+    "kid",
+    "kids",
+    "baby",
+    "boy",
+    "girl",
+    "teen",
+    "toddler",
+    "kidswear",
+    "childrenswear",
+}
+
+_CHINESE_CHILD_TERMS = {
+    "\u513f\u7ae5",
+    "\u5c0f\u670b\u53cb",
+    "\u5b69\u5b50",
+    "\u5b9d\u5b9d",
+    "\u7537\u5b69",
+    "\u5973\u5b69",
+    "\u5c11\u5e74",
+    "\u5c11\u5973",
+    "\u7ae5\u88c5",
+}
+
+_HAND_OR_SKIN_TERMS = {
+    "hand",
+    "hands",
+    "skin",
+    "finger",
+    "fingers",
+    "holding",
+    "handheld",
+    "hand-held",
+}
+
+_CHINESE_HAND_OR_SKIN_TERMS = {
+    "\u624b",
+    "\u624b\u6301",
+    "\u624b\u62ff",
+    "\u624b\u6307",
+    "\u76ae\u80a4",
 }
 
 _ANTI_AI_FACE_ISSUES = {
@@ -81,6 +223,10 @@ _ANTI_AI_FACE_ISSUES = {
     "over_smoothed_skin",
     "missing_skin_texture",
     "synthetic_beauty_filter",
+    "over_retouching",
+    "poreless_beauty_surface",
+    "synthetic_fashion_face",
+    "weak_photographic_imperfection",
     "doll_like_face",
     "template_smile",
     "over_perfect_symmetry",
@@ -103,6 +249,12 @@ _ANTI_AI_FACE_ISSUES = {
     "overly_matte_documentary_look",
     "tired_expression",
     "unflattering_color_cast",
+    "beautiful_realism_balance_failure",
+    "realism_made_subject_less_attractive",
+    "pretty_but_too_ai_filtered",
+    "real_but_unflattering",
+    "skin_texture_beauty_balance_failure",
+    "unflattering_feature_degradation",
     "suppressed_fair_complexion",
     "forced_tan_or_bronze_cast",
     "gray_brown_skin_cast",
@@ -110,6 +262,17 @@ _ANTI_AI_FACE_ISSUES = {
     "oversized_head",
     "compressed_neck_shoulders",
     "unflattering_face_drift",
+    "same_expression_repetition",
+    "same_head_angle_repetition",
+    "same_pose_repetition",
+    "doll_like_child_face",
+    "adultified_child_model",
+    "synthetic_child_skin",
+    "pageant_polish_child_face",
+    "frozen_child_smile",
+    "unreal_child_eyes",
+    "unreal_child_teeth",
+    "child_face_ai_render",
 }
 
 
@@ -132,13 +295,15 @@ class HumanPhotorealismLayer:
         metadata: dict[str, Any] | None = None,
     ) -> HumanPhotorealismGuidance:
         metadata = dict(metadata or {})
-        applies, reason = self._applies(
+        activation = self._activation(
             user_input=user_input,
             subject_type=subject_type,
             scenario_id=scenario_id,
             template_id=template_id,
             metadata=metadata,
         )
+        applies = bool(activation.get("applies"))
+        reason = str(activation.get("primary_reason") or activation.get("disabled_reason") or "unknown")
         guidance_id = stable_id("human_photorealism_guidance", project_id, job_id, scenario_id, user_input, variation_mode)
         if not applies:
             return HumanPhotorealismGuidance(
@@ -148,10 +313,17 @@ class HumanPhotorealismLayer:
                 applies=False,
                 subject_type=subject_type,
                 variation_mode=variation_mode,
-                metadata={"disabled_reason": reason, "doc": "65"},
+                metadata={
+                    "disabled_reason": reason,
+                    "doc": "65",
+                    "doc91_human_realism_plugin": True,
+                    HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
+                },
             )
 
         realism_level = self._realism_level(user_input, metadata)
+        human_subject_kind = str(activation.get("human_subject_kind") or "adult_portrait")
+        is_child_model = human_subject_kind == "child_or_teen_model"
         positives = [
             "real camera photograph, not a rendered or AI-beauty face",
             "natural human skin texture with subtle pores, fine detail, and small tonal variation",
@@ -176,6 +348,14 @@ class HumanPhotorealismLayer:
             "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop in close portraits",
             "keep harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle without beauty-filter reshaping",
         ]
+        if is_child_model:
+            positives.extend(
+                [
+                    "real child or teen photography with age-appropriate facial proportions, relaxed expression, and believable real-camera skin texture",
+                    "commercial catalog polish must still feel like a real child model, not a doll, toy, mannequin, or pageant retouch",
+                    "keep natural child eyes, cheeks, hairline, teeth, neck, and shoulder proportions with gentle real daylight or studio light",
+                ]
+            )
         if has_identity_reference:
             positives.append(
                 "preserve the reference person's recognizable identity direction while making the face look more like a real photographed person"
@@ -253,6 +433,21 @@ class HumanPhotorealismLayer:
             "skin whitening filter",
             "beauty-app glow",
         ]
+        if is_child_model:
+            negatives.extend(
+                [
+                    "doll-like child face",
+                    "plastic toy face",
+                    "adult beauty makeup on child",
+                    "pageant-model polish",
+                    "frozen perfect child smile",
+                    "over-large glossy child eyes",
+                    "over-smoothed child skin",
+                    "synthetic catalog mannequin child",
+                    "unreal child teeth",
+                    "AI child model face",
+                ]
+            )
         negatives.extend(_string_list(casebook.get("negative_prompt_fragments")))
         preserve = [
             "keep the same broad face shape, age direction, body type, and recognizable identity cues",
@@ -280,6 +475,13 @@ class HumanPhotorealismLayer:
             "East Asian fresh portraits keep fair luminous complexion unless a darker or tanned look is explicitly requested",
             "close crops keep natural head, neck, shoulder, and upper-body proportions",
         ]
+        if is_child_model:
+            review_targets.extend(
+                [
+                    "child or teen model face looks age-appropriate and photographed, not doll-like",
+                    "child skin, eyes, teeth, cheeks, and expression avoid synthetic catalog-model polish",
+                ]
+            )
         review_targets.extend(_string_list(casebook.get("review_targets")))
         casebook_retry = casebook.get("retry_patch_templates") if isinstance(casebook.get("retry_patch_templates"), dict) else {}
         retry_patch_templates = {
@@ -298,6 +500,32 @@ class HumanPhotorealismLayer:
             ],
             "identity_reinforcement": _dedupe([*preserve, *_string_list(casebook_retry.get("identity_reinforcement"))]),
         }
+        if is_child_model:
+            retry_patch_templates["prompt_additions"] = _dedupe(
+                [
+                    *retry_patch_templates["prompt_additions"],
+                    "real child or teen photography with age-appropriate facial proportions, natural skin, believable eyes, and relaxed expression",
+                ]
+            )
+            retry_patch_templates["artifact_repair"] = _dedupe(
+                [
+                    *retry_patch_templates["artifact_repair"],
+                    "repair child or teen model faces toward age-appropriate real-camera photography: natural cheeks, eyes, teeth, skin texture, and relaxed expression without doll, toy, or pageant polish",
+                ]
+            )
+            retry_patch_templates["negative_additions"] = _dedupe(
+                [
+                    *retry_patch_templates["negative_additions"],
+                    "doll-like child face",
+                    "adultified child model",
+                    "synthetic child skin",
+                    "pageant-polished child face",
+                    "frozen child smile",
+                    "unreal child eyes",
+                    "unreal child teeth",
+                    "AI child model face",
+                ]
+            )
         return HumanPhotorealismGuidance(
             guidance_id=guidance_id,
             project_id=project_id,
@@ -321,6 +549,8 @@ class HumanPhotorealismLayer:
                 "doc": "65",
                 "module_id": self.module_id,
                 "enable_reason": reason,
+                "doc91_human_realism_plugin": True,
+                HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "has_identity_reference": has_identity_reference,
                 "doc68_casebook_recipe": True,
                 "casebook_recipe_library": VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
@@ -371,7 +601,53 @@ class HumanPhotorealismLayer:
             metadata={"doc": "65", **dict(metadata or {})},
         )
 
-    def _applies(
+    @classmethod
+    def is_human_realism_issue_code(cls, issue_code: str) -> bool:
+        return str(issue_code or "").strip() in _ANTI_AI_FACE_ISSUES
+
+    def retry_patch_for_issue_codes(
+        self,
+        issue_codes: list[str],
+        *,
+        child_model: bool = False,
+    ) -> dict[str, list[str]]:
+        filtered = [code for code in _dedupe(issue_codes) if code in _ANTI_AI_FACE_ISSUES]
+        if not filtered:
+            return {}
+        user_input = (
+            "real child model photography, avoid doll-like child face"
+            if child_model or any(code.startswith(("child_", "doll_like_child", "adultified_child", "synthetic_child", "pageant_")) for code in filtered)
+            else "real human portrait photography, avoid AI beauty face"
+        )
+        guidance = self.build(
+            project_id=None,
+            job_id=None,
+            scenario_id="doc91_retry_repair",
+            template_id="shared_visual_cluster",
+            user_input=user_input,
+            subject_type="character",
+            variation_mode="delivery_suite",
+            has_identity_reference=True,
+            metadata={
+                "force_human_realism_plugin": True,
+                "human_subject_kind": "child_or_teen_model" if child_model else "adult_portrait",
+                "human_realism_strictness": "child_strict" if child_model else "commercial_strict",
+            },
+        )
+        review = self.review(
+            guidance=guidance,
+            project_id=None,
+            job_id=None,
+            issue_codes=filtered,
+            metadata={"doc91_retry_patch_owner": self.module_id},
+        )
+        return {
+            key: _string_list(value)
+            for key, value in review.retry_patch.items()
+            if isinstance(value, list) and _string_list(value)
+        }
+
+    def _activation(
         self,
         *,
         user_input: str,
@@ -379,17 +655,97 @@ class HumanPhotorealismLayer:
         scenario_id: str,
         template_id: str,
         metadata: dict[str, Any],
-    ) -> tuple[bool, str]:
+    ) -> dict[str, Any]:
         if _truthy(metadata.get("disable_human_photorealism")):
-            return False, "disabled_by_metadata"
-        text = " ".join([user_input, scenario_id, template_id, str(metadata.get("quality_mode") or "")]).lower()
-        if _contains_any(text, _STYLIZED_TERMS) or any(term in user_input for term in _CHINESE_STYLIZED_TERMS):
-            return False, "stylized_request"
+            return _activation_payload(
+                applies=False,
+                primary_reason="disabled_by_metadata",
+                disabled_reason="disabled_by_metadata",
+                disabled_by_style=False,
+                subject_type=subject_type,
+            )
+        if _truthy(metadata.get("force_human_realism_plugin")):
+            return _activation_payload(
+                applies=True,
+                primary_reason="forced_by_metadata",
+                reason_codes=["forced_by_metadata"],
+                subject_type=subject_type,
+                human_subject_kind=str(metadata.get("human_subject_kind") or "adult_portrait"),
+                strictness=str(metadata.get("human_realism_strictness") or "commercial_strict"),
+                evidence={"metadata": ["force_human_realism_plugin"]},
+            )
+
+        text = _combined_activation_text(
+            user_input=user_input,
+            scenario_id=scenario_id,
+            template_id=template_id,
+            subject_type=subject_type,
+            metadata=metadata,
+        )
+        if _stylized_requested(text):
+            return _activation_payload(
+                applies=False,
+                primary_reason="stylized_request",
+                disabled_reason="stylized_request",
+                disabled_by_style=True,
+                subject_type=subject_type,
+                evidence={"stylized_request": True},
+            )
+
+        reason_codes: list[str] = []
+        evidence: dict[str, Any] = {}
         if subject_type == "character":
-            return True, "character_subject_policy"
-        if _contains_any(text, _HUMAN_TERMS) or any(term in user_input for term in _CHINESE_HUMAN_TERMS):
-            return True, "human_prompt_signal"
-        return False, "no_human_signal"
+            reason_codes.append("character_subject_policy")
+            evidence["subject_type"] = subject_type
+        if _contains_any(text, _HUMAN_TERMS) or _contains_any(text, _CHINESE_HUMAN_TERMS):
+            reason_codes.append("human_prompt_signal")
+        if _contains_any(text, _PRODUCT_WITH_HUMAN_TERMS) or _contains_any(text, _CHINESE_PRODUCT_WITH_HUMAN_TERMS):
+            reason_codes.append("product_with_human_signal")
+        if any(role in text for role in ["face_reference", "person_reference", "portrait_reference"]):
+            reason_codes.append("face_or_person_reference")
+        if any(token in text for token in ["ecommerce", "product", "listing"]) and "product_with_human_signal" in reason_codes:
+            reason_codes.append("ecommerce_human_model_detected")
+
+        is_child = _contains_any(text, _CHILD_TERMS) or _contains_any(text, _CHINESE_CHILD_TERMS)
+        is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
+        if is_child:
+            human_subject_kind = "child_or_teen_model"
+            strictness = "child_strict"
+            reason_codes.append("child_or_teen_model_detected")
+        elif any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
+            human_subject_kind = "product_on_person"
+            strictness = "commercial_strict"
+        elif is_hand_or_skin and not any(token in text for token in ["face", "\u8138", "portrait", "\u4eba\u50cf"]):
+            human_subject_kind = "hand_or_skin_detail"
+            strictness = "balanced"
+            reason_codes.append("hand_or_skin_detail_detected")
+        elif "model" in text or "\u6a21\u7279" in text:
+            human_subject_kind = "fashion_model"
+            strictness = "commercial_strict"
+        else:
+            human_subject_kind = "adult_portrait"
+            strictness = "commercial_strict" if any(token in text for token in ["commercial", "cover", "campaign", "\u5546\u4e1a", "\u5c01\u9762"]) else "balanced"
+
+        reason_codes = _dedupe(reason_codes)
+        if not reason_codes:
+            return _activation_payload(
+                applies=False,
+                primary_reason="no_human_signal",
+                disabled_reason="no_human_signal",
+                disabled_by_style=False,
+                subject_type=subject_type,
+            )
+
+        evidence["text_signals"] = reason_codes
+        return _activation_payload(
+            applies=True,
+            primary_reason=reason_codes[0],
+            reason_codes=reason_codes,
+            subject_type=subject_type,
+            human_subject_kind=human_subject_kind,
+            strictness=strictness,
+            evidence=evidence,
+        )
 
     def _realism_level(self, user_input: str, metadata: dict[str, Any]) -> str:
         text = " ".join([user_input, str(metadata.get("quality_mode") or "")]).lower()
@@ -414,6 +770,98 @@ class HumanPhotorealismLayer:
 
 def _contains_any(text: str, terms: set[str]) -> bool:
     return any(term in text for term in terms)
+
+
+def _combined_activation_text(
+    *,
+    user_input: str,
+    scenario_id: str,
+    template_id: str,
+    subject_type: str,
+    metadata: dict[str, Any],
+) -> str:
+    pieces = [
+        user_input,
+        scenario_id,
+        template_id,
+        subject_type,
+        str(metadata.get("quality_mode") or ""),
+        str(metadata.get("human_subject_kind") or ""),
+        str(metadata.get("image_purpose") or ""),
+        str(metadata.get("variation_mode") or ""),
+        _flatten_text(metadata.get("template_policy")),
+        _flatten_text(metadata.get("product_profile")),
+        _flatten_text(metadata.get("uploaded_asset_roles")),
+        _flatten_text(metadata.get("asset_role_summary")),
+        _flatten_text(metadata.get("brain_summary")),
+        _flatten_text(metadata.get("llm_brain_summary")),
+        _flatten_text(metadata.get("project_context_summary")),
+    ]
+    return " ".join(part for part in pieces if part).lower()
+
+
+def _flatten_text(value: Any, *, max_items: int = 80) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                break
+            parts.append(str(key))
+            parts.append(_flatten_text(item, max_items=max_items))
+        return " ".join(part for part in parts if part)
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_flatten_text(item, max_items=max_items) for item in list(value)[:max_items])
+    return str(value)
+
+
+def _stylized_requested(text: str) -> bool:
+    stylized_terms = [*_STYLIZED_TERMS, *_CHINESE_STYLIZED_TERMS]
+    for term in stylized_terms:
+        index = text.find(term)
+        while index >= 0:
+            prefix = text[max(0, index - 28) : index]
+            if not any(negation in prefix for negation in _NEGATION_TERMS):
+                return True
+            index = text.find(term, index + len(term))
+    return False
+
+
+def _activation_payload(
+    *,
+    applies: bool,
+    primary_reason: str,
+    subject_type: str,
+    reason_codes: list[str] | None = None,
+    disabled_reason: str | None = None,
+    disabled_by_style: bool = False,
+    human_subject_kind: str = "none",
+    strictness: str = "off",
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if applies and human_subject_kind == "none":
+        human_subject_kind = "adult_portrait"
+    if applies and strictness == "off":
+        strictness = "balanced"
+    review_codes = list(_ANTI_AI_FACE_ISSUES) if applies else []
+    return {
+        "applies": applies,
+        "primary_reason": primary_reason,
+        "reason_codes": _dedupe(reason_codes or ([primary_reason] if applies else [])),
+        "disabled_reason": disabled_reason,
+        "disabled_by_style": disabled_by_style,
+        "subject_type": subject_type,
+        "human_subject_kind": human_subject_kind,
+        "strictness": strictness,
+        "review_issue_codes": review_codes,
+        "evidence": evidence or {},
+        "doc": "91",
+    }
 
 
 def _truthy(value: Any) -> bool:

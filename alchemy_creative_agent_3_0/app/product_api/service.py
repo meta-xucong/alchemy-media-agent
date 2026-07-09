@@ -22,7 +22,12 @@ from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPac
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
-from ..shared_capabilities.visual_cluster import ModeAwareRoleDirector, OutputQualityReviewMerger, VisionOutputInspector
+from ..shared_capabilities.visual_cluster import (
+    HumanPhotorealismLayer,
+    ModeAwareRoleDirector,
+    OutputQualityReviewMerger,
+    VisionOutputInspector,
+)
 from ..schemas import (
     AssetType,
     BrandProfile,
@@ -244,6 +249,14 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "oversized_head",
     "compressed_neck_shoulders",
     "unflattering_face_drift",
+    "doll_like_child_face",
+    "adultified_child_model",
+    "synthetic_child_skin",
+    "pageant_polish_child_face",
+    "frozen_child_smile",
+    "unreal_child_eyes",
+    "unreal_child_teeth",
+    "child_face_ai_render",
     "same_expression_repetition",
     "same_head_angle_repetition",
     "same_pose_repetition",
@@ -1217,6 +1230,7 @@ class V3ProductApiService:
         composition_repair: list[str] = []
         artifact_repair: list[str] = []
         object_removal_instruction: list[str] = []
+        human_realism_layer: HumanPhotorealismLayer | None = None
         for code in issue_codes:
             if code in {
                 "visible_text_artifact",
@@ -1432,18 +1446,10 @@ class V3ProductApiService:
                 "eye_shape_or_spacing_drift",
                 "nose_mouth_relationship_drift",
                 "jaw_chin_direction_drift",
-                "unflattering_feature_degradation",
-                "beautiful_realism_balance_failure",
-                "realism_made_subject_less_attractive",
-                "pretty_but_too_ai_filtered",
-                "real_but_unflattering",
-                "skin_texture_beauty_balance_failure",
             }:
                 prompt_additions.extend(
                     [
-                        "repair with beautiful realism: beauty is the visual goal and realism is the rendering method",
                         "preserve same-person facial feature relationships: attractive eyebrow shape and arc, awake eye shape and spacing, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance",
-                        "make realism come from photographed skin texture, soft natural light, hair strands, fabric detail, lens depth, and natural facial tension instead of making the face less attractive",
                     ]
                 )
                 identity_reinforcement.append(
@@ -1452,16 +1458,10 @@ class V3ProductApiService:
                 artifact_repair.extend(
                     [
                         "repair facial features before style: eyebrows, eyes, nose-mouth spacing, jaw/chin, cheek volume, and face ratio must remain beautiful and recognizable",
-                        "if the face is pretty but too filtered, restore subtle pores, eyelid detail, hair flyaways, fabric texture, and real shadow transitions without reshaping the face",
-                        "if the face is real but unflattering, recover soft flattering light, relaxed facial muscles, graceful eyebrow design, and a better camera angle while preserving identity",
                     ]
                 )
                 negative_additions.extend(
                     [
-                        "ugly realism",
-                        "realism made face less attractive",
-                        "real but ugly face",
-                        "harsh documentary ugliness",
                         "bad eyebrow design",
                         "ugly eyebrow shape",
                         "drooping eyebrows",
@@ -1471,53 +1471,29 @@ class V3ProductApiService:
                         "unflattering nose-mouth drift",
                         "jaw or chin direction drift",
                         "facial feature degradation",
-                        "pretty but poreless AI filter",
-                        "over-smoothed beauty face",
-                        "dull complexion",
-                        "muddy skin tone",
                     ]
                 )
-            elif code in {
-                "ai_face_render",
-                "plastic_skin",
-                "over_smoothed_skin",
-                "missing_skin_texture",
-                "synthetic_beauty_filter",
-                "doll_like_face",
-                "template_smile",
-                "over_perfect_symmetry",
-                "wax_skin_highlight",
-                "uncanny_eye_expression",
-                "same_ai_face_repetition",
-            }:
-                prompt_additions.extend(
-                    [
-                        "render the person as a real camera photograph with natural skin texture, subtle pores, believable expression, and realistic eyes",
-                        "keep identity direction stable while varying expression, gaze, head angle, pose, and camera angle naturally",
-                    ]
+            elif HumanPhotorealismLayer.is_human_realism_issue_code(code):
+                if human_realism_layer is None:
+                    human_realism_layer = HumanPhotorealismLayer()
+                human_patch = human_realism_layer.retry_patch_for_issue_codes(
+                    [code],
+                    child_model=code
+                    in {
+                        "doll_like_child_face",
+                        "adultified_child_model",
+                        "synthetic_child_skin",
+                        "pageant_polish_child_face",
+                        "frozen_child_smile",
+                        "unreal_child_eyes",
+                        "unreal_child_teeth",
+                        "child_face_ai_render",
+                    },
                 )
-                artifact_repair.append(
-                    "repair the face away from AI-beauty rendering toward real photographed skin, natural asymmetry, non-waxy highlights, and believable facial tension"
-                )
-                identity_reinforcement.append(
-                    "preserve broad face shape, age direction, body type, hair direction, and recognizable identity cues without copying the same template face"
-                )
-                negative_additions.extend(
-                    [
-                        "plastic skin",
-                        "over-smoothed skin",
-                        "airbrushed face without texture",
-                        "AI beauty filter",
-                        "synthetic influencer face",
-                        "doll-like face",
-                        "porcelain mask skin",
-                        "over-perfect facial symmetry",
-                        "template smile",
-                        "uncanny eyes",
-                        "wax-like skin highlights",
-                        "same exact AI face repeated",
-                    ]
-                )
+                prompt_additions.extend(self._string_list(human_patch.get("prompt_additions")))
+                negative_additions.extend(self._string_list(human_patch.get("negative_additions")))
+                identity_reinforcement.extend(self._string_list(human_patch.get("identity_reinforcement")))
+                artifact_repair.extend(self._string_list(human_patch.get("artifact_repair")))
             elif code == "low_commercial_finish":
                 prompt_additions.append("raise the final polish with a clean, premium, directly usable visual finish")
             elif code in {

@@ -299,6 +299,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     if cluster.human_photorealism_guidance is not None
                     else {}
                 ),
+                "human_realism_plugin": dict(cluster.metadata.get("human_realism_plugin") or {}),
                 "strong_reference_closure_package": (
                     cluster.strong_reference_closure_package.model_dump(mode="json")
                     if cluster.strong_reference_closure_package is not None
@@ -544,7 +545,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             subject_type=subject_type,
             variation_mode=variation_mode,
             has_identity_reference=bool(project_identity_anchors or strong_bindings),
-            metadata=capability_input.metadata,
+            metadata=self._human_realism_plugin_metadata(
+                capability_input=capability_input,
+                project_context=project_context,
+                template_policy=template_policy,
+                subject_type=subject_type,
+                variation_mode=variation_mode,
+            ),
         )
         strong_reference_plan = self._apply_human_photorealism_to_reference_plan(
             strong_reference_plan,
@@ -900,6 +907,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "batch_identity_diversity_status": batch_review.status if batch_review else None,
                 "human_natural_variation_applies": bool(human_variation and human_variation.applies),
                 "human_photorealism_applies": bool(human_photorealism and human_photorealism.applies),
+                "human_realism_plugin": (
+                    dict(human_photorealism.metadata.get("human_realism_plugin") or {})
+                    if human_photorealism
+                    else {}
+                ),
                 "strong_reference_closure_active": strong_reference_closure.active,
                 "mode_quality_profile_id": mode_quality_profile.profile_id,
                 "anti_ai_face_review_status": anti_ai_face_review.status if anti_ai_face_review else None,
@@ -1161,6 +1173,44 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if lock_default == "character":
             return "character"
         return "generic"
+
+    def _human_realism_plugin_metadata(
+        self,
+        *,
+        capability_input: CapabilityInput,
+        project_context: dict[str, Any],
+        template_policy: dict[str, Any],
+        subject_type: str,
+        variation_mode: str,
+    ) -> dict[str, Any]:
+        uploaded_asset_roles = []
+        for asset in capability_input.uploaded_assets:
+            role = asset.role.value if hasattr(asset.role, "value") else asset.role
+            uploaded_asset_roles.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "role": role,
+                    "filename": asset.filename,
+                    "mime_type": asset.mime_type,
+                    "metadata": dict(asset.metadata or {}),
+                }
+            )
+        return {
+            **dict(capability_input.metadata or {}),
+            "doc91_human_realism_plugin": True,
+            "subject_type": subject_type,
+            "variation_mode": variation_mode,
+            "template_policy": dict(template_policy or {}),
+            "product_profile": dict(capability_input.product_profile or {}),
+            "uploaded_asset_roles": uploaded_asset_roles,
+            "project_context_summary": {
+                "project_id": project_context.get("project_id"),
+                "template_id": project_context.get("template_id"),
+                "selected_output_count": len(project_context.get("selected_output_assets") or []),
+                "selected_reference_count": len(project_context.get("selected_references") or []),
+                "uploaded_reference_count": len(project_context.get("uploaded_references") or []),
+            },
+        }
 
     def _role_specific_generation_plan_from_suite(
         self,

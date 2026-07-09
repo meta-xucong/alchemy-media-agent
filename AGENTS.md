@@ -31,6 +31,8 @@ Hard rules:
 9. Long-term human identity and beautiful realism tuning must preserve attractive facial-feature design, including eyes, brows, nose-mouth relationship, jaw/chin direction, skin/lighting realism, and natural variation; never make a face less beautiful merely to make it look realistic.
 10. Retry outputs are append-only internally, but beginner-facing V3 result surfaces must show only final delivery outputs up to the requested count; retry-superseded originals belong in folded workflow/history details.
 11. When an uploaded portrait is used as a same-person reference, identity-critical traits from the image override conflicting prompt aesthetics unless the user explicitly asks to redesign or change the person.
+12. Doc91 Human Realism Plugin is a shared Visual Capability Cluster plugin. Any V3 path that generates real people, models, visible faces, hands, skin, product-on-person, fashion, kidswear, or lifestyle scenes with people must route anti-AI-face and real-camera human guidance through that plugin, even when the template subject is product. Do not duplicate this logic inside General, E-Commerce, Photography, or Central Brain code.
+13. Child, teen, or kidswear realism rules are only auxiliary branches inside the general Human Realism Plugin. They may strengthen age-appropriate realism when detected, but they must never turn the shared module into a child-specific or kidswear-specific solution.
 
 Short form:
 

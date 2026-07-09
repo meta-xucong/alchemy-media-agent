@@ -405,12 +405,79 @@ python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_
 git diff --check -- alchemy_creative_agent_3_0/app alchemy_creative_agent_3_0/docs alchemy_creative_agent_3_0/tests .codex-longrun
 ```
 
-## 7. Audit Conclusion
+## 7. Doc91 Current Compatibility Addendum
+
+Doc91 is the current governing document for Human Realism Plugin placement,
+activation, and consolidation.
+
+Compatibility result:
 
 ```text
-CURRENT_ACCEPTED_DOCUMENT_STATUS: DOC78 IS THE LATEST LONG-TERM IDENTITY AND BEAUTIFUL REALISM FOUNDATION TUNING PLAN; DOC76 REMAINS THE PLACEMENT-GOVERNANCE AUTHORITY
+Doc91 does not replace Doc76 foundation-vs-specialized-template governance.
+Doc91 does not replace Doc85-88 portrait reference identity and balance rules.
+Doc91 does not replace Doc90 General Template advanced reference controls.
+Doc91 extends Doc65/70/71/72/78 by turning human photorealism, anti-AI-face,
+beautiful realism, complexion/proportion guardrails, and child/model realism
+into one shared Visual Capability Cluster plugin boundary.
+```
+
+Latest ownership rule:
+
+```text
+Human Realism Plugin owns:
+  real-camera human rendering
+  anti-AI-face prompt and review issue codes
+  attractive-but-real face balance
+  skin/lighting/proportion realism
+  child/teen/model anti-doll realism
+  activation across General, E-Commerce, and future Photography templates
+
+Portrait Identity modules own:
+  uploaded portrait identity truth
+  bone-structure preservation
+  identity/style separation
+  prompt mood/reference balance
+
+Specialized templates own:
+  scenario-specific deliverable maps
+  product/listing/photography package roles
+```
+
+Current gap found before coding:
+
+```text
+Existing code already keeps most human realism behavior inside
+shared_capabilities/visual_cluster, which is compatible.
+
+Some activation paths still depend too much on subject_type == "character".
+That can cause product-with-human, kidswear, apparel-on-model, and lifestyle
+product scenes to skip anti-AI-face rules when subject_type remains product.
+
+Some API/service code still contains human-face retry prompt fragments for
+metadata-driven repair. This should be treated as compatibility debt:
+product_api/service.py may pass issue codes and retry payloads through, but the
+Human Realism Plugin must own new anti-AI-face, child/model realism, and
+real-camera human retry wording.
+
+The next coding phase should fix activation and metadata inside the existing
+Visual Capability Cluster rather than creating a new framework or moving logic
+into Central Brain or templates.
+```
+
+Doc91 verification commands:
+
+```text
+rg -n "Doc91|Human Realism Plugin|human_realism_plugin" AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creative_agent_3_0/docs
+rg -n "subject_type == \"character\"|human_photorealism|anti_ai_face" alchemy_creative_agent_3_0/app/shared_capabilities/visual_cluster alchemy_creative_agent_3_0/tests
+git diff --check -- AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creative_agent_3_0/docs
+```
+
+## 8. Audit Conclusion
+
+```text
+CURRENT_ACCEPTED_DOCUMENT_STATUS: DOC91 IS THE LATEST HUMAN REALISM PLUGIN GOVERNANCE PLAN; DOC90 REMAINS GENERAL ADVANCED REFERENCE CONTROL AUTHORITY; DOC88 REMAINS PORTRAIT REFERENCE BALANCE AUTHORITY; DOC76 REMAINS PLACEMENT-GOVERNANCE AUTHORITY
 CURRENT_ARCHITECTURE_STATUS: KEEP V3 PROJECT MODE + VISUAL CAPABILITY CLUSTER
 CURRENT_IMPLEMENTATION_RULE: CLASSIFY WORK AS FOUNDATION, GENERAL TEMPLATE, OR SPECIALIZED TEMPLATE BEFORE CODING
 CURRENT_TEST_RULE: PROVE CHANGES DO NOT LEAK INTO THE WRONG LAYER
-NEXT_RECOMMENDED_BOUNDARY: USE DOC76 FOR PLACEMENT, DOC77 FOR REVIEW/AESTHETIC STABILITY, AND DOC78 FOR LONG-TERM IDENTITY + BEAUTIFUL REALISM TUNING
+NEXT_RECOMMENDED_BOUNDARY: USE DOC91 FOR HUMAN REALISM PLUGIN ACTIVATION AND CONSOLIDATION; USE DOC85-88 FOR PORTRAIT IDENTITY TRUTH; USE DOC76 FOR PLACEMENT; USE DOC77 FOR REVIEW/AESTHETIC STABILITY
 ```

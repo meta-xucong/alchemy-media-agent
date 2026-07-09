@@ -116,3 +116,100 @@ def test_visual_cluster_ai_face_issue_feeds_retry_decision() -> None:
     assert decision["should_retry"] is True
     assert "natural human skin texture" in patch_text
     assert "plastic skin" in patch_text
+
+
+def test_doc91_ecommerce_kidswear_model_activates_human_realism_for_product_subject() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc91_kidswear",
+        job_id="job_doc91_kidswear",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input="Create an ecommerce kidswear catalog photo, child model wearing the outfit, avoid doll-like face",
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+        metadata={
+            "product_profile": {"category": "kidswear clothing", "audience": "children"},
+            "template_policy": {"identity_lock_default": "product"},
+        },
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+
+    assert guidance.applies is True
+    assert plugin["applies"] is True
+    assert plugin["subject_type"] == "product"
+    assert plugin["human_subject_kind"] == "child_or_teen_model"
+    assert plugin["strictness"] == "child_strict"
+    assert plugin["disabled_by_style"] is False
+    assert "ecommerce_human_model_detected" in plugin["reason_codes"]
+    assert "doll-like child face" in guidance.negative_prompt_fragments
+
+
+def test_doc91_visual_cluster_exports_plugin_metadata_for_product_on_model() -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        CapabilityInput(
+            job_id="job_doc91_cluster",
+            scenario_id="ecommerce",
+            user_input="Generate a kidswear product image with a real child model wearing the jacket",
+            product_profile={"category": "kidswear apparel", "product_name": "summer jacket"},
+            metadata={
+                "template_id": "ecommerce_template",
+                "requested_image_count": 2,
+                "project_context_snapshot": {"project_id": "project_doc91_cluster", "template_id": "ecommerce_template"},
+            },
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+
+    assert cluster["human_photorealism_guidance"]["applies"] is True
+    plugin = cluster["metadata"]["human_realism_plugin"]
+
+    assert plugin["applies"] is True
+    assert plugin["subject_type"] == "product"
+    assert plugin["human_subject_kind"] == "child_or_teen_model"
+    assert "human_photorealism_layer" in cluster["child_module_ids"]
+    assert "anti_ai_face_review" in cluster["child_module_ids"]
+
+
+def test_doc91_product_only_request_does_not_force_human_realism() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc91_product_only",
+        job_id="job_doc91_product_only",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input="Create a clean white-background product photo of a ceramic mug",
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+        metadata={"product_profile": {"category": "ceramic mug"}},
+    )
+
+    assert guidance.applies is False
+    assert guidance.metadata["human_realism_plugin"]["applies"] is False
+    assert guidance.metadata["disabled_reason"] == "no_human_signal"
+
+
+def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None:
+    layer = HumanPhotorealismLayer()
+
+    patch = layer.retry_patch_for_issue_codes(["doll_like_child_face"], child_model=True)
+    patch_text = " ".join(
+        [
+            *patch["prompt_additions"],
+            *patch["negative_additions"],
+            *patch["artifact_repair"],
+        ]
+    )
+
+    assert "real child or teen photography" in patch_text
+    assert "doll-like child face" in patch_text
+    assert "pageant" in patch_text

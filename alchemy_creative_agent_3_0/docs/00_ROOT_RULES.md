@@ -331,6 +331,13 @@ single-axis. Uploaded portraits preserve recognizable identity, user-approved
 outputs preserve positive visual direction, and the current prompt preserves
 task mood and art direction. Do not improve one axis by breaking the other two.
 
+For real human, model, fashion, kidswear, hand-held product, product-on-person,
+or lifestyle images with visible people, V3 must route realism and anti-AI-face
+guidance through the shared Human Realism Plugin in the Visual Capability
+Cluster. This applies even when the primary template subject is a product.
+Disable or reduce it only when the user explicitly requests anime, cartoon,
+CG, illustration, toy, doll, mascot, or another non-photoreal human style.
+
 ## 12. Commercial Usability Comes Before Artistic Exploration
 
 V3 is not an experimental art generator by default.
