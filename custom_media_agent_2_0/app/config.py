@@ -9,16 +9,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_CLAUDE_CODE_FALLBACK_MODELS: tuple[str, ...] = (
-    "deepseek-v4-pro-260425",
-    "deepseek-v4-flash-260425",
-    "deepseek-v3-2-251201",
-    "doubao-seed-2-0-lite-260428",
-    "doubao-seed-2-0-lite-260215",
-    "doubao-seed-1-6-lite-251015",
-    "glm-4-7-251222",
-    "doubao-lite-128k-240428",
-    "doubao-lite-32k-240428",
-    "doubao-lite-4k-240328",
+    "gpt-5.5",
+    "kimi-k2.6",
+    "kimi-for-coding",
 )
 
 

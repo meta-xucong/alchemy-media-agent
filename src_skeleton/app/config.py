@@ -87,15 +87,18 @@ class Settings(BaseModel):
     gemini_image_generation_enabled: bool = os.getenv("GEMINI_IMAGE_GENERATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
-    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
-    default_llm_model: str = os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5")
-    backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "deepseek")
+    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")
+    default_llm_model: str = os.getenv(
+        "DEFAULT_LLM_MODEL",
+        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro-260425")),
+    )
+    backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "openai")
     backup_llm_model: str = os.getenv(
         "BACKUP_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", "deepseek-v4-pro-260425"),
+        os.getenv("OPENAI_LLM_MODEL", "gpt-5.5"),
     )
-    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5"))
-    kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding"))
+    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-5.5")
+    kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "kimi-for-coding")
     deepseek_llm_model: str = os.getenv(
         "DEEPSEEK_LLM_MODEL",
         os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro-260425"),
@@ -116,10 +119,10 @@ class Settings(BaseModel):
     )
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "kimi"))
+    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"))
     lab_llm_model: str = os.getenv(
         "LAB_LLM_MODEL",
-        os.getenv("DEFAULT_LLM_MODEL", os.getenv("OPENAI_LLM_MODEL", "gpt-5.5")),
+        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro-260425")),
     )
     lab_openai_api_key: str | None = os.getenv("LAB_OPENAI_API_KEY") or os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
     lab_openai_base_url: str | None = _normalize_openai_base_url(os.getenv("LAB_OPENAI_BASE_URL") or os.getenv("V2_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))

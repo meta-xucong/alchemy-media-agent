@@ -72,16 +72,9 @@ def fresh_client() -> TestClient:
         settings,
         "claude_orchestrator_fallback_models",
         (
-            "deepseek-v4-pro-260425",
-            "deepseek-v4-flash-260425",
-            "deepseek-v3-2-251201",
-            "doubao-seed-2-0-lite-260428",
-            "doubao-seed-2-0-lite-260215",
-            "doubao-seed-1-6-lite-251015",
-            "glm-4-7-251222",
-            "doubao-lite-128k-240428",
-            "doubao-lite-32k-240428",
-            "doubao-lite-4k-240328",
+            "gpt-5.5",
+            "kimi-k2.6",
+            "kimi-for-coding",
         ),
     )
     object.__setattr__(settings, "claude_checkpoint_orchestrator_enabled", False)
@@ -2105,7 +2098,7 @@ def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, 
 
     assert parsed["stage"] == "intent"
     assert "--json-schema" in captured["command_line"]
-    assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "0"
+    assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "1"
     assert captured["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096"
     assert captured["timeout"] == 60.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("generation_decision") == 60.0
@@ -2453,9 +2446,9 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
             "claude_orchestrator_multimodal_model": "doubao-seed-2-0-lite-260428",
             "claude_orchestrator_fallback_model": "claude-haiku-test",
             "claude_orchestrator_fallback_models": [
-                "deepseek-v4-flash-260425",
-                "doubao-seed-2.0-lite",
-                "doubao-seed-2-0-lite-260428",
+                "gpt-5.5",
+                "kimi-k2.6",
+                "kimi-for-coding",
             ],
             "claude_orchestrator_effort": "medium",
             "claude_checkpoint_orchestrator_enabled": True,
@@ -2473,9 +2466,9 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert body["claude_orchestrator_model"] == "claude-sonnet-test"
     assert body["claude_orchestrator_multimodal_model"] == "doubao-seed-2-0-lite-260428"
     assert body["claude_orchestrator_fallback_models"][:3] == [
-        "deepseek-v4-flash-260425",
-        "doubao-seed-2.0-lite",
-        "doubao-seed-2-0-lite-260428",
+        "gpt-5.5",
+        "kimi-k2.6",
+        "kimi-for-coding",
     ]
     assert body["claude_checkpoint_orchestrator_enabled"] is True
     assert body["case_intelligence_provider"] == "claude-code"
@@ -5481,12 +5474,85 @@ def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
 
     queue = claude_orchestrator_service._claude_code_model_fallback_queue()
 
-    assert queue[:3] == [
-        "deepseek-v4-pro-260425",
-        "deepseek-v4-flash-260425",
-        "deepseek-v3-2-251201",
-    ]
-    assert queue[-1] == "doubao-lite-4k-240328"
+    assert queue[:3] == ["gpt-5.5", "kimi-k2.6", "kimi-for-coding"]
+
+
+def test_gpt_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, tmp_path: Path) -> None:
+    fresh_client()
+    object.__setattr__(settings, "openai_api_key", "sk-test-openai")
+    object.__setattr__(settings, "openai_base_url", "https://aiself.example.test/v1")
+    object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("gpt-5.5", "kimi-for-coding"))
+    object.__setattr__(settings, "claude_orchestrator_fallback_max_models_per_stage", 2)
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "stage": "intent",
+                                    "mode": "smart_enhance",
+                                    "primary_subject": "summer portrait",
+                                    "scene_goal": "natural commercial photography",
+                                    "must_keep": ["subject identity"],
+                                    "must_avoid": ["AI look"],
+                                    "asset_requirements": [],
+                                    "risk_notes": [],
+                                    "confidence": 0.84,
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, headers, json):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return FakeResponse()
+
+    def unexpected_claude_stage(**kwargs):
+        raise AssertionError("GPT fallback should use the OpenAI-compatible checkpoint lane")
+
+    monkeypatch.setattr(claude_orchestrator_service.httpx, "Client", FakeClient)
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", unexpected_claude_stage)
+
+    result, meta = claude_orchestrator_service._invoke_claude_code_model_fallbacks(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="intent",
+        prompt="Return JSON.",
+        schema=claude_orchestrator_service.CLAUDE_INTENT_CHECKPOINT_SCHEMA,
+    )
+
+    assert result is not None
+    assert result["stage"] == "intent"
+    assert result["mode"] == "smart_enhance"
+    assert meta["model"] == "gpt-5.5"
+    assert captured["url"] == "https://aiself.example.test/v1/chat/completions"
+    assert captured["payload"]["model"] == "gpt-5.5"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert "sk-test-openai" not in json.dumps(captured["payload"])
 
 
 def test_checkpoint_stage_soft_timeout_retries_kimi_before_model_fallback(monkeypatch, tmp_path) -> None:

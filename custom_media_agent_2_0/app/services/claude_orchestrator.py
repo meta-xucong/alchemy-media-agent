@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
+
 from app.config import settings
 from app.repositories.memory import utc_now
 from app.schemas import (
@@ -1190,20 +1192,30 @@ def _invoke_claude_code_model_fallbacks(
             attempt=attempts,
         )
         try:
-            result = _invoke_claude_stage_json(
-                command=command,
-                workspace=workspace,
-                stage_name=fallback_stage_name,
-                prompt=prompt,
-                schema=schema,
-                model_override=model,
-                fallback_model_override=next_model,
-                env_overrides=env_overrides,
-                setting_sources_override="project,local",
-                include_effort=False,
-                strip_model_fallback_env=True,
-                timeout_override=settings.claude_orchestrator_fallback_stage_timeout_seconds,
-            )
+            if _is_openai_compatible_fallback_model(model):
+                result = _invoke_openai_compatible_stage_json(
+                    workspace=workspace,
+                    stage_name=fallback_stage_name,
+                    prompt=prompt,
+                    schema=schema,
+                    model=model,
+                    timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                )
+            else:
+                result = _invoke_claude_stage_json(
+                    command=command,
+                    workspace=workspace,
+                    stage_name=fallback_stage_name,
+                    prompt=prompt,
+                    schema=schema,
+                    model_override=model,
+                    fallback_model_override=next_model,
+                    env_overrides=env_overrides,
+                    setting_sources_override="project,local",
+                    include_effort=False,
+                    strip_model_fallback_env=True,
+                    timeout_override=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                )
         except ClaudeInvocationError as exc:
             last_failure = str(exc)
             _emit_claude_progress(
@@ -1248,6 +1260,89 @@ def _invoke_claude_code_model_fallbacks(
             attempt=attempts,
         )
     return None, {"attempts": attempts, "failure_code": last_failure}
+
+
+def _is_openai_compatible_fallback_model(model: str | None) -> bool:
+    normalized = _text_value(model).lower()
+    return normalized.startswith("gpt-") or normalized.startswith("o1") or normalized.startswith("o3") or normalized.startswith("o4")
+
+
+def _openai_chat_completions_url() -> str:
+    base = (settings.openai_base_url or "https://api.openai.com/v1").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _invoke_openai_compatible_stage_json(
+    *,
+    workspace: Path,
+    stage_name: str,
+    prompt: str,
+    schema: dict[str, Any],
+    model: str,
+    timeout_seconds: float,
+) -> dict[str, Any] | None:
+    if not settings.openai_api_key:
+        raise ClaudeInvocationError("openai_fallback_not_configured")
+    safe_stage = re.sub(r"[^a-zA-Z0-9_.-]+", "_", stage_name).strip("_") or "stage"
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    _checkpoint_system_prompt()
+                    + "\nReturn one compact JSON object matching the supplied checkpoint schema. "
+                    "Do not wrap it in markdown or commentary."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {
+        "authorization": f"Bearer {settings.openai_api_key}",
+        "content-type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(_openai_chat_completions_url(), headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.TimeoutException as exc:
+        raise ClaudeInvocationError("openai_fallback_timeout") from exc
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        raise ClaudeInvocationError(f"openai_fallback_http_{status}") from exc
+    except Exception as exc:
+        raise ClaudeInvocationError("openai_fallback_error") from exc
+    _write_text(workspace / f"{safe_stage}_openai_response.json", json.dumps(data, ensure_ascii=False))
+    content = _openai_chat_content(data)
+    parsed = _parse_structured_output(content)
+    if not parsed:
+        raise ClaudeInvocationError("openai_fallback_invalid_json")
+    coerced = _coerce_checkpoint_payload(parsed, schema, workspace=workspace)
+    return coerced if _matches_checkpoint_schema(coerced, schema) else None
+
+
+def _openai_chat_content(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first.get("message"), dict) else {}
+    content = message.get("content")
+    if isinstance(content, list):
+        chunks = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                chunks.append(str(item["text"]))
+        return "".join(chunks)
+    return str(content or "")
 
 
 def _run_claude_subprocess(
@@ -1364,7 +1459,7 @@ def _invoke_claude_stage_json(
     for key, value in (env_overrides or {}).items():
         if value:
             env[key] = value
-    env["MAX_STRUCTURED_OUTPUT_RETRIES"] = "0"
+    env["MAX_STRUCTURED_OUTPUT_RETRIES"] = os.getenv("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(_checkpoint_stage_max_output_tokens())
     _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
     timeout_seconds = timeout_override or _checkpoint_stage_timeout_seconds(stage_name)

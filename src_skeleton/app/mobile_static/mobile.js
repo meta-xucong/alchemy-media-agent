@@ -5855,7 +5855,7 @@ function hydrateV2CaseIntelligenceModelHint() {
 function v2ClaudeFallbackModelQueue() {
   const primary = els.v2ClaudeModelInput?.value.trim() || "";
   const explicitFallback = els.v2ClaudeFallbackModelInput?.value.trim() || "";
-  return [explicitFallback, "deepseek-v4-flash-260425", "doubao-seed-2.0-lite", "doubao-seed-2-0-lite-260428"]
+  return [explicitFallback, "gpt-5.5", "kimi-k2.6", "kimi-for-coding"]
     .map((model) => model.trim())
     .filter((model, index, models) => model && model !== primary && models.indexOf(model) === index);
 }

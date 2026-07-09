@@ -8,14 +8,14 @@ Core rule:
 Claude Code remains the creative brain.
 Text-only orchestration uses the fast text source.
 Uploaded-image / visual-understanding orchestration uses the multimodal source.
-Kimi remains the fallback Claude Code source.
+GPT is the preferred text fallback, with Kimi as the final backup.
 ```
 
 ## Why This Exists
 
 V2 depends on Claude Code for creative orchestration. The app must not bypass Claude and continue with a deterministic creative fallback when any upstream source is overloaded, out of quota, or slow.
 
-Routing and fallback still call `claude -p`. V2 only changes the temporary Claude Code model and, for fallback, the injected Anthropic-compatible base URL/token for the failing checkpoint stage.
+Primary routing still calls `claude -p`. For fallback, V2 first uses the GPT OpenAI-compatible checkpoint lane when the fallback model is GPT, then falls back to Claude Code model switching for Kimi-style Anthropic-compatible backups. Both paths must emit the same checkpoint JSON schema.
 
 ## Runtime Strategy
 
@@ -26,7 +26,7 @@ Primary routing:
 3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
 4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
 5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
-6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source.
+6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source. GPT fallback uses the OpenAI-compatible checkpoint lane; Kimi fallback uses the Claude Code Anthropic-compatible lane.
 7. If the selected multimodal source is required for uploaded-image understanding, V2 must fail closed when that source is unavailable. It must not continue with a text-only fallback that cannot inspect uploaded images.
 
 Current production intent:
@@ -34,10 +34,10 @@ Current production intent:
 ```text
 text source: deepseek-v4-pro-260425
 multimodal source: doubao-seed-2-0-lite-260428
-fallback source: deepseek-v4-flash-260425 -> doubao-seed-2.0-lite
+fallback source: gpt-5.5 -> kimi-k2.6 -> kimi-for-coding
 ```
 
-DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi remains the conservative fallback for text checkpoints, not for required uploaded-image understanding.
+DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. GPT is the preferred text fallback when the primary text source is unavailable, and Kimi remains the last conservative backup. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
 
 ## Configuration
 
@@ -50,12 +50,12 @@ V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
 V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-flash-260425,doubao-seed-2.0-lite,doubao-seed-2-0-lite-260428
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.5,kimi-k2.6,kimi-for-coding
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
 ```
 
-The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. The fallback token should allow the same DeepSeek/Doubao-compatible lane; Kimi is not part of the default queue.
+The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. GPT fallback uses `V2_OPENAI_API_KEY` / `V2_OPENAI_BASE_URL` or the shared OpenAI settings. Kimi backup uses `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` / `V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL`.
 
 ## Source Selection
 
@@ -144,9 +144,9 @@ kimi_upstream_error
 upstream_context_canceled
 ```
 
-Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the selected source's micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the fallback Claude Code model queue for that same compact stage.
+Soft timeout, output-token-limit, hard timeout, and structured-output exhaustion are compression triggers first. If the selected source's micro/ultra-micro retries also exhaust without a valid checkpoint, the controller may try the fallback model queue for that same compact stage.
 
-The fallback is not a separate OpenAI-compatible executor. It is still Claude Code.
+For GPT entries, the fallback queue uses the narrow OpenAI-compatible checkpoint executor. For Kimi-style entries, it still uses Claude Code model fallback.
 
 Required multimodal exception:
 
@@ -206,7 +206,7 @@ Uploaded-image primary use:
 Successful fallback use:
 
 ```json
-{"provider":"claude-code-model-fallback","model":"deepseek-v4-flash-260425"}
+{"provider":"claude-code-model-fallback","model":"gpt-5.5"}
 ```
 
 ## Security Rules

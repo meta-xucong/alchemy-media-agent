@@ -93,11 +93,13 @@ def lab_llm_status() -> dict[str, Any]:
 
 def _planner_candidates(*, image_paths: bool) -> list[dict[str, str]]:
     preferred = _normalize_lab_provider(settings.lab_vision_provider if image_paths else settings.lab_llm_provider)
+    if image_paths and preferred == "deepseek":
+        preferred = "doubao"
     order = [preferred]
     if image_paths:
-        order.extend(["doubao", "deepseek", "openai"])
+        order.extend(["doubao", "openai", "kimi"])
     else:
-        order.extend(["deepseek", "openai", "doubao"])
+        order.extend(["deepseek", "doubao", "openai", "kimi"])
     unique = []
     for provider in order:
         if provider in unique:
@@ -227,14 +229,14 @@ async def _ask_anthropic_compatible_json(
 
 
 def _normalize_lab_provider(provider: str | None) -> str:
-    normalized = str(provider or "kimi").strip().lower()
+    normalized = str(provider or "deepseek").strip().lower()
     if normalized in {"anthropic", "moonshot"}:
         return "kimi"
     if normalized in {"deepseek", "deepseek_v4", "deepseek-v4"}:
         return "deepseek"
     if normalized in {"byteplus", "volcengine", "volc", "ark"}:
         return "doubao"
-    return normalized if normalized in LAB_LLM_PROVIDERS else "kimi"
+    return normalized if normalized in LAB_LLM_PROVIDERS else "deepseek"
 
 
 def _lab_model(provider: str) -> str:
@@ -244,7 +246,7 @@ def _lab_model(provider: str) -> str:
         return settings.lab_doubao_vision_model
     if provider == "deepseek":
         return settings.lab_llm_model if _normalize_lab_provider(settings.lab_llm_provider) == "deepseek" else settings.deepseek_llm_model
-    return settings.lab_llm_model or settings.kimi_llm_model
+    return settings.kimi_llm_model
 
 
 def _lab_token(provider: str) -> str | None:

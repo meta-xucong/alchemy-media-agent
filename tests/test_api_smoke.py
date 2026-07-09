@@ -13,6 +13,7 @@ import app.services.image_service as image_service_module
 import app.services.alchemy_lab as alchemy_lab_module
 import app.services.alchemy_lab_quality as alchemy_lab_quality_module
 import app.services.alchemy_lab_intent_director as alchemy_lab_intent_module
+import app.services.alchemy_lab_llm as alchemy_lab_llm_module
 from app.main import app
 from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
@@ -3945,6 +3946,41 @@ def test_runtime_provider_settings_accept_deepseek_route():
         settings.deepseek_llm_api_key = original_deepseek_api_key
         settings.lab_llm_provider = original_lab_provider
         settings.lab_llm_model = original_lab_model
+
+
+def test_lab_image_planner_never_routes_to_deepseek():
+    original_lab_provider = settings.lab_llm_provider
+    original_lab_vision_provider = settings.lab_vision_provider
+    original_lab_doubao_key = settings.lab_doubao_vision_api_key
+    original_deepseek_key = settings.deepseek_llm_api_key
+    original_openai_key = settings.openai_api_key
+    original_kimi_key = settings.lab_kimi_api_key
+    original_kimi_model = settings.kimi_llm_model
+
+    try:
+        settings.lab_llm_provider = "deepseek"
+        settings.lab_vision_provider = "deepseek"
+        settings.lab_doubao_vision_api_key = "sk-test-doubao"
+        settings.deepseek_llm_api_key = "sk-test-deepseek"
+        settings.openai_api_key = "sk-test-openai"
+        settings.lab_kimi_api_key = "sk-test-kimi"
+        settings.kimi_llm_model = "kimi-k2.6"
+
+        text_candidates = alchemy_lab_llm_module._planner_candidates(image_paths=False)
+        image_candidates = alchemy_lab_llm_module._planner_candidates(image_paths=True)
+
+        assert [candidate["provider"] for candidate in text_candidates][:3] == ["deepseek", "doubao", "openai"]
+        assert [candidate["provider"] for candidate in image_candidates][:3] == ["doubao", "openai", "kimi"]
+        assert "deepseek" not in {candidate["provider"] for candidate in image_candidates}
+        assert image_candidates[2]["model"] == "kimi-k2.6"
+    finally:
+        settings.lab_llm_provider = original_lab_provider
+        settings.lab_vision_provider = original_lab_vision_provider
+        settings.lab_doubao_vision_api_key = original_lab_doubao_key
+        settings.deepseek_llm_api_key = original_deepseek_key
+        settings.openai_api_key = original_openai_key
+        settings.lab_kimi_api_key = original_kimi_key
+        settings.kimi_llm_model = original_kimi_model
 
 
 def test_runtime_provider_settings_apply_when_persistence_fails(monkeypatch):

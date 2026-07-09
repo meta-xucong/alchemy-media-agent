@@ -188,10 +188,18 @@ def _planner_candidates() -> list[dict[str, str]]:
     selected = _normalize_llm_provider(settings.default_llm_provider)
     fallback = _normalize_llm_provider(settings.backup_llm_provider)
     order: list[str] = []
-    for provider in [selected, fallback]:
+    candidates = [selected]
+    if selected == "deepseek":
+        candidates.extend(["doubao", "openai", "anthropic"])
+    elif selected == "doubao":
+        candidates.extend(["deepseek", "openai", "anthropic"])
+    elif selected == "openai":
+        candidates.extend(["deepseek", "doubao", "anthropic"])
+    candidates.append(fallback)
+    for provider in candidates:
         if provider not in order:
             order.append(provider)
-    return [{"provider": provider, "model": _llm_model(provider)} for provider in order]
+    return [{"provider": provider, "model": _llm_model(provider)} for provider in order if _planner_configured(provider)]
 
 
 def _normalize_llm_provider(provider: str | None) -> str:
@@ -200,6 +208,8 @@ def _normalize_llm_provider(provider: str | None) -> str:
         return "anthropic"
     if normalized in {"deepseek", "deepseek_v4", "deepseek-v4"}:
         return "deepseek"
+    if normalized in {"doubao", "byteplus", "volcengine", "volc", "ark"}:
+        return "doubao"
     return "openai"
 
 
@@ -208,13 +218,15 @@ def _llm_model(provider: str) -> str:
         return settings.kimi_llm_model
     if provider == "deepseek":
         return settings.deepseek_llm_model
+    if provider == "doubao":
+        return settings.lab_doubao_vision_model
     return settings.openai_llm_model
 
 
 def _planner_configured(provider: str) -> bool:
     if provider == "openai":
         return bool(settings.openai_api_key)
-    if provider in {"anthropic", "deepseek"}:
+    if provider in {"anthropic", "deepseek", "doubao"}:
         return bool(_anthropic_token(provider))
     return False
 
@@ -229,7 +241,7 @@ async def _ask_provider_for_prompt_plan(
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if provider in {"anthropic", "deepseek"}:
+    if provider in {"anthropic", "deepseek", "doubao"}:
         return await _ask_anthropic_for_prompt_plan(
             plan,
             provider=provider,
@@ -267,7 +279,7 @@ async def ask_llm_json_plan(
         if not _planner_configured(provider):
             continue
         try:
-            if provider in {"anthropic", "deepseek"}:
+            if provider in {"anthropic", "deepseek", "doubao"}:
                 result = await _ask_anthropic_for_json_plan(
                     provider=provider,
                     system_prompt=system_prompt,
@@ -492,12 +504,16 @@ def _planner_user_payload(
 def _anthropic_token(provider: str = "anthropic") -> str | None:
     if provider == "deepseek":
         return settings.deepseek_llm_api_key
+    if provider == "doubao":
+        return settings.lab_doubao_vision_api_key
     return settings.anthropic_api_key or settings.anthropic_auth_token
 
 
 def _anthropic_base_url(provider: str = "anthropic") -> str | None:
     if provider == "deepseek":
         return settings.deepseek_llm_base_url
+    if provider == "doubao":
+        return settings.lab_doubao_vision_base_url
     return settings.anthropic_base_url
 
 

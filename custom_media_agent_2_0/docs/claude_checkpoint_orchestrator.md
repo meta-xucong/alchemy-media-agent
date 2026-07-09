@@ -286,7 +286,7 @@ MAX_STRUCTURED_OUTPUT_RETRIES=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=3
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=25
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-pro-260425,deepseek-v4-flash-260425,deepseek-v3-2-251201,doubao-seed-2-0-lite-260428,doubao-seed-2-0-lite-260215,doubao-seed-1-6-lite-251015,glm-4-7-251222,doubao-lite-128k-240428,doubao-lite-32k-240328,doubao-lite-4k-240328
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.5,kimi-k2.6,kimi-for-coding
 ```
 
 The soft stage timeout is deliberately wider than the earliest 60-second recovery draft. Production traces show Kimi can complete simple stages in roughly 30-50 seconds, while valid non-error checkpoint stages may take 80-150 seconds. A 120-second soft boundary keeps Kimi as the primary Claude Code source during normal latency spikes while still allowing the hard timeout and backup model queue to recover genuinely stuck stages.
@@ -302,24 +302,17 @@ MAX_THINKING_TOKENS=0
 
 ### Claude Code Model Fallback
 
-When the Claude Code route is available, it remains the only creative brain that V2 calls. The fallback does not call a separate OpenAI-compatible executor from the V2 backend. It re-invokes Claude Code for the same checkpoint stage with a different `--model` and optional `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` overrides.
+When the Claude Code route is available, it remains the primary creative brain that V2 calls. GPT fallback uses a narrow OpenAI-compatible checkpoint executor for the same JSON schema; Kimi-style backup re-invokes Claude Code for the same checkpoint stage with a different `--model` and optional `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` overrides.
 
 This keeps the external V2 framework unchanged: same Claude checkpoint prompts, same JSON schema, same visual grammar lock, same uploaded-asset fusion policy, same output caps, and same selected-template priority. Model order is deliberately strongest-first:
 
 ```text
-deepseek-v4-pro-260425
-deepseek-v4-flash-260425
-deepseek-v3-2-251201
-doubao-seed-2-0-lite-260428
-doubao-seed-2-0-lite-260215
-doubao-seed-1-6-lite-251015
-glm-4-7-251222
-doubao-lite-128k-240428
-doubao-lite-32k-240428
-doubao-lite-4k-240328
+gpt-5.5
+kimi-k2.6
+kimi-for-coding
 ```
 
-If Kimi returns temporary upstream failures such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries the next Claude Code model in the queue. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
+If the selected primary text source returns temporary upstream failures such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries the next Claude Code model in the queue. GPT is the preferred text fallback when exposed by the gateway; Kimi is the final backup. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
 
 ## Workspace 文件布局
 
