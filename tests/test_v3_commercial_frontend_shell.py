@@ -329,7 +329,12 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || \"\"" in script.text
     assert "v3JobVisibleImageCount(job) >= v3ExpectedImageCountForJob(job, expectedCount)" in script.text
     assert "expectedCount: generationSettings.count" in script.text
-    assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in script.text
+    recover_body = script.text.split("async function recoverV3GeneratedJob", 1)[1].split("function v3JobProviderRetrySummary", 1)[0]
+    assert "v3RecoveredLatestVisibleProjectOutputs" not in recover_body
+    assert "recovered_without_exact_job_match" not in recover_body
+    assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" not in recover_body
+    assert "if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in recover_body
+    assert "syncV3CurrentJobFromProjectOutputs({ preferLatest: false })" in script.text
     assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text

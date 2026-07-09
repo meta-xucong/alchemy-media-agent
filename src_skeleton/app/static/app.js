@@ -4949,7 +4949,7 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   renderV3Job(generated);
   await refreshV3CurrentProject({ silent: true });
   await loadV3ProjectOutputs({ silent: true, force: true });
-  if (syncV3CurrentJobFromProjectOutputs({ preferLatest: true })) {
+  if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
   }
   await maybePersistV3UploadedReferences(uploadedAssets);
@@ -5012,11 +5012,6 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
-      const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
-      if (recoveredLatestOutputs && v3JobHasExpectedVisibleImages(recoveredLatestOutputs, expectedCount)) {
-        v3State.currentJob = recoveredLatestOutputs;
-        return recoveredLatestOutputs;
-      }
     } catch (error) {
       lastError = error;
     }
@@ -5051,14 +5046,8 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
-      const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
-      if (recoveredLatestOutputs && v3JobHasExpectedVisibleImages(recoveredLatestOutputs, expectedCount)) {
-        v3State.currentJob = recoveredLatestOutputs;
-        return recoveredLatestOutputs;
-      }
       const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
       if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;
-      if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;
     } catch (error) {
       lastError = error;
     }
@@ -5074,8 +5063,6 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     await loadV3ProjectOutputs({ silent: true, force: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
-    const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, v3State.currentJob);
-    if (recoveredLatestOutputs && v3JobHasExpectedVisibleImages(recoveredLatestOutputs, expectedCount)) return recoveredLatestOutputs;
   } catch (error) {
     lastError = error;
   }
