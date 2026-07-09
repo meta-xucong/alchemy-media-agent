@@ -7119,9 +7119,9 @@ body[data-active-module="v3"] #sessionLabel {
   align-content: center;
   gap: 12px;
   padding: 32px;
-  background: rgba(247, 244, 236, 0.6);
-  backdrop-filter: blur(22px) saturate(1.12);
-  -webkit-backdrop-filter: blur(22px) saturate(1.12);
+  background: rgba(247, 244, 236, 0.34);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
   text-align: center;
 }
 

@@ -264,10 +264,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-mobile-upload-list.empty-v2-list::before" in mobile_styles.text
     assert ".v3-mobile-loading-layer" in mobile_styles.text
     assert "position: fixed" in mobile_styles.text
-    assert "rgba(246, 243, 235, 0.6)" in mobile_styles.text
+    assert "rgba(246, 243, 235, 0.34)" in mobile_styles.text
     assert ".v3-mobile-full-prompt-dialog" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
+    assert "waitForMobileV3HomePreviewImages" in mobile_script.text
     assert "limit=1000" not in mobile_script.text
     assert "mobileV3ProjectFetchLimit = 80" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
@@ -321,7 +322,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "await waitForV3Paint()" in script.text
     assert "v3-page-loading-overlay" in styles.text
     assert "v3-page-loading-active" in styles.text
-    assert "rgba(247, 244, 236, 0.6)" in styles.text
+    assert "rgba(247, 244, 236, 0.34)" in styles.text
+    assert "waitForV3HomePreviewImages" in script.text
     assert "if (v3State.projectOpening) return;" in script.text
     assert 'data-v3-output-action="prompt"' in script.text
     assert "promptOpen = false" in script.text

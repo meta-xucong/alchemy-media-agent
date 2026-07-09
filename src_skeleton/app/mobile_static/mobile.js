@@ -2844,20 +2844,17 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     persistMobileV3Caches();
     updateMobileV3Status("正在补图片");
     renderMobileV3ProjectCards({ deferImages: true });
-    mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)
-      .then((outputsPayload) => {
-        mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
-        mobileV3State.outputsLoaded = true;
-        persistMobileV3Caches();
-        setMobileV3LoadingLayer(false);
-        renderMobileV3ProjectCards();
-        updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
-      })
-      .catch(() => {
-        mobileV3State.outputsLoaded = true;
-        setMobileV3LoadingLayer(false);
-        renderMobileV3ProjectCards();
-      });
+    try {
+      const outputsPayload = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
+      mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
+    } catch (_error) {
+      mobileV3State.outputs = [];
+    }
+    mobileV3State.outputsLoaded = true;
+    persistMobileV3Caches();
+    renderMobileV3ProjectCards();
+    await waitForMobileV3HomePreviewImages();
+    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
     if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
   } catch (error) {
     setMobileV3LoadingLayer(false);
@@ -2888,6 +2885,39 @@ function setMobileV3LoadingLayer(visible, title = "", detail = "") {
   document.body.classList.toggle("v3-mobile-loading-active", Boolean(visible));
   setText("#mobileV3LoadingTitle", title || "正在同步项目");
   setText("#mobileV3LoadingDetail", detail || "先显示框架，再分批加载项目和图片。");
+}
+
+function mobileV3HomePreviewImages() {
+  const grid = document.querySelector("#mobileV3ProjectGrid");
+  if (!grid) return [];
+  return Array.from(grid.querySelectorAll("img[data-mobile-v3-home-thumb='true']"))
+    .slice(0, Math.max(1, mobileV3State.projectRenderLimit || mobileV3ProjectPageSize || 8));
+}
+
+function mobileV3ImageLoaded(image) {
+  return Boolean(image?.complete && image.naturalWidth > 0);
+}
+
+function waitForMobileV3HomePreviewImages() {
+  const images = mobileV3HomePreviewImages();
+  if (!images.length) return Promise.resolve();
+  if (images.every(mobileV3ImageLoaded)) return Promise.resolve();
+  setMobileV3LoadingLayer(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
+  return new Promise((resolve) => {
+    const cleanup = [];
+    const check = () => {
+      if (!images.every(mobileV3ImageLoaded)) return;
+      cleanup.forEach((release) => release());
+      resolve();
+    };
+    images.forEach((image) => {
+      if (mobileV3ImageLoaded(image)) return;
+      const onLoad = () => check();
+      image.addEventListener("load", onLoad);
+      cleanup.push(() => image.removeEventListener("load", onLoad));
+    });
+    check();
+  });
 }
 
 function ensureMobilePageLoadingLayer() {
@@ -3042,7 +3072,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     card.innerHTML = `
       <button class="v3-mobile-project-preview" type="button" data-mobile-v3-open-project="${escapeHtml(project.project_id)}" aria-label="查看项目图片">
         <span class="v3-mobile-history-stack" aria-hidden="true">${Array.from({ length: stackCount }, () => "<span></span>").join("")}</span>
-        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(mobileV3ProjectTitle(project))}" loading="lazy" decoding="async" />` : `<span class="v3-mobile-empty-thumb">新项目</span>`}
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(mobileV3ProjectTitle(project))}" loading="eager" decoding="async" data-mobile-v3-home-thumb="true" />` : `<span class="v3-mobile-empty-thumb">新项目</span>`}
       </button>
       <div class="v3-mobile-project-copy">
         <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>

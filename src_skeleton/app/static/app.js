@@ -1575,7 +1575,7 @@ async function initV3Shell({ force = false } = {}) {
     renderV3Projects();
     renderV3History();
     renderV3HeroHistory();
-    loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize }).catch(() => {});
+    await loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize }).catch(() => {});
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
@@ -1591,6 +1591,7 @@ async function initV3Shell({ force = false } = {}) {
     }
   } finally {
     v3State.loading = false;
+    await waitForV3HomePreviewImages();
     setV3PageLoading(false);
     renderV3ScenarioState();
   }
@@ -1637,7 +1638,9 @@ function openV3Home({ silent = false } = {}) {
           if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
         }));
       }
-      Promise.allSettled(loadTasks).finally(() => setV3PageLoading(false));
+      Promise.allSettled(loadTasks)
+        .then(() => waitForV3HomePreviewImages())
+        .finally(() => setV3PageLoading(false));
     }, 40);
   }
 }
@@ -2356,7 +2359,7 @@ function renderV3Projects() {
     card.dataset.v3ProjectId = item.project_id;
     card.innerHTML = `
       <div class="v3-project-thumb-wrap">
-        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" src="${escapeHtml(v3MediaUrl(thumbnails[0]))}" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
+        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" src="${escapeHtml(v3MediaUrl(thumbnails[0]))}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
       </div>
       <div class="v3-project-goal-slot" title="${escapeHtml(projectGoal)}">
         <p>${escapeHtml(projectGoal)}</p>
@@ -2416,7 +2419,7 @@ function renderV3History() {
         <span class="v3-history-stack" aria-hidden="true">
           ${Array.from({ length: stackCount }, () => "<span></span>").join("")}
         </span>
-        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : `<span class="v3-history-empty-thumb">图片准备中</span>`}
+        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">图片准备中</span>`}
       </button>
       <div class="v3-history-body">
         <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
@@ -5333,6 +5336,38 @@ function setAppPageLoading(visible, title = "", detail = "") {
 function waitForV3Paint() {
   return new Promise((resolve) => {
     window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+  });
+}
+
+function v3HomePreviewImages() {
+  const roots = [els.v3ProjectList, els.v3HistoryList].filter(Boolean);
+  const images = roots.flatMap((root) => Array.from(root.querySelectorAll("img[data-v3-home-thumb='true']")));
+  return images.slice(0, Math.max(1, v3State.projectRenderLimit || v3ProjectHomePageSize || 8) * 2);
+}
+
+function v3ImageLoaded(image) {
+  return Boolean(image?.complete && image.naturalWidth > 0);
+}
+
+function waitForV3HomePreviewImages() {
+  const images = v3HomePreviewImages();
+  if (!images.length) return Promise.resolve();
+  if (images.every(v3ImageLoaded)) return Promise.resolve();
+  setV3PageLoading(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
+  return new Promise((resolve) => {
+    const cleanup = [];
+    const check = () => {
+      if (!images.every(v3ImageLoaded)) return;
+      cleanup.forEach((release) => release());
+      resolve();
+    };
+    images.forEach((image) => {
+      if (v3ImageLoaded(image)) return;
+      const onLoad = () => check();
+      image.addEventListener("load", onLoad);
+      cleanup.push(() => image.removeEventListener("load", onLoad));
+    });
+    check();
   });
 }
 
