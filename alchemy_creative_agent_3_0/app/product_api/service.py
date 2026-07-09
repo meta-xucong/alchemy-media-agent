@@ -144,6 +144,18 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "identity_drift",
     "hair_or_outfit_drift",
     "camera_distance_drift",
+    "bone_structure_drift",
+    "face_shape_drift",
+    "cheek_jaw_chin_drift",
+    "eye_shape_or_spacing_identity_drift",
+    "eyebrow_eye_relationship_drift",
+    "nose_mouth_relationship_identity_drift",
+    "lip_contour_identity_drift",
+    "age_impression_drift",
+    "styling_changed_face_geometry",
+    "archetype_overrode_reference_identity",
+    "same_type_not_same_person",
+    "identity_reference_underweighted",
     "identity_card_missing",
     "identity_card_not_applied",
     "identity_feature_drift",
@@ -1218,6 +1230,45 @@ class V3ProductApiService:
                 )
                 identity_reinforcement.append(
                     "use selected generated references only as continuation support when an uploaded identity truth source exists; keep hair, outfit category, camera distance, and natural proportions consistent"
+                )
+            elif code in {
+                "bone_structure_drift",
+                "face_shape_drift",
+                "cheek_jaw_chin_drift",
+                "eye_shape_or_spacing_identity_drift",
+                "eyebrow_eye_relationship_drift",
+                "nose_mouth_relationship_identity_drift",
+                "lip_contour_identity_drift",
+                "age_impression_drift",
+                "styling_changed_face_geometry",
+                "archetype_overrode_reference_identity",
+                "same_type_not_same_person",
+                "identity_reference_underweighted",
+            }:
+                identity_reinforcement.extend(
+                    [
+                        "Doc86 same-person repair: use the uploaded portrait reference as the face-geometry truth source, not merely a beauty-style reference",
+                        "preserve underlying bone structure: face width/length ratio, cheek volume, jawline slope, chin scale, eye spacing/base eye shape, eyebrow-eye relationship, nose-mouth relationship, lip contour, and age impression",
+                        "allow makeup, wardrobe, hairstyle, lighting, pose, expression, and scene changes only as surface styling changes",
+                    ]
+                )
+                prompt_additions.append(
+                    "reduce generic beauty archetype pressure; period, fantasy, delicate, premium, or editorial styling must not remodel the person's face"
+                )
+                negative_additions.extend(
+                    [
+                        "same type but different person",
+                        "generic AI beauty replacement",
+                        "face slimming",
+                        "V-shaped jaw replacement",
+                        "eye enlargement",
+                        "eye spacing drift",
+                        "nose reshaping",
+                        "lip reshaping",
+                        "jaw or chin remodeling",
+                        "age impression drift",
+                        "style changed face geometry",
+                    ]
                 )
             elif code in {"product_identity_drift", "brand_asset_drift"}:
                 product_reinforcement.append(

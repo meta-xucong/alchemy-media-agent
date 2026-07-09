@@ -23,6 +23,7 @@ from .contracts import (
     AutoRetryDecision,
     BatchIdentityDiversityReview,
     BeautifulRealismBalanceReview,
+    BoneStructureRetryPatch,
     CommercialOutputSelection,
     GeneralSuiteRolePlan,
     HumanBatchDiversityReview,
@@ -32,10 +33,13 @@ from .contracts import (
     IdentityHeroSelectionPlan,
     ModeQualityProfile,
     ModeDifferentiationReview,
+    PortraitBoneStructureLock,
+    PortraitIdentitySimilarityReview,
     RoleSpecificGenerationPlan,
     ProjectIdentityAnchor,
     ProjectVisualGrammarSnapshot,
     StrictVisualReviewPolicy,
+    StylingDeltaPolicy,
     StrongReferenceClosurePackage,
     StrongReferenceContinuationPlan,
     StrongReferenceBinding,
@@ -63,6 +67,7 @@ from .human_photorealism import HumanPhotorealismLayer
 from .human_variation import HumanNaturalVariationPolicy
 from .identity_anchor import ProjectIdentityAnchorBuilder
 from .mode_role_director import ModeAwareRoleDirector
+from .portrait_identity import DOC86_IDENTITY_ISSUE_CODES, PortraitBoneStructureIdentityLayer
 from .strong_reference_loop import StrongReferenceLoopPlanner
 
 
@@ -92,6 +97,7 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "strict_visual_review_policy",
     "human_photorealism_layer",
     "anti_ai_face_review",
+    "portrait_bone_structure_identity_lock",
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
     MODE_QUALITY_PROFILE_MODULE_ID,
@@ -196,6 +202,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         commercial_quality_reviewer: CommercialQualityClosureReviewer | None = None,
         strong_reference_closure_builder: StrongReferenceClosureBuilder | None = None,
         mode_quality_profile_builder: ModeQualityProfileBuilder | None = None,
+        portrait_identity_layer: PortraitBoneStructureIdentityLayer | None = None,
     ) -> None:
         self.human_variation_policy = human_variation_policy or HumanNaturalVariationPolicy()
         self.identity_anchor_builder = identity_anchor_builder or ProjectIdentityAnchorBuilder()
@@ -207,6 +214,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         self.commercial_quality_reviewer = commercial_quality_reviewer or CommercialQualityClosureReviewer()
         self.strong_reference_closure_builder = strong_reference_closure_builder or StrongReferenceClosureBuilder()
         self.mode_quality_profile_builder = mode_quality_profile_builder or ModeQualityProfileBuilder()
+        self.portrait_identity_layer = portrait_identity_layer or PortraitBoneStructureIdentityLayer()
 
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
         cluster = self._build_cluster(capability_input)
@@ -303,6 +311,26 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "strict_visual_review_policy": (
                     cluster.strict_visual_review_policy.model_dump(mode="json")
                     if cluster.strict_visual_review_policy is not None
+                    else {}
+                ),
+                "portrait_bone_structure_lock": (
+                    cluster.portrait_bone_structure_lock.model_dump(mode="json")
+                    if cluster.portrait_bone_structure_lock is not None
+                    else {}
+                ),
+                "styling_delta_policy": (
+                    cluster.styling_delta_policy.model_dump(mode="json")
+                    if cluster.styling_delta_policy is not None
+                    else {}
+                ),
+                "portrait_identity_similarity_review": (
+                    cluster.portrait_identity_similarity_review.model_dump(mode="json")
+                    if cluster.portrait_identity_similarity_review is not None
+                    else {}
+                ),
+                "bone_structure_retry_patch": (
+                    cluster.bone_structure_retry_patch.model_dump(mode="json")
+                    if cluster.bone_structure_retry_patch is not None
                     else {}
                 ),
                 "visual_consistency_guard": cluster.consistency_guard.model_dump(mode="json"),
@@ -558,9 +586,27 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_hero_plan=identity_hero_plan,
             human_photorealism=human_photorealism,
         )
+        portrait_bone_lock = self.portrait_identity_layer.build_lock(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            subject_type=subject_type,
+            subject_identity_card=subject_identity_card,
+            strong_bindings=strong_bindings,
+        )
+        styling_delta_policy = self.portrait_identity_layer.build_styling_policy(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            user_input=capability_input.user_input,
+            lock=portrait_bone_lock,
+        )
         role_specific_plan = self._apply_subject_identity_card_to_role_plan(
             role_specific_plan,
             subject_identity_card,
+        )
+        role_specific_plan = self._apply_portrait_bone_structure_to_role_plan(
+            role_specific_plan,
+            portrait_bone_lock,
+            styling_delta_policy,
         )
         beautiful_realism_review = self._beautiful_realism_balance_review(
             capability_input=capability_input,
@@ -577,6 +623,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             variation_mode=variation_mode,
             identity_hero_plan=identity_hero_plan,
             subject_identity_card=subject_identity_card,
+            portrait_bone_lock=portrait_bone_lock,
+            styling_delta_policy=styling_delta_policy,
             beautiful_realism_review=beautiful_realism_review,
             human_photorealism=human_photorealism,
             role_specific_plan=role_specific_plan,
@@ -615,6 +663,22 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             job_id=capability_input.job_id,
             issue_codes=self._anti_ai_face_issue_codes(capability_input),
         )
+        portrait_similarity_review = self.portrait_identity_layer.build_review(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            output_id=self._first_candidate_output_id(capability_input),
+            lock=portrait_bone_lock,
+            styling_policy=styling_delta_policy,
+            issue_codes=self._doc86_identity_issue_codes(capability_input),
+            confidence=self._doc86_review_confidence(capability_input),
+        )
+        bone_retry_patch = (
+            BoneStructureRetryPatch.model_validate(portrait_similarity_review.retry_patch)
+            if portrait_similarity_review
+            and portrait_similarity_review.retry_patch
+            and portrait_similarity_review.status == "fail_retryable"
+            else None
+        )
         quality_reports = self._quality_review_reports(
             capability_input=capability_input,
             quality_review=quality_review,
@@ -623,6 +687,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             anti_ai_face_review=anti_ai_face_review,
             beautiful_realism_review=beautiful_realism_review,
             strict_review_policy=strict_review_policy,
+            portrait_identity_review=portrait_similarity_review,
+            bone_structure_retry_patch=bone_retry_patch,
         )
         retry_decisions = self._auto_retry_decisions(capability_input, quality_reports)
         commercial_quality_review = self.commercial_quality_reviewer.build(
@@ -662,6 +728,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "subject_identity_card" if subject_identity_card and subject_identity_card.applies else "",
                 "beautiful_realism_balance_review" if beautiful_realism_review and beautiful_realism_review.applies else "",
                 "strict_visual_review_policy" if strict_review_policy and strict_review_policy.applies else "",
+                "portrait_bone_structure_identity_lock" if portrait_bone_lock and portrait_bone_lock.applies else "",
                 "anti_ai_face_review" if anti_ai_face_review and anti_ai_face_review.applies else "",
                 "commercial_quality_review",
             ]
@@ -706,6 +773,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             subject_identity_card=subject_identity_card,
             beautiful_realism_balance_review=beautiful_realism_review,
             strict_visual_review_policy=strict_review_policy,
+            portrait_bone_structure_lock=portrait_bone_lock,
+            styling_delta_policy=styling_delta_policy,
+            portrait_identity_similarity_review=portrait_similarity_review,
+            bone_structure_retry_patch=bone_retry_patch,
             negative_visual_memory=negative_memory,
             template_consistency_policy=template_policy,
             has_visual_evidence=has_evidence,
@@ -734,6 +805,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "subject_identity_card_status": subject_identity_card.status if subject_identity_card else None,
                 "beautiful_realism_balance_status": beautiful_realism_review.status if beautiful_realism_review else None,
                 "strict_visual_review_policy_active": bool(strict_review_policy and strict_review_policy.applies),
+                "portrait_bone_structure_lock_active": bool(portrait_bone_lock and portrait_bone_lock.applies),
+                "portrait_identity_similarity_status": portrait_similarity_review.status if portrait_similarity_review else None,
                 "quality_review_report_count": len(quality_reports),
                 "auto_retry_decision_count": len(retry_decisions),
                 "doc67_default_role_count_aligned": True,
@@ -1505,6 +1578,67 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             }
         )
 
+    def _apply_portrait_bone_structure_to_role_plan(
+        self,
+        plan: RoleSpecificGenerationPlan,
+        lock: PortraitBoneStructureLock | None,
+        styling_policy: StylingDeltaPolicy | None,
+    ) -> RoleSpecificGenerationPlan:
+        if lock is None or not lock.applies:
+            return plan
+        prompt_additions = _dedupe(
+            [
+                *lock.prompt_rules,
+                *(styling_policy.prompt_rules if styling_policy and styling_policy.applies else []),
+            ]
+        )
+        negative_additions = _dedupe(
+            [
+                *lock.forbidden_geometry_drift,
+                *(styling_policy.disallowed_identity_changes if styling_policy and styling_policy.applies else []),
+            ]
+        )
+        updated_recipes = []
+        for recipe in plan.role_recipes:
+            updated_recipes.append(
+                recipe.model_copy(
+                    update={
+                        "must_keep_rules": _dedupe(
+                            [
+                                *recipe.must_keep_rules,
+                                *lock.stable_bone_traits[:4],
+                                *lock.stable_feature_relationships[:4],
+                            ]
+                        ),
+                        "must_not_rules": _dedupe([*recipe.must_not_rules, *negative_additions[:8]]),
+                        "review_checks": _dedupe([*recipe.review_checks, *lock.review_checks[:4]]),
+                        "metadata": {
+                            **dict(recipe.metadata),
+                            "doc86_portrait_bone_structure_lock": True,
+                            "portrait_bone_structure_lock_id": lock.lock_id,
+                            "styling_delta_policy_id": styling_policy.policy_id
+                            if styling_policy and styling_policy.applies
+                            else None,
+                        },
+                    }
+                )
+            )
+        return plan.model_copy(
+            update={
+                "role_recipes": updated_recipes,
+                "prompt_additions": _dedupe([*plan.prompt_additions, *prompt_additions])[:52],
+                "negative_additions": _dedupe([*plan.negative_additions, *negative_additions])[:60],
+                "metadata": {
+                    **dict(plan.metadata),
+                    "doc86_portrait_bone_structure_lock": True,
+                    "portrait_bone_structure_lock": lock.model_dump(mode="json"),
+                    "styling_delta_policy": styling_policy.model_dump(mode="json")
+                    if styling_policy and styling_policy.applies
+                    else {},
+                },
+            }
+        )
+
     def _beautiful_realism_balance_review(
         self,
         *,
@@ -1561,6 +1695,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         variation_mode: str,
         identity_hero_plan: IdentityHeroSelectionPlan | None,
         subject_identity_card: SubjectIdentityCard | None,
+        portrait_bone_lock: PortraitBoneStructureLock | None,
+        styling_delta_policy: StylingDeltaPolicy | None,
         beautiful_realism_review: BeautifulRealismBalanceReview | None,
         human_photorealism: HumanPhotorealismGuidance | None,
         role_specific_plan: RoleSpecificGenerationPlan,
@@ -1604,6 +1740,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "pretty_but_too_ai_filtered",
             "real_but_unflattering",
             "skin_texture_beauty_balance_failure",
+            *sorted(DOC86_IDENTITY_ISSUE_CODES),
         ]
         prompt_additions = [
             "Strict visual review closure: do not accept outputs that look like generic AI beauty, repeated clones, role-collapsed frames, or weak direct-use photography.",
@@ -1613,6 +1750,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "Facial-feature integrity: preserve attractive eyes, eyebrow shape/arc, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance.",
             "Reject technically valid but weak images when they look generic, flat, washed out, muddy, overprocessed, or visually accidental.",
             "If a result has AI face, watermarks, bad anatomy, identity drift, or duplicated role duty, prepare a bounded retry instead of treating it as final.",
+            "Doc86 portrait identity rule: makeup, wardrobe, styling, lighting, pose, expression, and scene may change, but bone structure and facial-feature relationships must still read as the same person when a portrait reference exists.",
         ]
         negative_additions = [
             "generic AI beauty identity",
@@ -1650,6 +1788,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "distorted fingers",
             "wrong dress structure",
             "distorted human proportions",
+            "same type but different person",
+            "style changed face geometry",
+            "archetype overrode reference identity",
+            "age impression drift",
             "strong HDR",
             "over-sharpening",
             "anime",
@@ -1696,6 +1838,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if subject_identity_card and subject_identity_card.applies:
             prompt_additions.extend(subject_identity_card.prompt_additions[:4])
             negative_additions.extend(subject_identity_card.negative_additions[:10])
+        if portrait_bone_lock and portrait_bone_lock.applies:
+            prompt_additions.extend(portrait_bone_lock.prompt_rules[:4])
+            negative_additions.extend(portrait_bone_lock.forbidden_geometry_drift[:8])
+        if styling_delta_policy and styling_delta_policy.applies:
+            prompt_additions.extend(styling_delta_policy.prompt_rules[:3])
+            negative_additions.extend(styling_delta_policy.disallowed_identity_changes[:6])
         if beautiful_realism_review and beautiful_realism_review.applies:
             prompt_additions.extend(beautiful_realism_review.review_targets[:4])
             negative_additions.extend(_string_list(beautiful_realism_review.retry_patch.get("negative_additions"))[:8])
@@ -1708,6 +1856,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "one clear subject reads immediately with intentional framing",
             "exposure, color grade, contrast, depth, and texture feel stable and directed",
             "identity-critical facial feature relationships remain consistent and attractive",
+            "portrait reference outputs preserve the same underlying bone structure while allowing styling changes",
             "realism improves skin, light, hair, fabric, and camera texture without degrading beauty",
             "no visible AI mark, watermark, random text, or fake label",
             "human subjects avoid plastic skin, beauty-app geometry, and cloned expressions",
@@ -1730,6 +1879,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "real-camera human realism",
                 "long-term identity continuity",
                 "facial-feature aesthetic integrity",
+                "portrait bone-structure identity",
                 "beautiful realism balance",
                 "artifact cleanliness",
                 "aesthetic stability",
@@ -1745,6 +1895,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "identity_hero_plan_id": identity_hero_plan.plan_id if identity_hero_plan else None,
                 "subject_identity_card_id": subject_identity_card.card_id
                 if subject_identity_card and subject_identity_card.applies
+                else None,
+                "portrait_bone_structure_lock_id": portrait_bone_lock.lock_id
+                if portrait_bone_lock and portrait_bone_lock.applies
+                else None,
+                "styling_delta_policy_id": styling_delta_policy.policy_id
+                if styling_delta_policy and styling_delta_policy.applies
                 else None,
             },
         )
@@ -2228,6 +2384,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         anti_ai_face_review: AntiAIFaceReviewResult | None = None,
         beautiful_realism_review: BeautifulRealismBalanceReview | None = None,
         strict_review_policy: StrictVisualReviewPolicy | None = None,
+        portrait_identity_review: PortraitIdentitySimilarityReview | None = None,
+        bone_structure_retry_patch: BoneStructureRetryPatch | None = None,
     ) -> list[VisualQualityReviewReport]:
         project_context = _as_dict(capability_input.metadata.get("project_context_snapshot"))
         candidates = self._candidate_payloads(capability_input)
@@ -2278,6 +2436,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                             "retryable": True,
                         }
                     )
+            if portrait_identity_review and portrait_identity_review.issue_codes:
+                for code in portrait_identity_review.issue_codes:
+                    detected_issues.append(
+                        {
+                            "code": code,
+                            "severity": "high",
+                            "message": code.replace("_", " "),
+                            "retryable": portrait_identity_review.status == "fail_retryable",
+                        }
+                    )
             strict_issue_codes = self._strict_review_issue_codes(
                 capability_input,
                 strict_review_policy,
@@ -2295,6 +2463,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 )
 
             identity_score = 0.88 if identity_locks else 0.62
+            if portrait_identity_review and portrait_identity_review.bone_structure_identity_score is not None:
+                identity_score = min(
+                    identity_score,
+                    max(0.0, float(portrait_identity_review.bone_structure_identity_score) / 100.0),
+                )
             style_score = 0.86 if consistency_guard.continuity_strength in {"medium", "strong"} else 0.68
             text_score = 0.92 if not warning_notes else 0.74
             usability_score = 0.86 if not detected_issues else 0.68
@@ -2304,6 +2477,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "text_artifact_safety": round(text_score, 2),
                 "commercial_usability": round(usability_score, 2),
             }
+            if portrait_identity_review and portrait_identity_review.status != "not_applicable":
+                scores["bone_structure_identity"] = round(
+                    float(portrait_identity_review.bone_structure_identity_score or 0) / 100.0,
+                    2,
+                )
+                scores["same_person_readability"] = round(
+                    float(portrait_identity_review.same_person_readability_score or 0) / 100.0,
+                    2,
+                )
             hard_issue = any(str(issue.get("severity")) == "high" for issue in detected_issues)
             status = "fail" if hard_issue else "retry_recommended" if detected_issues else "pass"
             prompt_additions = _dedupe(
@@ -2324,6 +2506,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     *(
                         _string_list(beautiful_realism_review.retry_patch.get("negative_additions"))
                         if beautiful_realism_review
+                        else []
+                    ),
+                    *(
+                        bone_structure_retry_patch.negative_additions
+                        if bone_structure_retry_patch and bone_structure_retry_patch.applies
                         else []
                     ),
                     "visible text artifacts",
@@ -2353,6 +2540,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         if strict_review_policy and strict_review_policy.applies
                         else []
                     ),
+                    *(
+                        bone_structure_retry_patch.prompt_additions
+                        if bone_structure_retry_patch and bone_structure_retry_patch.applies
+                        else []
+                    ),
                 ]
             )[:16]
             negative_additions = _dedupe(
@@ -2366,6 +2558,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     *(
                         _string_list(beautiful_realism_review.retry_patch.get("artifact_repair"))
                         if beautiful_realism_review
+                        else []
+                    ),
+                    *(
+                        bone_structure_retry_patch.identity_reinforcement
+                        if bone_structure_retry_patch and bone_structure_retry_patch.applies
                         else []
                     ),
                 ]
@@ -2401,6 +2598,14 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                             for lock in identity_locks
                             for binding_id in lock.source_binding_ids[:4]
                         ],
+                        "identity_reinforcement": (
+                            bone_structure_retry_patch.identity_reinforcement
+                            if bone_structure_retry_patch and bone_structure_retry_patch.applies
+                            else []
+                        ),
+                        "reduce_archetype_language": bool(
+                            bone_structure_retry_patch and bone_structure_retry_patch.reduce_archetype_language
+                        ),
                     },
                     user_visible_summary=self._review_user_summary(status, identity_locks),
                     metadata={
@@ -2411,6 +2616,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         else None,
                         "beautiful_realism_balance_review_id": beautiful_realism_review.review_id
                         if beautiful_realism_review and beautiful_realism_review.applies
+                        else None,
+                        "portrait_identity_similarity_review_id": portrait_identity_review.review_id
+                        if portrait_identity_review and portrait_identity_review.status != "not_applicable"
+                        else None,
+                        "doc86_bone_structure_review_status": portrait_identity_review.status
+                        if portrait_identity_review
                         else None,
                     },
                 )
@@ -2443,6 +2654,44 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             values.extend(_string_list(metadata.get(key)))
         allowed = set(strict_review_policy.retryable_issue_codes)
         return [code for code in _dedupe(values) if code in allowed]
+
+    def _doc86_identity_issue_codes(self, capability_input: CapabilityInput) -> list[str]:
+        values: list[str] = []
+        for key in (
+            "force_portrait_identity_issue_codes",
+            "portrait_identity_issue_codes",
+            "bone_structure_issue_codes",
+            "force_strict_visual_review_issue_codes",
+            "strict_visual_review_issue_codes",
+            "force_visual_retry_issue_codes",
+            "post_generation_fake_issue_codes",
+        ):
+            values.extend(_string_list(capability_input.metadata.get(key)))
+        for candidate in self._candidate_payloads(capability_input):
+            metadata = _as_dict(candidate.get("metadata"))
+            for key in (
+                "portrait_identity_issue_codes",
+                "bone_structure_issue_codes",
+                "detected_issue_codes",
+                "issue_codes",
+                "post_generation_fake_issue_codes",
+            ):
+                values.extend(_string_list(metadata.get(key)))
+        return [code for code in _dedupe(values) if code in DOC86_IDENTITY_ISSUE_CODES]
+
+    def _doc86_review_confidence(self, capability_input: CapabilityInput) -> float:
+        try:
+            confidence = float(capability_input.metadata.get("portrait_identity_review_confidence") or 0.9)
+        except (TypeError, ValueError):
+            confidence = 0.9
+        return max(0.0, min(1.0, confidence))
+
+    def _first_candidate_output_id(self, capability_input: CapabilityInput) -> str | None:
+        for candidate in self._candidate_payloads(capability_input):
+            value = candidate.get("output_id") or candidate.get("asset_id")
+            if value:
+                return str(value)
+        return None
 
     def _candidate_role_key(self, candidate: dict[str, Any]) -> str:
         metadata = _as_dict(candidate.get("metadata"))
@@ -2813,6 +3062,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "role_specific_generation_plan": (
                         cluster.role_specific_generation_plan.model_dump(mode="json")
                         if cluster.role_specific_generation_plan is not None
+                        else {}
+                    ),
+                    "portrait_bone_structure_lock": (
+                        cluster.portrait_bone_structure_lock.model_dump(mode="json")
+                        if cluster.portrait_bone_structure_lock is not None
+                        else {}
+                    ),
+                    "styling_delta_policy": (
+                        cluster.styling_delta_policy.model_dump(mode="json")
+                        if cluster.styling_delta_policy is not None
                         else {}
                     ),
                     "mode_differentiation_review": (

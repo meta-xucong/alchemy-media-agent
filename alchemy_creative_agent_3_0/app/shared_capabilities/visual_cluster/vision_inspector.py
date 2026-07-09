@@ -57,9 +57,25 @@ _BEAUTIFUL_REALISM_ISSUES = {
     "skin_texture_beauty_balance_failure",
 }
 
+_DOC86_PORTRAIT_IDENTITY_ISSUES = {
+    "bone_structure_drift",
+    "face_shape_drift",
+    "cheek_jaw_chin_drift",
+    "eye_shape_or_spacing_identity_drift",
+    "eyebrow_eye_relationship_drift",
+    "nose_mouth_relationship_identity_drift",
+    "lip_contour_identity_drift",
+    "age_impression_drift",
+    "styling_changed_face_geometry",
+    "archetype_overrode_reference_identity",
+    "same_type_not_same_person",
+    "identity_reference_underweighted",
+}
+
 RETRYABLE_ISSUE_CODES = {
     *_AESTHETIC_STABILITY_ISSUES,
     *_BEAUTIFUL_REALISM_ISSUES,
+    *_DOC86_PORTRAIT_IDENTITY_ISSUES,
     "visible_text_artifact",
     "watermark_or_signature",
     "faint_corner_watermark",
@@ -728,6 +744,36 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             identity_reinforcement.append("use uploaded portrait identity truth as the main source when present; do not let the written prompt or a selected generated frame replace the person's facial identity")
             product_reinforcement.append("if a product or object reference exists, preserve its exact silhouette, proportions, material, label/logo placement, packaging surface, and visible text shapes from the uploaded product truth source")
             negative_additions.extend(["reference ignored", "changed reference subject", "changed reference object"])
+        elif code in _DOC86_PORTRAIT_IDENTITY_ISSUES:
+            prompt_additions.extend(
+                [
+                    "Doc86 same-person repair: regenerate as the same person from the portrait reference, not merely the same beauty type",
+                    "preserve underlying bone structure and facial-feature relationships before applying styling",
+                    "style changes may affect makeup, wardrobe, hair arrangement, lighting, pose, expression, and scene, but must not reshape face geometry",
+                    "reduce generic beauty archetype pressure so period, delicate, editorial, or premium styling does not redesign the face",
+                ]
+            )
+            identity_reinforcement.extend(
+                [
+                    "keep face width/length ratio, cheek volume, jawline slope, chin scale, eye spacing/base eye shape, eyebrow-eye relationship, nose-mouth relationship, lip contour, and age impression from the reference",
+                    "same person under changed styling, not a similar-looking new model",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "same type but different person",
+                    "generic AI beauty replacement",
+                    "face slimming",
+                    "V-shaped jaw replacement",
+                    "eye enlargement",
+                    "eye spacing drift",
+                    "nose reshaping",
+                    "lip reshaping",
+                    "jaw or chin remodeling",
+                    "age impression drift",
+                    "style changed face geometry",
+                ]
+            )
         elif code in {"product_identity_drift", "brand_asset_drift"}:
             product_reinforcement.append("preserve the supplied product or brand asset truth source exactly: same instance, shape, colors, material, proportions, surface finish, packaging silhouette, and logo/label placement")
         elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:

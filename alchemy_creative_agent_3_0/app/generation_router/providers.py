@@ -1193,6 +1193,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
+        portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
         parts = [
             (
                 "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
@@ -1202,6 +1203,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if allow_product_language
                 else "Create a polished, directly usable creative image asset."
             ),
+            portrait_identity_contract,
             f"Visual direction: {prompt.visual_prompt}",
             f"Asset purpose: {asset.purpose}" if asset else "",
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
@@ -1493,6 +1495,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
             return 0
+        if "portrait identity contract" in lowered or "bone-structure identity" in lowered:
+            return 0
         if "human realism" in lowered or "photoreal human" in lowered or "east asian portrait" in lowered:
             return 1
         if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
@@ -1518,6 +1522,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 700
         if "Human realism" in line or "Photoreal human" in line or "Identity continuity" in line:
             return 520
+        if "Portrait identity" in line or "bone-structure" in line:
+            return 700
         if "Strict visual" in line or "Suite director rules" in line or "Subject identity" in line:
             return 420
         if "reference" in line.lower():
@@ -1529,6 +1535,35 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if max_chars <= 0 or len(value) <= max_chars:
             return value
         return value[: max(1, max_chars - 3)].rstrip(" ,;") + "..."
+
+    def _portrait_bone_structure_prompt_guidance(self, request: GenerationRequest) -> str:
+        role_plan = self._role_specific_generation_plan(request)
+        plan_metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
+        cluster = self._visual_cluster(request)
+        lock = plan_metadata.get("portrait_bone_structure_lock")
+        if not isinstance(lock, dict) or not lock.get("applies"):
+            lock = cluster.get("portrait_bone_structure_lock") if isinstance(cluster.get("portrait_bone_structure_lock"), dict) else {}
+        styling = plan_metadata.get("styling_delta_policy")
+        if not isinstance(styling, dict) or not styling.get("applies"):
+            styling = cluster.get("styling_delta_policy") if isinstance(cluster.get("styling_delta_policy"), dict) else {}
+        if not isinstance(lock, dict) or not lock.get("applies"):
+            return ""
+        prompt_rules = self._string_list(lock.get("prompt_rules"))
+        bone_traits = self._string_list(lock.get("stable_bone_traits"))
+        feature_traits = self._string_list(lock.get("stable_feature_relationships"))
+        allowed = self._string_list(lock.get("allowed_surface_changes"))
+        forbidden = self._string_list(lock.get("forbidden_geometry_drift"))
+        styling_rules = self._string_list(styling.get("prompt_rules")) if isinstance(styling, dict) else []
+        lines = [
+            "Same person under changed styling; not a similar-looking new model.",
+            *prompt_rules[:3],
+            "Bone structure to preserve: " + "; ".join(bone_traits[:6]) if bone_traits else "",
+            "Facial-feature relationships to preserve: " + "; ".join(feature_traits[:6]) if feature_traits else "",
+            "Allowed surface styling changes: " + "; ".join(allowed[:6]) if allowed else "",
+            "Forbidden identity drift: " + "; ".join(forbidden[:8]) if forbidden else "",
+            "Styling scope: " + "; ".join(styling_rules[:3]) if styling_rules else "",
+        ]
+        return "Portrait identity contract:\n" + "\n".join(line for line in lines if line)
 
     def _mode_role_prompt_guidance(self, request: GenerationRequest) -> list[str]:
         recipe = self._mode_role_recipe(request)
@@ -1577,6 +1612,26 @@ class ProductionImageGenerationProvider(GenerationProvider):
             if identity_rules:
                 lines.append("Identity hero selection: " + "; ".join(identity_rules[:4]))
         subject_identity_card = plan_metadata.get("subject_identity_card") if isinstance(plan_metadata, dict) else {}
+        portrait_bone_lock = plan_metadata.get("portrait_bone_structure_lock") if isinstance(plan_metadata, dict) else {}
+        styling_delta_policy = plan_metadata.get("styling_delta_policy") if isinstance(plan_metadata, dict) else {}
+        if isinstance(portrait_bone_lock, dict) and portrait_bone_lock.get("applies"):
+            prompt_rules = self._string_list(portrait_bone_lock.get("prompt_rules"))
+            bone_traits = self._string_list(portrait_bone_lock.get("stable_bone_traits"))
+            feature_traits = self._string_list(portrait_bone_lock.get("stable_feature_relationships"))
+            allowed_surface = self._string_list(portrait_bone_lock.get("allowed_surface_changes"))
+            forbidden = self._string_list(portrait_bone_lock.get("forbidden_geometry_drift"))
+            lines.append("Portrait bone-structure identity lock: " + "; ".join([*prompt_rules[:3], *bone_traits[:3], *feature_traits[:3]]))
+            if allowed_surface:
+                lines.append("Allowed styling changes: " + "; ".join(allowed_surface[:6]))
+            if forbidden:
+                lines.append("Forbidden face-geometry drift: " + "; ".join(forbidden[:8]))
+        if isinstance(styling_delta_policy, dict) and styling_delta_policy.get("applies"):
+            policy_rules = self._string_list(styling_delta_policy.get("prompt_rules"))
+            disallowed = self._string_list(styling_delta_policy.get("disallowed_identity_changes"))
+            if policy_rules:
+                lines.append("Styling delta policy: " + "; ".join(policy_rules[:3]))
+            if disallowed:
+                lines.append("Styling must not change: " + "; ".join(disallowed[:8]))
         if isinstance(subject_identity_card, dict) and subject_identity_card.get("applies"):
             keep_rules = self._string_list(subject_identity_card.get("identity_keep_rules"))
             feature_rules = self._string_list(subject_identity_card.get("facial_feature_integrity_rules"))

@@ -598,6 +598,73 @@ class StrictVisualReviewPolicy(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortraitBoneStructureLock(V3BaseModel):
+    lock_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    source_reference_id: str | None = None
+    source_asset_id: str | None = None
+    source_output_id: str | None = None
+    priority: str = "hard"
+    stable_bone_traits: list[str] = Field(default_factory=list)
+    stable_feature_relationships: list[str] = Field(default_factory=list)
+    forbidden_geometry_drift: list[str] = Field(default_factory=list)
+    allowed_surface_changes: list[str] = Field(default_factory=list)
+    prompt_rules: list[str] = Field(default_factory=list)
+    review_checks: list[str] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StylingDeltaPolicy(V3BaseModel):
+    policy_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    allowed_changes: list[str] = Field(default_factory=list)
+    disallowed_identity_changes: list[str] = Field(default_factory=list)
+    style_prompt_scope: str = "surface_only"
+    prompt_rules: list[str] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortraitIdentitySimilarityReview(V3BaseModel):
+    review_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    output_id: str | None = None
+    reference_asset_id: str | None = None
+    status: str = "not_applicable"
+    bone_structure_identity_score: int | None = None
+    facial_feature_relationship_score: int | None = None
+    styling_delta_correctness_score: int | None = None
+    same_person_readability_score: int | None = None
+    beauty_realism_score: int | None = None
+    issue_codes: list[str] = Field(default_factory=list)
+    allowed_difference_notes: list[str] = Field(default_factory=list)
+    forbidden_drift_notes: list[str] = Field(default_factory=list)
+    retry_patch: dict[str, Any] = Field(default_factory=dict)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BoneStructureRetryPatch(V3BaseModel):
+    patch_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+    prompt_additions: list[str] = Field(default_factory=list)
+    negative_additions: list[str] = Field(default_factory=list)
+    identity_reinforcement: list[str] = Field(default_factory=list)
+    reduce_style_pressure: bool = False
+    reduce_archetype_language: bool = False
+    require_reference_image: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class VisualCapabilityClusterResult(V3BaseModel):
     cluster_id: str
     version: str
@@ -633,6 +700,10 @@ class VisualCapabilityClusterResult(V3BaseModel):
     subject_identity_card: SubjectIdentityCard | None = None
     beautiful_realism_balance_review: BeautifulRealismBalanceReview | None = None
     strict_visual_review_policy: StrictVisualReviewPolicy | None = None
+    portrait_bone_structure_lock: PortraitBoneStructureLock | None = None
+    styling_delta_policy: StylingDeltaPolicy | None = None
+    portrait_identity_similarity_review: PortraitIdentitySimilarityReview | None = None
+    bone_structure_retry_patch: BoneStructureRetryPatch | None = None
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)
     template_consistency_policy: dict[str, Any] = Field(default_factory=dict)
     has_visual_evidence: bool = False

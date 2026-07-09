@@ -213,6 +213,7 @@ Doc76 wins for foundation-vs-specialized-template placement.
 Doc75 remains the latest identity hero / strict review closure authority inside foundation quality.
 Doc77 remains the latest real visual review / aesthetic stability tuning authority inside foundation quality.
 Doc78 remains the latest long-term identity / beautiful realism balance tuning authority inside foundation quality.
+Doc86 remains the latest portrait image-to-image authority for the rule that makeup, wardrobe, styling, lighting, pose, expression, and scene may change, but bone structure and facial-feature relationships must stay recognizably the same person when a portrait reference exists.
 Doc54/59 remain the four-mode General Template mode authority, but only for generic modes.
 Specialized template docs win for their own deliverable taxonomy after they are accepted.
 ```

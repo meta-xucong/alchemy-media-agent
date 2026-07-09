@@ -5,6 +5,7 @@ from .contracts import (
     AutoRetryDecision,
     BatchIdentityDiversityReview,
     BeautifulRealismBalanceReview,
+    BoneStructureRetryPatch,
     CommercialQualityIssue,
     CommercialOutputSelection,
     GeneratedOutputResolution,
@@ -20,6 +21,8 @@ from .contracts import (
     ModeExecutionPolicy,
     ModeRoleRecipe,
     PostGenerationReviewPackage,
+    PortraitBoneStructureLock,
+    PortraitIdentitySimilarityReview,
     ProjectIdentityAnchor,
     RealReviewCandidateSignal,
     RealReviewSignalPackage,
@@ -28,6 +31,7 @@ from .contracts import (
     StrongReferenceClosurePackage,
     StrongReferenceContinuationPlan,
     StrictVisualReviewPolicy,
+    StylingDeltaPolicy,
     SubjectIdentityCard,
     VisualCapabilityClusterResult,
     VisualCommercialQualityReview,
@@ -66,6 +70,7 @@ from .identity_anchor import ProjectIdentityAnchorBuilder
 from .module import VISUAL_CAPABILITY_CLUSTER_ID, VISUAL_CLUSTER_CHILD_MODULE_IDS, VisualCapabilityClusterModule
 from .human_variation import HumanNaturalVariationPolicy
 from .mode_role_director import ModeAwareRoleDirector
+from .portrait_identity import DOC86_IDENTITY_ISSUE_CODES, PortraitBoneStructureIdentityLayer
 from .quality_review import OutputQualityReviewMerger
 from .strong_reference_loop import StrongReferenceLoopPlanner
 from .vision_inspector import VisionOutputInspector
@@ -82,6 +87,7 @@ __all__ = [
     "BatchIdentityDiversityReview",
     "BatchIdentityDiversityReviewer",
     "BeautifulRealismBalanceReview",
+    "BoneStructureRetryPatch",
     "CommercialQualityIssue",
     "CommercialQualityClosureReviewer",
     "CommercialOutputSelection",
@@ -111,6 +117,9 @@ __all__ = [
     "OutputQualityReviewMerger",
     "OpenAIVisionInspectionProvider",
     "PostGenerationReviewPackage",
+    "PortraitBoneStructureIdentityLayer",
+    "PortraitBoneStructureLock",
+    "PortraitIdentitySimilarityReview",
     "ProjectIdentityAnchor",
     "ProjectIdentityAnchorBuilder",
     "ProjectVisualGrammarSnapshot",
@@ -129,7 +138,9 @@ __all__ = [
     "StrongReferenceContinuationPlan",
     "StrongReferenceLoopPlanner",
     "StrictVisualReviewPolicy",
+    "StylingDeltaPolicy",
     "SubjectIdentityCard",
+    "DOC86_IDENTITY_ISSUE_CODES",
     "VISUAL_CAPABILITY_CLUSTER_ID",
     "VISUAL_CLUSTER_CHILD_MODULE_IDS",
     "VisualCapabilityClusterModule",
