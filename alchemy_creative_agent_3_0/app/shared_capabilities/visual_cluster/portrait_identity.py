@@ -10,6 +10,9 @@ from .contracts import (
     PortraitBoneStructureLock,
     PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
+    PortraitReferenceBalancePolicy,
+    PortraitReferenceBalanceRetryPatch,
+    PortraitReferenceBalanceReview,
     PortraitReferenceInfluencePolicy,
     ReferenceOverinheritanceRetryPatch,
     StrongReferenceBinding,
@@ -44,6 +47,15 @@ DOC87_REFERENCE_BOUNDARY_ISSUE_CODES = {
     "makeup_changed_face_geometry",
     "hair_change_replaced_identity",
     "retry_repaired_artifact_but_changed_identity",
+}
+
+DOC88_REFERENCE_BALANCE_ISSUE_CODES = {
+    "prompt_mood_regression",
+    "prompt_color_tone_regression",
+    "approved_style_anchor_ignored",
+    "identity_repair_damaged_prompt_direction",
+    "overconstrained_identity_prompt",
+    "scenario_specific_negative_overfit",
 }
 
 
@@ -101,7 +113,7 @@ class PortraitBoneStructureIdentityLayer:
             "age-band shift",
             "generic beauty-face replacement",
             "same beauty type but different person",
-            "period, fantasy, or editorial archetype face replacing the reference identity",
+            "scenario-specific beauty archetype face replacing the reference identity",
         ]
         allowed_surface_changes = [
             "makeup color and intensity",
@@ -118,7 +130,7 @@ class PortraitBoneStructureIdentityLayer:
             "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
             "Treat makeup, wardrobe, hairstyle, lighting, pose, expression, and scene as prompt-owned styling channels that must not redesign the face.",
             "Do not reshape face, eyes, nose, mouth, jaw, chin, or age impression to fit a generic beauty archetype.",
-            "Do not make the reference person more narrow-faced, pointed-chinned, larger-eyed, or smaller-mouthed to fit a period, fantasy, editorial, premium, delicate, or ethereal style.",
+            "Do not make the reference person more narrow-faced, pointed-chinned, larger-eyed, or smaller-mouthed to fit any scenario-specific beauty template.",
             "The result must still be readable as the uploaded person after makeup, costume, lighting, and scene change; same archetype is not enough.",
             "If the prompt asks for any portrait styling change, apply it to costume, makeup, hair, light, scene, mood, camera, and atmosphere without redesigning the face.",
         ]
@@ -179,9 +191,9 @@ class PortraitBoneStructureIdentityLayer:
         ]
         prompt_rules = [
             "Styling delta policy: requested style changes are surface-level changes only.",
-            "Modern makeup to period makeup is allowed; changing facial geometry is not.",
-            "Any portrait style request, including modern, lifestyle, commercial, period, fantasy, editorial, or cinematic styling, is surface-level unless the user explicitly asks to change identity.",
-            "Ancient, fantasy, editorial, premium, delicate, or beautiful style words must not override the reference person's bone structure.",
+            "A requested styling change is allowed; changing facial geometry is not.",
+            "Any portrait style request is surface-level unless the user explicitly asks to change identity.",
+            "Target-style, premium, delicate, or beautiful style words must not override the reference person's bone structure.",
             "Source-reference lighting, source color temperature, source scene, and source camera mood are not inherited unless explicitly requested.",
         ]
         return StylingDeltaPolicy(
@@ -224,7 +236,7 @@ class PortraitBoneStructureIdentityLayer:
             "source wardrobe unless explicitly marked as wardrobe truth",
             "whole-image style template",
             "beauty-camera bias",
-            "period/fantasy/editorial archetype face",
+            "scenario-specific archetype face",
             "face-slimming, V-chin, enlarged-eye, or smaller-mouth beauty filter",
         ]
         prompt_owned = [
@@ -244,7 +256,7 @@ class PortraitBoneStructureIdentityLayer:
             "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly asks for style guidance.",
             "Follow the current prompt for lighting, color grade, scene, mood, camera, composition, wardrobe, and art direction.",
             "Preserve the same person's face geometry while allowing prompt-directed styling changes.",
-            "Beautiful, delicate, ancient, fantasy, editorial, premium, or ethereal style words may polish makeup and atmosphere, but they must not remodel the reference person's facial outline or feature scale.",
+            "Beautiful, delicate, premium, or target-style words may polish makeup and atmosphere, but they must not remodel the reference person's facial outline or feature scale.",
             "Hair is medium-preserve: keep broad direction and distinctive marks unless the prompt or template asks for a change.",
         ]
         if styling_policy and styling_policy.applies:
@@ -281,6 +293,187 @@ class PortraitBoneStructureIdentityLayer:
                 "portrait_bone_structure_lock_id": lock.lock_id,
                 "ordinary_portrait_reference_defaults_to_identity_truth": True,
             },
+        )
+
+    def build_reference_balance_policy(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        user_input: str,
+        selected_outputs: list[dict[str, Any]],
+        lock: PortraitBoneStructureLock | None,
+        reference_policy: PortraitReferenceInfluencePolicy | None,
+    ) -> PortraitReferenceBalancePolicy | None:
+        if lock is None or not lock.applies or reference_policy is None or not reference_policy.applies:
+            return None
+
+        approved_ids = _dedupe(
+            _identity(item, "output_id", "asset_id", "candidate_id") for item in selected_outputs
+        )
+        current_prompt_truth_rules = [
+            "Doc88 prompt truth: the current request controls this image's mood, color, light, scene, camera, composition, and art direction.",
+            "Do not let identity repair flatten, warm-shift, darken, simplify, or otherwise damage the current prompt's intended atmosphere.",
+            "If the prompt asks for a new visual direction, follow that direction while keeping the uploaded person recognizable.",
+        ]
+        uploaded_identity_truth_rules = [
+            "Doc88 identity truth: uploaded portrait references preserve recognizable same-person identity, not the whole old photo.",
+            "Use compact identity guidance: preserve face structure and feature relationships without overloading the prompt with scenario-specific negative words.",
+            "Identity repair must keep the person inside the intended current atmosphere, not turn the task into a face-repair-only frame.",
+        ]
+        approved_visual_anchor_rules = [
+            "Doc88 approved visual anchor: user-selected generated outputs may preserve positive color, lighting, composition, craft, and subject direction.",
+            "Selected generated outputs are positive visual direction anchors, not replacements for uploaded portrait identity truth.",
+            "Use approved outputs only when they do not conflict with the current prompt's requested mood, scene, or art direction.",
+        ]
+        if not approved_ids:
+            approved_visual_anchor_rules.append(
+                "No selected generated output is confirmed; do not use unselected or failed candidates as positive visual anchors."
+            )
+        prompt_ordering_rules = [
+            "Provider prompt order: current prompt mood and art direction first.",
+            "Then add uploaded same-person identity truth.",
+            "Then add approved visual anchor guidance when available.",
+            "Keep negative guidance compact and generic; do not paste scenario-specific examples into universal foundation prompts.",
+        ]
+        compact_negative_guidance = [
+            "generic stylized template face",
+            "scenario-specific beauty template face",
+            "identity repair that damages prompt mood",
+            "copied source-photo lighting when not requested",
+            "approved visual direction ignored",
+            "overloaded identity negatives",
+        ]
+        stop_conditions = [
+            "stop automatic visual retry if the same balance issue repeats",
+            "stop if repairing identity repeatedly damages the prompt's intended mood",
+            "stop if the prompt direction and selected visual anchor conflict and no user choice resolves it",
+        ]
+        return PortraitReferenceBalancePolicy(
+            policy_id=stable_id("portrait_reference_balance_policy", project_id, job_id, lock.lock_id, ",".join(approved_ids), user_input),
+            project_id=project_id,
+            job_id=job_id,
+            applies=True,
+            current_prompt_truth_rules=current_prompt_truth_rules,
+            uploaded_identity_truth_rules=uploaded_identity_truth_rules,
+            approved_visual_anchor_rules=approved_visual_anchor_rules,
+            prompt_ordering_rules=prompt_ordering_rules,
+            compact_negative_guidance=compact_negative_guidance,
+            stop_conditions=stop_conditions,
+            user_visible_summary=[
+                "V3 will keep the person while preserving this request's atmosphere.",
+                "Selected good results can guide style without replacing identity.",
+            ],
+            metadata={
+                "doc": "88",
+                "extends": ["86", "87"],
+                "portrait_bone_structure_lock_id": lock.lock_id,
+                "portrait_reference_influence_policy_id": reference_policy.policy_id,
+                "approved_visual_anchor_output_ids": approved_ids,
+                "selected_output_count": len(selected_outputs),
+                "user_input_digest": str(user_input or "")[:240],
+            },
+        )
+
+    def build_balance_review(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        output_id: str | None,
+        balance_policy: PortraitReferenceBalancePolicy | None,
+        issue_codes: list[str],
+        confidence: float = 0.9,
+    ) -> PortraitReferenceBalanceReview | None:
+        if balance_policy is None or not balance_policy.applies:
+            return None
+        relevant = [code for code in _dedupe(issue_codes) if code in DOC88_REFERENCE_BALANCE_ISSUE_CODES]
+        if not relevant:
+            return PortraitReferenceBalanceReview(
+                review_id=stable_id("portrait_reference_balance_review", project_id, job_id, output_id, balance_policy.policy_id, "pass"),
+                project_id=project_id,
+                job_id=job_id,
+                output_id=output_id,
+                status="pass",
+                prompt_mood_preservation_score=88,
+                approved_anchor_obedience_score=86 if balance_policy.metadata.get("approved_visual_anchor_output_ids") else None,
+                identity_prompt_balance_score=88,
+                user_visible_summary=["V3 checked that identity, direction, and atmosphere stay balanced."],
+                metadata={"doc": "88", "confidence": confidence, "policy_id": balance_policy.policy_id},
+            )
+        patch = self.build_balance_retry_patch(
+            project_id=project_id,
+            job_id=job_id,
+            balance_policy=balance_policy,
+            reason_codes=relevant,
+        )
+        return PortraitReferenceBalanceReview(
+            review_id=stable_id("portrait_reference_balance_review", project_id, job_id, output_id, balance_policy.policy_id, ",".join(relevant)),
+            project_id=project_id,
+            job_id=job_id,
+            output_id=output_id,
+            status="fail_retryable" if confidence >= 0.65 else "manual_review",
+            prompt_mood_preservation_score=58 if any(code in relevant for code in {"prompt_mood_regression", "prompt_color_tone_regression", "identity_repair_damaged_prompt_direction"}) else 78,
+            approved_anchor_obedience_score=60 if "approved_style_anchor_ignored" in relevant else 82,
+            identity_prompt_balance_score=56 if "overconstrained_identity_prompt" in relevant else 76,
+            issue_codes=relevant,
+            retry_patch=patch.model_dump(mode="json") if patch.applies and confidence >= 0.65 else {},
+            user_visible_summary=["The person or style direction needs a more balanced retry."],
+            metadata={"doc": "88", "confidence": confidence, "policy_id": balance_policy.policy_id},
+        )
+
+    def build_balance_retry_patch(
+        self,
+        *,
+        project_id: str | None,
+        job_id: str | None,
+        balance_policy: PortraitReferenceBalancePolicy,
+        reason_codes: list[str],
+    ) -> PortraitReferenceBalanceRetryPatch:
+        reasons = _dedupe(reason_codes)
+        prompt_additions: list[str] = [
+            "Doc88 balance repair: preserve the current prompt's requested mood, color, light, scene, camera, composition, and art direction while keeping the uploaded portrait identity recognizable.",
+            "Use uploaded portrait references as identity truth, not as a whole-photo tone or scene template.",
+            "Use user-approved generated outputs only as positive visual direction anchors when they do not conflict with the current prompt.",
+        ]
+        negative_additions = [
+            "prompt mood regression",
+            "prompt color or lighting regression",
+            "identity repair that damages the requested atmosphere",
+            "approved visual direction ignored",
+            "overloaded identity negative prompt",
+            "scenario-specific template face",
+        ]
+        identity_reinforcement = [
+            "same person inside the current prompt's atmosphere",
+            "identity, approved direction, and prompt mood must all survive the retry",
+        ]
+        shorten = False
+        if "overconstrained_identity_prompt" in reasons or "scenario_specific_negative_overfit" in reasons:
+            prompt_additions.append(
+                "Shorten identity guidance to compact same-person face structure and feature-relationship rules; remove scenario-specific archetype negatives."
+            )
+            negative_additions.append("long scenario-specific identity negative list")
+            shorten = True
+        if "prompt_mood_regression" in reasons or "prompt_color_tone_regression" in reasons:
+            prompt_additions.append("Restore the current prompt's color palette, lighting direction, scene atmosphere, and emotional tone.")
+        if "approved_style_anchor_ignored" in reasons:
+            prompt_additions.append("Re-apply the selected output's positive craft, composition, color, and subject direction without replacing uploaded identity truth.")
+        if "identity_repair_damaged_prompt_direction" in reasons:
+            prompt_additions.append("Repair identity without simplifying composition, changing the requested scene, or flattening the visual mood.")
+        return PortraitReferenceBalanceRetryPatch(
+            patch_id=stable_id("portrait_reference_balance_retry_patch", project_id, job_id, ",".join(reasons), balance_policy.policy_id),
+            project_id=project_id,
+            job_id=job_id,
+            applies=bool(reasons),
+            reason_codes=reasons,
+            prompt_additions=_dedupe(prompt_additions),
+            negative_additions=_dedupe(negative_additions),
+            identity_reinforcement=_dedupe(identity_reinforcement),
+            preserve_prompt_mood=True,
+            preserve_approved_visual_anchor=bool(balance_policy.metadata.get("approved_visual_anchor_output_ids")),
+            shorten_overconstrained_identity_guidance=shorten,
+            metadata={"doc": "88", "portrait_reference_balance_policy_id": balance_policy.policy_id},
         )
 
     def build_review(
@@ -417,7 +610,8 @@ class PortraitBoneStructureIdentityLayer:
             "do not copy source lighting, source color temperature, source scene, source wardrobe, source camera mood, or the original shoot style.",
             "Follow the current prompt's lighting, color grade, background, camera angle, mood, wardrobe, and art direction.",
             "When cleaning artifacts, preserve the same face; do not replace the person with a cleaner generic beauty face.",
-            "Do not repair toward a narrower face, sharper chin, larger eyes, smaller mouth, or more generic period/fantasy/editorial beauty archetype.",
+            "Do not repair toward a narrower face, sharper chin, larger eyes, smaller mouth, or more generic scenario-specific beauty archetype.",
+            "Doc88 balance: style-boundary repair must not damage the current prompt's requested tone, atmosphere, scene, or user-approved positive visual direction.",
         ]
         if lock.source_asset_id:
             prompt_additions.append(f"Use reference asset {lock.source_asset_id} as identity truth, not whole-image style truth.")
@@ -432,7 +626,7 @@ class PortraitBoneStructureIdentityLayer:
             "same type but different person after cleanup",
             "cleaner generic replacement face",
             "narrower target-style template face",
-            "pointed period/fantasy beauty chin",
+            "pointed scenario-specific beauty chin",
             "smaller-mouth beauty template",
         ]
         identity_reinforcement = [
@@ -469,7 +663,8 @@ class PortraitBoneStructureIdentityLayer:
             "Keep face width/length ratio, cheek volume, jawline slope, chin scale, eye spacing/base eye shape, eyebrow-eye relationship, nose-mouth relationship, lip contour, and age impression.",
             "Keep temple-cheek-jaw contour, face-outline width, base eye size, mouth scale relative to the face, and lip fullness family from the reference.",
             "Apply style only to makeup, wardrobe, hair styling, lighting, pose, expression, scene, and atmosphere.",
-            "Reduce generic beauty archetype pressure; do not let ancient, delicate, editorial, or premium style words remodel the face.",
+            "Reduce generic beauty archetype pressure; do not let target-style, delicate, or premium style words remodel the face.",
+            "Preserve the current prompt's intended color, lighting, scene, composition, and atmosphere while repairing identity.",
             "A good-looking but narrower, sharper, smaller-mouthed, larger-eyed, or more template-like styled model is still an identity failure.",
         ]
         if lock.source_asset_id:
@@ -488,7 +683,7 @@ class PortraitBoneStructureIdentityLayer:
             "jaw or chin remodeling",
             "age impression drift",
             "style changed face geometry",
-            "period/fantasy/editorial archetype replaced the reference person",
+            "scenario-specific archetype replaced the reference person",
         ]
         identity_reinforcement = [
             "same person from the portrait reference; not merely the same beauty type",
@@ -525,6 +720,14 @@ def _primary_identity_binding(bindings: list[StrongReferenceBinding]) -> StrongR
 
 def _first(values: list[str]) -> str | None:
     return values[0] if values else None
+
+
+def _identity(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def _dedupe(values: Any) -> list[str]:

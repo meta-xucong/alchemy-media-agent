@@ -18,6 +18,16 @@ image-to-image identity transfer precision
 reference-truth preservation for people, products, and structured appearance assets
 ```
 
+Doc88 update:
+
+```text
+For portrait references, "reference-truth preservation" must not be interpreted
+as copying the whole uploaded photo or making identity guidance dominate every
+other channel. Uploaded portrait truth preserves the person; the current prompt
+preserves task mood and art direction; user-approved generated outputs may
+preserve positive tone, light, and composition.
+```
+
 The problem is not whether V3 can use references at all.
 
 The current system already supports true reference-image generation:
@@ -65,6 +75,7 @@ Doc78  Long-term identity and beautiful realism
 Doc80  Provider reference upload compression
 Doc83  Retry delivery layer and uploaded-reference identity closure
 Doc84  Structured appearance identity and general prompt purity closure
+Doc88  Portrait reference balance and prompt mood preservation
 ```
 
 Doc85 does not replace:

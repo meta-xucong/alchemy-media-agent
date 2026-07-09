@@ -85,11 +85,21 @@ _DOC87_REFERENCE_BOUNDARY_ISSUES = {
     "retry_repaired_artifact_but_changed_identity",
 }
 
+_DOC88_REFERENCE_BALANCE_ISSUES = {
+    "prompt_mood_regression",
+    "prompt_color_tone_regression",
+    "approved_style_anchor_ignored",
+    "identity_repair_damaged_prompt_direction",
+    "overconstrained_identity_prompt",
+    "scenario_specific_negative_overfit",
+}
+
 RETRYABLE_ISSUE_CODES = {
     *_AESTHETIC_STABILITY_ISSUES,
     *_BEAUTIFUL_REALISM_ISSUES,
     *_DOC86_PORTRAIT_IDENTITY_ISSUES,
     *_DOC87_REFERENCE_BOUNDARY_ISSUES,
+    *_DOC88_REFERENCE_BALANCE_ISSUES,
     "visible_text_artifact",
     "watermark_or_signature",
     "faint_corner_watermark",
@@ -765,7 +775,8 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "Doc86 same-person repair: regenerate as the same person from the portrait reference, not merely the same beauty type",
                     "preserve underlying bone structure and facial-feature relationships before applying styling",
                     "style changes may affect makeup, wardrobe, hair arrangement, lighting, pose, expression, and scene, but must not reshape face geometry",
-                    "reduce generic beauty archetype pressure so period, delicate, editorial, or premium styling does not redesign the face",
+                    "reduce generic beauty archetype pressure so target-style, delicate, or premium styling does not redesign the face",
+                    "preserve the current prompt's intended color, lighting, scene, composition, and atmosphere while repairing identity",
                 ]
             )
             identity_reinforcement.extend(
@@ -814,6 +825,30 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "reference used as full style template",
                     "prompt style ignored",
                     "same type but different person after cleanup",
+                ]
+                )
+        elif code in _DOC88_REFERENCE_BALANCE_ISSUES:
+            prompt_additions.extend(
+                [
+                    "Doc88 balance repair: preserve the current prompt's requested mood, color, light, scene, camera, composition, and art direction while keeping uploaded portrait identity recognizable",
+                    "use uploaded portrait references as identity truth, not as a whole-photo tone, lighting, or scene template",
+                    "use user-approved generated outputs only as positive visual direction anchors when they do not conflict with the current prompt",
+                ]
+            )
+            identity_reinforcement.extend(
+                [
+                    "same person inside the current prompt's atmosphere",
+                    "identity, approved direction, and prompt mood must all survive the retry",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "prompt mood regression",
+                    "prompt color or lighting regression",
+                    "identity repair that damages requested atmosphere",
+                    "approved visual direction ignored",
+                    "overloaded identity negative prompt",
+                    "scenario-specific template face",
                 ]
             )
         elif code in {"product_identity_drift", "brand_asset_drift"}:

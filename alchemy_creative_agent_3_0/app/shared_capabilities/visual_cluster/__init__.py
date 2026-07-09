@@ -22,6 +22,9 @@ from .contracts import (
     ModeRoleRecipe,
     PostGenerationReviewPackage,
     PortraitBoneStructureLock,
+    PortraitReferenceBalancePolicy,
+    PortraitReferenceBalanceRetryPatch,
+    PortraitReferenceBalanceReview,
     PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
     PortraitReferenceInfluencePolicy,
@@ -76,6 +79,7 @@ from .mode_role_director import ModeAwareRoleDirector
 from .portrait_identity import (
     DOC86_IDENTITY_ISSUE_CODES,
     DOC87_REFERENCE_BOUNDARY_ISSUE_CODES,
+    DOC88_REFERENCE_BALANCE_ISSUE_CODES,
     PortraitBoneStructureIdentityLayer,
 )
 from .quality_review import OutputQualityReviewMerger
@@ -126,6 +130,9 @@ __all__ = [
     "PostGenerationReviewPackage",
     "PortraitBoneStructureIdentityLayer",
     "PortraitBoneStructureLock",
+    "PortraitReferenceBalancePolicy",
+    "PortraitReferenceBalanceRetryPatch",
+    "PortraitReferenceBalanceReview",
     "PortraitIdentityStyleSeparationReview",
     "PortraitIdentitySimilarityReview",
     "PortraitReferenceInfluencePolicy",
@@ -152,6 +159,7 @@ __all__ = [
     "SubjectIdentityCard",
     "DOC86_IDENTITY_ISSUE_CODES",
     "DOC87_REFERENCE_BOUNDARY_ISSUE_CODES",
+    "DOC88_REFERENCE_BALANCE_ISSUE_CODES",
     "VISUAL_CAPABILITY_CLUSTER_ID",
     "VISUAL_CLUSTER_CHILD_MODULE_IDS",
     "VisualCapabilityClusterModule",

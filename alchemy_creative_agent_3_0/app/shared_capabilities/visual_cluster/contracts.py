@@ -703,6 +703,51 @@ class PortraitIdentitySimilarityReview(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortraitReferenceBalancePolicy(V3BaseModel):
+    policy_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    current_prompt_truth_rules: list[str] = Field(default_factory=list)
+    uploaded_identity_truth_rules: list[str] = Field(default_factory=list)
+    approved_visual_anchor_rules: list[str] = Field(default_factory=list)
+    prompt_ordering_rules: list[str] = Field(default_factory=list)
+    compact_negative_guidance: list[str] = Field(default_factory=list)
+    stop_conditions: list[str] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortraitReferenceBalanceReview(V3BaseModel):
+    review_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    output_id: str | None = None
+    status: str = "not_applicable"
+    prompt_mood_preservation_score: int | None = None
+    approved_anchor_obedience_score: int | None = None
+    identity_prompt_balance_score: int | None = None
+    issue_codes: list[str] = Field(default_factory=list)
+    retry_patch: dict[str, Any] = Field(default_factory=dict)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortraitReferenceBalanceRetryPatch(V3BaseModel):
+    patch_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+    prompt_additions: list[str] = Field(default_factory=list)
+    negative_additions: list[str] = Field(default_factory=list)
+    identity_reinforcement: list[str] = Field(default_factory=list)
+    preserve_prompt_mood: bool = True
+    preserve_approved_visual_anchor: bool = True
+    shorten_overconstrained_identity_guidance: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class BoneStructureRetryPatch(V3BaseModel):
     patch_id: str
     project_id: str | None = None
@@ -756,10 +801,13 @@ class VisualCapabilityClusterResult(V3BaseModel):
     portrait_bone_structure_lock: PortraitBoneStructureLock | None = None
     styling_delta_policy: StylingDeltaPolicy | None = None
     portrait_reference_influence_policy: PortraitReferenceInfluencePolicy | None = None
+    portrait_reference_balance_policy: PortraitReferenceBalancePolicy | None = None
     portrait_identity_similarity_review: PortraitIdentitySimilarityReview | None = None
     portrait_identity_style_separation_review: PortraitIdentityStyleSeparationReview | None = None
+    portrait_reference_balance_review: PortraitReferenceBalanceReview | None = None
     bone_structure_retry_patch: BoneStructureRetryPatch | None = None
     reference_overinheritance_retry_patch: ReferenceOverinheritanceRetryPatch | None = None
+    portrait_reference_balance_retry_patch: PortraitReferenceBalanceRetryPatch | None = None
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)
     template_consistency_policy: dict[str, Any] = Field(default_factory=dict)
     has_visual_evidence: bool = False

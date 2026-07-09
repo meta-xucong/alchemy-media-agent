@@ -847,7 +847,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "relationship, mouth scale, lip contour family, jaw/chin direction, age impression, body type, "
                         "and natural skin-tone direction. The prompt may change makeup, wardrobe, hair styling, lighting, "
                         "pose, expression, head angle, camera angle, crop, scene, and mood, but it must not turn the person "
-                        "into a narrower, sharper, larger-eyed, smaller-mouthed, or generic period/fantasy/editorial beauty model."
+                        "into a narrower, sharper, larger-eyed, smaller-mouthed, or generic scenario-specific beauty model."
                     )
                 else:
                     reference_constraint = (
@@ -1215,8 +1215,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if allow_product_language
                 else "Create a polished, directly usable creative image asset."
             ),
-            portrait_identity_contract,
             f"Visual direction: {prompt.visual_prompt}",
+            portrait_identity_contract,
             f"Asset purpose: {asset.purpose}" if asset else "",
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
             f"Composition: {layout.product_area.position}" if layout else "",
@@ -1367,7 +1367,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; vary only expression, gaze, pose, head angle, camera angle, crop, scene, light, and small hair movement."
             )
             lines.append(
-                "Same-person identity is stricter than same archetype: do not narrow or sharpen the face, make a V-shaped chin, enlarge eyes, shrink the mouth, reshape lips, or recast the reference into a period/fantasy/editorial beauty template."
+                "Same-person identity is stricter than same archetype: do not narrow or sharpen the face, make a V-shaped chin, enlarge eyes, shrink the mouth, reshape lips, or recast the reference into a scenario-specific beauty template."
             )
             lines.append(
                 "Forbidden portrait drift: generic AI beauty replacement, beauty-app face, face slimming, enlarged eyes, V-chin distortion, new ethnicity direction, new age band, forced tan/darkened skin, or washing the uploaded person into a merely similar model."
@@ -1431,7 +1431,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if structured_appearance
                 else "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and wardrobe styling unless the user explicitly asks for exact copy."
             ),
-            "Do not force a new facial geometry, narrower/sharper face, V-shaped chin, enlarged eyes, smaller mouth, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, period styling, fantasy styling, or location.",
+            "Do not force a new facial geometry, narrower/sharper face, V-shaped chin, enlarged eyes, smaller mouth, new ethnicity, new age band, darker/tanned skin, or generic AI-beauty face just because the prompt asks for a mood, outfit, styling change, or location.",
         ]
         if any(term in lower or term in prompt_text for term in strict_face_terms):
             rules.append("If the prompt explicitly asks to replace the identity, follow only when it is clear; otherwise keep the uploaded reference identity.")
@@ -1510,8 +1510,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
             return 0
-        if "portrait identity contract" in lowered or "bone-structure identity" in lowered:
+        if "doc88 prompt truth" in lowered or "doc88 balance contract" in lowered:
             return 0
+        if "portrait identity contract" in lowered or "bone-structure identity" in lowered:
+            return 1
         if line.startswith("Reference truth layering contract") or line.startswith("Uploaded portrait reference priority"):
             return 0
         if "portrait identity truth" in lowered or "same-person identity is stricter" in lowered:
@@ -1576,6 +1578,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if isinstance(cluster.get("portrait_reference_influence_policy"), dict)
                 else {}
             )
+        balance_policy = plan_metadata.get("portrait_reference_balance_policy")
+        if not isinstance(balance_policy, dict) or not balance_policy.get("applies"):
+            balance_policy = (
+                cluster.get("portrait_reference_balance_policy")
+                if isinstance(cluster.get("portrait_reference_balance_policy"), dict)
+                else {}
+            )
         if not isinstance(lock, dict) or not lock.get("applies"):
             return ""
         prompt_rules = self._string_list(lock.get("prompt_rules"))
@@ -1595,11 +1604,33 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt_owned = (
             self._string_list(reference_policy.get("prompt_owned_channels")) if isinstance(reference_policy, dict) else []
         )
+        prompt_truth_rules = (
+            self._string_list(balance_policy.get("current_prompt_truth_rules")) if isinstance(balance_policy, dict) else []
+        )
+        identity_truth_rules = (
+            self._string_list(balance_policy.get("uploaded_identity_truth_rules")) if isinstance(balance_policy, dict) else []
+        )
+        approved_anchor_rules = (
+            self._string_list(balance_policy.get("approved_visual_anchor_rules")) if isinstance(balance_policy, dict) else []
+        )
+        ordering_rules = (
+            self._string_list(balance_policy.get("prompt_ordering_rules")) if isinstance(balance_policy, dict) else []
+        )
+        compact_negatives = (
+            self._string_list(balance_policy.get("compact_negative_guidance")) if isinstance(balance_policy, dict) else []
+        )
         lines = [
+            "Doc88 balance contract: keep current prompt mood, uploaded identity truth, and approved visual direction together."
+            if balance_policy
+            else "",
+            *prompt_truth_rules[:3],
             "Reference inheritance boundary: Identity comes from the reference; direction comes from the prompt."
             if reference_rules
             else "",
             *reference_rules[:3],
+            *identity_truth_rules[:3],
+            *approved_anchor_rules[:3],
+            *ordering_rules[:3],
             "Prompt-owned channels: " + "; ".join(prompt_owned[:8]) if prompt_owned else "",
             "Do not inherit from source reference: " + "; ".join(blocked_channels[:8]) if blocked_channels else "",
             "Same person under changed styling; not a similar-looking new model.",
@@ -1608,7 +1639,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Bone structure to preserve: " + "; ".join(bone_traits[:6]) if bone_traits else "",
             "Facial-feature relationships to preserve: " + "; ".join(feature_traits[:6]) if feature_traits else "",
             "Allowed surface styling changes: " + "; ".join(allowed[:6]) if allowed else "",
-            "Forbidden identity drift: " + "; ".join(forbidden[:8]) if forbidden else "",
+            "Forbidden identity drift: " + "; ".join(_dedupe([*compact_negatives[:4], *forbidden[:5]])) if forbidden else "",
             "Styling scope: " + "; ".join(styling_rules[:3]) if styling_rules else "",
         ]
         return "Portrait identity contract:\n" + "\n".join(line for line in lines if line)
@@ -1665,6 +1696,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
         portrait_reference_policy = (
             plan_metadata.get("portrait_reference_influence_policy") if isinstance(plan_metadata, dict) else {}
         )
+        portrait_balance_policy = (
+            plan_metadata.get("portrait_reference_balance_policy") if isinstance(plan_metadata, dict) else {}
+        )
+        if isinstance(portrait_balance_policy, dict) and portrait_balance_policy.get("applies"):
+            prompt_truth = self._string_list(portrait_balance_policy.get("current_prompt_truth_rules"))
+            approved_anchor = self._string_list(portrait_balance_policy.get("approved_visual_anchor_rules"))
+            ordering = self._string_list(portrait_balance_policy.get("prompt_ordering_rules"))
+            if prompt_truth:
+                lines.append("Doc88 prompt mood protection: " + "; ".join(prompt_truth[:3]))
+            if approved_anchor:
+                lines.append("Doc88 approved visual anchor: " + "; ".join(approved_anchor[:3]))
+            if ordering:
+                lines.append("Doc88 prompt order: " + "; ".join(ordering[:3]))
         if isinstance(portrait_reference_policy, dict) and portrait_reference_policy.get("applies"):
             policy_rules = self._string_list(portrait_reference_policy.get("prompt_rules"))
             prompt_owned = self._string_list(portrait_reference_policy.get("prompt_owned_channels"))

@@ -208,6 +208,9 @@ Use this map when a Codex implementation task begins from the current stage:
 83 -> Retry delivery and uploaded-reference conflict closure; final delivery layering, uploaded-reference priority, and retry confidence become explicit.
 84 -> Structured appearance and prompt-purity closure; General Template styling language must not be misread as ecommerce, and complex appearance assets must gain structure-level continuity rules.
 85 -> Image-to-image identity-transfer and reference-truth closure; uploaded portraits, products, and structured appearance assets must preserve exact truth sources through provider-reference layering rather than prompt-only continuity.
+86 -> Portrait bone-structure identity lock; referenced portraits must remain recognizably the same person rather than merely the same beauty type.
+87 -> Portrait reference identity/style separation; uploaded portrait references provide identity by default while prompt-owned lighting, color, scene, mood, camera, wardrobe, and art direction remain controlled by the current prompt unless explicitly marked otherwise.
+88 -> Portrait reference balance and prompt mood preservation; uploaded identity truth, user-approved visual direction, and current prompt mood must be preserved together, and identity repair must not break tone, atmosphere, or prompt intent.
 ```
 
 Current code-stage priority:
@@ -242,7 +245,8 @@ Current code-stage priority:
 27. Apply 80 when uploaded or selected reference images are sent to image-edit providers; provider input copies may be compressed but user-facing originals must remain untouched.
 28. Apply 81 whenever real provider generation can fail before any candidate image exists; this is provider-failure recovery, not visual-quality retry, and must stay bounded under Doc53 loop-safety rules.
 29. Apply 83-85 as the next reference-image closure chain: 83 governs uploaded-reference priority and retry delivery; 84 governs prompt purity and structure-level appearance continuity; 85 governs true image-to-image identity transfer and reference-truth layering for people, products, and structured appearance assets.
-30. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+30. Apply 86-88 as the portrait image-to-image refinement chain: 86 locks same-person bone structure; 87 separates identity inheritance from prompt-owned style; 88 prevents over-hard identity repair from damaging prompt mood or user-approved positive visual direction.
+31. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 
 ## 2. V3.0 Foundation

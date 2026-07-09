@@ -215,6 +215,7 @@ Doc77 remains the latest real visual review / aesthetic stability tuning authori
 Doc78 remains the latest long-term identity / beautiful realism balance tuning authority inside foundation quality.
 Doc86 remains the portrait bone-structure identity-lock implementation baseline for the rule that a referenced portrait must stay recognizably the same person rather than merely the same beauty type.
 Doc87 is the latest portrait reference inheritance authority: identity comes from the reference; lighting, color grade, scene, mood, camera, wardrobe, and art direction come from the prompt by default unless the user explicitly marks the reference as style guidance.
+Doc88 is the latest portrait reference balance authority: uploaded identity truth, user-approved visual direction, and current prompt mood must be preserved together; do not solve identity drift by breaking tone, atmosphere, or prompt intent.
 Doc54/59 remain the four-mode General Template mode authority, but only for generic modes.
 Specialized template docs win for their own deliverable taxonomy after they are accepted.
 ```

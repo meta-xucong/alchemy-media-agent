@@ -123,7 +123,7 @@ def test_doc87_uploaded_portrait_reference_is_identity_truth_not_style_truth() -
     assert "portrait_reference_identity_style_separator" in cluster["child_module_ids"]
 
 
-def test_doc87_provider_prompt_blocks_source_style_before_visual_direction() -> None:
+def test_doc87_provider_prompt_preserves_reference_boundary_after_doc88_visual_direction() -> None:
     cluster = _cluster()
     prompt = ProductionImageGenerationProvider()._generation_prompt(_request_from_cluster(cluster), [])  # noqa: SLF001
 
@@ -138,7 +138,7 @@ def test_doc87_provider_prompt_blocks_source_style_before_visual_direction() -> 
     assert "same archetype is not enough" in prompt
     assert "narrow-faced" in prompt or "narrower" in prompt
     assert "Visual direction:" in prompt
-    assert prompt.index("Reference inheritance boundary:") < prompt.index("Visual direction:")
+    assert prompt.index("Visual direction:") < prompt.index("Reference inheritance boundary:")
 
 
 def test_doc87_source_lighting_overinheritance_triggers_style_boundary_retry() -> None:

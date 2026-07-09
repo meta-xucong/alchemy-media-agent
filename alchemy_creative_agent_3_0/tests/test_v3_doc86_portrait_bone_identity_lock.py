@@ -151,7 +151,7 @@ def test_doc86_is_general_for_modern_portrait_scenes_not_keyword_specific() -> N
     assert "Bone structure to preserve" in prompt
 
 
-def test_doc86_provider_prompt_places_identity_contract_before_visual_direction() -> None:
+def test_doc86_provider_prompt_keeps_identity_contract_after_doc88_visual_direction() -> None:
     cluster = _cluster()
     prompt = ProductionImageGenerationProvider()._generation_prompt(_request_from_cluster(cluster), [])  # noqa: SLF001
 
@@ -159,7 +159,7 @@ def test_doc86_provider_prompt_places_identity_contract_before_visual_direction(
     assert "Same person under changed styling" in prompt
     assert "Bone structure to preserve" in prompt
     assert "Visual direction:" in prompt
-    assert prompt.index("Portrait identity contract:") < prompt.index("Visual direction:")
+    assert prompt.index("Visual direction:") < prompt.index("Portrait identity contract:")
     assert "without redesigning the face" in prompt
 
 

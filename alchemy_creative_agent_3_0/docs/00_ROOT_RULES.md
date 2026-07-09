@@ -326,6 +326,11 @@ The system should preserve and reuse:
 
 A beautiful one-off image is not enough. V3 should produce a consistent commercial visual series.
 
+For portrait image-to-image, consistency must be balanced rather than
+single-axis. Uploaded portraits preserve recognizable identity, user-approved
+outputs preserve positive visual direction, and the current prompt preserves
+task mood and art direction. Do not improve one axis by breaking the other two.
+
 ## 12. Commercial Usability Comes Before Artistic Exploration
 
 V3 is not an experimental art generator by default.

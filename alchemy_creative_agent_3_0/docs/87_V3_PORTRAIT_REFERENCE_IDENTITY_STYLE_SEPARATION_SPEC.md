@@ -40,9 +40,18 @@ Short product rule:
 Identity comes from the reference. Direction comes from the prompt.
 ```
 
-This is a foundation-quality document. It is not a period-costume rule, not a
+This is a foundation-quality document. It is not a scene-specific rule, not a
 photography-template package, and not an e-commerce template. It applies to all
 portrait/person image generation paths that use an identity reference.
+
+Doc88 update:
+
+```text
+Doc87 remains the identity/style separation baseline, but Doc88 is the latest
+authority for balancing uploaded identity truth, user-approved visual direction,
+and current prompt mood. Do not harden identity guidance so much that the
+prompt's color, lighting, scene, mood, or aesthetic intent is damaged.
+```
 
 ## 2. Compatibility And Authority
 
@@ -78,12 +87,25 @@ how retry should fix artifacts without replacing the face
 when hairstyle / hair color may or may not change
 ```
 
+Doc88 is the latest authority for:
+
+```text
+how to preserve prompt mood while repairing identity drift
+how selected approved outputs can act as positive tone / style anchors
+how to prevent scenario-specific examples from becoming universal negative
+prompt rules
+```
+
 If Doc86 or earlier documents imply that lighting, color grade, mood, scene,
 hair, or full-image style should be inherited from the portrait reference by
 default, Doc87 wins.
 
 If Doc86 or earlier documents imply that a visually beautiful output can pass
 when it is only the same beauty type but not the same person, Doc87 wins.
+
+If Doc87 language is interpreted as "always add stronger identity negatives
+until likeness improves", Doc88 wins. Identity repair must preserve the user's
+requested atmosphere and any user-approved positive visual direction.
 
 ## 3. Core Inheritance Model
 
@@ -144,7 +166,7 @@ makeup color and intensity
 eyeliner / eyeshadow / lip color
 skin finish, if it does not destroy natural texture or face geometry
 costume / wardrobe / accessory style
-surface polish and editorial retouching level
+surface polish and requested retouching level
 ```
 
 Rule:
@@ -156,11 +178,14 @@ Makeup may change the look, but not the face.
 Fail examples:
 
 ```text
-ancient makeup makes the eyes larger and rounder
-editorial makeup narrows the face
+makeup makes the eyes a different base shape
+styling narrows or reshapes the face
 beauty polish changes the nose-mouth relationship
 retouching makes the person look like another model
 ```
+
+These are universal identity failures. They are not tied to any one scene,
+wardrobe, era, culture, or photography style.
 
 ### 3.3 Hair Channel
 
@@ -254,16 +279,16 @@ template direction.
 Example:
 
 ```text
-If the reference is a bright warm beach portrait and the prompt asks for a cool
-dark cinematic portrait, V3 must keep the face identity but follow the cool dark
-cinematic lighting.
+If the uploaded reference has one color/light/scene direction and the current
+prompt asks for a clearly different direction, V3 must keep the face identity
+while following the current prompt's requested mood, lighting, and scene.
 ```
 
 Fail condition:
 
 ```text
-The output keeps the source image's warm daylight / beach exposure / casual
-summer feeling when the prompt asked for a different art direction.
+The output keeps the source image's original lighting, exposure, and atmosphere
+when the prompt asked for a different art direction.
 ```
 
 ## 4. Reference Influence Budget
@@ -318,16 +343,18 @@ blocked_reference_channels:
 
 ## 5. Prompt Layering Requirements
 
-Provider prompts for portrait image-to-image must be ordered as:
+Provider prompts for portrait image-to-image must follow Doc88's three-source
+balance order:
 
 ```text
-1. Same-person identity truth from reference
-2. Reference influence budget
-3. Explicit "do not inherit source lighting/style unless requested" rule
-4. User prompt art direction
-5. Makeup / hair / wardrobe change rules
-6. Beauty-realism and anti-AI-face rules
-7. Negative identity and artifact rules
+1. Current prompt's user goal and mood / art direction
+2. Same-person identity truth from uploaded reference
+3. User-approved positive visual anchor, if present
+4. Reference influence budget
+5. Explicit "do not inherit source lighting/style unless requested" rule
+6. Makeup / hair / wardrobe change rules
+7. Beauty-realism and anti-AI-face rules
+8. Compact negative identity and artifact rules
 ```
 
 Required provider semantics:
@@ -346,8 +373,8 @@ Hair may be restyled when requested, but face identity must remain the same.
 Prompt phrases to avoid or scope:
 
 ```text
-perfect ancient beauty face
-delicate goddess face
+generic stylized template face
+over-idealized beauty-template face
 V-shaped face
 large watery eyes
 high nose bridge
@@ -359,11 +386,16 @@ Korean glass skin
 They may be transformed into:
 
 ```text
-ancient styling, costume, makeup, and atmosphere while preserving reference face
+target styling, costume, makeup, and atmosphere while preserving reference face
 delicate mood without changing facial geometry
 clear skin texture with natural pores and real light response
 refined portrait polish without face slimming or feature enlargement
 ```
+
+Scene-specific words, industry-specific words, seasonal words, genre words, or
+photography-setup words may appear in examples only when the user prompt
+contains them. They must not be hardcoded into universal foundation negative
+rules.
 
 ## 6. Review Scoring
 
@@ -551,7 +583,7 @@ Required retry patch:
 
 ```text
 Keep the same person from the reference, but do not copy the reference image's
-original lighting, warmth, beach/daylight mood, clothing, or source scene.
+original lighting, color temperature, atmosphere, clothing, or source scene.
 Follow the current prompt's lighting, color grade, background, and camera style.
 ```
 
@@ -724,7 +756,8 @@ Input:
 
 ```text
 Reference has warm daylight or casual lifestyle mood.
-Prompt asks for cool dark cinematic / studio / period / editorial mood.
+Prompt asks for a clearly different color, light, scene, camera, or emotional
+atmosphere.
 ```
 
 Pass:
@@ -733,6 +766,7 @@ Pass:
 output keeps reference identity
 output follows prompt lighting/color/scene
 source lighting does not dominate
+identity repair does not flatten or damage the prompt's intended atmosphere
 ```
 
 ## 12. Acceptance Criteria
@@ -748,7 +782,9 @@ Doc87 is implemented only when all are true:
 7. Artifact retry cannot replace the face.
 8. Retry patches preserve identity while correcting only the failing channel.
 9. General Template remains scenario-neutral and beginner-friendly.
-10. Doc77/78/85/86 focused regressions continue to pass.
+10. Doc88 balance rules are respected: identity repair must not break prompt
+    tone, mood, atmosphere, or selected positive visual direction.
+11. Doc77/78/85/86/88 focused regressions continue to pass.
 
 Minimum real quality target:
 
@@ -785,8 +821,12 @@ not the source lighting, color temperature, scene, clothing, or original shoot
 mood by default. Review must separately score identity inheritance and prompt
 style obedience. A beautiful output that is only the same type of person must
 fail identity review. An output that keeps the face but inherits the wrong
-source lighting/style must fail style-boundary review. Retry patches must fix
-only the failing channel and must not replace the face while removing artifacts.
+source lighting/style must fail style-boundary review. Under Doc88, retry
+patches must also preserve the current prompt's intended tone, atmosphere, and
+any user-approved positive visual direction; do not solve identity drift by
+making the output flatter, colder, warmer, less atmospheric, or less faithful to
+the user's prompt. Retry patches must fix only the failing channel and must not
+replace the face while removing artifacts.
 
-Add focused Doc87 tests and run Doc77/78/85/86 regressions.
+Add focused Doc87 tests and run Doc77/78/85/86/88 regressions.
 ```

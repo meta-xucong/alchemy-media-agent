@@ -22,10 +22,16 @@ Makeup, wardrobe, styling, lighting, pose, expression, and scene may change.
 Bone structure and facial-feature relationships must not change.
 ```
 
-Doc87 is the current superseding standard for portrait reference inheritance
-boundaries. Doc86 remains the implementation baseline for bone-structure locks,
-identity issue codes, and identity-drift retry patches, but Doc87 wins whenever
-there is a conflict about what an uploaded portrait reference should influence.
+Doc87 is the current identity/style separation baseline for portrait reference
+inheritance boundaries. Doc86 remains the implementation baseline for
+bone-structure locks, identity issue codes, and identity-drift retry patches,
+but Doc87 wins whenever there is a conflict about what an uploaded portrait
+reference should influence.
+
+Doc88 is the current superseding standard for portrait reference balance. Doc86
+must not be implemented as "make identity rules harder every retry." The
+bone-structure lock must coexist with the current prompt's color, light, scene,
+mood, and any user-approved positive visual direction.
 
 Doc87 clarification:
 
@@ -101,6 +107,10 @@ wardrobe, or whole-image style by default, Doc87 wins.
 If Doc86 or earlier documents imply that retry may remove artifacts by replacing
 the face with a cleaner but less recognizable face, Doc87 wins.
 
+If Doc86 language is interpreted as a reason to add long, scenario-specific
+negative prompts that damage the user's requested atmosphere or selected visual
+direction, Doc88 wins.
+
 ## 3. Product Standard
 
 ### 3.1 Allowed Difference
@@ -108,9 +118,8 @@ the face with a cleaner but less recognizable face, Doc87 wins.
 The user may ask for major styling changes, such as:
 
 ```text
-modern photo -> period costume
-beach portrait -> ancient fantasy portrait
-natural makeup -> heavier editorial makeup
+one scene or wardrobe direction -> another scene or wardrobe direction
+natural makeup -> stronger requested makeup
 loose hair -> styled hair
 daylight scene -> cinematic night scene
 casual outfit -> formal wardrobe
@@ -147,7 +156,7 @@ generic AI beauty replacement
 V-shaped face slimming
 eye enlargement that changes identity
 nose/mouth remodeling caused by beauty archetype words
-ancient-style makeup that rewrites facial geometry
+target-style makeup that rewrites facial geometry
 ```
 
 ## 4. Scoring Standard
@@ -424,7 +433,7 @@ Risk words:
 
 ```text
 perfect oval face
-delicate ancient beauty
+delicate stylized beauty
 idol face
 doll face
 V-shaped jaw
@@ -444,9 +453,17 @@ person's actual bone structure and feature relationships.
 Prompt compiler should downgrade or scope these terms:
 
 ```text
-"ancient beauty" -> "ancient styling, makeup, costume, and atmosphere"
+"target beauty style" -> "requested styling, makeup, costume, and atmosphere"
 "delicate face" -> "delicate styling while preserving the reference face"
 "perfect oval face" -> remove or replace with "reference face shape preserved"
+```
+
+Doc88 clarification:
+
+```text
+Do not copy a style-family example into universal foundation prompts. The
+compiler should use neutral wording such as "target styling" unless the user's
+prompt explicitly names a specific style family.
 ```
 
 ## 8. Review And Retry Behavior
@@ -485,7 +502,7 @@ The inspector must not over-penalize:
 
 ```text
 new makeup
-period styling
+changed styling
 different hair arrangement
 different lighting
 different expression
@@ -544,8 +561,9 @@ Retry patch example:
 The previous result changed the person's underlying face. Regenerate as the
 same person from the reference image: keep face width/length ratio, cheek and
 jaw direction, chin scale, eye spacing/base shape, eyebrow-eye relationship,
-nose-mouth relationship, and lip contour. The ancient costume, makeup, lighting,
-and pose may change, but facial geometry must not be redesigned.
+nose-mouth relationship, and lip contour. The requested styling, makeup,
+lighting, scene, and pose may change, but facial geometry must not be
+redesigned. Preserve the current prompt's intended color, mood, and atmosphere.
 ```
 
 ## 9. Runtime Behavior
@@ -807,8 +825,8 @@ Input:
 
 ```text
 Upload a modern portrait reference.
-Ask for a strongly different styling direction, such as period costume,
-cinematic makeup, or editorial lighting.
+Ask for a strongly different styling direction, scene direction, makeup level,
+lighting treatment, or camera language.
 Generate one or more images.
 ```
 
@@ -892,6 +910,12 @@ Provider prompts must place the same-person identity contract before style or
 beauty archetype wording. Generic beauty words must never reshape face, eyes,
 nose, mouth, jaw, chin, or age impression away from the reference.
 
+Doc88 balance requirement: the identity contract must not become so long or so
+negative-heavy that it damages the current prompt's requested color, light,
+scene, mood, or user-approved positive visual direction. Identity repair must
+keep the image as the same person inside the intended atmosphere, not merely as
+a stricter but less faithful face-repair frame.
+
 Upgrade visual review so it scores same-person readability by ignoring allowed
 styling changes but penalizing bone-structure drift. If a result is merely the
 same beauty type rather than the same person, mark it as retryable when
@@ -901,7 +925,7 @@ and strengthen exact face-geometry preservation.
 Do not expose engineering terms in beginner UI. Keep failed/retried outputs in
 project records. Append retry outputs; never overwrite originals.
 
-Run focused Doc86 tests plus Doc77/78/85 regressions, compile checks, frontend
+Run focused Doc86 tests plus Doc77/78/85/88 regressions, compile checks, frontend
 static checks, and one real image-to-image validation when provider availability
 allows.
 ```

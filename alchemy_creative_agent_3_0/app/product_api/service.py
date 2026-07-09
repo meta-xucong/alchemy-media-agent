@@ -166,6 +166,12 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "makeup_changed_face_geometry",
     "hair_change_replaced_identity",
     "retry_repaired_artifact_but_changed_identity",
+    "prompt_mood_regression",
+    "prompt_color_tone_regression",
+    "approved_style_anchor_ignored",
+    "identity_repair_damaged_prompt_direction",
+    "overconstrained_identity_prompt",
+    "scenario_specific_negative_overfit",
     "identity_card_missing",
     "identity_card_not_applied",
     "identity_feature_drift",
@@ -1263,7 +1269,7 @@ class V3ProductApiService:
                     ]
                 )
                 prompt_additions.append(
-                    "reduce generic beauty archetype pressure; period, fantasy, delicate, premium, or editorial styling must not remodel the person's face"
+                    "reduce generic beauty archetype pressure; target-style, delicate, or premium styling must not remodel the person's face"
                 )
                 negative_additions.extend(
                     [
@@ -1316,6 +1322,37 @@ class V3ProductApiService:
                         "reference used as full style template",
                         "prompt style ignored",
                         "same type but different person after cleanup",
+                    ]
+                )
+            elif code in {
+                "prompt_mood_regression",
+                "prompt_color_tone_regression",
+                "approved_style_anchor_ignored",
+                "identity_repair_damaged_prompt_direction",
+                "overconstrained_identity_prompt",
+                "scenario_specific_negative_overfit",
+            }:
+                prompt_additions.extend(
+                    [
+                        "Doc88 balance repair: preserve the current prompt's requested mood, color, light, scene, camera, composition, and art direction while keeping uploaded portrait identity recognizable",
+                        "use uploaded portrait references as identity truth, not as a whole-photo tone, lighting, or scene template",
+                        "use user-approved generated outputs only as positive visual direction anchors when they do not conflict with the current prompt",
+                    ]
+                )
+                identity_reinforcement.extend(
+                    [
+                        "same person inside the current prompt's atmosphere",
+                        "identity, approved direction, and prompt mood must all survive the retry",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "prompt mood regression",
+                        "prompt color or lighting regression",
+                        "identity repair that damages requested atmosphere",
+                        "approved visual direction ignored",
+                        "overloaded identity negative prompt",
+                        "scenario-specific template face",
                     ]
                 )
             elif code in {"product_identity_drift", "brand_asset_drift"}:

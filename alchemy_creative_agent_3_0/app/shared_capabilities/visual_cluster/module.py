@@ -34,6 +34,9 @@ from .contracts import (
     ModeQualityProfile,
     ModeDifferentiationReview,
     PortraitBoneStructureLock,
+    PortraitReferenceBalancePolicy,
+    PortraitReferenceBalanceRetryPatch,
+    PortraitReferenceBalanceReview,
     PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
     PortraitReferenceInfluencePolicy,
@@ -73,6 +76,7 @@ from .mode_role_director import ModeAwareRoleDirector
 from .portrait_identity import (
     DOC86_IDENTITY_ISSUE_CODES,
     DOC87_REFERENCE_BOUNDARY_ISSUE_CODES,
+    DOC88_REFERENCE_BALANCE_ISSUE_CODES,
     PortraitBoneStructureIdentityLayer,
 )
 from .strong_reference_loop import StrongReferenceLoopPlanner
@@ -106,6 +110,7 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "anti_ai_face_review",
     "portrait_bone_structure_identity_lock",
     "portrait_reference_identity_style_separator",
+    "portrait_reference_balance_policy",
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
     MODE_QUALITY_PROFILE_MODULE_ID,
@@ -613,6 +618,14 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             lock=portrait_bone_lock,
             styling_policy=styling_delta_policy,
         )
+        portrait_balance_policy = self.portrait_identity_layer.build_reference_balance_policy(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            user_input=capability_input.user_input,
+            selected_outputs=selected_outputs,
+            lock=portrait_bone_lock,
+            reference_policy=portrait_reference_policy,
+        )
         role_specific_plan = self._apply_subject_identity_card_to_role_plan(
             role_specific_plan,
             subject_identity_card,
@@ -622,6 +635,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             portrait_bone_lock,
             styling_delta_policy,
             portrait_reference_policy,
+            portrait_balance_policy,
         )
         beautiful_realism_review = self._beautiful_realism_balance_review(
             capability_input=capability_input,
@@ -697,6 +711,14 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             issue_codes=self._doc87_reference_boundary_issue_codes(capability_input),
             confidence=self._doc86_review_confidence(capability_input),
         )
+        portrait_balance_review = self.portrait_identity_layer.build_balance_review(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            output_id=self._first_candidate_output_id(capability_input),
+            balance_policy=portrait_balance_policy,
+            issue_codes=self._doc88_reference_balance_issue_codes(capability_input),
+            confidence=self._doc86_review_confidence(capability_input),
+        )
         bone_retry_patch = (
             BoneStructureRetryPatch.model_validate(portrait_similarity_review.retry_patch)
             if portrait_similarity_review
@@ -711,6 +733,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             and portrait_style_review.status == "fail_retryable"
             else None
         )
+        balance_retry_patch = (
+            PortraitReferenceBalanceRetryPatch.model_validate(portrait_balance_review.retry_patch)
+            if portrait_balance_review
+            and portrait_balance_review.retry_patch
+            and portrait_balance_review.status == "fail_retryable"
+            else None
+        )
         quality_reports = self._quality_review_reports(
             capability_input=capability_input,
             quality_review=quality_review,
@@ -721,8 +750,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             strict_review_policy=strict_review_policy,
             portrait_identity_review=portrait_similarity_review,
             portrait_style_review=portrait_style_review,
+            portrait_balance_review=portrait_balance_review,
             bone_structure_retry_patch=bone_retry_patch,
             reference_overinheritance_retry_patch=reference_retry_patch,
+            portrait_reference_balance_retry_patch=balance_retry_patch,
         )
         retry_decisions = self._auto_retry_decisions(capability_input, quality_reports)
         commercial_quality_review = self.commercial_quality_reviewer.build(
@@ -765,6 +796,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "portrait_bone_structure_identity_lock" if portrait_bone_lock and portrait_bone_lock.applies else "",
                 "portrait_reference_identity_style_separator"
                 if portrait_reference_policy and portrait_reference_policy.applies
+                else "",
+                "portrait_reference_balance_policy"
+                if portrait_balance_policy and portrait_balance_policy.applies
                 else "",
                 "anti_ai_face_review" if anti_ai_face_review and anti_ai_face_review.applies else "",
                 "commercial_quality_review",
@@ -813,10 +847,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             portrait_bone_structure_lock=portrait_bone_lock,
             styling_delta_policy=styling_delta_policy,
             portrait_reference_influence_policy=portrait_reference_policy,
+            portrait_reference_balance_policy=portrait_balance_policy,
             portrait_identity_similarity_review=portrait_similarity_review,
             portrait_identity_style_separation_review=portrait_style_review,
+            portrait_reference_balance_review=portrait_balance_review,
             bone_structure_retry_patch=bone_retry_patch,
             reference_overinheritance_retry_patch=reference_retry_patch,
+            portrait_reference_balance_retry_patch=balance_retry_patch,
             negative_visual_memory=negative_memory,
             template_consistency_policy=template_policy,
             has_visual_evidence=has_evidence,
@@ -851,6 +888,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 ),
                 "portrait_identity_similarity_status": portrait_similarity_review.status if portrait_similarity_review else None,
                 "portrait_identity_style_separation_status": portrait_style_review.status if portrait_style_review else None,
+                "portrait_reference_balance_status": portrait_balance_review.status if portrait_balance_review else None,
                 "quality_review_report_count": len(quality_reports),
                 "auto_retry_decision_count": len(retry_decisions),
                 "doc67_default_role_count_aligned": True,
@@ -1628,21 +1666,47 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         lock: PortraitBoneStructureLock | None,
         styling_policy: StylingDeltaPolicy | None,
         reference_policy: PortraitReferenceInfluencePolicy | None,
+        balance_policy: PortraitReferenceBalancePolicy | None = None,
     ) -> RoleSpecificGenerationPlan:
         if lock is None or not lock.applies:
             return plan
         prompt_additions = _dedupe(
             [
+                *(
+                    balance_policy.current_prompt_truth_rules
+                    if balance_policy and balance_policy.applies
+                    else []
+                ),
                 *lock.prompt_rules,
                 *(styling_policy.prompt_rules if styling_policy and styling_policy.applies else []),
                 *(reference_policy.prompt_rules if reference_policy and reference_policy.applies else []),
+                *(
+                    balance_policy.uploaded_identity_truth_rules
+                    if balance_policy and balance_policy.applies
+                    else []
+                ),
+                *(
+                    balance_policy.approved_visual_anchor_rules
+                    if balance_policy and balance_policy.applies
+                    else []
+                ),
+                *(
+                    balance_policy.prompt_ordering_rules
+                    if balance_policy and balance_policy.applies
+                    else []
+                ),
             ]
         )
         negative_additions = _dedupe(
             [
-                *lock.forbidden_geometry_drift,
+                *(
+                    balance_policy.compact_negative_guidance
+                    if balance_policy and balance_policy.applies
+                    else []
+                ),
+                *lock.forbidden_geometry_drift[:6],
                 *(styling_policy.disallowed_identity_changes if styling_policy and styling_policy.applies else []),
-                *(reference_policy.blocked_reference_channels if reference_policy and reference_policy.applies else []),
+                *(reference_policy.blocked_reference_channels[:6] if reference_policy and reference_policy.applies else []),
             ]
         )
         updated_recipes = []
@@ -1665,12 +1729,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                             "doc87_portrait_reference_identity_style_separation": bool(
                                 reference_policy and reference_policy.applies
                             ),
+                            "doc88_portrait_reference_balance_policy": bool(
+                                balance_policy and balance_policy.applies
+                            ),
                             "portrait_bone_structure_lock_id": lock.lock_id,
                             "styling_delta_policy_id": styling_policy.policy_id
                             if styling_policy and styling_policy.applies
                             else None,
                             "portrait_reference_influence_policy_id": reference_policy.policy_id
                             if reference_policy and reference_policy.applies
+                            else None,
+                            "portrait_reference_balance_policy_id": balance_policy.policy_id
+                            if balance_policy and balance_policy.applies
                             else None,
                         },
                     }
@@ -1693,6 +1763,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     ),
                     "portrait_reference_influence_policy": reference_policy.model_dump(mode="json")
                     if reference_policy and reference_policy.applies
+                    else {},
+                    "doc88_portrait_reference_balance_policy": bool(balance_policy and balance_policy.applies),
+                    "portrait_reference_balance_policy": balance_policy.model_dump(mode="json")
+                    if balance_policy and balance_policy.applies
                     else {},
                 },
             }
@@ -2456,8 +2530,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         strict_review_policy: StrictVisualReviewPolicy | None = None,
         portrait_identity_review: PortraitIdentitySimilarityReview | None = None,
         portrait_style_review: PortraitIdentityStyleSeparationReview | None = None,
+        portrait_balance_review: PortraitReferenceBalanceReview | None = None,
         bone_structure_retry_patch: BoneStructureRetryPatch | None = None,
         reference_overinheritance_retry_patch: ReferenceOverinheritanceRetryPatch | None = None,
+        portrait_reference_balance_retry_patch: PortraitReferenceBalanceRetryPatch | None = None,
     ) -> list[VisualQualityReviewReport]:
         project_context = _as_dict(capability_input.metadata.get("project_context_snapshot"))
         candidates = self._candidate_payloads(capability_input)
@@ -2533,6 +2609,23 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                             "retryable": portrait_style_review.status == "fail_retryable",
                         }
                     )
+            if portrait_balance_review and portrait_balance_review.issue_codes:
+                for code in portrait_balance_review.issue_codes:
+                    detected_issues.append(
+                        {
+                            "code": code,
+                            "severity": "high"
+                            if code
+                            in {
+                                "prompt_mood_regression",
+                                "prompt_color_tone_regression",
+                                "identity_repair_damaged_prompt_direction",
+                            }
+                            else "medium",
+                            "message": code.replace("_", " "),
+                            "retryable": portrait_balance_review.status == "fail_retryable",
+                        }
+                    )
             strict_issue_codes = self._strict_review_issue_codes(
                 capability_input,
                 strict_review_policy,
@@ -2582,6 +2675,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     float(portrait_style_review.lighting_color_scene_obedience_score or 0) / 100.0,
                     2,
                 )
+            if portrait_balance_review and portrait_balance_review.status != "not_applicable":
+                scores["prompt_mood_preservation"] = round(
+                    float(portrait_balance_review.prompt_mood_preservation_score or 0) / 100.0,
+                    2,
+                )
+                scores["identity_prompt_balance"] = round(
+                    float(portrait_balance_review.identity_prompt_balance_score or 0) / 100.0,
+                    2,
+                )
             hard_issue = any(str(issue.get("severity")) == "high" for issue in detected_issues)
             status = "fail" if hard_issue else "retry_recommended" if detected_issues else "pass"
             prompt_additions = _dedupe(
@@ -2614,6 +2716,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         if reference_overinheritance_retry_patch and reference_overinheritance_retry_patch.applies
                         else []
                     ),
+                    *(
+                        portrait_reference_balance_retry_patch.negative_additions
+                        if portrait_reference_balance_retry_patch and portrait_reference_balance_retry_patch.applies
+                        else []
+                    ),
                     "visible text artifacts",
                     "watermark or signature",
                 ]
@@ -2623,6 +2730,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     *(
                         reference_overinheritance_retry_patch.prompt_additions
                         if reference_overinheritance_retry_patch and reference_overinheritance_retry_patch.applies
+                        else []
+                    ),
+                    *(
+                        portrait_reference_balance_retry_patch.prompt_additions
+                        if portrait_reference_balance_retry_patch and portrait_reference_balance_retry_patch.applies
                         else []
                     ),
                     *prompt_additions,
@@ -2676,6 +2788,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         if reference_overinheritance_retry_patch and reference_overinheritance_retry_patch.applies
                         else []
                     ),
+                    *(
+                        portrait_reference_balance_retry_patch.identity_reinforcement
+                        if portrait_reference_balance_retry_patch and portrait_reference_balance_retry_patch.applies
+                        else []
+                    ),
                 ]
             )[:20]
             reports.append(
@@ -2723,6 +2840,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                                         and reference_overinheritance_retry_patch.applies
                                         else []
                                     ),
+                                    *(
+                                        portrait_reference_balance_retry_patch.identity_reinforcement
+                                        if portrait_reference_balance_retry_patch
+                                        and portrait_reference_balance_retry_patch.applies
+                                        else []
+                                    ),
                                 ]
                             )
                         ),
@@ -2733,6 +2856,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                             reference_overinheritance_retry_patch.block_source_style_channels
                             if reference_overinheritance_retry_patch and reference_overinheritance_retry_patch.applies
                             else []
+                        ),
+                        "preserve_prompt_mood": bool(
+                            portrait_reference_balance_retry_patch
+                            and portrait_reference_balance_retry_patch.preserve_prompt_mood
+                        ),
+                        "preserve_approved_visual_anchor": bool(
+                            portrait_reference_balance_retry_patch
+                            and portrait_reference_balance_retry_patch.preserve_approved_visual_anchor
+                        ),
+                        "shorten_overconstrained_identity_guidance": bool(
+                            portrait_reference_balance_retry_patch
+                            and portrait_reference_balance_retry_patch.shorten_overconstrained_identity_guidance
                         ),
                     },
                     user_visible_summary=self._review_user_summary(status, identity_locks),
@@ -2750,6 +2885,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         else None,
                         "doc86_bone_structure_review_status": portrait_identity_review.status
                         if portrait_identity_review
+                        else None,
+                        "portrait_reference_balance_review_id": portrait_balance_review.review_id
+                        if portrait_balance_review and portrait_balance_review.status != "not_applicable"
+                        else None,
+                        "doc88_portrait_reference_balance_status": portrait_balance_review.status
+                        if portrait_balance_review
                         else None,
                     },
                 )
@@ -2830,6 +2971,31 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ):
                 values.extend(_string_list(metadata.get(key)))
         return [code for code in _dedupe(values) if code in DOC87_REFERENCE_BOUNDARY_ISSUE_CODES]
+
+    def _doc88_reference_balance_issue_codes(self, capability_input: CapabilityInput) -> list[str]:
+        values: list[str] = []
+        for key in (
+            "force_portrait_balance_issue_codes",
+            "portrait_balance_issue_codes",
+            "reference_balance_issue_codes",
+            "force_strict_visual_review_issue_codes",
+            "strict_visual_review_issue_codes",
+            "force_visual_retry_issue_codes",
+            "post_generation_fake_issue_codes",
+        ):
+            values.extend(_string_list(capability_input.metadata.get(key)))
+        for candidate in self._candidate_payloads(capability_input):
+            metadata = _as_dict(candidate.get("metadata"))
+            for key in (
+                "portrait_balance_issue_codes",
+                "reference_balance_issue_codes",
+                "strict_visual_review_issue_codes",
+                "detected_issue_codes",
+                "issue_codes",
+                "post_generation_fake_issue_codes",
+            ):
+                values.extend(_string_list(metadata.get(key)))
+        return [code for code in _dedupe(values) if code in DOC88_REFERENCE_BALANCE_ISSUE_CODES]
 
     def _doc86_review_confidence(self, capability_input: CapabilityInput) -> float:
         try:
@@ -3069,6 +3235,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 for report in retryable_reports
                 for addition in _string_list(report.retry_patch.get("reference_requirements"))
             )[:8],
+            "preserve_prompt_mood": any(
+                bool(report.retry_patch.get("preserve_prompt_mood")) for report in retryable_reports
+            ),
+            "preserve_approved_visual_anchor": any(
+                bool(report.retry_patch.get("preserve_approved_visual_anchor")) for report in retryable_reports
+            ),
+            "shorten_overconstrained_identity_guidance": any(
+                bool(report.retry_patch.get("shorten_overconstrained_identity_guidance"))
+                for report in retryable_reports
+            ),
         }
         return [
             AutoRetryDecision(
@@ -3229,6 +3405,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "portrait_reference_influence_policy": (
                         cluster.portrait_reference_influence_policy.model_dump(mode="json")
                         if cluster.portrait_reference_influence_policy is not None
+                        else {}
+                    ),
+                    "portrait_reference_balance_policy": (
+                        cluster.portrait_reference_balance_policy.model_dump(mode="json")
+                        if cluster.portrait_reference_balance_policy is not None
+                        else {}
+                    ),
+                    "portrait_reference_balance_review": (
+                        cluster.portrait_reference_balance_review.model_dump(mode="json")
+                        if cluster.portrait_reference_balance_review is not None
                         else {}
                     ),
                     "mode_differentiation_review": (
