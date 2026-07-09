@@ -5252,34 +5252,96 @@ body.v3-mobile-loading-active {
 
 .v3-mobile-advanced-reference-controls {
   display: grid;
-  gap: 10px;
-  padding: 11px 12px;
-  border: 1px solid rgba(47, 90, 69, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.58);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(47, 90, 69, 0.16);
+  border-radius: 17px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(246, 250, 243, 0.72)),
+    rgba(255, 255, 255, 0.64);
+  box-shadow: 0 12px 26px rgba(38, 58, 45, 0.08);
 }
 
 .v3-mobile-advanced-reference-controls summary {
-  display: flex;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+  padding: 12px 13px;
+  list-style: none;
+  background:
+    linear-gradient(135deg, rgba(47, 90, 69, 0.08), rgba(255, 255, 255, 0.32)),
+    rgba(255, 255, 255, 0.52);
   color: var(--ink);
+  cursor: pointer;
   font-size: 13px;
   font-weight: 850;
 }
 
+.v3-mobile-advanced-reference-controls summary::-webkit-details-marker {
+  display: none;
+}
+
+.v3-mobile-advanced-reference-controls summary span {
+  position: relative;
+  min-width: 0;
+  padding-left: 30px;
+}
+
+.v3-mobile-advanced-reference-controls summary span::before {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(47, 90, 69, 0.16);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(47, 90, 69, 0.82) 0 4px, transparent 5px),
+    rgba(255, 255, 255, 0.78);
+  content: "";
+  transform: translateY(-50%);
+}
+
 .v3-mobile-advanced-reference-controls summary small {
+  max-width: 128px;
+  padding: 6px 9px;
+  border: 1px solid rgba(47, 90, 69, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  text-align: right;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.v3-mobile-advanced-reference-controls summary::after {
+  padding: 6px 9px;
+  border: 1px solid rgba(47, 90, 69, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--primary);
+  content: "展开";
+  font-size: 10px;
+  font-weight: 850;
+  text-align: center;
+}
+
+.v3-mobile-advanced-reference-controls[open] summary {
+  border-bottom: 1px solid rgba(47, 90, 69, 0.12);
+}
+
+.v3-mobile-advanced-reference-controls[open] summary::after {
+  content: "收起";
 }
 
 .v3-mobile-reference-priority-list {
   display: grid;
   gap: 8px;
-  margin-top: 10px;
+  padding: 10px;
 }
 
 .v3-mobile-reference-priority-list label {
@@ -5290,13 +5352,26 @@ body.v3-mobile-loading-active {
   padding: 10px;
   border: 1px solid rgba(47, 90, 69, 0.12);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.62);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 246, 239, 0.56)),
+    rgba(255, 255, 255, 0.62);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.v3-mobile-reference-priority-list label:has(input:checked) {
+  border-color: rgba(47, 90, 69, 0.32);
+  background:
+    linear-gradient(180deg, rgba(238, 248, 235, 0.9), rgba(255, 255, 255, 0.7)),
+    rgba(255, 255, 255, 0.76);
+  box-shadow: 0 8px 18px rgba(47, 90, 69, 0.08);
 }
 
 .v3-mobile-reference-priority-list input {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   margin-top: 2px;
+  border: 1px solid rgba(47, 90, 69, 0.24);
+  border-radius: 7px;
   accent-color: var(--primary);
 }
 
