@@ -467,6 +467,11 @@
                       <strong>Kimi</strong>
                       <small id="agentThinkingState">检查中</small>
                     </button>
+                    <button class="model-option" data-llm-provider="deepseek" type="button">
+                      <span>DeepSeek</span>
+                      <strong>DeepSeek V4</strong>
+                      <small id="deepseekThinkingState">检查中</small>
+                    </button>
                   </div>
                 </section>
               </div>
@@ -547,6 +552,25 @@
                         <option value="kimi-latest"></option>
                         <option value="kimi-k2"></option>
                       </datalist>
+                    </label>
+                    <label class="field">
+                      <span>DeepSeek V4 思考模型</span>
+                      <input id="deepseekLlmModelInput" type="text" list="deepseekLlmModelList" placeholder="deepseek-v4-pro-260425" />
+                      <datalist id="deepseekLlmModelList">
+                        <option value="deepseek-v4-pro"></option>
+                        <option value="deepseek-v4-pro-260425"></option>
+                        <option value="deepseek-v4-flash"></option>
+                        <option value="deepseek-v4-flash-260425"></option>
+                        <option value="deepseek-v3-2-251201"></option>
+                      </datalist>
+                    </label>
+                    <label class="field">
+                      <span>DeepSeek API Key</span>
+                      <input id="deepseekApiKeyInput" type="password" autocomplete="off" placeholder="复用 V2 Claude 中枢兼容 Key，可留空" />
+                    </label>
+                    <label class="field">
+                      <span>DeepSeek Base URL</span>
+                      <input id="deepseekBaseUrlInput" type="url" placeholder="https://aiself.vip" />
                     </label>
                     <label class="field">
                       <span>Kimi API Key</span>
@@ -914,6 +938,14 @@
                     <span>Claude 中枢模型</span>
                     <input id="v2ClaudeModelInput" type="text" list="v2ClaudeModelList" placeholder="留空使用 Claude Code 默认模型" />
                     <datalist id="v2ClaudeModelList">
+                      <option value="deepseek-v4-pro"></option>
+                      <option value="deepseek-v4-pro-260425"></option>
+                      <option value="deepseek-v4-flash"></option>
+                      <option value="deepseek-v4-flash-260425"></option>
+                      <option value="deepseek-v3-2-251201"></option>
+                      <option value="doubao-seed-2-0-lite-260428"></option>
+                      <option value="doubao-seed-2.0-lite"></option>
+                      <option value="doubao-seed-2.0-pro"></option>
                       <option value="claude-sonnet-4-20250514"></option>
                       <option value="claude-opus-4-20250514"></option>
                     </datalist>

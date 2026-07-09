@@ -34,7 +34,7 @@ Current production intent:
 ```text
 text source: deepseek-v4-pro-260425
 multimodal source: doubao-seed-2-0-lite-260428
-fallback source: kimi-for-coding
+fallback source: deepseek-v4-flash-260425 -> doubao-seed-2.0-lite
 ```
 
 DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi remains the conservative fallback for text checkpoints, not for required uploaded-image understanding.
@@ -50,12 +50,12 @@ V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
 V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=deepseek-v4-flash-260425,doubao-seed-2.0-lite,doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
 ```
 
-The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. The fallback token should allow `kimi-for-coding`.
+The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. The fallback token should allow the same DeepSeek/Doubao-compatible lane; Kimi is not part of the default queue.
 
 ## Source Selection
 
@@ -206,7 +206,7 @@ Uploaded-image primary use:
 Successful fallback use:
 
 ```json
-{"provider":"claude-code-model-fallback","model":"kimi-for-coding"}
+{"provider":"claude-code-model-fallback","model":"deepseek-v4-flash-260425"}
 ```
 
 ## Security Rules

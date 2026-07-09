@@ -186,26 +186,36 @@ def _should_use_llm(*, intensity: str, provider_preference: str | None) -> bool:
 
 def _planner_candidates() -> list[dict[str, str]]:
     selected = _normalize_llm_provider(settings.default_llm_provider)
-    fallback = "anthropic" if selected == "openai" else "openai"
-    return [
-        {"provider": selected, "model": _llm_model(selected)},
-        {"provider": fallback, "model": _llm_model(fallback)},
-    ]
+    fallback = _normalize_llm_provider(settings.backup_llm_provider)
+    order: list[str] = []
+    for provider in [selected, fallback]:
+        if provider not in order:
+            order.append(provider)
+    return [{"provider": provider, "model": _llm_model(provider)} for provider in order]
 
 
 def _normalize_llm_provider(provider: str | None) -> str:
-    return "anthropic" if provider in {"anthropic", "kimi"} else "openai"
+    normalized = str(provider or "openai").strip().lower()
+    if normalized in {"anthropic", "kimi", "moonshot"}:
+        return "anthropic"
+    if normalized in {"deepseek", "deepseek_v4", "deepseek-v4"}:
+        return "deepseek"
+    return "openai"
 
 
 def _llm_model(provider: str) -> str:
-    return settings.kimi_llm_model if provider == "anthropic" else settings.openai_llm_model
+    if provider == "anthropic":
+        return settings.kimi_llm_model
+    if provider == "deepseek":
+        return settings.deepseek_llm_model
+    return settings.openai_llm_model
 
 
 def _planner_configured(provider: str) -> bool:
     if provider == "openai":
         return bool(settings.openai_api_key)
-    if provider == "anthropic":
-        return bool(_anthropic_token())
+    if provider in {"anthropic", "deepseek"}:
+        return bool(_anthropic_token(provider))
     return False
 
 
@@ -219,9 +229,10 @@ async def _ask_provider_for_prompt_plan(
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if provider == "anthropic":
+    if provider in {"anthropic", "deepseek"}:
         return await _ask_anthropic_for_prompt_plan(
             plan,
+            provider=provider,
             model=model,
             original_prompt=original_prompt,
             intensity=intensity,
@@ -256,8 +267,9 @@ async def ask_llm_json_plan(
         if not _planner_configured(provider):
             continue
         try:
-            if provider == "anthropic":
+            if provider in {"anthropic", "deepseek"}:
                 result = await _ask_anthropic_for_json_plan(
+                    provider=provider,
                     system_prompt=system_prompt,
                     user_payload=user_payload,
                     model=model,
@@ -325,6 +337,7 @@ async def _ask_openai_for_json_plan(
 
 async def _ask_anthropic_for_json_plan(
     *,
+    provider: str,
     system_prompt: str,
     user_payload: dict[str, Any],
     model: str,
@@ -332,13 +345,13 @@ async def _ask_anthropic_for_json_plan(
     temperature: float,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    token = _anthropic_token()
+    token = _anthropic_token(provider)
     if not token:
-        raise RuntimeError("Kimi LLM token is not configured")
+        raise RuntimeError(f"{provider} compatible LLM token is not configured")
 
     payload = {
         "model": model,
-        "max_tokens": max_tokens,
+        "max_tokens": _anthropic_max_tokens(provider, model, max_tokens),
         "temperature": temperature,
         "system": system_prompt,
         "messages": [{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
@@ -350,7 +363,7 @@ async def _ask_anthropic_for_json_plan(
         "x-api-key": token,
     }
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.post(_anthropic_messages_url(settings.anthropic_base_url), headers=headers, json=payload)
+        response = await client.post(_anthropic_messages_url(_anthropic_base_url(provider)), headers=headers, json=payload)
         response.raise_for_status()
     return _loads_json_object(_anthropic_response_text(response.json()))
 
@@ -400,19 +413,20 @@ async def _ask_openai_for_prompt_plan(
 async def _ask_anthropic_for_prompt_plan(
     plan: ImagePromptPlan,
     *,
+    provider: str,
     model: str,
     original_prompt: str,
     intensity: str,
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    token = _anthropic_token()
+    token = _anthropic_token(provider)
     if not token:
-        raise RuntimeError("Kimi LLM token is not configured")
+        raise RuntimeError(f"{provider} compatible LLM token is not configured")
 
     payload = {
         "model": model,
-        "max_tokens": 1200,
+        "max_tokens": _anthropic_max_tokens(provider, model, 1200),
         "temperature": 0.2,
         "system": _planner_instruction(),
         "messages": [
@@ -429,7 +443,7 @@ async def _ask_anthropic_for_prompt_plan(
         "x-api-key": token,
     }
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(_anthropic_messages_url(settings.anthropic_base_url), headers=headers, json=payload)
+        response = await client.post(_anthropic_messages_url(_anthropic_base_url(provider)), headers=headers, json=payload)
         response.raise_for_status()
     return _loads_json_object(_anthropic_response_text(response.json()))
 
@@ -475,8 +489,24 @@ def _planner_user_payload(
     }
 
 
-def _anthropic_token() -> str | None:
+def _anthropic_token(provider: str = "anthropic") -> str | None:
+    if provider == "deepseek":
+        return settings.deepseek_llm_api_key
     return settings.anthropic_api_key or settings.anthropic_auth_token
+
+
+def _anthropic_base_url(provider: str = "anthropic") -> str | None:
+    if provider == "deepseek":
+        return settings.deepseek_llm_base_url
+    return settings.anthropic_base_url
+
+
+def _anthropic_max_tokens(provider: str, model: str, requested: int) -> int:
+    # DeepSeek V4 often emits a short thinking block before the final text.
+    # Keep tiny JSON probes from being truncated before the answer appears.
+    if provider == "deepseek" or "deepseek" in (model or "").lower():
+        return max(int(requested or 0), 768)
+    return requested
 
 
 def _anthropic_messages_url(base_url: str | None) -> str:

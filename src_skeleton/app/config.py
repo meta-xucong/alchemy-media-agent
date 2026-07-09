@@ -89,16 +89,37 @@ class Settings(BaseModel):
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
     default_llm_model: str = os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5")
-    backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "anthropic")
-    backup_llm_model: str = os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding")
+    backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "deepseek")
+    backup_llm_model: str = os.getenv(
+        "BACKUP_LLM_MODEL",
+        os.getenv("DEEPSEEK_LLM_MODEL", "deepseek-v4-pro-260425"),
+    )
     openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gpt-5.5"))
     kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding"))
+    deepseek_llm_model: str = os.getenv(
+        "DEEPSEEK_LLM_MODEL",
+        os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro-260425"),
+    )
+    deepseek_llm_base_url: str | None = (
+        os.getenv("DEEPSEEK_LLM_BASE_URL")
+        or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL")
+        or os.getenv("ANTHROPIC_BASE_URL")
+        or os.getenv("LAB_DOUBAO_VISION_BASE_URL")
+        or "https://aiself.vip"
+    ).rstrip() or None
+    deepseek_llm_api_key: str | None = (
+        os.getenv("DEEPSEEK_LLM_API_KEY")
+        or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("LAB_DOUBAO_VISION_API_KEY")
+    )
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "kimi"))
     lab_llm_model: str = os.getenv(
         "LAB_LLM_MODEL",
-        os.getenv("KIMI_LLM_MODEL", os.getenv("BACKUP_LLM_MODEL", "kimi-for-coding")),
+        os.getenv("DEFAULT_LLM_MODEL", os.getenv("OPENAI_LLM_MODEL", "gpt-5.5")),
     )
     lab_openai_api_key: str | None = os.getenv("LAB_OPENAI_API_KEY") or os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
     lab_openai_base_url: str | None = _normalize_openai_base_url(os.getenv("LAB_OPENAI_BASE_URL") or os.getenv("V2_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
@@ -195,6 +216,8 @@ def update_runtime_settings(
     backup_llm_model: str | None = None,
     openai_llm_model: str | None = None,
     kimi_llm_model: str | None = None,
+    deepseek_llm_model: str | None = None,
+    deepseek_llm_base_url: str | None = None,
     lab_llm_provider: str | None = None,
     lab_llm_model: str | None = None,
     lab_openai_base_url: str | None = None,
@@ -206,6 +229,7 @@ def update_runtime_settings(
     openai_base_url: str | None = None,
     anthropic_api_key: str | None = None,
     anthropic_base_url: str | None = None,
+    deepseek_llm_api_key: str | None = None,
     gemini_image_api_key: str | None = None,
     gemini_image_base_url: str | None = None,
     gemini_image_generation_enabled: bool | None = None,
@@ -235,6 +259,10 @@ def update_runtime_settings(
         settings.openai_llm_model = openai_llm_model.strip()
     if kimi_llm_model:
         settings.kimi_llm_model = kimi_llm_model.strip()
+    if deepseek_llm_model:
+        settings.deepseek_llm_model = deepseek_llm_model.strip()
+    if deepseek_llm_base_url is not None:
+        settings.deepseek_llm_base_url = deepseek_llm_base_url.strip().rstrip("/") or None
     if lab_llm_provider:
         settings.lab_llm_provider = lab_llm_provider.strip()
     if lab_llm_model:
@@ -251,6 +279,8 @@ def update_runtime_settings(
         settings.default_llm_model = default_llm_model.strip()
         if settings.default_llm_provider in {"anthropic", "kimi"}:
             settings.kimi_llm_model = default_llm_model.strip()
+        elif settings.default_llm_provider == "deepseek":
+            settings.deepseek_llm_model = default_llm_model.strip()
         else:
             settings.openai_llm_model = default_llm_model.strip()
     if backup_llm_model:
@@ -260,11 +290,16 @@ def update_runtime_settings(
         settings.default_llm_model = settings.kimi_llm_model
         settings.backup_llm_provider = "openai"
         settings.backup_llm_model = settings.openai_llm_model
+    elif settings.default_llm_provider == "deepseek":
+        settings.default_llm_provider = "deepseek"
+        settings.default_llm_model = settings.deepseek_llm_model
+        settings.backup_llm_provider = "openai"
+        settings.backup_llm_model = settings.openai_llm_model
     else:
         settings.default_llm_provider = "openai"
         settings.default_llm_model = settings.openai_llm_model
-        settings.backup_llm_provider = "anthropic"
-        settings.backup_llm_model = settings.kimi_llm_model
+        settings.backup_llm_provider = "deepseek"
+        settings.backup_llm_model = settings.deepseek_llm_model
     if settings.default_image_provider == "gemini_image" and settings.gemini_image_generation_enabled:
         settings.default_image_model = settings.gemini_image_model
     elif settings.default_image_provider == "doubao_image":
@@ -286,6 +321,8 @@ def update_runtime_settings(
         settings.anthropic_auth_token = anthropic_api_key.strip()
     if anthropic_base_url is not None:
         settings.anthropic_base_url = anthropic_base_url.strip() or None
+    if deepseek_llm_api_key:
+        settings.deepseek_llm_api_key = deepseek_llm_api_key.strip()
     if gemini_image_api_key:
         settings.gemini_image_api_key = gemini_image_api_key.strip()
     if gemini_image_base_url is not None:
@@ -322,6 +359,8 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         "BACKUP_LLM_MODEL": settings.backup_llm_model,
         "OPENAI_LLM_MODEL": settings.openai_llm_model,
         "KIMI_LLM_MODEL": settings.kimi_llm_model,
+        "DEEPSEEK_LLM_MODEL": settings.deepseek_llm_model,
+        "DEEPSEEK_LLM_BASE_URL": settings.deepseek_llm_base_url or "",
         "LAB_LLM_PROVIDER": settings.lab_llm_provider,
         "LAB_LLM_MODEL": settings.lab_llm_model,
         "LAB_OPENAI_BASE_URL": settings.lab_openai_base_url or "",

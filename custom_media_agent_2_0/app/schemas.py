@@ -469,6 +469,7 @@ class V2RuntimeModelSettingsRequest(BaseModel):
     claude_orchestrator_model: str | None = Field(default=None, max_length=120)
     claude_orchestrator_multimodal_model: str | None = Field(default=None, max_length=120)
     claude_orchestrator_fallback_model: str | None = Field(default=None, max_length=120)
+    claude_orchestrator_fallback_models: list[str] | None = Field(default=None, max_length=12)
     claude_orchestrator_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claude_orchestrator_tools: str | None = Field(default=None, max_length=80)
     claude_checkpoint_orchestrator_enabled: bool | None = None

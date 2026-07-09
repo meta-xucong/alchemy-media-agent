@@ -467,6 +467,9 @@ const els = {
   geminiImageApiKeyInput: document.querySelector("#geminiImageApiKeyInput"),
   openaiLlmModelInput: document.querySelector("#openaiLlmModelInput"),
   agentLlmModelInput: document.querySelector("#agentLlmModelInput"),
+  deepseekLlmModelInput: document.querySelector("#deepseekLlmModelInput"),
+  deepseekBaseUrlInput: document.querySelector("#deepseekBaseUrlInput"),
+  deepseekApiKeyInput: document.querySelector("#deepseekApiKeyInput"),
   anthropicBaseUrlInput: document.querySelector("#anthropicBaseUrlInput"),
   anthropicApiKeyInput: document.querySelector("#anthropicApiKeyInput"),
   imageActiveLabel: document.querySelector("#imageActiveLabel"),
@@ -476,6 +479,7 @@ const els = {
   geminiImageState: document.querySelector("#geminiImageState"),
   openaiThinkingState: document.querySelector("#openaiThinkingState"),
   agentThinkingState: document.querySelector("#agentThinkingState"),
+  deepseekThinkingState: document.querySelector("#deepseekThinkingState"),
   intensityValue: document.querySelector("#intensityValue"),
   assetInput: document.querySelector("#assetInput"),
   assetName: document.querySelector("#assetName"),
@@ -5104,11 +5108,11 @@ function firstUsableImageProvider(candidates = ["openai_gpt_image", "doubao_imag
 }
 
 function setThinkingProvider(provider, { persist = false } = {}) {
-  state.selectedLlmProvider = provider === "anthropic" ? "anthropic" : "openai";
+  state.selectedLlmProvider = normalizeThinkingProvider(provider);
   document.querySelectorAll("[data-llm-provider]").forEach((button) => {
     button.classList.toggle("active", button.dataset.llmProvider === state.selectedLlmProvider);
   });
-  els.thinkingActiveLabel.textContent = state.selectedLlmProvider === "anthropic" ? "Kimi 优先" : "GPT 优先";
+  els.thinkingActiveLabel.textContent = `${thinkingProviderLabel(state.selectedLlmProvider)} 优先`;
   scheduleMobileSummaryUpdate();
   if (persist) scheduleProviderSettingsSync({ immediate: true });
 }
@@ -5124,12 +5128,16 @@ function bindProviderAutosave() {
     els.geminiImageModelInput,
     els.openaiLlmModelInput,
     els.agentLlmModelInput,
+    els.deepseekLlmModelInput,
+    els.deepseekBaseUrlInput,
   ].forEach((input) => {
+    if (!input) return;
     input.addEventListener("input", () => scheduleProviderSettingsSync());
     input.addEventListener("change", () => scheduleProviderSettingsSync({ immediate: true }));
   });
 
-  [els.openaiApiKeyInput, els.doubaoImageApiKeyInput, els.geminiImageApiKeyInput, els.anthropicApiKeyInput].forEach((input) => {
+  [els.openaiApiKeyInput, els.doubaoImageApiKeyInput, els.geminiImageApiKeyInput, els.anthropicApiKeyInput, els.deepseekApiKeyInput].forEach((input) => {
+    if (!input) return;
     input.addEventListener("input", () => scheduleProviderSettingsSync({ delay: 900 }));
     input.addEventListener("change", () => scheduleProviderSettingsSync({ immediate: true }));
   });
@@ -5258,13 +5266,15 @@ async function loadProviders() {
   state.providerSettings = runtime;
   state.imageProviderCapabilities = Object.fromEntries((providers.image || []).map((provider) => [provider.provider, provider]));
   state.selectedProvider = safeImageProviderPreference(runtime.default_image_provider || "openai_gpt_image");
-  state.selectedLlmProvider = runtime.default_llm_provider || "openai";
+  state.selectedLlmProvider = normalizeThinkingProvider(runtime.default_llm_provider || "openai");
   state.selectedIntensity = runtime.image_work_intensity || "balanced";
   els.openaiImageModelInput.value = runtime.openai_image_model || "gpt-image-2";
   els.doubaoImageModelInput.value = runtime.doubao_image_model || "doubao-seedream-4-0-250828";
   els.geminiImageModelInput.value = runtime.gemini_image_model || "gemini-3-pro-image-preview";
   els.openaiLlmModelInput.value = runtime.openai_llm_model || "gpt-5.5";
   els.agentLlmModelInput.value = runtime.kimi_llm_model || "kimi-for-coding";
+  if (els.deepseekLlmModelInput) els.deepseekLlmModelInput.value = runtime.deepseek_llm_model || "deepseek-v4-pro-260425";
+  if (els.deepseekBaseUrlInput) els.deepseekBaseUrlInput.value = runtime.deepseek_llm_base_url || "https://aiself.vip";
   els.doubaoImageBaseUrlInput.value = runtime.doubao_image_base_url || "";
   els.geminiImageBaseUrlInput.value = runtime.gemini_image_base_url || "";
   els.openaiBaseUrlInput.value = runtime.openai_base_url || "";
@@ -5292,6 +5302,11 @@ async function loadProviders() {
       : "需 API";
   els.openaiThinkingState.textContent = runtime.openai_api_key_configured ? runtime.openai_llm_model : "需 API";
   els.agentThinkingState.textContent = runtime.anthropic_api_key_configured ? runtime.kimi_llm_model || "已配置" : "需 Kimi API";
+  if (els.deepseekThinkingState) {
+    els.deepseekThinkingState.textContent = runtime.deepseek_llm_api_key_configured
+      ? runtime.deepseek_llm_model || "已配置"
+      : "需 API";
+  }
   els.providerState.textContent = state.imageProviderReady ? `${providerLabel(state.selectedProvider)} ready` : "需要 API";
   renderV2ModelSettings();
   renderV2ProviderInheritance();
@@ -5460,7 +5475,15 @@ function setImageProviderAvailability(provider, enabled, title) {
 }
 
 function thinkingProviderLabel(provider) {
-  return provider === "anthropic" ? "Kimi" : "GPT";
+  if (provider === "anthropic") return "Kimi";
+  if (provider === "deepseek") return "DeepSeek V4";
+  return "GPT";
+}
+
+function normalizeThinkingProvider(provider) {
+  if (provider === "anthropic" || provider === "kimi") return "anthropic";
+  if (provider === "deepseek") return "deepseek";
+  return "openai";
 }
 
 async function flushProviderSettingsSync({ silent = true } = {}) {
@@ -5486,6 +5509,8 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
       default_llm_model: selectedThinkingModel(),
       openai_llm_model: els.openaiLlmModelInput.value.trim() || "gpt-5.5",
       kimi_llm_model: els.agentLlmModelInput.value.trim() || "kimi-for-coding",
+      deepseek_llm_model: els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425",
+      deepseek_llm_base_url: els.deepseekBaseUrlInput?.value.trim() || "",
       image_work_intensity: state.selectedIntensity,
       openai_base_url: els.openaiBaseUrlInput.value.trim(),
       anthropic_base_url: els.anthropicBaseUrlInput.value.trim(),
@@ -5498,6 +5523,8 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
     if (geminiImageApiKey) payload.gemini_image_api_key = geminiImageApiKey;
     const backupApiKey = els.anthropicApiKeyInput.value.trim();
     if (backupApiKey) payload.anthropic_api_key = backupApiKey;
+    const deepseekApiKey = els.deepseekApiKeyInput?.value.trim();
+    if (deepseekApiKey) payload.deepseek_llm_api_key = deepseekApiKey;
 
     const runtime = await request("/v1/runtime/provider-settings", {
       method: "POST",
@@ -5510,6 +5537,7 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
     els.doubaoImageApiKeyInput.value = "";
     els.geminiImageApiKeyInput.value = "";
     els.anthropicApiKeyInput.value = "";
+    if (els.deepseekApiKeyInput) els.deepseekApiKeyInput.value = "";
     await loadProviders();
     if (!silent) {
       const message = modelEffectMessage(runtime);
@@ -5544,6 +5572,9 @@ function selectedThinkingModel() {
   if (state.selectedLlmProvider === "anthropic") {
     return els.agentLlmModelInput.value.trim() || "kimi-for-coding";
   }
+  if (state.selectedLlmProvider === "deepseek") {
+    return els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425";
+  }
   return els.openaiLlmModelInput.value.trim() || "gpt-5.5";
 }
 
@@ -5556,7 +5587,7 @@ function toggleProviderSaving(isSaving) {
 }
 
 function otherThinkingProvider(provider) {
-  return provider === "anthropic" ? "openai" : "anthropic";
+  return normalizeThinkingProvider(provider) === "openai" ? "deepseek" : "openai";
 }
 
 function modelEffectMessage(runtime) {
@@ -5821,6 +5852,14 @@ function hydrateV2CaseIntelligenceModelHint() {
   }
 }
 
+function v2ClaudeFallbackModelQueue() {
+  const primary = els.v2ClaudeModelInput?.value.trim() || "";
+  const explicitFallback = els.v2ClaudeFallbackModelInput?.value.trim() || "";
+  return [explicitFallback, "deepseek-v4-flash-260425", "doubao-seed-2.0-lite", "doubao-seed-2-0-lite-260428"]
+    .map((model) => model.trim())
+    .filter((model, index, models) => model && model !== primary && models.indexOf(model) === index);
+}
+
 async function applyV2ModelSettings() {
   if (!els.v2ModelApplyBtn) return;
   const originalText = els.v2ModelApplyBtn.textContent;
@@ -5845,6 +5884,7 @@ async function applyV2ModelSettings() {
         claude_orchestrator_enabled: true,
         claude_orchestrator_model: els.v2ClaudeModelInput?.value.trim(),
         claude_orchestrator_fallback_model: els.v2ClaudeFallbackModelInput?.value.trim(),
+        claude_orchestrator_fallback_models: v2ClaudeFallbackModelQueue(),
         case_intelligence_provider: caseSource,
         case_intelligence_model: caseModel,
       },

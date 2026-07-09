@@ -2452,6 +2452,11 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
             "claude_orchestrator_model": "claude-sonnet-test",
             "claude_orchestrator_multimodal_model": "doubao-seed-2-0-lite-260428",
             "claude_orchestrator_fallback_model": "claude-haiku-test",
+            "claude_orchestrator_fallback_models": [
+                "deepseek-v4-flash-260425",
+                "doubao-seed-2.0-lite",
+                "doubao-seed-2-0-lite-260428",
+            ],
             "claude_orchestrator_effort": "medium",
             "claude_checkpoint_orchestrator_enabled": True,
             "case_intelligence_provider": "claude-code",
@@ -2467,6 +2472,11 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert body["claude_orchestrator_enabled"] is True
     assert body["claude_orchestrator_model"] == "claude-sonnet-test"
     assert body["claude_orchestrator_multimodal_model"] == "doubao-seed-2-0-lite-260428"
+    assert body["claude_orchestrator_fallback_models"][:3] == [
+        "deepseek-v4-flash-260425",
+        "doubao-seed-2.0-lite",
+        "doubao-seed-2-0-lite-260428",
+    ]
     assert body["claude_checkpoint_orchestrator_enabled"] is True
     assert body["case_intelligence_provider"] == "claude-code"
     assert body["case_intelligence_model"] == "claude-sonnet-test"

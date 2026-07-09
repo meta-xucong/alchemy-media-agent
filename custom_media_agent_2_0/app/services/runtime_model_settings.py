@@ -22,6 +22,7 @@ RUNTIME_MODEL_FIELDS = {
     "claude_orchestrator_model",
     "claude_orchestrator_multimodal_model",
     "claude_orchestrator_fallback_model",
+    "claude_orchestrator_fallback_models",
     "claude_orchestrator_effort",
     "claude_orchestrator_tools",
     "claude_checkpoint_orchestrator_enabled",
@@ -111,6 +112,10 @@ def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
     if effort and effort not in VALID_CLAUDE_EFFORTS:
         updates["claude_orchestrator_effort"] = "low"
 
+    fallback_models = updates.get("claude_orchestrator_fallback_models")
+    if fallback_models is not None:
+        updates["claude_orchestrator_fallback_models"] = _normalize_model_queue(fallback_models)
+
     if updates.get("default_agent_model") is None:
         updates.pop("default_agent_model", None)
     if updates.get("openai_image_model") is None:
@@ -121,6 +126,23 @@ def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
         updates.pop("gemini_image_model", None)
 
     return updates
+
+
+def _normalize_model_queue(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        candidates = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        candidates = value
+    else:
+        return ()
+    models: list[str] = []
+    for item in candidates:
+        model = str(item or "").strip()
+        if model and model not in models:
+            models.append(model)
+    return tuple(models[:12])
 
 
 def _coerce_configured_provider(provider: str) -> str:

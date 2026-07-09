@@ -10,7 +10,7 @@ import httpx
 from app.config import openai_sdk_client_kwargs, settings
 
 
-LAB_LLM_PROVIDERS = {"openai", "kimi", "doubao"}
+LAB_LLM_PROVIDERS = {"openai", "kimi", "deepseek", "doubao"}
 
 
 class LabLLMError(RuntimeError):
@@ -95,9 +95,9 @@ def _planner_candidates(*, image_paths: bool) -> list[dict[str, str]]:
     preferred = _normalize_lab_provider(settings.lab_vision_provider if image_paths else settings.lab_llm_provider)
     order = [preferred]
     if image_paths:
-        order.extend(["doubao", "kimi", "openai"])
+        order.extend(["doubao", "deepseek", "openai"])
     else:
-        order.extend(["kimi", "openai", "doubao"])
+        order.extend(["deepseek", "openai", "doubao"])
     unique = []
     for provider in order:
         if provider in unique:
@@ -209,7 +209,7 @@ async def _ask_anthropic_compatible_json(
         )
     payload = {
         "model": model,
-        "max_tokens": max_tokens,
+        "max_tokens": _anthropic_max_tokens(provider, model, max_tokens),
         "temperature": temperature,
         "system": system_prompt,
         "messages": [{"role": "user", "content": content}],
@@ -230,6 +230,8 @@ def _normalize_lab_provider(provider: str | None) -> str:
     normalized = str(provider or "kimi").strip().lower()
     if normalized in {"anthropic", "moonshot"}:
         return "kimi"
+    if normalized in {"deepseek", "deepseek_v4", "deepseek-v4"}:
+        return "deepseek"
     if normalized in {"byteplus", "volcengine", "volc", "ark"}:
         return "doubao"
     return normalized if normalized in LAB_LLM_PROVIDERS else "kimi"
@@ -240,6 +242,8 @@ def _lab_model(provider: str) -> str:
         return settings.lab_llm_model if _normalize_lab_provider(settings.lab_llm_provider) == "openai" else settings.openai_llm_model
     if provider == "doubao":
         return settings.lab_doubao_vision_model
+    if provider == "deepseek":
+        return settings.lab_llm_model if _normalize_lab_provider(settings.lab_llm_provider) == "deepseek" else settings.deepseek_llm_model
     return settings.lab_llm_model or settings.kimi_llm_model
 
 
@@ -248,6 +252,8 @@ def _lab_token(provider: str) -> str | None:
         return settings.lab_openai_api_key
     if provider == "doubao":
         return settings.lab_doubao_vision_api_key
+    if provider == "deepseek":
+        return settings.deepseek_llm_api_key
     if provider == "kimi":
         return settings.lab_kimi_api_key
     return None
@@ -258,6 +264,8 @@ def _lab_base_url(provider: str) -> str | None:
         return settings.lab_openai_base_url
     if provider == "doubao":
         return settings.lab_doubao_vision_base_url
+    if provider == "deepseek":
+        return settings.deepseek_llm_base_url
     if provider == "kimi":
         return settings.lab_kimi_base_url
     return None
@@ -270,6 +278,12 @@ def _anthropic_messages_url(base_url: str | None) -> str:
     if base.endswith("/v1"):
         return f"{base}/messages"
     return f"{base}/v1/messages"
+
+
+def _anthropic_max_tokens(provider: str, model: str, requested: int) -> int:
+    if provider == "deepseek" or "deepseek" in (model or "").lower():
+        return max(int(requested or 0), 768)
+    return requested
 
 
 def _response_text(response: Any) -> str:

@@ -447,11 +447,14 @@ class RuntimeProviderSettingsRequest(BaseModel):
     openai_image_model: str | None = Field(default=None, min_length=1, max_length=120)
     doubao_image_model: str | None = Field(default=None, min_length=1, max_length=120)
     gemini_image_model: str | None = Field(default=None, min_length=1, max_length=120)
-    default_llm_provider: Literal["openai", "anthropic"] | None = None
+    default_llm_provider: Literal["openai", "anthropic", "deepseek"] | None = None
     default_llm_model: str | None = Field(default=None, min_length=1, max_length=120)
     backup_llm_model: str | None = Field(default=None, min_length=1, max_length=120)
     openai_llm_model: str | None = Field(default=None, min_length=1, max_length=120)
     kimi_llm_model: str | None = Field(default=None, min_length=1, max_length=120)
+    deepseek_llm_model: str | None = Field(default=None, min_length=1, max_length=160)
+    deepseek_llm_api_key: str | None = Field(default=None, max_length=4096)
+    deepseek_llm_base_url: str | None = Field(default=None, max_length=512)
     image_work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
     openai_api_key: str | None = Field(default=None, max_length=4096)
     openai_base_url: str | None = Field(default=None, max_length=512)
@@ -462,7 +465,7 @@ class RuntimeProviderSettingsRequest(BaseModel):
     gemini_image_api_key: str | None = Field(default=None, max_length=4096)
     gemini_image_base_url: str | None = Field(default=None, max_length=512)
     gemini_image_generation_enabled: bool | None = None
-    lab_llm_provider: Literal["openai", "kimi", "doubao"] | None = None
+    lab_llm_provider: Literal["openai", "kimi", "deepseek", "doubao"] | None = None
     lab_llm_model: str | None = Field(default=None, min_length=1, max_length=160)
     lab_openai_api_key: str | None = Field(default=None, max_length=4096)
     lab_openai_base_url: str | None = Field(default=None, max_length=512)
@@ -485,6 +488,9 @@ class RuntimeProviderSettingsResponse(BaseModel):
     backup_llm_model: str
     openai_llm_model: str
     kimi_llm_model: str
+    deepseek_llm_model: str
+    deepseek_llm_base_url: str | None = None
+    deepseek_llm_api_key_configured: bool
     image_work_intensity: str
     openai_base_url: str | None = None
     openai_api_key_configured: bool

@@ -3893,6 +3893,60 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         settings.anthropic_auth_token = original_anthropic_auth_token
 
 
+def test_runtime_provider_settings_accept_deepseek_route():
+    client = TestClient(app)
+    original_persist = settings.persist_runtime_settings
+    original_llm_provider = settings.default_llm_provider
+    original_llm_model = settings.default_llm_model
+    original_backup_provider = settings.backup_llm_provider
+    original_backup_model = settings.backup_llm_model
+    original_deepseek_model = settings.deepseek_llm_model
+    original_deepseek_base_url = settings.deepseek_llm_base_url
+    original_deepseek_api_key = settings.deepseek_llm_api_key
+    original_lab_provider = settings.lab_llm_provider
+    original_lab_model = settings.lab_llm_model
+
+    try:
+        settings.persist_runtime_settings = False
+        response = client.post(
+            "/v1/runtime/provider-settings",
+            json={
+                "default_llm_provider": "deepseek",
+                "default_llm_model": "deepseek-v4-pro-260425",
+                "deepseek_llm_model": "deepseek-v4-pro-260425",
+                "deepseek_llm_api_key": "sk-test-deepseek-only",
+                "deepseek_llm_base_url": "https://deepseek-compatible.example.test",
+                "openai_llm_model": "gpt-5.5-test",
+                "lab_llm_provider": "deepseek",
+                "lab_llm_model": "deepseek-v4-pro-260425",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["default_llm_provider"] == "deepseek"
+        assert body["default_llm_model"] == "deepseek-v4-pro-260425"
+        assert body["backup_llm_provider"] == "openai"
+        assert body["backup_llm_model"] == "gpt-5.5-test"
+        assert body["deepseek_llm_model"] == "deepseek-v4-pro-260425"
+        assert body["deepseek_llm_base_url"] == "https://deepseek-compatible.example.test"
+        assert body["deepseek_llm_api_key_configured"] is True
+        assert body["lab_llm_provider"] == "deepseek"
+        assert body["lab_llm_model"] == "deepseek-v4-pro-260425"
+        assert "sk-test-deepseek-only" not in response.text
+    finally:
+        settings.persist_runtime_settings = original_persist
+        settings.default_llm_provider = original_llm_provider
+        settings.default_llm_model = original_llm_model
+        settings.backup_llm_provider = original_backup_provider
+        settings.backup_llm_model = original_backup_model
+        settings.deepseek_llm_model = original_deepseek_model
+        settings.deepseek_llm_base_url = original_deepseek_base_url
+        settings.deepseek_llm_api_key = original_deepseek_api_key
+        settings.lab_llm_provider = original_lab_provider
+        settings.lab_llm_model = original_lab_model
+
+
 def test_runtime_provider_settings_apply_when_persistence_fails(monkeypatch):
     client = TestClient(app)
     original_intensity = settings.image_work_intensity
