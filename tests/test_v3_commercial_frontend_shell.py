@@ -4,9 +4,11 @@ import json
 
 from fastapi.testclient import TestClient
 
-from alchemy_creative_agent_3_0.app.project_mode.store import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.project_mode.store import InMemoryProjectStore, PersistentProjectStore
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import InMemoryProductJobStore
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from app import main as app_main
 from app.main import app, v3_route_handlers
 
@@ -58,6 +60,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectList"' not in index.text
     assert 'id="v3ProjectDetailPanel"' in index.text
     assert 'id="v3ProjectArchiveBtn"' in index.text
+    assert 'id="v3ProjectDeleteBtn"' in index.text
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
@@ -138,6 +141,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert h5.status_code == 200
     assert 'href="/creative-agent-v3"' not in h5.text
     assert 'data-tab="v3"' in h5.text
+    assert 'id="mobileV3DeleteProjectBtn"' in h5.text
     assert 'id="v3Tab"' in h5.text
     assert 'id="mobileV3GoalInput"' in h5.text
     assert 'id="mobileV3ProjectGrid"' in h5.text
@@ -286,6 +290,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "data-mobile-v3-output-prompt" in mobile_script.text
     assert "data-mobile-v3-remove-upload" in mobile_script.text
     assert "function removeMobileV3ReferenceUpload" in mobile_script.text
+    assert "async function deleteMobileV3Project" in mobile_script.text
+    assert "mobileV3DeleteProjectBtn" in mobile_script.text
     assert "mobileV3State.uploadFingerprints = {}" in mobile_script.text
     assert "网络有点慢，稍后点刷新项目" in mobile_script.text
 
@@ -295,7 +301,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "const v3HistoryStorageKey" in script.text
     assert "/api/v3/creative-agent" in script.text
     assert "v3ProjectFetchLimit = 80" in script.text
-    assert "v3ProjectHomePageSize = 12" in script.text
+    assert "v3ProjectHomePageSize = 9" in script.text
     assert "/history?limit=24" not in script.text
     assert "function openV3Home" in script.text
     assert "function openV3ScenarioWorkspace" in script.text
@@ -367,6 +373,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function closeV3ProjectSubpage" in script.text
     assert 'openV3ProjectSubpage(button.dataset.v3Step || "compose")' in script.text
     assert "function archiveV3Project" in script.text
+    assert "async function deleteV3Project" in script.text
+    assert 'data-v3-project-action="delete_project"' in script.text
+    assert "const v3ProjectHomePageSize = 9;" in script.text
     assert "function renderV3ProjectOutputBoard" in script.text
     assert "function handleV3ProjectOutputBoardClick" in script.text
     assert "async function selectV3OutputItem" in script.text
@@ -401,6 +410,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "template_first_create: true" in script.text
     assert "data-v3-project-action" in script.text
     assert "archive_project" in script.text
+    assert "delete_project" in script.text
     assert "data-v3-reference-action" in script.text
     assert "async function createV3Project" in script.text
     assert "function loadV3History" in script.text
@@ -883,3 +893,61 @@ def test_v3_output_routes_serve_v3_owned_generated_files(tmp_path) -> None:
     assert preview.headers["content-type"] == "image/png"
     assert download.status_code == 200
     assert download.headers["content-type"] == "image/png"
+
+
+def test_v3_project_delete_route_removes_project_scoped_files(tmp_path) -> None:
+    old_handlers = app_main.v3_route_handlers
+    service = V3ProductApiService(
+        job_store=InMemoryProductJobStore(),
+        asset_store=V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads"),
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    project_store = PersistentProjectStore(storage_root=tmp_path / "v3_projects")
+    app_main.v3_route_handlers = V3ProductRouteHandlers(service=service, project_store=project_store)
+    client = TestClient(app)
+    try:
+        asset_id = _create_ready_v3_upload(client, role="face_reference")
+        created_project = client.post(
+            "/api/v3/creative-agent/projects",
+            json={
+                "user_goal": "Create a clean portrait project",
+                "primary_template_id": "general_template",
+                "uploaded_asset_ids": [asset_id],
+            },
+        )
+        assert created_project.status_code == 200
+        project_id = created_project.json()["project"]["project_id"]
+        project_dir = project_store.storage_root / project_id
+        assert project_dir.exists()
+        project = project_store.get_project(project_id)
+        assert project is not None
+        project.job_ids.append("job_project_delete_route")
+        project_store.save_project(project)
+        record = service.output_store.save_base64_output(
+            job_id="job_project_delete_route",
+            candidate_id="candidate_project_delete_route",
+            asset_id="asset_project_delete_route",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(),
+            mime_type="image/png",
+            output_format="png",
+            metadata={"project_id": project_id},
+        )
+        assert service.output_store.get_output(record.output_id) is not None
+        assert service.asset_store.get_upload(asset_id) is not None
+
+        deleted = client.delete(f"/api/v3/creative-agent/projects/{project_id}")
+    finally:
+        app_main.v3_route_handlers = old_handlers
+
+    assert deleted.status_code == 200
+    payload = deleted.json()
+    assert payload["deleted"] is True
+    assert payload["deleted_outputs"] == 1
+    assert payload["deleted_uploaded_assets"] == 1
+    assert payload["deleted_jobs"] == 0
+    assert project_store.get_project(project_id) is None
+    assert not project_dir.exists()
+    assert service.output_store.get_output(record.output_id) is None
+    assert service.asset_store.get_upload(asset_id) is None

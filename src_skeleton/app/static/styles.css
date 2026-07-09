@@ -4057,6 +4057,14 @@ h2 {
   background: rgba(255, 255, 255, 0.56);
 }
 
+.button.danger {
+  border-color: rgba(154, 79, 86, 0.28);
+  color: #8a3a2b;
+  background:
+    linear-gradient(180deg, rgba(255, 249, 246, 0.96), rgba(245, 225, 218, 0.88)),
+    #fff4ef;
+}
+
 .notice-bar,
 .v2-progress-panel,
 .api-subpanel,

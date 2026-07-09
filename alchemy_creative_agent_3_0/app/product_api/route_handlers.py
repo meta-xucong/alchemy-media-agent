@@ -84,6 +84,9 @@ class V3ProductRouteHandlers:
     def post_project_archive(self, project_id: str) -> dict[str, Any]:
         return self.project_service.archive_project(project_id).model_dump(mode="json")
 
+    def delete_project(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.delete_project(project_id)
+
     def get_project_timeline(self, project_id: str) -> dict[str, Any]:
         return self.project_service.list_timeline(project_id).model_dump(mode="json")
 

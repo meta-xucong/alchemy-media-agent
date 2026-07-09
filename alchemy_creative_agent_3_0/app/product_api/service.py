@@ -318,6 +318,13 @@ class InMemoryProductJobStore:
         bounded_limit = max(1, min(int(limit or 20), 100))
         return sorted(self._records.values(), key=lambda record: record.updated_at, reverse=True)[:bounded_limit]
 
+    def delete_many(self, job_ids: list[str]) -> int:
+        deleted = 0
+        for job_id in list(dict.fromkeys(str(item or "").strip() for item in job_ids)):
+            if job_id and self._records.pop(job_id, None) is not None:
+                deleted += 1
+        return deleted
+
     def count(self) -> int:
         return len(self._records)
 

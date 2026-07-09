@@ -255,6 +255,64 @@ class V3ProjectModeService:
         project = self._require_project(project.project_id)
         return self._project_response(project)
 
+    def delete_project(self, project_id: str) -> dict[str, Any]:
+        project = self._require_project(project_id)
+        self._reconcile_project_outputs(project)
+        output_ids = self._project_generated_output_ids(project)
+        upload_ids = self._project_uploaded_reference_ids(project)
+        shared_output_ids = self._shared_project_output_ids(project, output_ids)
+        shared_upload_ids = self._shared_project_upload_ids(project, upload_ids)
+        output_ids_to_delete = [output_id for output_id in output_ids if output_id not in shared_output_ids]
+        upload_ids_to_delete = [asset_id for asset_id in upload_ids if asset_id not in shared_upload_ids]
+
+        deleted_outputs = 0
+        failed_outputs: list[str] = []
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is not None and hasattr(output_store, "delete_output"):
+            for output_id in output_ids_to_delete:
+                try:
+                    if output_store.delete_output(output_id):
+                        deleted_outputs += 1
+                except Exception:
+                    failed_outputs.append(output_id)
+
+        deleted_uploads = 0
+        failed_uploads: list[str] = []
+        asset_store = getattr(self.product_service, "asset_store", None)
+        if asset_store is not None and hasattr(asset_store, "delete_upload"):
+            for asset_id in upload_ids_to_delete:
+                try:
+                    if asset_store.delete_upload(asset_id):
+                        deleted_uploads += 1
+                except Exception:
+                    failed_uploads.append(asset_id)
+
+        deleted_jobs = 0
+        job_store = getattr(self.product_service, "job_store", None)
+        if job_store is not None and hasattr(job_store, "delete_many"):
+            deleted_jobs = int(job_store.delete_many(list(project.job_ids)))
+
+        delete_store_project = getattr(self.project_store, "delete_project", None)
+        project_deleted = bool(delete_store_project(project.project_id)) if callable(delete_store_project) else False
+        return {
+            "api_namespace": API_NAMESPACE,
+            "route": f"{API_NAMESPACE}/projects/{project.project_id}",
+            "project_id": project.project_id,
+            "deleted": project_deleted,
+            "deleted_outputs": deleted_outputs,
+            "deleted_uploaded_assets": deleted_uploads,
+            "deleted_jobs": deleted_jobs,
+            "skipped_shared_outputs": len(shared_output_ids),
+            "skipped_shared_uploaded_assets": len(shared_upload_ids),
+            "failed_outputs": failed_outputs,
+            "failed_uploaded_assets": failed_uploads,
+            "metadata": {
+                **self._metadata(),
+                "delete_mode": "hard_delete_project_scope",
+                "project_deleted_at": _utc_now_iso(),
+            },
+        }
+
     def add_project_reference(
         self,
         project_id: str,
@@ -3251,6 +3309,87 @@ class V3ProjectModeService:
             if item.get("asset_id") and str(item["asset_id"]) not in inactive_ids
         ]
         return list(dict.fromkeys([*active_reference_ids, *legacy_ids]))
+
+    def _project_generated_output_ids(self, project: ProjectRecord) -> list[str]:
+        output_ids = self._project_output_reference_ids(project)
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is not None:
+            for job_id in list(dict.fromkeys(project.job_ids)):
+                try:
+                    records = output_store.list_by_job(job_id)
+                except Exception:
+                    continue
+                output_ids.extend(str(getattr(record, "output_id", "") or "") for record in records)
+        return list(dict.fromkeys(output_id for output_id in output_ids if output_id))
+
+    def _project_output_reference_ids(self, project: ProjectRecord) -> list[str]:
+        output_ids: list[str] = []
+        for ref in project.selected_output_refs:
+            if ref.output_id:
+                output_ids.append(ref.output_id)
+        for state in project.selected_output_states:
+            if state.output_id:
+                output_ids.append(state.output_id)
+        for reference in project.reference_assets:
+            if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+                if reference.created_from_output_id:
+                    output_ids.append(reference.created_from_output_id)
+                if str(reference.asset_ref_id or "").startswith("v3_output_"):
+                    output_ids.append(reference.asset_ref_id)
+        for timeline_item in self.project_store.list_timeline(project.project_id):
+            output_ids.extend(str(item or "") for item in timeline_item.related_output_ids)
+            for ref in timeline_item.selected_output_refs:
+                if ref.output_id:
+                    output_ids.append(ref.output_id)
+        context = project.latest_context
+        if context is not None:
+            for ref in context.selected_output_assets:
+                if ref.output_id:
+                    output_ids.append(ref.output_id)
+            for item in context.selected_reference_assets:
+                output_id = str(item.get("output_id") or item.get("created_from_output_id") or "").strip()
+                if output_id:
+                    output_ids.append(output_id)
+        return list(dict.fromkeys(output_id for output_id in output_ids if output_id))
+
+    def _project_uploaded_reference_ids(self, project: ProjectRecord) -> list[str]:
+        asset_ids = self._project_asset_ids(project)
+        for reference in project.reference_assets:
+            if reference.source_type == ProjectReferenceSourceType.UPLOADED:
+                asset_ids.append(reference.asset_ref_id)
+        context = project.latest_context
+        if context is not None:
+            for item in context.uploaded_reference_assets:
+                asset_id = str(item.get("asset_id") or item.get("asset_ref_id") or "").strip()
+                if asset_id:
+                    asset_ids.append(asset_id)
+        return list(dict.fromkeys(asset_id for asset_id in asset_ids if asset_id))
+
+    def _shared_project_output_ids(self, project: ProjectRecord, candidate_output_ids: list[str]) -> set[str]:
+        candidates = {str(item or "").strip() for item in candidate_output_ids if str(item or "").strip()}
+        if not candidates:
+            return set()
+        shared: set[str] = set()
+        for other in self.project_store.list_projects(limit=100):
+            if other.project_id == project.project_id:
+                continue
+            for output_id in self._project_output_reference_ids(other):
+                if output_id in candidates:
+                    shared.add(output_id)
+        return shared
+
+    def _shared_project_upload_ids(self, project: ProjectRecord, candidate_asset_ids: list[str]) -> set[str]:
+        candidates = {str(item or "").strip() for item in candidate_asset_ids if str(item or "").strip()}
+        if not candidates:
+            return set()
+        shared: set[str] = set()
+        for other in self.project_store.list_projects(limit=100):
+            if other.project_id == project.project_id:
+                continue
+            for asset_id in self._project_uploaded_reference_ids(other):
+                if asset_id in candidates:
+                    shared.add(asset_id)
+        return shared
 
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
         return ProjectResponse(

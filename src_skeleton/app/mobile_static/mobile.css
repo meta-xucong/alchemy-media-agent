@@ -469,6 +469,13 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
   background: transparent;
 }
 
+.button.danger,
+.button.compact.danger {
+  border-color: rgba(154, 79, 86, 0.28);
+  color: var(--danger);
+  background: rgba(154, 79, 86, 0.08);
+}
+
 .button.compact {
   min-height: 34px;
   padding: 0 12px;
@@ -4634,6 +4641,14 @@ select:focus {
 .v3-mobile-workflow-panel {
   display: grid;
   gap: 14px;
+}
+
+.v3-mobile-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 #v3Tab > .v3-mobile-workbench > .v3-mobile-detail-panel,

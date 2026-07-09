@@ -30,7 +30,7 @@ const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
 const historyFetchPageSize = 48;
 const heroHistoryPageSize = 8;
-const v3ProjectHomePageSize = 12;
+const v3ProjectHomePageSize = 9;
 const v3ProjectFetchLimit = 80;
 const v3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 16;
@@ -528,6 +528,7 @@ const els = {
   v3ProjectNextActions: document.querySelector("#v3ProjectNextActions"),
   v3BrandMemoryPanel: document.querySelector("#v3BrandMemoryPanel"),
   v3ProjectArchiveBtn: document.querySelector("#v3ProjectArchiveBtn"),
+  v3ProjectDeleteBtn: document.querySelector("#v3ProjectDeleteBtn"),
   v3PersistentDisplayRegion: document.querySelector("#v3PersistentDisplayRegion"),
   v3StepActionRegion: document.querySelector("#v3StepActionRegion"),
   v3StepCards: document.querySelector("#v3StepCards"),
@@ -1089,6 +1090,7 @@ function bindControls() {
   if (els.v3CloseSubpageBtn) els.v3CloseSubpageBtn.addEventListener("click", closeV3ProjectSubpage);
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
+  if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
   if (els.v3BrandMemoryPanel) els.v3BrandMemoryPanel.addEventListener("click", handleV3BrandMemoryPanelClick);
   if (els.closeV3BrandMemoryBtn) els.closeV3BrandMemoryBtn.addEventListener("click", closeV3BrandMemoryModal);
   if (els.v3BrandMemoryCancelBtn) els.v3BrandMemoryCancelBtn.addEventListener("click", closeV3BrandMemoryModal);
@@ -2337,6 +2339,7 @@ function renderV3Projects() {
       <div class="v3-project-card-actions">
         <button type="button" class="button compact secondary" data-v3-project-action="open_project" data-v3-project-id="${escapeHtml(item.project_id)}">继续项目</button>
         <button type="button" class="button compact ghost" data-v3-project-action="archive_project" data-v3-project-id="${escapeHtml(item.project_id)}">归档</button>
+        <button type="button" class="button compact danger" data-v3-project-action="delete_project" data-v3-project-id="${escapeHtml(item.project_id)}">删除</button>
       </div>
     `;
     els.v3ProjectList.appendChild(card);
@@ -2664,6 +2667,7 @@ function renderV3ProjectDetail() {
     els.v3ProjectArchiveBtn.disabled = !project?.project_id || archived;
     els.v3ProjectArchiveBtn.textContent = archived ? "已归档" : "归档项目";
   }
+  if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.disabled = !project?.project_id;
   renderV3ProjectOutputBoard();
   renderV3UsefulReferences();
   renderV3ProjectSnapshot();
@@ -4242,12 +4246,55 @@ async function archiveV3Project(projectId) {
   }
 }
 
+async function deleteV3Project(projectId) {
+  if (!projectId) return;
+  const project = v3State.currentProject?.project_id === projectId
+    ? v3State.currentProject
+    : v3State.projects.find((item) => item?.project_id === projectId);
+  const title = v3ProjectDisplayTitle(project, "这个项目");
+  const ok = window.confirm(`确定删除「${title}」吗？\n\n这个项目、项目记录和项目里的图片会从 V3 删除，用来释放服务器空间。此操作不可恢复。`);
+  if (!ok) return;
+  try {
+    setV3Busy(true, "正在删除项目...");
+    updateV3Notice("正在删除项目和对应图片，请稍等。", "info");
+    await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+    v3State.projects = v3State.projects.filter((item) => item?.project_id !== projectId);
+    v3State.imageHistory = (v3State.imageHistory || []).filter((item) => String(item?.project_id || item?.metadata?.project_id || "") !== projectId);
+    v3State.projectOutputs = (v3State.projectOutputs || []).filter((item) => String(item?.project_id || item?.metadata?.project_id || "") !== projectId);
+    v3State.projectOutputItems = (v3State.projectOutputItems || []).filter((item) => String(item?.project_id || item?.metadata?.project_id || "") !== projectId);
+    writeV3LocalProjects(v3State.projects);
+    if (v3State.activeHistoryProjectId === projectId) closeV3ProjectHistoryModal();
+    if (v3State.currentProject?.project_id === projectId) {
+      v3State.currentProject = null;
+      v3State.currentJob = null;
+      v3State.selectedResult = null;
+      v3State.projectTimeline = [];
+      v3State.projectOutputs = [];
+      v3State.activeProjectStep = "compose";
+      closeV3ProjectSubpage({ silent: true });
+      openV3Home({ silent: true });
+    }
+    renderV3Projects();
+    renderV3History();
+    renderV3HeroHistory();
+    updateV3Notice("项目已删除，相关 V3 图片已清理。", "success");
+  } catch (error) {
+    updateV3Notice(`项目删除失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
+  }
+}
+
 function handleV3ProjectClick(event) {
   const actionButton = event.target.closest("[data-v3-project-action]");
   if (actionButton) {
     event.preventDefault();
     event.stopPropagation();
     const projectId = actionButton.dataset.v3ProjectId || "";
+    if (actionButton.dataset.v3ProjectAction === "delete_project") {
+      deleteV3Project(projectId);
+      return;
+    }
     if (actionButton.dataset.v3ProjectAction === "archive_project") {
       archiveV3Project(projectId);
       return;
@@ -4413,6 +4460,7 @@ function renderV3ProjectOpeningState(projectId) {
   }
   if (els.v3ProjectStyleChips) els.v3ProjectStyleChips.innerHTML = "<span>加载中</span>";
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.disabled = true;
+  if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.disabled = true;
   if (els.v3ProjectOutputBoard) {
     els.v3ProjectOutputBoard.classList.add("empty-v3-list");
     els.v3ProjectOutputBoard.innerHTML = "正在进入项目，图片马上出现。";

@@ -3099,6 +3099,10 @@ function handleMobileV3Click(event) {
     generateMobileV3Job();
     return;
   }
+  if (event.target.closest("#mobileV3DeleteProjectBtn")) {
+    deleteMobileV3Project(mobileV3State.currentProject?.project_id);
+    return;
+  }
   const templateButton = event.target.closest("[data-mobile-v3-template]");
   if (templateButton) {
     if (templateButton.disabled) {
@@ -3304,6 +3308,36 @@ async function createMobileV3ProjectFromHome() {
     openMobileV3ProjectDetail(project, { openComposer: true });
   } catch (error) {
     updateMobileV3Status(`创建失败：${friendlyError(error)}`);
+  }
+}
+
+async function deleteMobileV3Project(projectId) {
+  if (!projectId) return;
+  const project = mobileV3FindProject(projectId) || mobileV3State.currentProject;
+  const title = mobileV3ProjectTitle(project);
+  const ok = window.confirm(`确定删除「${title}」吗？\n\n这个项目和项目里的 V3 图片会被删除，用来释放服务器空间。此操作不可恢复。`);
+  if (!ok) return;
+  try {
+    setMobileV3LoadingLayer(true, "正在删除项目", "正在清理项目记录和对应图片。");
+    await mobileV3Request(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+    mobileV3State.projects = (mobileV3State.projects || []).filter((item) => item?.project_id !== projectId);
+    mobileV3State.outputs = (mobileV3State.outputs || []).filter((item) => String(item?.project_id || item?.metadata?.project_id || "") !== projectId);
+    if (mobileV3State.currentProject?.project_id === projectId) {
+      mobileV3State.currentProject = null;
+      mobileV3State.currentTimeline = [];
+      mobileV3State.activeGalleryProjectId = "";
+      mobileV3State.files = [];
+      mobileV3State.uploadedAssets = [];
+      mobileV3State.uploadFingerprints = {};
+    }
+    persistMobileV3Caches();
+    renderMobileV3ProjectCards();
+    closeMobileSurface({ silent: true, fromHistory: true });
+    updateMobileV3Status("项目已删除，相关图片已清理。");
+  } catch (error) {
+    updateMobileV3Status(`项目删除失败：${friendlyError(error)}`);
+  } finally {
+    setMobileV3LoadingLayer(false);
   }
 }
 
@@ -3616,6 +3650,8 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   mobileV3State.currentTimeline = [];
   setText("#mobileV3ProjectTitle", mobileV3ProjectTitle(project));
   setText("#mobileV3ProjectGoal", mobileV3ProjectGoal(project));
+  const deleteButton = document.querySelector("#mobileV3DeleteProjectBtn");
+  if (deleteButton) deleteButton.disabled = !project?.project_id;
   setText("#mobileV3BackToProjectsBtn", "返回最近项目");
   setText("#mobileV3ProjectDetail [data-mobile-open=\"v3-compose\"] span", "继续项目");
   setText("#mobileV3ComposeSummary", "进入工作台继续生成");

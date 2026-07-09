@@ -361,6 +361,12 @@ def v3_archive_project_endpoint(project_id: str, request: Request, authorization
     return _run_v3_handler(v3_route_handlers.post_project_archive, project_id)
 
 
+@app.delete("/api/v3/creative-agent/projects/{project_id}")
+def v3_delete_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.delete_project, project_id)
+
+
 @app.get("/api/v3/creative-agent/projects/{project_id}/timeline")
 def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)

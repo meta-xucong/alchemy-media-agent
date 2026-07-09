@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 
 from .contracts import ProjectRecord, ProjectTimelineItem
 
@@ -42,6 +43,11 @@ class InMemoryProjectStore:
 
     def list_timeline(self, project_id: str) -> list[ProjectTimelineItem]:
         return sorted(self._timeline.get(project_id, []), key=lambda item: item.created_at)
+
+    def delete_project(self, project_id: str) -> bool:
+        project = self._projects.pop(project_id, None)
+        timeline = self._timeline.pop(project_id, None)
+        return project is not None or timeline is not None
 
 
 class PersistentProjectStore(InMemoryProjectStore):
@@ -86,6 +92,16 @@ class PersistentProjectStore(InMemoryProjectStore):
     def list_timeline(self, project_id: str) -> list[ProjectTimelineItem]:
         self._load_timeline(project_id)
         return super().list_timeline(project_id)
+
+    def delete_project(self, project_id: str) -> bool:
+        if not _valid_project_id(project_id):
+            return False
+        removed = super().delete_project(project_id)
+        project_dir = self.storage_root / project_id
+        if project_dir.exists():
+            _safe_remove_tree(self.storage_root, project_dir)
+            removed = True
+        return removed
 
     def _load_all_projects(self) -> None:
         if not self.storage_root.exists():
@@ -157,6 +173,15 @@ def _atomic_write_json(path: Path, payload: object) -> None:
 
 def _valid_project_id(project_id: str) -> bool:
     return bool(_PROJECT_ID_PATTERN.match(str(project_id or "")))
+
+
+def _safe_remove_tree(root: Path, target: Path) -> None:
+    root_resolved = root.resolve()
+    target_resolved = target.resolve()
+    if target_resolved == root_resolved or root_resolved not in target_resolved.parents:
+        raise ValueError("Refusing to delete outside the V3 project storage root.")
+    if target_resolved.exists():
+        shutil.rmtree(target_resolved)
 
 
 def _default_storage_root() -> Path:

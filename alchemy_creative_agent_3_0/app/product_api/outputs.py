@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import threading
 from uuid import uuid4
 
@@ -157,6 +158,17 @@ class V3GeneratedOutputStore:
             return None
         return path, media_type, filename
 
+    def delete_output(self, output_id: str) -> bool:
+        if not _valid_output_id(output_id):
+            return False
+        output_dir = self.storage_root / output_id
+        if not output_dir.exists():
+            self._invalidate_cache()
+            return False
+        _safe_remove_tree(self.storage_root, output_dir)
+        self._invalidate_cache()
+        return True
+
     def _write_record(self, record: V3GeneratedOutputRecord) -> None:
         path = self._record_path(record.output_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +246,15 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _safe_remove_tree(root: Path, target: Path) -> None:
+    root_resolved = root.resolve()
+    target_resolved = target.resolve()
+    if target_resolved == root_resolved or root_resolved not in target_resolved.parents:
+        raise ValueError("Refusing to delete outside the V3 output storage root.")
+    if target_resolved.exists():
+        shutil.rmtree(target_resolved)
 
 
 def _decode_image(encoded_image: str) -> bytes:

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 from uuid import uuid4
 
 from ..shared_capabilities import AssetRole, UploadedAssetInfo
@@ -168,6 +169,15 @@ class V3UploadedAssetStore:
             return None
         return path.read_bytes(), record.mime_type
 
+    def delete_upload(self, asset_id: str) -> bool:
+        if not _valid_asset_id(asset_id):
+            return False
+        asset_dir = self.storage_root / asset_id
+        if not asset_dir.exists():
+            return False
+        _safe_remove_tree(self.storage_root, asset_dir)
+        return True
+
     def resolve_uploaded_assets(self, asset_ids: list[str]) -> list[UploadedAssetInfo]:
         resolved: list[UploadedAssetInfo] = []
         seen: set[str] = set()
@@ -293,3 +303,12 @@ def _coerce_asset_role(value: str | None) -> AssetRole | None:
 
 def _valid_asset_id(asset_id: str) -> bool:
     return bool(_ASSET_ID_PATTERN.match(str(asset_id or "")))
+
+
+def _safe_remove_tree(root: Path, target: Path) -> None:
+    root_resolved = root.resolve()
+    target_resolved = target.resolve()
+    if target_resolved == root_resolved or root_resolved not in target_resolved.parents:
+        raise ValueError("Refusing to delete outside the V3 uploaded asset storage root.")
+    if target_resolved.exists():
+        shutil.rmtree(target_resolved)

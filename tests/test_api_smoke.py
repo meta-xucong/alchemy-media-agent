@@ -1871,7 +1871,7 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260627-v2-upload-polish" in index.text
+    assert "20260709-v3-project-delete" in index.text
     assert index.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text
@@ -2250,7 +2250,7 @@ def test_frontend_static_app_is_served():
     assert "function refreshV1GenerationSideEffects" in script.text
     assert "await refreshV1GenerationSideEffects();" in script.text
     assert "function v2HistoryEndpoint" in script.text
-    assert "loadV2HistoryResponse({ full: true" in script.text
+    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0" in script.text
     assert "const v2HistoryFetchPageSize = 72" in script.text
     assert "管理员可见全部账户" in script.text
     assert "当前账户与旧版生图记录" in script.text
@@ -2275,7 +2275,7 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260707-v3-mobile-h5" in h5.text
+    assert "20260709-v3-project-delete" in h5.text
     assert h5.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text
@@ -2520,7 +2520,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
     assert "function v2HistoryEndpoint" in mobile_script.text
-    assert "loadV2HistoryResponse({ full: true" in mobile_script.text
+    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0" in mobile_script.text
     assert "const v2HistoryFetchPageSize = 72" in mobile_script.text
     assert "/v1/veyra/usage?limit=100" in mobile_script.text
     assert "await refreshVeyraAccountPanelAfterHistoryChange();" in mobile_script.text
