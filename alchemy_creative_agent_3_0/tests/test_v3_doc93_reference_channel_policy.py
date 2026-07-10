@@ -323,6 +323,11 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert provider_assets[0]["identity_gateway_min_edge_px"] == 512
     assert provider_assets[0]["identity_evidence_scope"] == "feature_detail"
     assert provider_assets[1]["identity_evidence_scope"] == "head_geometry"
+    assert provider_assets[0]["identity_color_retention"] == 0.90
+    assert provider_assets[1]["identity_color_retention"] == 0.65
+    assert provider_assets[0]["identity_evidence_group_id"] == "portrait_identity::uploaded_face_truth"
+    assert provider_assets[1]["identity_evidence_group_id"] == "portrait_identity::uploaded_face_truth"
+    assert provider_assets[0]["priority"] > provider_assets[1]["priority"]
     assert provider_assets[0]["provider_reference_bytes"] <= 480_000
     assert provider_assets[1]["provider_reference_bytes"] <= 480_000
     assert Path(provider_assets[0]["storage_path"]).read_bytes() != Path(
@@ -335,6 +340,16 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert corner != (128, 128, 128)
     assert 20 < max(corner) - min(corner) < 180
     assert 20 < max(red, green, blue) - min(red, green, blue) < 180
+
+    prompt_with_evidence = provider._generation_prompt(  # noqa: SLF001
+        request,
+        references,
+        asset_plan=asset_plan,
+    )
+    assert "complementary crops of one single uploaded person" in prompt_with_evidence
+    assert "Use the feature-detail crop for brow-eye" in prompt_with_evidence
+    assert "Use the head-geometry crop for face width/length" in prompt_with_evidence
+    assert len(prompt_with_evidence) <= 15_000
 
 
 def test_doc93_reference_conditioned_real_generation_defaults_to_live_review() -> None:

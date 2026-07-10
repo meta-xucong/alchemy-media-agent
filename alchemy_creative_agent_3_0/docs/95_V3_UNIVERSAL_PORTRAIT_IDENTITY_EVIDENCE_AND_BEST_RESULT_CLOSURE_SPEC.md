@@ -100,6 +100,8 @@ otherwise use a conservative subject-safe fallback crop
 never crop away the chin, jaw corners, forehead, or both temples
 preserve moderate natural color after neutral white balance
 do not reduce identity evidence to near-grayscale
+retain enough natural color and tonal separation for brows, eyes, nose, lips,
+and face-plane transitions to remain readable
 do not synthesize a flat matte or artificial background
 keep valid JPEG geometry for gateway compatibility
 compress each derivative independently and bound their combined payload
@@ -118,6 +120,13 @@ minimum short edge 512 px
 The complete original remains in project history. It is sent upstream only
 when Doc93 explicitly assigns source-owned hair, wardrobe, appearance, scene,
 lighting, camera, mood, or style channels.
+
+The provider prompt must explicitly state that both derivatives are
+complementary crops of one single source person. Feature-detail evidence owns
+the brow-eye and nose-mouth relationships; head-geometry evidence owns the
+forehead, face ratio, temple-cheek-jaw contour, jaw slope, and chin scale. The
+model must never interpret them as two candidate identities or average them
+into a generic beauty face.
 
 ## 5. Identity Source Priority
 
@@ -339,4 +348,3 @@ no generic beauty-template face replacement
 no provider request-body regression
 full V3, frontend/API, root, compile, and static audits pass
 ```
-

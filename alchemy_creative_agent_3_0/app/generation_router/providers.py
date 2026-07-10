@@ -726,7 +726,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         asset_plan = self._asset_plan(request, reference_assets)
         provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
-        generation_prompt = self._generation_prompt(request, reference_assets)
+        generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         protected_user_direction = self._provider_user_direction(request)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
@@ -1018,12 +1018,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "asset_id": f"{asset['asset_id']}::{derivative['derivative_kind']}",
                         "source_asset_id": asset["asset_id"],
                         "role": self._truth_layer_provider_role(derivative.get("truth_layer"), asset.get("role")),
-                        "priority": self._truth_layer_priority(derivative.get("truth_layer"), asset, index),
+                        "priority": self._truth_layer_priority(derivative.get("truth_layer"), asset, index)
+                        + (8 if derivative.get("derivative_kind") == "portrait_identity_crop" else 0),
                         "provider_input_mode": "reference_image",
                         "storage_path": derivative["path"],
                         "filename": derivative.get("path_name") or asset.get("filename"),
                         "mime_type": "image/jpeg",
-                        "prompt_constraints": [self._truth_layer_constraint(derivative.get("truth_layer"), asset)],
+                        "prompt_constraints": [
+                            self._truth_derivative_constraint(derivative, asset)
+                        ],
                         "negative_constraints": closure_negative_rules[:8],
                         "strength": asset.get("strength"),
                         "use_policy": asset.get("use_policy"),
@@ -1040,6 +1043,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         ),
                         "identity_gateway_min_edge_px": derivative.get("identity_gateway_min_edge_px"),
                         "identity_evidence_scope": derivative.get("identity_evidence_scope"),
+                        "identity_evidence_group_id": (
+                            f"portrait_identity::{asset['asset_id']}"
+                            if derivative.get("truth_layer") == "portrait_identity_truth"
+                            else None
+                        ),
                         "provider_reference_bytes": self._provider_reference_file_size(derivative.get("path")),
                     }
                 )
@@ -1401,6 +1409,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         return f"Use {filename} as style and context truth only."
 
+    def _truth_derivative_constraint(self, derivative: dict[str, Any], asset: dict[str, Any]) -> str:
+        base = self._truth_layer_constraint(derivative.get("truth_layer"), asset)
+        kind = str(derivative.get("derivative_kind") or "")
+        if kind == "portrait_identity_crop":
+            return (
+                "Complementary crop 1 of one single uploaded person, not a separate candidate: use this feature-detail "
+                "view for brow-eye geometry, eye shape and spacing, nose bridge/tip/wings, nose-mouth relationship, "
+                "philtrum, mouth width, and lip contour. Ignore its hair styling, clothing, background, light, and color grade. "
+                + base
+            )
+        if kind == "portrait_identity_geometry_crop":
+            return (
+                "Complementary crop 2 of the same single uploaded person, not a separate candidate: use this head-geometry "
+                "view for forehead-midface-lower-face proportion, temple-cheek-jaw contour, face width/length, cheek volume, "
+                "jaw slope, and chin scale. Ignore its hair styling, clothing, background, light, and color grade. "
+                + base
+            )
+        return base
+
     def _provider_reference_file_size(self, path: Any) -> int | None:
         try:
             return int(Path(str(path)).stat().st_size)
@@ -1430,13 +1457,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     ),
                     "identity_gateway_min_edge_px": item.get("identity_gateway_min_edge_px"),
                     "identity_evidence_scope": item.get("identity_evidence_scope"),
+                    "identity_evidence_group_id": item.get("identity_evidence_group_id"),
                     "provider_reference_bytes": item.get("provider_reference_bytes"),
                     "filename": item.get("filename"),
                 }
             )
         return summaries
 
-    def _generation_prompt(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> str:
+    def _generation_prompt(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+        *,
+        asset_plan: dict[str, Any] | None = None,
+    ) -> str:
         prompt = request.prompt_compilation
         asset = request.asset_spec
         layout = request.layout_plan
@@ -1467,6 +1501,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             f"Visual direction:\n{visual_direction}",
             reference_channel_contract,
             portrait_identity_contract,
+            self._identity_evidence_prompt(asset_plan),
             f"Asset purpose: {asset.purpose}" if asset else "",
             (
                 "Output goal: create a polished, directly usable image with a clear subject and atmosphere."
@@ -1581,6 +1616,36 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return self._provider_prompt_for_delivery(
             "\n".join(part for part in parts if str(part or "").strip()),
             protected_user_direction=user_direction,
+        )
+
+    def _identity_evidence_prompt(self, asset_plan: dict[str, Any] | None) -> str:
+        assets = asset_plan.get("assets", []) if isinstance(asset_plan, dict) else []
+        identity_assets = [
+            item
+            for item in assets
+            if item.get("reference_truth_layer") == "portrait_identity_truth"
+            and item.get("provider_input_mode") == "reference_image"
+        ]
+        scopes = {
+            str(item.get("identity_evidence_scope") or "")
+            for item in identity_assets
+            if item.get("identity_evidence_scope")
+        }
+        if not {"feature_detail", "head_geometry"}.issubset(scopes):
+            return ""
+        source_ids = _dedupe(
+            [str(item.get("source_asset_id") or "") for item in identity_assets if item.get("source_asset_id")]
+        )
+        if len(source_ids) != 1:
+            return ""
+        return "\n".join(
+            [
+                "Portrait identity evidence:",
+                "The two portrait reference images are complementary crops of one single uploaded person, not two people and not alternative identities.",
+                "Use the feature-detail crop for brow-eye, eye spacing, nose-mouth, philtrum, mouth width, and lip-contour relationships.",
+                "Use the head-geometry crop for face width/length, forehead-midface-lower-face proportion, temple-cheek-jaw contour, cheek volume, jaw slope, and chin scale.",
+                "Fuse both crops into the same-person identity. Do not average them into a generic beauty face, and do not inherit their hair styling, clothing, background, lighting, or color grade unless the reference-channel policy explicitly assigns that channel.",
+            ]
         )
 
     def _provider_user_direction(self, request: GenerationRequest) -> str:

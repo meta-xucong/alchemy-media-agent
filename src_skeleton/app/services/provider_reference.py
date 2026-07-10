@@ -118,7 +118,7 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "fallback_to_original": bool(fallback),
         "identity_color_neutralized": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
         "identity_color_retention": (
-            0.55 if kind == "portrait_identity_crop" else 0.30 if kind == "portrait_identity_geometry_crop" else None
+            0.90 if kind == "portrait_identity_crop" else 0.65 if kind == "portrait_identity_geometry_crop" else None
         ),
         "identity_background_neutralized": False,
         "identity_context_reduced_by_tight_crop": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
@@ -143,7 +143,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v1:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +159,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
         if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
             from PIL import ImageEnhance
 
-            color_retention = 0.55 if kind == "portrait_identity_crop" else 0.30
+            color_retention = 0.90 if kind == "portrait_identity_crop" else 0.65
             cropped = ImageEnhance.Color(cropped).enhance(color_retention)
             minimum_edge = min(512, max_edge)
             if min(cropped.size) < minimum_edge:
@@ -205,10 +205,10 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
             center_x = width * 0.5
             center_y = height * 0.42
         else:
-            crop_w = int(width * 0.62)
-            crop_h = int(height * 0.58)
+            crop_w = int(width * 0.58)
+            crop_h = int(height * 0.53)
             center_x = width * 0.5
-            center_y = height * 0.34
+            center_y = height * 0.31
     elif kind == "portrait_identity_geometry_crop":
         if height > width * 1.15:
             crop_w = int(width * 0.90)
@@ -221,10 +221,10 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
             center_x = width * 0.5
             center_y = height * 0.45
         else:
-            crop_w = int(width * 0.78)
-            crop_h = int(height * 0.74)
+            crop_w = int(width * 0.72)
+            crop_h = int(height * 0.58)
             center_x = width * 0.5
-            center_y = height * 0.38
+            center_y = height * 0.29
     elif kind == "appearance_truth_crop":
         crop_w = int(width * 0.88)
         crop_h = int(height * 0.92)
