@@ -827,13 +827,38 @@ metadata records the exact final provider-prompt character count so gateway
 rejections can be distinguished from image-input failures without logging the
 private prompt itself.
 
-Provider prompt normalization is not user-prompt compression. Preserve the
-complete user/LLM visual direction and every unique user constraint. Remove
-only framework-generated copies already owned by the role director, Doc93
-reference policy, identity contract, or negative section. Review priorities
-and pass conditions stay in the post-generation reviewer; only generation
-guidance enters the image provider. Exact duplicate lines are normalized once,
-and no default character cap or arbitrary truncation is introduced.
+Provider prompt materialization is not user-prompt compression. Preserve the
+complete positive user direction and every explicit user negative. Keep the
+full Brain result, checkpoints, module packages, and audit evidence in V3
+metadata, but send only their concise structured decisions to the image
+provider. Remove framework-generated copies already owned by the role
+director, Doc93 reference policy, identity contract, Human Realism, or the
+negative section. Review priorities and pass conditions stay in the
+post-generation reviewer; only generation guidance enters the image provider.
+
+Live VPS acceptance supersedes the earlier no-budget assumption. The same
+valid GPT Image 2 reference crop succeeded with a provider prompt around 16k
+characters but the fully repeated 25k-35k framework prompt was rejected by the
+OpenAI-compatible edit gateway with generic `400 / openai_error` wrappers.
+Therefore the provider materializer uses a 15k transport target for normal V3
+jobs. This is a semantic framework budget, not a suffix slice:
+
+```text
+preserve the complete positive user request first
+preserve explicit user negative instructions
+materialize Brain optimized direction and continuity from structured fields
+emit each module-owned rule once
+drop duplicate review/pass wording from generation payloads
+drop internal asset ids from natural-language provider instructions
+if the user request itself exceeds the target, keep it intact and shed
+framework guidance before considering any transport failure
+```
+
+This follows the proven V2 checkpoint principle: allow the creative brain to
+reason deeply, persist compact structured checkpoints, and keep the downstream
+provider contract concise. V3 remains independently implemented and does not
+call V2 runtime code. Exact duplicate lines are normalized once; arbitrary
+whole-prompt truncation and loss of user scene details remain forbidden.
 
 If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
 `400 / bad_response_status_code / openai_error`, classify only that generic

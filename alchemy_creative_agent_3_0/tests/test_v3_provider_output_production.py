@@ -232,6 +232,9 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert candidate.metadata["compiled_visual_direction"] == "premium ecommerce product hero image on a clean bright background"
     assert "premium ecommerce product hero image on a clean bright background" in candidate.metadata["final_provider_prompt"]
     assert "Strong reference rules" in candidate.metadata["final_provider_prompt"]
+    assert candidate.metadata["final_provider_prompt_chars"] == len(candidate.metadata["final_provider_prompt"])
+    assert candidate.metadata["provider_prompt_target_chars"] == 15000
+    assert candidate.metadata["provider_prompt_materialization"] == "v3_semantic_budget_user_direction_lossless"
     assert "fake text" in candidate.metadata["negative_constraints"]
     assert "distorted product" in candidate.metadata["negative_constraints"]
     assert Path(candidate.file_path).exists()
@@ -239,6 +242,7 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     records = provider.output_store.list_by_job("job_v3_prod")
     assert records[0].metadata["compiled_visual_direction"] == candidate.metadata["compiled_visual_direction"]
     assert records[0].metadata["final_provider_prompt"] == candidate.metadata["final_provider_prompt"]
+    assert records[0].metadata["final_provider_prompt_chars"] == candidate.metadata["final_provider_prompt_chars"]
     assert records[0].metadata["style_notes"] == ["premium", "clean"]
 
 
@@ -513,8 +517,15 @@ def test_production_provider_includes_human_photorealism_guidance(tmp_path, monk
     assert response.provider_metadata["mode_quality_profile"]["mode"] == "selection_candidates"
 
 
-def test_production_provider_keeps_full_provider_prompt_by_default() -> None:
+def test_production_provider_materializes_framework_without_losing_user_direction() -> None:
     request = _human_generation_request()
+    user_direction = " ".join(
+        [
+            "East Asian summer beach portrait with natural fair skin, same person identity, premium real camera photography"
+            for _ in range(8)
+        ]
+    )
+    request.metadata["user_input"] = user_direction
     request.prompt_compilation.visual_prompt = " ".join(
         [
             "East Asian summer beach portrait with natural fair skin, same person identity, premium real camera photography"
@@ -525,7 +536,8 @@ def test_production_provider_keeps_full_provider_prompt_by_default() -> None:
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert len(final_prompt) > 3200
+    assert len(final_prompt) <= ProductionImageGenerationProvider.provider_prompt_target_chars
+    assert user_direction in final_prompt
     assert "Visual direction:" in final_prompt
     assert "Human realism contract" in final_prompt
     assert "Identity continuity" in final_prompt
@@ -537,6 +549,7 @@ def test_provider_prompt_removes_framework_duplicates_without_truncating_user_di
     request = _human_generation_request()
     user_direction = "A complete exact user visual direction with silver costume, pear blossoms, and cool cinematic light."
     request.prompt_compilation.visual_prompt = user_direction
+    request.metadata["user_input"] = user_direction
     request.prompt_compilation.hard_constraints = [
         "Use the V3-owned generation strategy selected by the runtime.",
         "Do not render any final text, captions, or UI copy inside the image model output.",

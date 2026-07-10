@@ -5,13 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..creative_core.prompt_language import product_language_allowed
+from ..creative_core.prompt_language import (
+    product_language_allowed,
+    split_positive_and_negative_prompt,
+    strip_negated_product_phrases,
+)
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
@@ -285,10 +290,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     provider_name = "production_image_generation_provider"
     provider_version = "v3.8b-provider-output-production"
-    # Keep the production path lossless by default. A numeric limit can still be
-    # set by tests or a future provider-specific guard when a hard upstream
-    # limit is proven, but normal local/VPS generation should use the same full
-    # V3-compiled provider prompt.
+    # Live GPT Image 2 reference runs showed that framework-expanded prompts
+    # above roughly 16k characters can be rejected by an otherwise valid image
+    # edit gateway. Keep the user's positive request lossless, but materialize
+    # module-owned guidance into a concise provider transport contract.
+    provider_prompt_target_chars = 15000
     max_provider_prompt_chars: int | None = None
 
     def __init__(self, output_store: Any | None = None) -> None:
@@ -383,6 +389,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_reference_assets": provider_reference_assets,
                     "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                     "final_provider_prompt": final_provider_prompt,
+                    "final_provider_prompt_chars": len(final_provider_prompt),
+                    "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
+                    "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
                     "negative_constraints": negative_constraints,
                     "style_notes": list(request.prompt_compilation.style_notes),
                     "layout_notes": list(request.prompt_compilation.layout_notes),
@@ -450,6 +459,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_reference_assets": provider_reference_assets,
                         "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                         "final_provider_prompt": final_provider_prompt,
+                        "final_provider_prompt_chars": len(final_provider_prompt),
+                        "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
+                        "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
                         "negative_constraints": negative_constraints,
                         "style_notes": list(request.prompt_compilation.style_notes),
                         "layout_notes": list(request.prompt_compilation.layout_notes),
@@ -505,6 +517,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
                 "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                 "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
+                "final_provider_prompt_chars": len(final_provider_prompt),
+                "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
+                "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
                 "llm_brain": llm_brain,
                 "shared_capabilities": shared_capabilities,
                 "visual_capability_cluster": visual_cluster,
@@ -711,6 +726,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         asset_plan = self._asset_plan(request, reference_assets)
         provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
+        generation_prompt = self._generation_prompt(request, reference_assets)
+        protected_user_direction = self._provider_user_direction(request)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
             scene=self._scene_for_request(request),
@@ -724,7 +741,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             quality=self._quality_for_request(request),
             output_format="png",
             variables={
-                "generation_prompt": self._generation_prompt(request, reference_assets),
+                "generation_prompt": generation_prompt,
+                "provider_prompt_chars": len(generation_prompt),
+                "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
+                "protected_user_direction_chars": len(protected_user_direction),
+                "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
                 "asset_plan": asset_plan,
                 "v3_prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                 "v3_generation_plan_id": request.generation_plan.generation_plan_id,
@@ -1397,12 +1418,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt = request.prompt_compilation
         asset = request.asset_spec
         layout = request.layout_plan
+        user_direction = self._provider_user_direction(request)
+        visual_direction = self._provider_visual_direction(request, user_direction=user_direction)
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
         role_guidance = self._mode_role_prompt_guidance(request)
+        include_supporting_notes = allow_product_language or len(user_direction) < 180
         resolved_reference_policy = self._resolved_reference_policy_package(request)
         provider_hard_constraints = self._provider_hard_constraints(
             request,
@@ -1418,19 +1442,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if allow_product_language
                 else "Create a polished, directly usable creative image asset."
             ),
-            f"Visual direction: {prompt.visual_prompt}",
+            f"Visual direction:\n{visual_direction}",
             reference_channel_contract,
             portrait_identity_contract,
             f"Asset purpose: {asset.purpose}" if asset else "",
+            (
+                "Output goal: create a polished, directly usable image with a clear subject and atmosphere."
+                if not allow_product_language and len(user_direction) < 180
+                else ""
+            ),
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
             f"Composition: {layout.product_area.position}" if layout else "",
             f"Visual hierarchy: {', '.join(layout.visual_hierarchy)}" if layout and layout.visual_hierarchy else "",
-            "Generate exactly one complete image frame for this output. Do not create a collage, split screen, contact sheet, storyboard, before-after comparison, duplicated frame, or grid of separate images inside the same output.",
+            "Generate exactly one image; it must be a single complete image frame. Do not create a collage, split screen, contact sheet, storyboard, before-after comparison, duplicated frame, or grid of separate images inside the same output.",
             "Reserve clean blank areas for later UI/text overlay outside the generated pixels.",
             (
                 "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, AI-generated marks, or product claims inside the image."
                 if allow_product_language
-                else "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, or AI-generated marks inside the image."
+                else "Do not render any final text or add captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, or AI-generated marks inside the image."
             ),
             *(
                 [
@@ -1439,12 +1468,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ]
                 if allow_product_language
                 else [
-                    "Preserve the requested subject, scene, style, lighting, composition, and natural proportions.",
+                    "Preserve the requested subject, scene, style, and mood, plus explicit lighting, composition, and natural proportions.",
                     "Do not add unrelated props, unrelated labels, logos, distracting objects, or objects not requested by the user.",
                 ]
             ),
-            f"Style notes: {', '.join(prompt.style_notes)}" if prompt.style_notes else "",
-            f"Layout notes: {', '.join(prompt.layout_notes)}" if prompt.layout_notes else "",
+            f"Style notes: {', '.join(prompt.style_notes)}" if include_supporting_notes and prompt.style_notes else "",
+            f"Layout notes: {', '.join(prompt.layout_notes)}" if include_supporting_notes and prompt.layout_notes else "",
             f"Hard constraints: {'; '.join(provider_hard_constraints)}" if provider_hard_constraints else "",
         ]
         if role_guidance:
@@ -1459,44 +1488,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if human_guidance or (human_photo_context and not allow_product_language):
             positive = self._string_list(human_guidance.get("positive_prompt_fragments"))
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
-            lines = []
-            lines.append(
-                "Polish interpretation: if any earlier line says polished, refined, premium, or beauty, resolve it as camera-ready real-person photography, not skin blur, face slimming, enlarged eyes, V-shaped chin, or idol-card retouch."
-            )
-            lines.append(
-                "Attractive realism balance: keep a healthy clear complexion, fresh bright skin tone from soft natural bounce light, gentle cheek warmth, natural lip color, and awake eyes; preserve natural skin tone and real texture, avoiding skin whitening, dull complexion, muddy color cast, underexposed face, harsh facial shadow, or overly matte documentary plainness."
-            )
-            lines.append(
-                "Identity continuity: preserve the requested person's recognizable face and body identity when identity continuity is part of the task; Human Realism must not expand reference inheritance into hair, wardrobe, lighting, scene, camera, or style."
-            )
-            lines.append(
-                "East Asian portrait aesthetic guard: for East Asian fresh, beauty, or summer portrait requests with no explicit tan, dark, or bronze instruction, keep a clean fair luminous complexion from high-key daylight, soft bounce light, exposure, and color balance; do not darken or tan the skin by default; avoid fake whitening masks or skin smoothing; preserve natural head-to-body, neck, shoulder, and upper-body proportions."
-            )
+            lines = [
+                "Polish interpretation: camera-ready real-person photography, never beauty-app face reshaping, face slimming, enlarged eyes, V-shaped chin, or skin-blur retouch.",
+                "Attractive realism balance: keep a healthy clear complexion, natural skin tone, and an attractive natural face with believable texture, soft natural bounce light, awake eyes, natural lips, and no plastic, waxy, skin whitening, or beauty-filter retouch.",
+                "Identity continuity: Human Realism improves rendering only; it never expands reference ownership into hair, wardrobe, lighting, scene, camera, or style.",
+                "East Asian portrait aesthetic guard: unless tan, dark, or bronze skin is requested, keep a clean fair luminous complexion and do not darken or tan the skin by default; use exposure and color balance rather than fake whitening masks or smoothing; preserve natural head-to-body, neck, shoulder, and upper-body proportions.",
+                "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",
+            ]
             if positive:
-                lines.append("Photoreal human rendering: " + "; ".join(positive[:8]))
+                lines.append("Photoreal human rendering: " + "; ".join(positive[:4]))
             if do_not_inherit and reference_assets:
-                lines.append("Reference cleanup: " + "; ".join(do_not_inherit[:4]))
+                lines.append("Reference cleanup: " + "; ".join(do_not_inherit[:2]))
             if lines:
                 parts.append("Human realism contract:\n" + "\n".join(lines))
         closure = self._strong_reference_closure_package(request)
         if closure:
             closure_lines = [
                 "Reference strength: " + str(closure.get("reference_strength") or "strong"),
-                "Provider reference ids: " + ", ".join(self._string_list(closure.get("provider_reference_required_ids"))[:6]),
-                "Keep: " + "; ".join(self._string_list(closure.get("identity_keep_rules"))[:5]),
-                "Allow variation: " + "; ".join(self._string_list(closure.get("allowed_variations"))[:5]),
-                "Do not drift: " + "; ".join(self._string_list(closure.get("forbidden_drift"))[:5]),
+                "Use selected references as identity truth only for their resolved identity channels.",
+                "Allow variation: " + "; ".join(self._string_list(closure.get("allowed_variations"))[:4]),
+                "Do not drift: " + "; ".join(self._string_list(closure.get("forbidden_drift"))[:4]),
             ]
-            role_guidance_text = "\n".join(role_guidance).lower()
-            unique_provider_rules = [
-                value
-                for value in self._string_list(closure.get("provider_prompt_rules"))[:5]
-                if value.lower() not in role_guidance_text
-            ]
-            if unique_provider_rules:
-                closure_lines.append(
-                    "Provider rules: " + "; ".join(unique_provider_rules)
-                )
             parts.append("Selected reference closure:\n" + "\n".join(line for line in closure_lines if not line.endswith(": ")))
         if reference_assets:
             reference_lines = [
@@ -1541,9 +1553,129 @@ class ProductionImageGenerationProvider(GenerationProvider):
         retry_guidance = self._retry_prompt_guidance(request)
         if retry_guidance:
             parts.append("Retry repair guidance: " + " ".join(retry_guidance))
-        if prompt.negative_prompt:
-            parts.append(f"Avoid: {prompt.negative_prompt}")
-        return self._provider_prompt_for_delivery("\n".join(part for part in parts if str(part or "").strip()))
+        negative_guidance = self._provider_negative_guidance(request)
+        if negative_guidance:
+            parts.append(f"Avoid: {negative_guidance}")
+        return self._provider_prompt_for_delivery(
+            "\n".join(part for part in parts if str(part or "").strip()),
+            protected_user_direction=user_direction,
+        )
+
+    def _provider_user_direction(self, request: GenerationRequest) -> str:
+        raw = str(request.metadata.get("normalized_input") or request.metadata.get("user_input") or "").strip()
+        if not raw:
+            return ""
+        positive, _explicit_negative = split_positive_and_negative_prompt(raw)
+        value = str(positive or raw)
+        if not self._product_language_allowed(request, []):
+            value = strip_negated_product_phrases(value)
+        return " ".join(value.split()).strip()
+
+    def _provider_visual_direction(self, request: GenerationRequest, *, user_direction: str) -> str:
+        if not user_direction:
+            return str(request.prompt_compilation.visual_prompt or "").strip()
+        lines = [f"User request (verbatim): {user_direction}"]
+        llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
+        guidance = llm_brain.get("prompt_guidance") if isinstance(llm_brain.get("prompt_guidance"), dict) else {}
+        if llm_brain.get("llm_used"):
+            refinements = self._provider_brain_refinement_clauses(
+                str(guidance.get("optimized_direction") or ""),
+                user_direction=user_direction,
+            )
+            if refinements:
+                lines.append("Brain-refined visual decisions: " + "; ".join(refinements[:4]))
+        elif len(user_direction) < 180:
+            refinements = self._provider_brain_refinement_clauses(
+                str(request.prompt_compilation.visual_prompt or ""),
+                user_direction=user_direction,
+            )
+            if refinements:
+                lines.append("Provider-neutral refined direction: " + "; ".join(refinements[:4]))
+        if len(user_direction) < 180:
+            style_notes = self._string_list(guidance.get("style_notes"))
+            if style_notes:
+                lines.append("Brain-refined style: " + "; ".join(_dedupe(style_notes)[:4]))
+        consistency = " ".join(str(guidance.get("consistency_strategy") or "").split()).strip()
+        if consistency and not self._provider_text_overlaps_user(consistency, user_direction):
+            lines.append("Project continuity decision: " + consistency)
+        return "\n".join(lines)
+
+    def _provider_brain_refinement_clauses(self, value: str, *, user_direction: str) -> list[str]:
+        text = " ".join(str(value or "").split()).strip()
+        if not text:
+            return []
+        clauses = re.split(r"(?<=[.!?。！？])\s*|\s*[;；]\s*", text)
+        selected: list[str] = []
+        generic_fragments = (
+            "create a professionally polished image set for",
+            "create a commercially polished image set for",
+            "use clean composition",
+            "no generated text overlays",
+        )
+        for clause in clauses:
+            clean = " ".join(str(clause or "").split()).strip(" .;；")
+            if not clean:
+                continue
+            lowered = clean.lower()
+            if any(marker in lowered for marker in generic_fragments):
+                continue
+            if self._provider_text_overlaps_user(clean, user_direction):
+                continue
+            if clean not in selected:
+                selected.append(clean)
+            if len(selected) >= 4:
+                break
+        return selected
+
+    def _provider_text_overlaps_user(self, value: str, user_direction: str) -> bool:
+        def semantic_key(text: str) -> str:
+            return "".join(character.lower() for character in str(text or "") if character.isalnum())
+
+        value_key = semantic_key(value)
+        user_key = semantic_key(user_direction)
+        if not value_key or not user_key:
+            return False
+        if value_key in user_key or user_key in value_key:
+            return True
+        if len(value_key) >= 24:
+            windows = [value_key[index : index + 24] for index in range(0, len(value_key) - 23, 12)]
+            return bool(windows) and sum(1 for window in windows if window in user_key) >= max(1, len(windows) // 2)
+        return False
+
+    def _provider_negative_guidance(self, request: GenerationRequest) -> str:
+        raw_user = str(request.metadata.get("normalized_input") or request.metadata.get("user_input") or "")
+        _positive, explicit_negative = split_positive_and_negative_prompt(raw_user)
+        llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
+        guidance = llm_brain.get("prompt_guidance") if isinstance(llm_brain.get("prompt_guidance"), dict) else {}
+        brain_negative = self._string_list(guidance.get("negative_prompt_addons"))[:8]
+        human_negative = self._string_list(self._human_photorealism_guidance(request).get("negative_prompt_fragments"))[:8]
+        compiled_negative = [
+            part.strip()
+            for part in str(request.prompt_compilation.negative_prompt or "").replace("，", ",").split(",")
+            if part.strip()
+        ]
+        framework_negative: list[str] = []
+        priority_markers = (
+            "identity",
+            "face",
+            "skin",
+            "watermark",
+            "text",
+            "collage",
+            "split screen",
+            "contact sheet",
+            "distorted",
+            "artifact",
+            "unrelated",
+            "unrequested",
+            "clutter",
+        )
+        for value in compiled_negative:
+            if any(marker in value.lower() for marker in priority_markers):
+                framework_negative.append(value)
+            if len(framework_negative) >= 18:
+                break
+        return ", ".join(_dedupe([*explicit_negative, *brain_negative, *human_negative, *framework_negative]))
 
     def _reference_truth_prompt(
         self,
@@ -1564,44 +1696,41 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return ""
         lines = [
             "Reference truth layering contract:",
-            "Reference truth has priority over generic archetype wording in the text prompt.",
-            "Uploaded truth sources remain identity-critical; selected generated references contribute only their Doc93-assigned channels and never override a new explicit prompt.",
+            "Uploaded truth sources remain identity-critical for their assigned channels; selected generated references never override uploaded truth or a new explicit prompt.",
         ]
-        for asset_id, item in sources.items():
-            layers = self._string_list(item.get("truth_layers"))
-            if not layers:
-                continue
-            label = str(item.get("priority_note") or "reference")
-            lines.append(f"- {asset_id}: {', '.join(layers)} ({label})")
         if any("portrait_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
             lines.append(
-                "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; follow the current prompt for hair, makeup, wardrobe, accessories, camera, crop, scene, light, mood, and style unless an individual channel is explicitly locked."
+                "Portrait identity truth: preserve the same person's face geometry, feature relationships, age and body direction; the current prompt still owns hair, makeup, wardrobe, camera, scene, light, mood, and style unless explicitly locked."
             )
             lines.append(
-                "Same-person identity is stricter than same archetype: do not narrow or sharpen the face, make a V-shaped chin, enlarge eyes, shrink the mouth, reshape lips, or recast the reference into a scenario-specific beauty template."
+                "Same-person identity is stricter than same archetype; same archetype is not enough."
             )
             lines.append(
-                "Forbidden portrait drift: generic AI beauty replacement, beauty-app face, face slimming, enlarged eyes, V-chin distortion, new ethnicity direction, new age band, forced tan/darkened skin, or washing the uploaded person into a merely similar model."
+                "Forbidden portrait drift: generic AI beauty replacement, face slimming, enlarged eyes, V-chin distortion, new age or ethnicity direction, or a merely similar model."
             )
         if any("product_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
             lines.append(
-                "For product identity truth, preserve exact product shape, proportions, material, color, packaging silhouette, surface finish, and visible label/logo placement; vary scene, crop, camera angle, and lighting without inventing a new product."
+                "Product identity truth: preserve product shape, proportions, material, color, packaging silhouette, surface finish, and visible label/logo placement while scene and camera may vary."
             )
         if any("structured_appearance_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
             lines.append(
-                "For structured appearance truth, preserve silhouette, layer order, collar/neckline, sleeve/cuff, closure/sash/belt, material behavior, transparency family, pattern/embroidery family, trim placement, and accessory placement while changing pose, camera, crop, scene, and fabric motion."
+                "Structured appearance truth: preserve silhouette, layer order, neckline, sleeve/cuff, closure, material, pattern/trim, and accessory placement while pose, camera, scene, and fabric motion may vary."
             )
         return "\n".join(lines)
 
-    def _provider_prompt_for_delivery(self, raw_prompt: str) -> str:
+    def _provider_prompt_for_delivery(self, raw_prompt: str, *, protected_user_direction: str = "") -> str:
         raw_prompt = str(raw_prompt or "").strip()
         if not raw_prompt:
             return ""
         normalized_prompt = "\n".join(self._normalised_unique_prompt_lines(raw_prompt)).strip()
-        max_chars = self.max_provider_prompt_chars
-        if max_chars is None or max_chars <= 0:
+        max_chars = self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        if max_chars <= 0 or len(normalized_prompt) <= max_chars:
             return normalized_prompt
-        return self._compact_provider_prompt(normalized_prompt, max_chars=max_chars)
+        return self._compact_provider_prompt(
+            normalized_prompt,
+            max_chars=max_chars,
+            protected_user_direction=protected_user_direction,
+        )
 
     def _provider_hard_constraints(
         self,
@@ -1616,6 +1745,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "use the v3-owned generation strategy",
             "generated subject, scene, style, and mood must match the user request",
             "preserve the user's detailed scene literally",
+            "do not render any final text",
+            "do not add visible captions",
+            "each generated output must be one single complete image frame",
+            "each output is one single complete image frame",
+            "preserve the user's requested subject and usage scenario",
+            "do not change the core subject identity",
+            "follow the planned suite roles",
+            "follow active project reference images",
+            "keep confirmed style:",
         )
         role_prefixes = (
             "follow the role-specific output direction",
@@ -1714,13 +1852,39 @@ class ProductionImageGenerationProvider(GenerationProvider):
             rules.append("If the prompt explicitly asks to replace the identity, follow only when it is clear; otherwise keep the uploaded reference identity.")
         return rules
 
-    def _compact_provider_prompt(self, raw_prompt: str, *, max_chars: int | None = None) -> str:
+    def _compact_provider_prompt(
+        self,
+        raw_prompt: str,
+        *,
+        max_chars: int | None = None,
+        protected_user_direction: str = "",
+    ) -> str:
         lines = self._normalised_unique_prompt_lines(raw_prompt)
         if not lines:
             return ""
+        protected_indexes: set[int] = set()
+        critical_prefixes = (
+            "Create ",
+            "Generate exactly one image; it must be a single complete image frame",
+            "Do not render any final text",
+            "Do not add any new visible text",
+            "Preserve the requested subject, scene, style, and mood",
+        )
+        for index, line in enumerate(lines):
+            if line.startswith(critical_prefixes):
+                protected_indexes.add(index)
+        if protected_user_direction:
+            for index, line in enumerate(lines):
+                if line.startswith("User request (verbatim):") or protected_user_direction in line:
+                    protected_indexes.add(index)
+                    if index > 0 and lines[index - 1] == "Visual direction:":
+                        protected_indexes.add(index - 1)
+        protected_lines = [line for index, line in enumerate(lines) if index in protected_indexes]
         body: list[tuple[int, int, str]] = []
         avoid: list[tuple[int, int, str]] = []
         for index, line in enumerate(lines):
+            if index in protected_indexes:
+                continue
             clipped = self._clip_prompt_line(line, self._provider_prompt_line_limit(line))
             priority = self._provider_prompt_priority(line)
             item = (priority, index, clipped)
@@ -1733,22 +1897,36 @@ class ProductionImageGenerationProvider(GenerationProvider):
             max_chars = self.max_provider_prompt_chars
         if max_chars is None or max_chars <= 0:
             return str(raw_prompt or "").strip()
+        protected_text = "\n".join(protected_lines)
+        if len(protected_text) >= max_chars:
+            return protected_text
         avoid_budget = min(700, max(450, max_chars // 5))
         selected = self._fit_prompt_lines(
             sorted(body, key=lambda item: (item[0], item[1])),
-            max_chars=max_chars - avoid_budget,
+            max_chars=max_chars - len(protected_text) - (1 if protected_text else 0) - avoid_budget,
         )
-        remaining = max_chars - len("\n".join(selected)) - (1 if selected else 0)
+        used_text = "\n".join([*protected_lines, *selected])
+        remaining = max_chars - len(used_text) - (1 if used_text else 0)
         selected.extend(
             self._fit_prompt_lines(
                 sorted(avoid, key=lambda item: (item[0], item[1])),
                 max_chars=max(0, remaining),
             )
         )
-        compacted = "\n".join(line for line in selected if line).strip()
+        selected_values = set(selected)
+        selected_by_index = {
+            index: value
+            for _priority, index, value in [*body, *avoid]
+            if value in selected_values
+        }
+        compacted = "\n".join(
+            line if index in protected_indexes else selected_by_index[index]
+            for index, line in enumerate(lines)
+            if index in protected_indexes or index in selected_by_index
+        ).strip()
         if len(compacted) <= max_chars:
             return compacted
-        return compacted[: max_chars - 1].rstrip() + "..."
+        return protected_text or compacted[: max_chars - 1].rstrip() + "..."
 
     def _normalised_unique_prompt_lines(self, raw_prompt: str) -> list[str]:
         lines: list[str] = []
@@ -1801,7 +1979,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 1
         if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
             return 1
-        if line.startswith("Generate exactly one") or line.startswith("Do not add any new visible text"):
+        if (
+            line.startswith("Generate exactly one")
+            or line.startswith("Do not add any new visible text")
+            or line.startswith("Do not render any final text")
+            or line.startswith("Preserve the requested subject, scene, style, and mood")
+        ):
             return 4
         if line.startswith("Role-specific generation contract") or line.startswith("Mode:") or line.startswith("This image role:"):
             return 3
@@ -1850,13 +2033,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         selected_rules: list[str] = []
         for marker in (
             "current prompt owns",
-            "same-person identity truth",
             "preserve underlying face geometry",
             "follow the current prompt",
             "do not copy the reference image's original lighting",
-            "doc88 balance contract",
-            "selected generated outputs",
-            "compact identity guidance",
         ):
             match = next((rule for rule in prompt_rules if marker in rule.lower()), None)
             if match and match not in selected_rules:
@@ -1865,13 +2044,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         owner_lines = []
         if isinstance(effective_owners, dict):
             owner_lines = [
-                f"{channel}={owner}"
+                f"{channel}={str(owner).rsplit(':', 1)[-1]}"
                 for channel, owner in effective_owners.items()
                 if str(owner or "").startswith("reference:")
             ]
         lines = [
             "Doc93 reference-channel contract: reference images may influence only their assigned channels.",
-            *selected_rules[:8],
+            *selected_rules[:4],
             "Effective reference-owned channels: " + "; ".join(owner_lines[:10]) if owner_lines else "",
         ]
         return "Reference channel policy:\n" + "\n".join(line for line in lines if line)
@@ -1922,45 +2101,58 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt_truth_rules = (
             self._string_list(balance_policy.get("current_prompt_truth_rules")) if isinstance(balance_policy, dict) else []
         )
-        identity_truth_rules = (
-            self._string_list(balance_policy.get("uploaded_identity_truth_rules")) if isinstance(balance_policy, dict) else []
+        compact_negatives = (
+            self._string_list(balance_policy.get("compact_negative_guidance")) if isinstance(balance_policy, dict) else []
         )
         approved_anchor_rules = (
             self._string_list(balance_policy.get("approved_visual_anchor_rules")) if isinstance(balance_policy, dict) else []
         )
-        ordering_rules = (
-            self._string_list(balance_policy.get("prompt_ordering_rules")) if isinstance(balance_policy, dict) else []
+        approved_anchor_rule = next(
+            (rule for rule in approved_anchor_rules if "positive visual direction anchors" in rule.lower()),
+            approved_anchor_rules[0] if approved_anchor_rules else "",
         )
-        compact_negatives = (
-            self._string_list(balance_policy.get("compact_negative_guidance")) if isinstance(balance_policy, dict) else []
+        selected_bone_traits = _dedupe(
+            [
+                *bone_traits[:2],
+                *[trait for trait in bone_traits if "original facial outline width" in trait.lower()][:1],
+            ]
+        )
+        selected_feature_traits = _dedupe(
+            [
+                *feature_traits[:2],
+                *[trait for trait in feature_traits if "mouth scale" in trait.lower()][:1],
+            ]
         )
         lines = [
             "Doc88 balance contract: keep current prompt mood, uploaded identity truth, and approved visual direction together."
             if balance_policy
             else "",
-            *prompt_truth_rules[:3],
+            *prompt_truth_rules[:1],
             "Reference inheritance boundary: Identity comes from the reference; direction comes from the prompt."
             if reference_rules
             else "",
-            *reference_rules[:3],
-            *identity_truth_rules[:3],
-            *approved_anchor_rules[:3],
-            *ordering_rules[:3],
+            *reference_rules[:1],
+            approved_anchor_rule,
             "Prompt-owned channels: " + "; ".join(prompt_owned[:8]) if prompt_owned else "",
             "Do not inherit from source reference: " + "; ".join(blocked_channels[:8]) if blocked_channels else "",
             "Same person under changed styling; not a similar-looking new model.",
+            "Same-person identity is stricter than same archetype; same archetype is not enough.",
             "Styling may change; preserve the reference face without redesigning the face.",
-            *prompt_rules[:3],
-            "Bone structure to preserve: " + "; ".join(bone_traits[:6]) if bone_traits else "",
-            "Facial-feature relationships to preserve: " + "; ".join(feature_traits[:6]) if feature_traits else "",
-            "Allowed surface styling changes: " + "; ".join(allowed[:6]) if allowed else "",
-            "Forbidden identity drift: " + "; ".join(_dedupe([*compact_negatives[:4], *forbidden[:5]])) if forbidden else "",
-            "Styling scope: " + "; ".join(styling_rules[:3]) if styling_rules else "",
+            *prompt_rules[:1],
+            "Bone structure to preserve: " + "; ".join(selected_bone_traits) if selected_bone_traits else "",
+            "Facial-feature relationships to preserve: " + "; ".join(selected_feature_traits) if selected_feature_traits else "",
+            "Allowed surface styling changes: " + "; ".join(allowed[:5]) if allowed else "",
+            "Forbidden identity drift: " + "; ".join(_dedupe([*compact_negatives[:3], *forbidden[:4]])) if forbidden else "",
+            "Styling scope: " + "; ".join(styling_rules[:1]) if styling_rules else "",
         ]
         return "Portrait identity contract:\n" + "\n".join(line for line in lines if line)
 
     def _mode_role_prompt_guidance(self, request: GenerationRequest) -> list[str]:
         recipe = self._mode_role_recipe(request)
+        role_plan = self._role_specific_generation_plan(request)
+        if not recipe:
+            role_recipes = role_plan.get("role_recipes") if isinstance(role_plan.get("role_recipes"), list) else []
+            recipe = next((dict(item) for item in role_recipes if isinstance(item, dict)), {})
         if not recipe:
             return []
         policy = self._mode_execution_policy(request)
@@ -1999,14 +2191,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
             text = str(value or "").strip()
             if text:
                 lines.append(f"{label}: {text}")
-        role_plan = self._role_specific_generation_plan(request)
         plan_prompt_additions = self._string_list(role_plan.get("prompt_additions"))
         if plan_prompt_additions:
-            concise_additions = [
-                self._role_prompt_pressure_for_provider(value)
-                for value in plan_prompt_additions[:8]
-                if self._role_prompt_pressure_for_provider(value)
-            ]
+            concise_additions: list[str] = []
+            for marker in (
+                "doc90 person priority",
+                "doc90 conflict rule",
+                "doc90 identity geometry",
+                "output 1 must serve the role",
+            ):
+                value = next((item for item in plan_prompt_additions if marker in item.lower()), "")
+                concise = self._role_prompt_pressure_for_provider(value)
+                if concise and concise not in concise_additions:
+                    concise_additions.append(concise)
             if concise_additions:
                 lines.append("Suite director rules: " + "; ".join(concise_additions))
         plan_metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
@@ -2014,16 +2211,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if isinstance(identity_plan, dict) and identity_plan.get("applies"):
             identity_rules = self._string_list(identity_plan.get("prompt_additions"))
             if identity_rules:
-                lines.append("Identity hero selection: " + "; ".join(identity_rules[:4]))
+                lines.append("Identity hero selection: " + "; ".join(identity_rules[:2]))
         subject_identity_card = plan_metadata.get("subject_identity_card") if isinstance(plan_metadata, dict) else {}
-        portrait_bone_lock = plan_metadata.get("portrait_bone_structure_lock") if isinstance(plan_metadata, dict) else {}
-        styling_delta_policy = plan_metadata.get("styling_delta_policy") if isinstance(plan_metadata, dict) else {}
-        portrait_reference_policy = (
-            plan_metadata.get("portrait_reference_influence_policy") if isinstance(plan_metadata, dict) else {}
-        )
-        portrait_balance_policy = (
-            plan_metadata.get("portrait_reference_balance_policy") if isinstance(plan_metadata, dict) else {}
-        )
         if isinstance(subject_identity_card, dict) and subject_identity_card.get("applies"):
             keep_rules = self._string_list(subject_identity_card.get("identity_keep_rules"))
             feature_rules = self._string_list(subject_identity_card.get("facial_feature_integrity_rules"))
@@ -2032,29 +2221,34 @@ class ProductionImageGenerationProvider(GenerationProvider):
             allowed_variations = self._string_list(subject_identity_card.get("allowed_variations"))
             forbidden_drift = self._string_list(subject_identity_card.get("forbidden_drift"))
             if keep_rules or feature_rules:
-                lines.append("Subject identity card: " + "; ".join([*keep_rules[:2], *feature_rules[:2]]))
+                lines.append("Subject identity card: " + "; ".join([*keep_rules[:1], *feature_rules[:1]]))
             if realism_rules:
-                lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:2]))
+                lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:1]))
             if appearance_rules:
-                lines.append("Structured appearance lock: " + "; ".join(appearance_rules[:2]))
+                selected_appearance = _dedupe(
+                    [
+                        *appearance_rules[:1],
+                        *[rule for rule in appearance_rules if "pattern family" in rule.lower()][:1],
+                    ]
+                )
+                lines.append("Structured appearance lock: " + "; ".join(selected_appearance))
             if allowed_variations:
-                lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:3]))
+                lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:4]))
             if forbidden_drift:
-                lines.append("Identity drift to avoid: " + "; ".join(forbidden_drift[:4]))
+                lines.append("Identity drift to avoid: " + "; ".join(forbidden_drift[:3]))
         strict_policy = plan_metadata.get("strict_visual_review_policy") if isinstance(plan_metadata, dict) else {}
         if isinstance(strict_policy, dict) and strict_policy.get("applies"):
             strict_rules = self._string_list(strict_policy.get("prompt_additions"))
             if strict_rules:
                 selected_strict = [
                     strict_rules[index]
-                    for index in (0, 2, 3, 5)
+                    for index in (0, 2, 3)
                     if index < len(strict_rules)
                 ]
                 lines.append("Strict visual review rules: " + "; ".join(selected_strict))
             pass_conditions = self._string_list(strict_policy.get("pass_conditions"))
             if pass_conditions:
-                selected_pass = _dedupe([pass_conditions[0], pass_conditions[-1]])
-                lines.append("Strict visual pass conditions: " + "; ".join(selected_pass))
+                lines.append("Strict visual pass conditions: " + "; ".join(_dedupe([pass_conditions[0], pass_conditions[-1]])))
             negative_rules = self._string_list(strict_policy.get("negative_additions"))
             if negative_rules:
                 priority_negative_rules = [
@@ -2076,11 +2270,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     }
                 ]
                 lines.append("Strict visual avoid: " + "; ".join(_dedupe(priority_negative_rules)))
-        lines.extend(self._concise_module_prompt_line(line) for line in provider_casebook_prompt_lines(recipe))
+        lines.extend(self._concise_module_prompt_line(line, max_items=3) for line in provider_casebook_prompt_lines(recipe))
         if keep:
-            lines.append("Keep: " + "; ".join(keep[:5]))
+            lines.append("Keep: " + "; ".join(keep[:3]))
         if avoid:
-            lines.append("Do not: " + "; ".join(avoid[:5]))
+            lines.append("Do not: " + "; ".join(avoid[:3]))
         return [line for line in lines if str(line or "").strip()]
 
     def _role_prompt_pressure_for_provider(self, value: str) -> str:
@@ -2088,6 +2282,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         for marker in (
             "Use a real-photo portrait atom stack:",
             "Real-camera imperfection should win over beauty-app polish",
+            "; real camera photograph",
         ):
             if marker in text:
                 text = text.split(marker, 1)[0].rstrip(" ;.")

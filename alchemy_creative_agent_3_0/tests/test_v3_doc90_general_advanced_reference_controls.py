@@ -159,6 +159,8 @@ def test_doc90_provider_prompt_keeps_reference_identity_above_prompt_face_archet
     assert "must not replace the reference person's facial geometry" in prompt
     assert "same-person impression" in prompt
     assert prompt.index("Visual direction:") < prompt.index("Doc90 person priority")
+    assert "Use the uploaded woman as the same person" in prompt
+    assert len(prompt) <= ProductionImageGenerationProvider.provider_prompt_target_chars
 
 
 def test_doc90_explicit_person_priority_off_disables_child_module() -> None:
