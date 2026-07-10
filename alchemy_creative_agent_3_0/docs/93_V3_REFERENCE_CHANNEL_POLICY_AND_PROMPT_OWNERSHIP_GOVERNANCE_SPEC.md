@@ -790,6 +790,31 @@ describing an identity-only reference as an identity-and-style anchor
 re-deriving channel ownership from filename or role after policy resolution
 ```
 
+### 13.1 Provider Reference Evidence
+
+Prompt ownership must also govern which pixels are sent upstream. Text rules
+alone are insufficient when an identity-only reference contains a strong old
+hairstyle, wardrobe, palette, lighting setup, or background.
+
+For an ordinary portrait identity reference:
+
+```text
+deduplicate byte-identical references that have the same role and locks
+create a provider-only portrait identity crop
+neutralize most color in that identity crop
+send the focused identity crop instead of the full old frame
+record suppressed full-frame identity source ids in provider metadata
+```
+
+The full original remains available in project history and is never modified.
+It returns to provider input when the resolved policy explicitly assigns hair,
+wardrobe, appearance, lighting, scene, camera, mood, or style channels to that
+reference. Product truth and structured appearance truth continue to receive
+their appropriate full or focused evidence.
+
+This rule prevents duplicate visual weighting and prevents full-frame pixels
+from silently defeating a correct textual channel policy.
+
 ## 14. Review Contract
 
 Review must score independent dimensions:
@@ -1276,7 +1301,7 @@ Local verification on 2026-07-10:
 
 ```text
 Doc93 focused tests: passed
-V3 full suite: 368 passed
+V3 full suite: 369 passed
 frontend/API shell: 89 passed
 root suite: 138 passed
 desktop/mobile JavaScript syntax: passed

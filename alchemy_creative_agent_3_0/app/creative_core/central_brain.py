@@ -765,9 +765,6 @@ class CentralCreativeBrain:
                 "jawline direction",
                 "age impression",
                 "body type and proportions",
-                "hair color and broad length range",
-                "wardrobe category",
-                "lighting language",
             ],
             "metadata": {
                 "doc": "73",
@@ -776,6 +773,7 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "user_reference_priority": True,
+                "doc93_reference_channel_safe": True,
             },
         }
 

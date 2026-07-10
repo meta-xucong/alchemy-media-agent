@@ -281,6 +281,42 @@ def test_doc93_cluster_and_provider_remove_coarse_hair_wardrobe_light_lock(tmp_p
     assert "Do not copy the reference image's original lighting" in final_prompt
 
 
+def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_neutral(tmp_path) -> None:
+    from PIL import Image
+
+    first_path = tmp_path / "uploaded-face-a.png"
+    second_path = tmp_path / "uploaded-face-b.png"
+    Image.new("RGB", (256, 256), (20, 210, 45)).save(first_path)
+    second_path.write_bytes(first_path.read_bytes())
+    cluster = _cluster()
+    request = _request_from_cluster(cluster, reference_file=str(first_path))
+    request.metadata["uploaded_assets"].append(
+        {
+            "asset_id": "uploaded_face_duplicate",
+            "file_path": str(second_path),
+            "source_type": "uploaded",
+            "role": "face_reference",
+            "use_policy": "identity",
+            "strength": "hard",
+        }
+    )
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    asset_plan = provider._asset_plan(request, references)  # noqa: SLF001
+    provider_assets = asset_plan["assets"]
+    input_plan = asset_plan["provider_input_plan"]
+
+    assert len(references) == 1
+    assert input_plan["reference_image_count"] == 1
+    assert input_plan["suppressed_full_frame_identity_asset_ids"] == ["uploaded_face_truth"]
+    assert len(provider_assets) == 1
+    assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
+    assert provider_assets[0]["identity_color_neutralized"] is True
+    with Image.open(provider_assets[0]["storage_path"]).convert("RGB") as focused:
+        red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
+    assert max(red, green, blue) - min(red, green, blue) <= 20
+
+
 def test_doc93_channel_issue_codes_flow_through_review_and_retry() -> None:
     codes = [
         "source_hair_overinherited",

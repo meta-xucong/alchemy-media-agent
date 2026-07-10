@@ -114,6 +114,7 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "path": str(target),
         "path_name": Path(str(target)).name,
         "fallback_to_original": bool(fallback),
+        "identity_color_neutralized": kind == "portrait_identity_crop" and not fallback,
         "provider_only": True,
     }
 
@@ -129,7 +130,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-identity-neutral-v1:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +143,10 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
         image = _to_rgb_on_white(image, Image)
         box = _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
+        if kind == "portrait_identity_crop":
+            from PIL import ImageEnhance
+
+            cropped = ImageEnhance.Color(cropped).enhance(0.08)
         if max(cropped.size) > max_edge:
             cropped.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
         for current_quality in dict.fromkeys([quality, 88, 84, 80, 76, 72, 68]):

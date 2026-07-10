@@ -412,7 +412,7 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "harmonious natural features with awake eyes and relaxed facial muscles, not a face reshaped by beauty filters",
     ]
     reference = [
-        "preserve broad face shape, age direction, body type, hair family, and feature relationships",
+        "preserve broad face shape, age direction, body type, and facial feature relationships",
         "allow expression, gaze, pose, crop, camera distance, and small hair-styling variation",
         "identity consistency must come from stable traits, not cloned stills",
     ]

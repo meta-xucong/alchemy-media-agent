@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 import threading
 import time
@@ -801,6 +802,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         ]
         assets: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
+        seen_evidence: set[tuple[str, str, str, tuple[str, ...]]] = set()
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             path = data.get("file_path")
@@ -815,11 +817,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
             resolved_path = str(file_path.resolve())
             if resolved_path in seen_paths:
                 continue
+            role = str(data.get("role") or data.get("use_policy") or "unknown_reference")
+            use_policy = str(data.get("use_policy") or "")
+            lock_targets = tuple(
+                sorted(str(value).strip() for value in data.get("lock_targets", []) if str(value).strip())
+            )
+            content_fingerprint = self._reference_content_fingerprint(file_path)
+            evidence_key = (content_fingerprint, role, use_policy, lock_targets)
+            if content_fingerprint and evidence_key in seen_evidence:
+                continue
             seen_paths.add(resolved_path)
+            if content_fingerprint:
+                seen_evidence.add(evidence_key)
             assets.append(
                 {
                     "asset_id": str(data.get("asset_id") or data.get("source_id") or data.get("output_id") or file_path.stem),
-                    "role": str(data.get("role") or data.get("use_policy") or "unknown_reference"),
+                    "role": role,
                     "source_type": str(data.get("source_type") or (data.get("metadata") or {}).get("source_type") or ""),
                     "asset_ref_id": data.get("asset_ref_id") or data.get("reference_id"),
                     "output_id": data.get("output_id"),
@@ -828,14 +841,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "file_path": str(file_path),
                     "uri": data.get("uri"),
                     "strength": data.get("strength"),
-                    "use_policy": data.get("use_policy"),
-                    "lock_targets": data.get("lock_targets") if isinstance(data.get("lock_targets"), list) else [],
+                    "use_policy": use_policy,
+                    "lock_targets": list(lock_targets),
                     "provider_input_required": bool(data.get("provider_input_required")),
                     "prompt_only_fallback": bool(data.get("prompt_only_fallback")),
                     "metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
                 }
             )
         return assets[:6]
+
+    def _reference_content_fingerprint(self, file_path: Path) -> str:
+        try:
+            digest = hashlib.sha256()
+            with file_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return ""
 
     def _asset_plan(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> dict[str, Any]:
         allow_product_language = self._product_language_allowed(request, reference_assets)
@@ -861,6 +884,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             else "Use this uploaded image as visual evidence for subject style, lighting, composition, or mood."
         )
         assets = []
+        suppressed_original_ids: list[str] = []
         for index, asset in enumerate(reference_assets):
             role = str(asset.get("role") or "")
             use_policy = str(asset.get("use_policy") or role)
@@ -917,7 +941,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
                 reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
-            for derivative in self._reference_truth_derivatives(asset, truth_layers):
+            derivatives = self._reference_truth_derivatives(asset, truth_layers)
+            for derivative in derivatives:
                 assets.append(
                     {
                         "asset_id": f"{asset['asset_id']}::{derivative['derivative_kind']}",
@@ -937,33 +962,41 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_reference_derivative": True,
                         "derivative_kind": derivative.get("derivative_kind"),
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
+                        "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
                     }
                 )
-            assets.append(
-                {
-                    "asset_id": asset["asset_id"],
-                    "role": _v1_reference_role(asset.get("role")),
-                    "priority": self._original_reference_priority(asset, truth_layers, index),
-                    "provider_input_mode": "reference_image",
-                    "storage_path": asset["file_path"],
-                    "filename": asset.get("filename"),
-                    "mime_type": asset.get("mime_type"),
-                    "prompt_constraints": [reference_constraint],
-                    "negative_constraints": closure_negative_rules[:8],
-                    "strength": asset.get("strength"),
-                    "use_policy": asset.get("use_policy"),
-                    "source_type": asset.get("source_type"),
-                    "reference_truth_layer": (
-                        "style_context_truth"
-                        if "style_context_truth" in truth_layers
-                        else truth_layers[0]
-                        if truth_layers
-                        else None
-                    ),
-                    "truth_layers": truth_layers,
-                    "provider_reference_derivative": False,
-                }
-            )
+            if self._should_include_original_reference(
+                truth_layers=truth_layers,
+                derivatives=derivatives,
+                reference_policy=reference_policy,
+            ):
+                assets.append(
+                    {
+                        "asset_id": asset["asset_id"],
+                        "role": _v1_reference_role(asset.get("role")),
+                        "priority": self._original_reference_priority(asset, truth_layers, index),
+                        "provider_input_mode": "reference_image",
+                        "storage_path": asset["file_path"],
+                        "filename": asset.get("filename"),
+                        "mime_type": asset.get("mime_type"),
+                        "prompt_constraints": [reference_constraint],
+                        "negative_constraints": closure_negative_rules[:8],
+                        "strength": asset.get("strength"),
+                        "use_policy": asset.get("use_policy"),
+                        "source_type": asset.get("source_type"),
+                        "reference_truth_layer": (
+                            "style_context_truth"
+                            if "style_context_truth" in truth_layers
+                            else truth_layers[0]
+                            if truth_layers
+                            else None
+                        ),
+                        "truth_layers": truth_layers,
+                        "provider_reference_derivative": False,
+                    }
+                )
+            else:
+                suppressed_original_ids.append(asset["asset_id"])
         truth_package = {
             **truth_package,
             "truth_derivative_ids": [
@@ -982,6 +1015,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "reference_image_asset_ids": [item["asset_id"] for item in assets],
                 "reference_image_count": len(assets),
                 "original_reference_asset_ids": [asset["asset_id"] for asset in reference_assets],
+                "suppressed_full_frame_identity_asset_ids": suppressed_original_ids,
                 "reference_truth_layers": [
                     {
                         "asset_id": item.get("asset_id"),
@@ -1000,6 +1034,40 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "requires_image_reference": bool(assets),
             },
         }
+
+    def _should_include_original_reference(
+        self,
+        *,
+        truth_layers: list[str],
+        derivatives: list[dict[str, Any]],
+        reference_policy: dict[str, Any],
+    ) -> bool:
+        if not derivatives or not reference_policy:
+            return True
+        if set(truth_layers) != {"portrait_identity_truth"}:
+            return True
+        has_identity_crop = any(
+            item.get("derivative_kind") == "portrait_identity_crop"
+            for item in derivatives
+        )
+        if not has_identity_crop:
+            return True
+        non_identity_channels = (
+            "hair_direction",
+            "makeup_style",
+            "wardrobe_structure",
+            "accessory_system",
+            "lighting_color",
+            "scene_background",
+            "camera_composition",
+            "mood_art_direction",
+            "style_finish",
+        )
+        has_explicit_reference_channel = any(
+            str(reference_policy.get(channel) or "") in {"hard", "medium", "soft"}
+            for channel in non_identity_channels
+        )
+        return has_explicit_reference_channel
 
     def _reference_truth_package(
         self,
@@ -1260,6 +1328,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
                     "derivative_kind": item.get("derivative_kind"),
                     "fallback_to_original": bool(item.get("fallback_to_original")),
+                    "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
                     "filename": item.get("filename"),
                 }
             )
