@@ -128,6 +128,13 @@ forehead, face ratio, temple-cheek-jaw contour, jaw slope, and chin scale. The
 model must never interpret them as two candidate identities or average them
 into a generic beauty face.
 
+For reference-conditioned portrait jobs, the provider prompt begins with an
+identity-preserving edit operation before scene and style direction. It states
+that the task edits the exact supplied person rather than casting or generating
+a similar model, and that same-person geometry outranks generic beauty,
+premium, delicate, elegant, genre, or style vocabulary. This is a universal
+operation contract, not a scene recipe.
+
 ## 5. Identity Source Priority
 
 ```text

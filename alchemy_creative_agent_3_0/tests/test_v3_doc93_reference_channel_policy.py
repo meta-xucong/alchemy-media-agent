@@ -347,8 +347,10 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
         asset_plan=asset_plan,
     )
     assert "complementary crops of one single uploaded person" in prompt_with_evidence
+    assert "Primary operation: identity-preserving portrait edit" in prompt_with_evidence
     assert "Use the feature-detail crop for brow-eye" in prompt_with_evidence
     assert "Use the head-geometry crop for face width/length" in prompt_with_evidence
+    assert prompt_with_evidence.index("Primary operation:") < prompt_with_evidence.index("Visual direction:")
     assert len(prompt_with_evidence) <= 15_000
 
 

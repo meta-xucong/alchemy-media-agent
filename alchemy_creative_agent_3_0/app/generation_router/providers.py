@@ -1484,6 +1484,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         role_guidance = self._mode_role_prompt_guidance(request)
         include_supporting_notes = allow_product_language or len(user_direction) < 180
         resolved_reference_policy = self._resolved_reference_policy_package(request)
+        identity_evidence_prompt = self._identity_evidence_prompt(asset_plan)
         provider_hard_constraints = self._provider_hard_constraints(
             request,
             has_role_guidance=bool(role_guidance),
@@ -1498,10 +1499,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if allow_product_language
                 else "Create a polished, directly usable creative image asset."
             ),
+            (
+                "Primary operation: identity-preserving portrait edit. Depict the exact same person shown in the supplied portrait evidence; edit that person's styling and scene instead of casting, averaging, beautifying, or generating a similar-looking new model. Same-person facial geometry outranks generic beauty, premium, delicate, elegant, genre, or style words."
+                if identity_evidence_prompt
+                else ""
+            ),
             f"Visual direction:\n{visual_direction}",
             reference_channel_contract,
             portrait_identity_contract,
-            self._identity_evidence_prompt(asset_plan),
+            identity_evidence_prompt,
             f"Asset purpose: {asset.purpose}" if asset else "",
             (
                 "Output goal: create a polished, directly usable image with a clear subject and atmosphere."
