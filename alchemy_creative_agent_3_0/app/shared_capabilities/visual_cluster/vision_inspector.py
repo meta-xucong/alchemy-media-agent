@@ -109,6 +109,21 @@ _DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES = {
     "reference_scene_replaced",
 }
 
+_DOC93_REFERENCE_CHANNEL_ISSUES = {
+    "source_hair_overinherited",
+    "source_makeup_overinherited",
+    "source_wardrobe_overinherited",
+    "source_lighting_overinherited",
+    "source_color_grade_overinherited",
+    "source_scene_overinherited",
+    "source_camera_overinherited",
+    "source_whole_style_overinherited",
+    "reference_used_as_style_when_identity_only",
+    "prompt_owned_channel_ignored",
+    "selected_anchor_overrode_current_prompt",
+    "structured_appearance_lock_misapplied",
+}
+
 RETRYABLE_ISSUE_CODES = {
     *_AESTHETIC_STABILITY_ISSUES,
     *_BEAUTIFUL_REALISM_ISSUES,
@@ -116,6 +131,7 @@ RETRYABLE_ISSUE_CODES = {
     *_DOC87_REFERENCE_BOUNDARY_ISSUES,
     *_DOC88_REFERENCE_BALANCE_ISSUES,
     *_DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES,
+    *_DOC93_REFERENCE_CHANNEL_ISSUES,
     "visible_text_artifact",
     "watermark_or_signature",
     "faint_corner_watermark",
@@ -789,12 +805,17 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
         elif code == "collage_or_split_panel":
             negative_additions.extend(["collage", "split screen", "multi-panel layout"])
             composition_repair.append("generate one complete single-frame image")
-        elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
+        elif code == "identity_drift":
             identity_reinforcement.append(
                 "preserve the exact uploaded portrait identity truth if present: face ratio, eye shape and spacing, eyebrow arc, nose-mouth relationship, jaw/chin direction, natural age impression, body identity direction, and skin-tone direction; use selected generated references only as continuation support when an uploaded truth source exists"
             )
+        elif code == "hair_or_outfit_drift":
             identity_reinforcement.append(
-                "preserve broad hair direction and outfit category; follow the current prompt for lens, lighting, scene, and camera mood unless they are explicitly locked as style guidance; when styling defines the project, also preserve garment structure, layer logic, material behavior, pattern family, trim placement, and accessory placement"
+                "repair hair or outfit continuity only when that exact channel is assigned by the resolved reference policy or explicitly requested by the user; otherwise follow the current prompt and do not expand portrait identity into wardrobe or hairstyle inheritance"
+            )
+        elif code == "camera_distance_drift":
+            composition_repair.append(
+                "restore the current prompt's requested camera distance and framing; inherit camera composition only when the resolved reference policy explicitly assigns that channel to a reference"
             )
         elif code == "reference_guard_ignored":
             identity_reinforcement.append("use uploaded portrait identity truth as the main source when present; do not let the written prompt or a selected generated frame replace the person's facial identity")
@@ -830,6 +851,29 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "jaw or chin remodeling",
                     "age impression drift",
                     "style changed face geometry",
+                ]
+            )
+        elif code in _DOC93_REFERENCE_CHANNEL_ISSUES:
+            prompt_additions.extend(
+                [
+                    "Doc93 channel repair: keep valid identity or product truth, but restore every current prompt-owned channel that the reference overrode",
+                    "follow the current request for hair, makeup, wardrobe, accessories, lighting, color, scene, camera, mood, and style unless that exact channel was explicitly locked",
+                    "do not increase whole-image reference strength and do not let a selected generated anchor override the current prompt",
+                ]
+            )
+            identity_reinforcement.append(
+                "preserve same-person face geometry while repairing only leaked styling channels; do not copy source wardrobe, light, scene, or whole-image style"
+            )
+            negative_additions.extend(
+                [
+                    "source hairstyle leakage",
+                    "source makeup leakage",
+                    "source wardrobe leakage",
+                    "source lighting or color-grade leakage",
+                    "source scene or camera leakage",
+                    "source whole-image style leakage",
+                    "selected anchor overrode current prompt",
+                    "identity-only reference used as a style template",
                 ]
             )
         elif code in _DOC87_REFERENCE_BOUNDARY_ISSUES:

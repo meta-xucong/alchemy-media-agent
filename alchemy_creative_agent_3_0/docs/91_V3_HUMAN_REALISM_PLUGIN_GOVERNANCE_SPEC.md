@@ -1,5 +1,14 @@
 # 91 V3 Human Realism Plugin Governance Spec
 
+Doc93 compatibility note:
+
+```text
+Doc91 remains the Human Realism placement and activation authority. Reference
+inheritance belongs to Doc93. Human Realism may improve real-camera rendering
+and reject AI artifacts, but it cannot promote source hair, wardrobe, lighting,
+scene, camera, or style into identity truth.
+```
+
 ## 1. Purpose
 
 Doc91 formalizes the reusable Human Realism Plugin for V3.

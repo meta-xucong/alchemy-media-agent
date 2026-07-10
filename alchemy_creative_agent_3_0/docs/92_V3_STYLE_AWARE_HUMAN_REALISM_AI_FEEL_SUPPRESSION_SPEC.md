@@ -1,5 +1,14 @@
 # 92 V3 Style-Aware Human Realism AI-Feel Suppression Spec
 
+Doc93 compatibility note:
+
+```text
+Doc92 remains the style-aware Human Realism authority. It may adapt realism
+rendering to the requested style, but it must not infer that the uploaded
+reference owns styling channels. Reference role and channel inheritance are
+resolved only by Doc93.
+```
+
 ## 1. Purpose
 
 Doc92 tunes the Doc91 Human Realism Plugin after real VPS validation on two

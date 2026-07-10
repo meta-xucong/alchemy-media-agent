@@ -1,5 +1,13 @@
 # 65 V3 Human Photorealism And Anti-AI Face Layer Spec
 
+Doc93 compatibility note:
+
+```text
+Doc65 remains a Human Realism foundation. Doc93 owns reference inheritance.
+Photorealism and anti-AI-face guidance must not convert an ordinary portrait
+identity reference into hair, wardrobe, lighting, scene, camera, or style truth.
+```
+
 ## 1. Status And Authority
 
 Doc65 is the human portrait realism layer after Doc64.

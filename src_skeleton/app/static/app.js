@@ -4885,7 +4885,7 @@ function v3HasActiveReferenceForAdvancedControls() {
 
 function v3ReferencePriorityStatusText(controls, hasReference) {
   if (!hasReference) return "上传参考图后，可优先保持人物、物品或场景一致";
-  if (controls.preserve_person_identity) return "已优先保持人物长相";
+  if (controls.preserve_person_identity) return "已保持同一个人的长相，造型和场景按本次要求";
   if (controls.preserve_product_appearance || controls.preserve_scene_consistency) return "已开启参考图一致性";
   return "参考图会作为普通画面参考";
 }

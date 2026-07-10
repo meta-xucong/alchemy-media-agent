@@ -15,6 +15,7 @@ from .contracts import (
     PortraitReferenceBalanceReview,
     PortraitReferenceInfluencePolicy,
     ReferenceOverinheritanceRetryPatch,
+    ResolvedReferencePolicyPackage,
     StrongReferenceBinding,
     StylingDeltaPolicy,
     SubjectIdentityCard,
@@ -47,6 +48,14 @@ DOC87_REFERENCE_BOUNDARY_ISSUE_CODES = {
     "makeup_changed_face_geometry",
     "hair_change_replaced_identity",
     "retry_repaired_artifact_but_changed_identity",
+    "source_hair_overinherited",
+    "source_makeup_overinherited",
+    "source_color_grade_overinherited",
+    "source_camera_overinherited",
+    "source_whole_style_overinherited",
+    "prompt_owned_channel_ignored",
+    "selected_anchor_overrode_current_prompt",
+    "structured_appearance_lock_misapplied",
 }
 
 DOC88_REFERENCE_BALANCE_ISSUE_CODES = {
@@ -216,18 +225,28 @@ class PortraitBoneStructureIdentityLayer:
         job_id: str | None,
         lock: PortraitBoneStructureLock | None,
         styling_policy: StylingDeltaPolicy | None,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> PortraitReferenceInfluencePolicy | None:
         if lock is None or not lock.applies:
             return None
+        channel_policy = next(
+            (
+                policy
+                for policy in (reference_policy_package.policies if reference_policy_package else [])
+                if policy.source_role == "portrait_identity_reference"
+            ),
+            None,
+        )
         inherited = [
             "bone structure",
             "facial-feature relationships",
             "temple-cheek-jaw contour, cheek fullness, and face width/length direction",
             "base eye size/spacing and mouth scale relative to the face",
             "natural age impression",
-            "broad hair direction unless prompt/template asks for a change",
             "distinctive identity marks when visible",
         ]
+        if channel_policy and channel_policy.hair_direction in {"hard", "medium", "soft"}:
+            inherited.append(f"hair direction at {channel_policy.hair_direction} strength")
         blocked = [
             "source lighting",
             "source color temperature",
@@ -239,17 +258,32 @@ class PortraitBoneStructureIdentityLayer:
             "scenario-specific archetype face",
             "face-slimming, V-chin, enlarged-eye, or smaller-mouth beauty filter",
         ]
-        prompt_owned = [
-            "makeup",
-            "wardrobe",
-            "lighting",
-            "color grade",
-            "scene",
-            "mood",
-            "camera",
-            "composition",
-            "art direction",
-        ]
+        prompt_owned = (
+            _dedupe(
+                [
+                    *channel_policy.prompt_owned_channels,
+                    "makeup",
+                    "wardrobe",
+                    "lighting",
+                    "color grade",
+                    "scene",
+                    "mood",
+                    "camera",
+                    "composition",
+                    "art direction",
+                ]
+            )
+            if channel_policy
+            else [
+                "makeup_style",
+                "wardrobe_structure",
+                "lighting_color",
+                "scene_background",
+                "mood_art_direction",
+                "camera_composition",
+                "style_finish",
+            ]
+        )
         prompt_rules = [
             "Reference inheritance boundary: Identity comes from the reference; direction comes from the prompt.",
             "Use the uploaded portrait as identity truth by default, not style truth.",
@@ -259,6 +293,14 @@ class PortraitBoneStructureIdentityLayer:
             "Beautiful, delicate, premium, or target-style words may polish makeup and atmosphere, but they must not remodel the reference person's facial outline or feature scale.",
             "Hair is medium-preserve: keep broad direction and distinctive marks unless the prompt or template asks for a change.",
         ]
+        if reference_policy_package and reference_policy_package.applies:
+            prompt_rules = list(reference_policy_package.provider_prompt_rules)
+            blocked = _dedupe(
+                [
+                    *blocked,
+                    *(channel_policy.blocked_inheritance_channels if channel_policy else []),
+                ]
+            )
         if styling_policy and styling_policy.applies:
             prompt_rules.extend(styling_policy.prompt_rules[-2:])
         review_checks = [
@@ -275,7 +317,7 @@ class PortraitBoneStructureIdentityLayer:
             applies=True,
             identity_truth_strength=lock.priority if lock.priority == "hard" else "medium",
             makeup_style_strength="prompt_controlled",
-            hair_strength="medium_preserve",
+            hair_strength=(channel_policy.hair_direction if channel_policy else "soft"),
             wardrobe_structure_strength="prompt_controlled",
             lighting_color_scene_strength="prompt_owned",
             camera_composition_strength="prompt_owned",
@@ -292,6 +334,8 @@ class PortraitBoneStructureIdentityLayer:
                 "doc": "87",
                 "portrait_bone_structure_lock_id": lock.lock_id,
                 "ordinary_portrait_reference_defaults_to_identity_truth": True,
+                "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
+                "reference_policy_package_id": reference_policy_package.package_id if reference_policy_package else None,
             },
         )
 

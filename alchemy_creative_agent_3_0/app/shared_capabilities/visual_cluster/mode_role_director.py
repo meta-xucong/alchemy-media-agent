@@ -639,8 +639,8 @@ def _base_keep(subject_type: str) -> list[str]:
     if subject_type == "character":
         return [
             "same recognizable person direction",
-            "same body type and broad hair or wardrobe direction",
-            "same lighting language",
+            "same body identity direction",
+            "prompt-directed hair, wardrobe, and lighting unless those channels are explicitly locked",
         ]
     if subject_type == "product":
         return [

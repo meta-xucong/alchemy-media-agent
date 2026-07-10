@@ -3476,7 +3476,7 @@ function updateMobileV3ReferencePriorityStatus() {
     return;
   }
   if (controls.preserve_person_identity) {
-    status.textContent = "已优先保持人物长相";
+    status.textContent = "已保持同一个人的长相，造型和场景按本次要求";
     return;
   }
   if (controls.preserve_product_appearance || controls.preserve_scene_consistency) {

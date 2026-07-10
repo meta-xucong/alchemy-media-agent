@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...creative_core.prompt_language import looks_like_human_structured_appearance_context
 from ...creative_core.rules import stable_id
-from .contracts import HumanIdentityAnchorProfile, HumanNaturalVariationPlan
+from .contracts import HumanIdentityAnchorProfile, HumanNaturalVariationPlan, ResolvedReferencePolicyPackage
 
 
 HUMAN_KEYWORDS = (
@@ -73,6 +72,7 @@ class HumanNaturalVariationPolicy:
         selected_references: list[dict[str, Any]] | None = None,
         uploaded_references: list[dict[str, Any]] | None = None,
         identity_lock_profiles: list[dict[str, Any]] | None = None,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> tuple[HumanIdentityAnchorProfile, HumanNaturalVariationPlan]:
         selected_outputs = list(selected_outputs or [])
         selected_references = list(selected_references or [])
@@ -83,7 +83,9 @@ class HumanNaturalVariationPolicy:
         exact_copy = self._has_exact_copy_request(text)
         mode = self._normalize_mode(variation_mode)
         has_reference = bool(selected_outputs or selected_references or uploaded_references or identity_lock_profiles)
-        structured_appearance = self._has_structured_appearance_lock(text, identity_lock_profiles)
+        structured_appearance = self._has_structured_appearance_lock(reference_policy_package, identity_lock_profiles)
+        hair_reference_locked = _channel_is_reference_owned(reference_policy_package, "hair_direction")
+        wardrobe_reference_locked = _channel_is_reference_owned(reference_policy_package, "wardrobe_structure")
         applies = bool(is_human and requested_image_count >= 2)
         identity_strength, diversity_strength = MODE_DIVERSITY.get(mode, MODE_DIVERSITY["delivery_suite"])
         if not has_reference and identity_strength == "strong":
@@ -123,8 +125,8 @@ class HumanNaturalVariationPolicy:
             locked_traits=[
                 "recognizable identity direction",
                 "body type and proportions",
-                "major hair color and broad length range",
-                "major wardrobe category when relevant",
+                *(["explicitly assigned hair direction"] if hair_reference_locked else []),
+                *(["explicitly assigned wardrobe structure"] if wardrobe_reference_locked else []),
                 *(
                     ["same appearance asset structure, pattern family, layer logic, and accessory placement"]
                     if structured_appearance
@@ -139,7 +141,7 @@ class HumanNaturalVariationPolicy:
                 "age drift",
                 "ethnicity or person identity drift",
                 "large body type change",
-                "major hair color or length change unless requested",
+                *(["locked hair direction drift"] if hair_reference_locked else []),
                 *(
                     [
                         "appearance asset replacement",
@@ -182,6 +184,7 @@ class HumanNaturalVariationPolicy:
                 "has_reference": has_reference,
                 "exact_copy_request": exact_copy,
                 "structured_appearance_lock": structured_appearance,
+                "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
                 "doc": "56",
             },
         )
@@ -274,11 +277,11 @@ class HumanNaturalVariationPolicy:
             "Keep the same recognizable person and body type across the set.",
             "Allow natural professional variation in expression, gaze, pose, head angle, camera angle, crop, and small hair styling details.",
             "Each image should feel like a different frame from the same professional shoot, not a duplicate of the same still.",
-            "Preserve broad hair color and length direction while allowing natural movement, parting, volume, or shoot-day styling variation.",
+            "Keep the current prompt-directed hair direction coherent while allowing natural movement, parting, volume, or shoot-day styling variation.",
         ]
         if has_reference:
             additions.append(
-                "Use the reference as an identity and style anchor, not as an instruction to copy the exact same expression, pose, head angle, or crop."
+                "Use each reference only for its assigned visual channels; an identity-only portrait keeps the person but does not copy source styling, light, scene, or camera."
             )
         if structured_appearance:
             additions.append(
@@ -294,8 +297,12 @@ class HumanNaturalVariationPolicy:
             additions.append("Prioritize layout, crop, and negative-space variation while keeping the person consistent.")
         return additions
 
-    def _has_structured_appearance_lock(self, text: str, identity_lock_profiles: list[dict[str, Any]]) -> bool:
-        if looks_like_human_structured_appearance_context(text):
+    def _has_structured_appearance_lock(
+        self,
+        reference_policy_package: ResolvedReferencePolicyPackage | None,
+        identity_lock_profiles: list[dict[str, Any]],
+    ) -> bool:
+        if _channel_is_reference_owned(reference_policy_package, "wardrobe_structure"):
             return True
         for profile in identity_lock_profiles:
             lock = profile.get("appearance_structure_lock") if isinstance(profile, dict) else {}
@@ -332,3 +339,10 @@ class HumanNaturalVariationPolicy:
             "batch should not repeat the exact same expression, head angle, and pose across most images",
             f"variation budget follows {mode}",
         ]
+
+
+def _channel_is_reference_owned(package: ResolvedReferencePolicyPackage | None, channel: str) -> bool:
+    if package is None or not package.applies:
+        return False
+    owner = str(package.effective_channel_owners.get(channel) or "")
+    return owner.startswith("reference:") and owner.rsplit(":", 1)[-1] in {"hard", "medium"}

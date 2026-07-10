@@ -170,7 +170,15 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "source_scene_overinherited",
     "source_wardrobe_overinherited",
     "source_camera_mood_overinherited",
+    "source_hair_overinherited",
+    "source_makeup_overinherited",
+    "source_color_grade_overinherited",
+    "source_camera_overinherited",
+    "source_whole_style_overinherited",
     "reference_used_as_style_when_identity_only",
+    "prompt_owned_channel_ignored",
+    "selected_anchor_overrode_current_prompt",
+    "structured_appearance_lock_misapplied",
     "prompt_style_underweighted",
     "makeup_changed_face_geometry",
     "hair_change_replaced_identity",
@@ -1315,6 +1323,35 @@ class V3ProductApiService:
                         "jaw or chin remodeling",
                         "age impression drift",
                         "style changed face geometry",
+                    ]
+                )
+            elif code in {
+                "source_hair_overinherited",
+                "source_makeup_overinherited",
+                "source_color_grade_overinherited",
+                "source_camera_overinherited",
+                "source_whole_style_overinherited",
+                "prompt_owned_channel_ignored",
+                "selected_anchor_overrode_current_prompt",
+                "structured_appearance_lock_misapplied",
+            }:
+                prompt_additions.extend(
+                    [
+                        "Doc93 channel repair: preserve valid identity or product truth while restoring current prompt-owned styling channels",
+                        "follow the current request for hair, makeup, wardrobe, accessories, lighting, color, scene, camera, mood, and style unless that exact channel was explicitly locked",
+                        "do not increase whole-image reference strength and do not let a selected generated output override the current prompt",
+                    ]
+                )
+                identity_reinforcement.append(
+                    "keep the same person's face geometry while repairing only leaked source styling; do not copy source wardrobe, light, scene, camera, or whole-image style"
+                )
+                negative_additions.extend(
+                    [
+                        "source hairstyle or makeup leakage",
+                        "source wardrobe leakage",
+                        "source lighting, color, scene, or camera leakage",
+                        "source whole-image style leakage",
+                        "selected anchor overrode current prompt",
                     ]
                 )
             elif code in {

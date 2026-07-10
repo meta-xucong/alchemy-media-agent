@@ -7,7 +7,6 @@ from typing import Any
 from uuid import uuid4
 
 from ..app_shell.routes import API_NAMESPACE
-from ..creative_core.prompt_language import looks_like_human_structured_appearance_context
 from ..creative_core.rules import stable_id
 from ..product_api import V3ProductApiService
 from ..product_api.contracts import (
@@ -19,6 +18,7 @@ from ..product_api.contracts import (
     V3UploadedAssetRecord,
 )
 from ..schemas import BrandProfile, ReferenceAsset
+from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
 from .contracts import (
     ECOMMERCE_TEMPLATE_ID,
     GENERAL_TEMPLATE_ID,
@@ -77,11 +77,13 @@ class V3ProjectModeService:
         product_service: V3ProductApiService | None = None,
         project_store: InMemoryProjectStore | None = None,
         template_registry: ProjectTemplateRegistry | None = None,
+        reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
     ) -> None:
         self.product_service = product_service or V3ProductApiService()
         self.project_store = project_store or InMemoryProjectStore()
         scenario_registry = getattr(getattr(self.product_service, "scenario_runtime", None), "scenario_registry", None)
         self.template_registry = template_registry or ProjectTemplateRegistry(scenario_registry=scenario_registry)
+        self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
         projects = [
@@ -689,6 +691,8 @@ class V3ProjectModeService:
             request=job_request,
             template_id=template_manifest.template_id,
         )
+        project.metadata["advanced_reference_controls"] = dict(advanced_reference_controls)
+        project.metadata["doc90_advanced_reference_controls"] = bool(advanced_reference_controls)
         context = self._build_context(
             project,
             continuation_instruction=job_request.user_input,
@@ -2100,18 +2104,6 @@ class V3ProjectModeService:
         ).lower()
         return self._looks_like_character_text(text)
 
-    def _looks_like_structured_appearance_project(self, project: ProjectRecord) -> bool:
-        text = " ".join(
-            str(item or "")
-            for item in [
-                project.user_goal,
-                project.short_summary,
-                project.confirmed_style_summary,
-                *getattr(project, "confirmed_style_tags", []),
-            ]
-        )
-        return looks_like_human_structured_appearance_context(text)
-
     def _looks_like_character_text(self, text: str) -> bool:
         normalized = str(text or "").lower()
         character_tokens = (
@@ -2156,7 +2148,7 @@ class V3ProjectModeService:
         if policy == ProjectReferenceUsePolicy.PRODUCT_IDENTITY or policy == ProjectReferenceUsePolicy.PRODUCT:
             return ["shape", "material", "color", "logo_or_label_position", "proportions"]
         if policy == ProjectReferenceUsePolicy.IDENTITY:
-            return ["face_identity", "hair", "wardrobe", "camera_distance", "lighting_language"]
+            return ["face_identity", "body_identity_direction", "natural_complexion_direction"]
         if policy == ProjectReferenceUsePolicy.BRAND_ASSET:
             return ["logo_shape", "brand_color", "brand_symbol", "layout_position"]
         if policy == ProjectReferenceUsePolicy.LIGHTING:
@@ -2335,11 +2327,25 @@ class V3ProjectModeService:
             template_id=effective_template_id,
             selected_visual_references=selected_visual_references,
         )
+        reference_policy_package = self.reference_channel_policy_module.resolve(
+            project_id=project.project_id,
+            job_id=None,
+            user_input=continuation_instruction or project.user_goal,
+            subject_type=str(template_policy.get("identity_lock_default") or "generic"),
+            template_id=effective_template_id,
+            strong_bindings=strong_reference_bindings,
+            selected_outputs=[item.model_dump(mode="json") for item in selected_refs],
+            advanced_reference_controls=self._clean_advanced_reference_controls(
+                project.metadata.get("advanced_reference_controls")
+            ),
+            metadata=project.metadata,
+        )
         identity_lock_profiles = self._project_identity_lock_profiles(
             project=project,
             template_policy=template_policy,
             strong_reference_bindings=strong_reference_bindings,
             visual_snapshot=visual_snapshot,
+            reference_policy_package=reference_policy_package.model_dump(mode="json"),
         )
         project_identity_anchors = self._project_identity_anchors(
             project=project,
@@ -2347,11 +2353,13 @@ class V3ProjectModeService:
             selected_refs=selected_refs,
             strong_reference_bindings=strong_reference_bindings,
             identity_lock_profiles=identity_lock_profiles,
+            reference_policy_package=reference_policy_package.model_dump(mode="json"),
         )
         strong_reference_continuation_plan = self._project_strong_reference_continuation_plan(
             project=project,
             anchors=project_identity_anchors,
             strong_reference_bindings=strong_reference_bindings,
+            reference_policy_package=reference_policy_package.model_dump(mode="json"),
         )
         general_suite_role_plan = self._project_general_suite_role_plan(
             project=project,
@@ -2371,6 +2379,8 @@ class V3ProjectModeService:
         metadata["identity_lock_count"] = len(identity_lock_profiles)
         metadata["project_identity_anchor_count"] = len(project_identity_anchors)
         metadata["strong_reference_continuation_plan_id"] = strong_reference_continuation_plan.get("plan_id")
+        metadata["reference_policy_package_id"] = reference_policy_package.package_id
+        metadata["doc93_reference_channel_policy"] = bool(reference_policy_package.applies)
         metadata["general_suite_role_plan_id"] = general_suite_role_plan.get("plan_id")
         metadata["batch_identity_diversity_review_id"] = batch_identity_diversity_review.get("review_id")
         metadata["template_consistency_policy"] = template_policy
@@ -2393,6 +2403,7 @@ class V3ProjectModeService:
             identity_lock_profiles=identity_lock_profiles,
             project_identity_anchors=project_identity_anchors,
             strong_reference_continuation_plan=strong_reference_continuation_plan,
+            resolved_reference_policy_package=reference_policy_package.model_dump(mode="json"),
             general_suite_role_plan=general_suite_role_plan,
             batch_identity_diversity_review=batch_identity_diversity_review,
             negative_visual_memory=negative_visual_memory,
@@ -2478,11 +2489,7 @@ class V3ProjectModeService:
                 "selection_reason": ref.selection_reason,
                 "use_policy": selected_policy.value,
                 "role": self._reference_role_for_policy(selected_policy),
-                "strength": "hard" if selected_policy in {
-                    ProjectReferenceUsePolicy.IDENTITY,
-                    ProjectReferenceUsePolicy.PRODUCT_IDENTITY,
-                    ProjectReferenceUsePolicy.BRAND_ASSET,
-                } else "medium",
+                "strength": "medium",
                 "lock_targets": self._lock_targets_for_policy(selected_policy),
             }
             payload.update({key: value for key, value in generated_payload.items() if value not in (None, "", [], {})})
@@ -2563,7 +2570,9 @@ class V3ProjectModeService:
                     "strength": strength,
                     "use_policy": use_policy.value,
                     "lock_targets": item.get("lock_targets") or self._lock_targets_for_policy(use_policy),
-                    "provider_input_required": bool(file_path and strength == "hard"),
+                    "provider_input_required": bool(
+                        file_path and (strength == "hard" or item.get("source_type") == "selected_output")
+                    ),
                     "prompt_only_fallback": not bool(file_path),
                     "user_visible_label": self._reference_user_label(use_policy),
                     "metadata": {
@@ -2581,17 +2590,35 @@ class V3ProjectModeService:
         template_policy: dict[str, Any],
         strong_reference_bindings: list[dict[str, Any]],
         visual_snapshot: dict[str, Any],
+        reference_policy_package: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         if not strong_reference_bindings:
             return []
         subject_type = str(template_policy.get("identity_lock_default") or "generic")
-        structured_appearance = self._looks_like_structured_appearance_project(project)
+        reference_policy_package = dict(reference_policy_package or {})
+        effective_owners = (
+            reference_policy_package.get("effective_channel_owners")
+            if isinstance(reference_policy_package.get("effective_channel_owners"), dict)
+            else {}
+        )
+        hair_locked = self._reference_channel_owner_is_locked(effective_owners, "hair_direction")
+        wardrobe_locked = self._reference_channel_owner_is_locked(effective_owners, "wardrobe_structure")
+        camera_locked = self._reference_channel_owner_is_locked(effective_owners, "camera_composition")
+        lighting_locked = self._reference_channel_owner_is_locked(effective_owners, "lighting_color")
+        style_locked = self._reference_channel_owner_is_locked(effective_owners, "style_finish")
+        structured_appearance = wardrobe_locked
         if subject_type == "character":
             keep_rules = [
-                "keep the selected person's recognizable vibe",
-                "keep hair, outfit direction, camera distance, and lighting coherent",
+                "keep the same person's recognizable face geometry, facial-feature relationships, age direction, and body identity direction",
+                "follow the current prompt for hair, makeup, wardrobe, lighting, scene, camera, mood, and style unless a channel is explicitly locked",
             ]
-            avoid_rules = ["face drift", "random hairstyle change", "outfit direction drift"]
+            avoid_rules = ["face drift", "same beauty type but different person"]
+            if hair_locked:
+                keep_rules.append("keep the explicitly assigned hair direction")
+                avoid_rules.append("locked hair direction drift")
+            if wardrobe_locked:
+                keep_rules.append("keep the explicitly assigned wardrobe direction")
+                avoid_rules.append("locked wardrobe direction drift")
             if structured_appearance:
                 keep_rules.append(
                     "keep the same appearance asset structure: silhouette, layer order, neckline or collar direction, sleeve or cuff shape, closure or sash logic, material behavior, pattern family, trim placement, and accessory placement coherent"
@@ -2628,14 +2655,25 @@ class V3ProjectModeService:
                 "forbidden_drift": avoid_rules,
                 "prompt_constraints": [
                     *keep_rules,
-                    *[str(item) for item in visual_snapshot.get("style_rules", [])[:4]],
+                    *(
+                        [str(item) for item in visual_snapshot.get("style_rules", [])[:4]]
+                        if subject_type != "character" or style_locked
+                        else []
+                    ),
                 ],
                 "negative_constraints": [
                     *avoid_rules,
                     *[str(item) for item in visual_snapshot.get("negative_directions", [])[:4]],
                 ],
                 "user_visible_summary": self._identity_lock_user_summary(subject_type),
-                "metadata": {"template_policy": template_policy, "structured_appearance_lock": structured_appearance},
+                "metadata": {
+                    "template_policy": template_policy,
+                    "structured_appearance_lock": structured_appearance,
+                    "doc93_reference_channel_policy": bool(reference_policy_package.get("applies")),
+                    "reference_policy_package_id": reference_policy_package.get("package_id"),
+                    "camera_locked": camera_locked,
+                    "lighting_locked": lighting_locked,
+                },
             }
         ]
 
@@ -2647,6 +2685,7 @@ class V3ProjectModeService:
         selected_refs: list[OutputRef],
         strong_reference_bindings: list[dict[str, Any]],
         identity_lock_profiles: list[dict[str, Any]],
+        reference_policy_package: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         if not selected_refs and not strong_reference_bindings:
             return []
@@ -2661,6 +2700,13 @@ class V3ProjectModeService:
             for profile in identity_lock_profiles
             for rule in [*profile.get("keep_rules", []), *profile.get("prompt_constraints", [])]
         )
+        reference_policy_package = dict(reference_policy_package or {})
+        effective_owners = (
+            reference_policy_package.get("effective_channel_owners")
+            if isinstance(reference_policy_package.get("effective_channel_owners"), dict)
+            else {}
+        )
+        style_reference_active = self._reference_channel_owner_is_locked(effective_owners, "style_finish")
         return [
             {
                 "anchor_id": stable_id("project_identity_anchor", project.project_id, subject_type, ",".join(output_ids), ",".join(binding_ids)),
@@ -2673,7 +2719,7 @@ class V3ProjectModeService:
                 "active": True,
                 "anchor_strength": "strong" if provider_required or subject_type in {"character", "product"} else "medium",
                 "identity_keep_rules": lock_rules[:8],
-                "style_keep_rules": list(self._style_chips(project))[:6],
+                "style_keep_rules": list(self._style_chips(project))[:6] if style_reference_active else [],
                 "allowed_variations": self._anchor_allowed_variations(subject_type),
                 "forbidden_drift": self._anchor_forbidden_drift(subject_type),
                 "provider_reference_required": provider_required,
@@ -2682,7 +2728,12 @@ class V3ProjectModeService:
                     "Selected image will guide the next generation.",
                     "V3 keeps the important identity/style details while allowing useful variation.",
                 ],
-                "metadata": {"doc": "58", "template_policy": template_policy.get("policy_id")},
+                "metadata": {
+                    "doc": "58",
+                    "extends": ["93"],
+                    "template_policy": template_policy.get("policy_id"),
+                    "reference_policy_package_id": reference_policy_package.get("package_id"),
+                },
             }
         ]
 
@@ -2692,6 +2743,7 @@ class V3ProjectModeService:
         project: ProjectRecord,
         anchors: list[dict[str, Any]],
         strong_reference_bindings: list[dict[str, Any]],
+        reference_policy_package: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not anchors and not strong_reference_bindings:
             return {}
@@ -2710,15 +2762,25 @@ class V3ProjectModeService:
             for item in strong_reference_bindings
             for target in item.get("lock_targets", [])
         )
+        reference_policy_package = dict(reference_policy_package or {})
+        effective_owners = (
+            reference_policy_package.get("effective_channel_owners")
+            if isinstance(reference_policy_package.get("effective_channel_owners"), dict)
+            else {}
+        )
+        structured_appearance = self._reference_channel_owner_is_locked(effective_owners, "wardrobe_structure")
+        provider_rules = self._dedupe_text(reference_policy_package.get("provider_prompt_rules") or [])
+        provider_negative_rules = self._dedupe_text(reference_policy_package.get("provider_negative_rules") or [])
         prompt_additions = self._dedupe_text(
             [
                 "use active project reference images as the strongest positive references",
                 "preserve uploaded prototype identity/product details before extending selected generated style",
+                *provider_rules,
                 *(
                     [
                         "when styling defines the project, preserve the same appearance asset structure: silhouette, layer order, collar or neckline direction, sleeve or cuff shape, closure or sash logic, material behavior, pattern family, trim placement, and accessory placement"
                     ]
-                    if self._looks_like_structured_appearance_project(project)
+                    if structured_appearance
                     else []
                 ),
                 *[rule for anchor in anchors for rule in anchor.get("identity_keep_rules", [])],
@@ -2728,13 +2790,14 @@ class V3ProjectModeService:
         negative_additions = self._dedupe_text(
             [
                 "do not use unselected candidates as positive references",
+                *provider_negative_rules,
                 *(
                     [
                         "do not redesign the appearance asset",
                         "do not change garment structure or layer logic",
                         "do not replace pattern family, trim placement, or accessory placement without a user request",
                     ]
-                    if self._looks_like_structured_appearance_project(project)
+                    if structured_appearance
                     else []
                 ),
                 *[rule for anchor in anchors for rule in anchor.get("forbidden_drift", [])],
@@ -2751,7 +2814,13 @@ class V3ProjectModeService:
             "negative_additions": negative_additions,
             "reference_mode": "provider_image_reference" if provider_ids else "prompt_only_reference" if prompt_only_ids else "context_reference",
             "user_visible_summary": ["Selected result is saved as the next reference."],
-            "metadata": {"doc": "58", "strong_binding_count": len(strong_reference_bindings)},
+            "metadata": {
+                "doc": "58",
+                "extends": ["93"],
+                "strong_binding_count": len(strong_reference_bindings),
+                "reference_policy_package_id": reference_policy_package.get("package_id"),
+                "doc93_reference_channel_policy": bool(reference_policy_package.get("applies")),
+            },
         }
 
     def _project_general_suite_role_plan(
@@ -2897,10 +2966,14 @@ class V3ProjectModeService:
 
     def _identity_lock_user_summary(self, subject_type: str) -> list[str]:
         if subject_type == "character":
-            return ["Keeps the selected person's vibe, hair, outfit direction, camera, and lighting"]
+            return ["Keeps the same person's recognizable face; styling and scene follow the current request"]
         if subject_type == "product":
             return ["Keeps product shape, material, color, proportions, and label position"]
         return ["Keeps the selected style, composition, palette, and lighting"]
+
+    def _reference_channel_owner_is_locked(self, owners: dict[str, Any], channel: str) -> bool:
+        owner = str(owners.get(channel) or "")
+        return owner.startswith("reference:") and owner.rsplit(":", 1)[-1] in {"hard", "medium"}
 
     def _project_visual_grammar_snapshot(
         self,
@@ -2955,7 +3028,7 @@ class V3ProjectModeService:
         if tone:
             parts.append(" / ".join(tone[:3]))
         if selected_refs:
-            parts.append("uses selected project images as the current style anchor")
+            parts.append("uses selected project images only for their assigned continuation channels")
         return self._short_text(" | ".join(part for part in parts if part), 160)
 
     def _dedupe_visual_reference_payloads(self, references: list[dict[str, Any]]) -> list[dict[str, Any]]:

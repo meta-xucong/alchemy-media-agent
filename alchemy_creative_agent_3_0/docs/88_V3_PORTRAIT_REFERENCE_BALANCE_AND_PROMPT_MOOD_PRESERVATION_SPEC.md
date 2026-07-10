@@ -1,5 +1,14 @@
 # 88 V3 Portrait Reference Balance And Prompt Mood Preservation Spec
 
+Doc93 authority update:
+
+```text
+Doc88 remains the portrait balance baseline. Doc93 is the current implementation
+authority for resolving uploaded truth, selected output support, and current
+prompt direction per visual channel. Selected output support cannot override a
+new explicit prompt or replace uploaded identity truth.
+```
+
 ## 1. Purpose
 
 Doc88 is the latest authority for V3 portrait image-to-image balance after the

@@ -1,5 +1,13 @@
 # 59 V3 Mode-Aware Role Director And Suite Differentiation Spec
 
+Doc93 compatibility note:
+
+```text
+Mode-aware role planning remains valid. The director may request channel
+variation but cannot redefine reference ownership. Identity, appearance, style,
+scene, and prompt-owned channels come from the resolved Doc93 policy.
+```
+
 ## 1. Status And Authority
 
 This document is the next development authority after document `58`.

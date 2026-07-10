@@ -748,6 +748,70 @@ class PortraitReferenceBalanceRetryPatch(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReferenceChannelPolicy(V3BaseModel):
+    """Per-reference authority over independently controlled visual channels."""
+
+    policy_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    source_asset_id: str
+    source_role: str
+    source_type: str = "project_reference"
+    identity_geometry: str = "off"
+    body_identity: str = "off"
+    natural_complexion_direction: str = "off"
+    hair_direction: str = "prompt_owned"
+    makeup_style: str = "prompt_owned"
+    wardrobe_structure: str = "prompt_owned"
+    accessory_system: str = "prompt_owned"
+    product_identity: str = "off"
+    lighting_color: str = "prompt_owned"
+    scene_background: str = "prompt_owned"
+    camera_composition: str = "prompt_owned"
+    mood_art_direction: str = "prompt_owned"
+    style_finish: str = "prompt_owned"
+    prompt_owned_channels: list[str] = Field(default_factory=list)
+    explicit_user_locks: list[str] = Field(default_factory=list)
+    blocked_inheritance_channels: list[str] = Field(default_factory=list)
+    allowed_reference_contributions: list[str] = Field(default_factory=list)
+    conflict_resolutions: list[dict[str, Any]] = Field(default_factory=list)
+    provider_prompt_rules: list[str] = Field(default_factory=list)
+    provider_negative_rules: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptOwnershipDecision(V3BaseModel):
+    """Current-job prompt ownership with deterministic evidence."""
+
+    explicit_channels: list[str] = Field(default_factory=list)
+    preserve_requests: list[str] = Field(default_factory=list)
+    change_requests: list[str] = Field(default_factory=list)
+    explicit_style_reference_ids: list[str] = Field(default_factory=list)
+    explicit_identity_reference_ids: list[str] = Field(default_factory=list)
+    explicit_appearance_reference_ids: list[str] = Field(default_factory=list)
+    confidence_by_channel: dict[str, float] = Field(default_factory=dict)
+    evidence_by_channel: dict[str, list[str]] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResolvedReferencePolicyPackage(V3BaseModel):
+    """Single downstream authority for reference inheritance and prompt ownership."""
+
+    package_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    policies: list[ReferenceChannelPolicy] = Field(default_factory=list)
+    prompt_ownership: PromptOwnershipDecision = Field(default_factory=PromptOwnershipDecision)
+    effective_channel_owners: dict[str, str] = Field(default_factory=dict)
+    provider_prompt_rules: list[str] = Field(default_factory=list)
+    provider_negative_rules: list[str] = Field(default_factory=list)
+    review_targets: list[str] = Field(default_factory=list)
+    retry_issue_map: dict[str, list[str]] = Field(default_factory=dict)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class BoneStructureRetryPatch(V3BaseModel):
     patch_id: str
     project_id: str | None = None
@@ -808,6 +872,7 @@ class VisualCapabilityClusterResult(V3BaseModel):
     bone_structure_retry_patch: BoneStructureRetryPatch | None = None
     reference_overinheritance_retry_patch: ReferenceOverinheritanceRetryPatch | None = None
     portrait_reference_balance_retry_patch: PortraitReferenceBalanceRetryPatch | None = None
+    resolved_reference_policy_package: ResolvedReferencePolicyPackage | None = None
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)
     template_consistency_policy: dict[str, Any] = Field(default_factory=dict)
     has_visual_evidence: bool = False

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...creative_core.prompt_language import (
-    looks_like_human_structured_appearance_context,
-    product_language_allowed,
-)
+from ...creative_core.prompt_language import product_language_allowed
 from ...creative_core.rules import stable_id
 from ..base import SharedCapabilityModule
 from ..contracts import (
@@ -40,6 +37,7 @@ from .contracts import (
     PortraitIdentityStyleSeparationReview,
     PortraitIdentitySimilarityReview,
     PortraitReferenceInfluencePolicy,
+    ResolvedReferencePolicyPackage,
     ReferenceOverinheritanceRetryPatch,
     RoleSpecificGenerationPlan,
     ProjectIdentityAnchor,
@@ -79,6 +77,11 @@ from .portrait_identity import (
     DOC88_REFERENCE_BALANCE_ISSUE_CODES,
     PortraitBoneStructureIdentityLayer,
 )
+from .reference_channel_policy import (
+    REFERENCE_CHANNEL_ISSUE_CODES,
+    REFERENCE_CHANNEL_POLICY_MODULE_ID,
+    ReferenceChannelPolicyModule,
+)
 from .strong_reference_loop import StrongReferenceLoopPlanner
 
 
@@ -112,6 +115,7 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "portrait_bone_structure_identity_lock",
     "portrait_reference_identity_style_separator",
     "portrait_reference_balance_policy",
+    REFERENCE_CHANNEL_POLICY_MODULE_ID,
     ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID,
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
@@ -218,6 +222,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         strong_reference_closure_builder: StrongReferenceClosureBuilder | None = None,
         mode_quality_profile_builder: ModeQualityProfileBuilder | None = None,
         portrait_identity_layer: PortraitBoneStructureIdentityLayer | None = None,
+        reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
     ) -> None:
         self.human_variation_policy = human_variation_policy or HumanNaturalVariationPolicy()
         self.identity_anchor_builder = identity_anchor_builder or ProjectIdentityAnchorBuilder()
@@ -230,6 +235,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         self.strong_reference_closure_builder = strong_reference_closure_builder or StrongReferenceClosureBuilder()
         self.mode_quality_profile_builder = mode_quality_profile_builder or ModeQualityProfileBuilder()
         self.portrait_identity_layer = portrait_identity_layer or PortraitBoneStructureIdentityLayer()
+        self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
 
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
         cluster = self._build_cluster(capability_input)
@@ -305,6 +311,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     if cluster.strong_reference_closure_package is not None
                     else {}
                 ),
+                "resolved_reference_policy_package": (
+                    cluster.resolved_reference_policy_package.model_dump(mode="json")
+                    if cluster.resolved_reference_policy_package is not None
+                    else {}
+                ),
                 "mode_quality_profile": (
                     cluster.mode_quality_profile.model_dump(mode="json")
                     if cluster.mode_quality_profile is not None
@@ -374,6 +385,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "context_version": cluster.context_version,
                 "v3_native_visual_capability_cluster": True,
                 "advanced_reference_controls": dict(cluster.metadata.get("advanced_reference_controls") or {}),
+                "reference_policy_package_id": cluster.metadata.get("reference_policy_package_id"),
             },
         )
 
@@ -411,6 +423,36 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             user_input=capability_input.user_input,
             allow_product_language=allow_product_language,
         )
+        strong_bindings = self._strong_reference_bindings(
+            capability_input=capability_input,
+            selected_outputs=selected_outputs,
+            selected_references=selected_references,
+            uploaded_references=uploaded_references,
+            template_policy=template_policy,
+            allow_product_language=allow_product_language,
+        )
+        subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
+        advanced_reference_controls = self._advanced_reference_controls(
+            capability_input=capability_input,
+            project_context=project_context,
+            strong_bindings=strong_bindings,
+            subject_type=subject_type,
+        )
+        reference_policy_package = self.reference_channel_policy_module.resolve(
+            project_id=str(project_context.get("project_id") or "") or None,
+            job_id=capability_input.job_id,
+            user_input=capability_input.user_input,
+            subject_type=subject_type,
+            template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+            strong_bindings=strong_bindings,
+            selected_outputs=selected_outputs,
+            advanced_reference_controls=advanced_reference_controls,
+            metadata=capability_input.metadata,
+        )
+        effective_asset_analyses = self._asset_analyses_for_reference_policy(
+            asset_analyses,
+            reference_policy_package,
+        )
 
         selected_output_ids = _dedupe(_identity(item, "output_id", "asset_id", "candidate_id") for item in selected_outputs)
         context_reference_ids = _dedupe(
@@ -426,7 +468,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             selected_cases=selected_cases,
             grammar_lock=grammar_lock,
             history_reference=history_reference,
-            asset_analyses=asset_analyses,
+            asset_analyses=effective_asset_analyses,
         )
         style_signals = _sanitize_general_visual_terms(style_signals, allow_product_language=allow_product_language)
         composition_rules = _sanitize_general_visual_terms(
@@ -452,7 +494,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             scenario_id=capability_input.scenario_id,
             style_signals=style_signals,
             composition_rules=composition_rules,
-            palette_notes=self._palette_notes(asset_analyses, project_context),
+            palette_notes=self._palette_notes(effective_asset_analyses, project_context),
             lighting_notes=self._lighting_notes(style_signals, capability_input.user_input),
             lens_notes=self._lens_notes(capability_input.user_input, selected_cases),
             layout_notes=layout_notes,
@@ -476,6 +518,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             metadata={
                 "case_count": len(selected_cases),
                 "uploaded_asset_analysis_count": len(asset_analyses),
+                "reference_authorized_style_analysis_count": len(effective_asset_analyses),
                 "binding_count": len(bindings),
                 "selected_output_count": len(selected_outputs),
                 "commerce_terms_allowed": allow_product_language,
@@ -488,14 +531,6 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             uploaded_references=uploaded_references,
             profile=profile,
         )
-        strong_bindings = self._strong_reference_bindings(
-            capability_input=capability_input,
-            selected_outputs=selected_outputs,
-            selected_references=selected_references,
-            uploaded_references=uploaded_references,
-            template_policy=template_policy,
-            allow_product_language=allow_product_language,
-        )
         binding_profile = self._binding_profile(bindings, selected_references, uploaded_references, strong_bindings)
         identity_locks = self._identity_lock_profiles(
             capability_input=capability_input,
@@ -504,6 +539,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             strong_bindings=strong_bindings,
             template_policy=template_policy,
             allow_product_language=allow_product_language,
+            reference_policy_package=reference_policy_package,
         )
         human_anchor, human_variation = self._human_variation_profiles(
             capability_input=capability_input,
@@ -512,6 +548,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             selected_references=selected_references,
             uploaded_references=uploaded_references,
             identity_locks=identity_locks,
+            reference_policy_package=reference_policy_package,
         )
         project_identity_anchors = self.identity_anchor_builder.build(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -520,6 +557,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             strong_bindings=strong_bindings,
             identity_locks=identity_locks,
             template_policy=template_policy,
+            reference_policy_package=reference_policy_package,
         )
         strong_reference_plan = self.strong_reference_planner.build(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -529,13 +567,6 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         )
         requested_count = self._requested_image_count(capability_input, project_context)
         variation_mode = self._effective_variation_mode(capability_input, project_context)
-        subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
-        advanced_reference_controls = self._advanced_reference_controls(
-            capability_input=capability_input,
-            project_context=project_context,
-            strong_bindings=strong_bindings,
-            subject_type=subject_type,
-        )
         human_photorealism = self.human_photorealism_layer.build(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -565,6 +596,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             anchors=project_identity_anchors,
             identity_locks=identity_locks,
             human_photorealism=human_photorealism,
+            reference_policy_package=reference_policy_package,
         )
         strong_reference_closure = self._apply_advanced_reference_controls_to_closure(
             strong_reference_closure,
@@ -593,6 +625,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             role_specific_plan,
             strong_reference_closure,
         )
+        role_specific_plan = self._apply_reference_channel_policy_to_role_plan(
+            role_specific_plan,
+            reference_policy_package,
+        )
         role_specific_plan = self._apply_mode_quality_profile_to_role_plan(role_specific_plan, mode_quality_profile)
         identity_hero_plan = self._identity_hero_selection_plan(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -619,6 +655,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             project_identity_anchors=project_identity_anchors,
             identity_hero_plan=identity_hero_plan,
             human_photorealism=human_photorealism,
+            reference_policy_package=reference_policy_package,
         )
         subject_identity_card = self._apply_advanced_reference_controls_to_subject_identity_card(
             subject_identity_card,
@@ -642,6 +679,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             job_id=capability_input.job_id,
             lock=portrait_bone_lock,
             styling_policy=styling_delta_policy,
+            reference_policy_package=reference_policy_package,
         )
         portrait_balance_policy = self.portrait_identity_layer.build_reference_balance_policy(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -688,6 +726,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             human_photorealism=human_photorealism,
             role_specific_plan=role_specific_plan,
             advanced_reference_controls=advanced_reference_controls,
+            reference_policy_package=reference_policy_package,
         )
         role_specific_plan = self._apply_strict_visual_review_policy_to_role_plan(
             role_specific_plan,
@@ -833,6 +872,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID
                 if advanced_reference_controls.get("applies")
                 else "",
+                REFERENCE_CHANNEL_POLICY_MODULE_ID if reference_policy_package.applies else "",
                 "anti_ai_face_review" if anti_ai_face_review and anti_ai_face_review.applies else "",
                 "commercial_quality_review",
             ]
@@ -887,6 +927,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             bone_structure_retry_patch=bone_retry_patch,
             reference_overinheritance_retry_patch=reference_retry_patch,
             portrait_reference_balance_retry_patch=balance_retry_patch,
+            resolved_reference_policy_package=reference_policy_package,
             negative_visual_memory=negative_memory,
             template_consistency_policy=template_policy,
             has_visual_evidence=has_evidence,
@@ -931,6 +972,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "auto_retry_decision_count": len(retry_decisions),
                 "advanced_reference_controls": advanced_reference_controls,
                 "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
+                "doc93_reference_channel_policy": bool(reference_policy_package.applies),
+                "reference_policy_package_id": reference_policy_package.package_id,
                 "doc67_default_role_count_aligned": True,
             },
         )
@@ -1013,6 +1056,46 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if human_style_context and "premium real-camera portrait finish" in signals:
             signals = [signal for signal in signals if signal != "premium polished finish"]
         return _dedupe(signals)[:14]
+
+    def _asset_analyses_for_reference_policy(
+        self,
+        asset_analyses: list[dict[str, Any]],
+        package: ResolvedReferencePolicyPackage | None,
+    ) -> list[dict[str, Any]]:
+        if package is None or not package.applies:
+            return asset_analyses
+        policies_by_asset = {policy.source_asset_id: policy for policy in package.policies}
+        effective: list[dict[str, Any]] = []
+        for analysis in asset_analyses:
+            asset_id = _identity(analysis, "asset_id", "asset_ref_id", "source_id")
+            policy = policies_by_asset.get(asset_id)
+            if policy is None:
+                role = str(analysis.get("role") or "").lower()
+                policy = next(
+                    (
+                        item
+                        for item in package.policies
+                        if ("face" in role and item.source_role == "portrait_identity_reference")
+                        or ("product" in role and item.source_role == "product_identity_reference")
+                    ),
+                    None,
+                )
+            if policy is None:
+                effective.append(analysis)
+                continue
+            style_authorized = any(
+                getattr(policy, channel) in {"hard", "medium", "soft"}
+                for channel in (
+                    "lighting_color",
+                    "scene_background",
+                    "camera_composition",
+                    "mood_art_direction",
+                    "style_finish",
+                )
+            )
+            if style_authorized:
+                effective.append(analysis)
+        return effective
 
     def _composition_rules(
         self,
@@ -1246,8 +1329,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "prompt_additions": _dedupe(
                     [
                         *plan.prompt_additions,
-                        *guidance.reference_preserve_rules,
-                        "keep identity continuity while avoiding a copied expression or identical face angle",
+                        "Human Realism may improve skin, eyes, expression, proportion, and camera response, but it must not expand which reference channels are inherited.",
                     ]
                 )[:12],
                 "negative_additions": _dedupe(
@@ -1320,6 +1402,42 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             }
         )
 
+    def _apply_reference_channel_policy_to_role_plan(
+        self,
+        plan: RoleSpecificGenerationPlan,
+        package: ResolvedReferencePolicyPackage | None,
+    ) -> RoleSpecificGenerationPlan:
+        if package is None or not package.applies:
+            return plan
+        updated_recipes = []
+        for recipe in plan.role_recipes:
+            updated_recipes.append(
+                recipe.model_copy(
+                    update={
+                        "must_keep_rules": _dedupe([*recipe.must_keep_rules, *package.provider_prompt_rules[:5]]),
+                        "must_not_rules": _dedupe([*recipe.must_not_rules, *package.provider_negative_rules[:8]]),
+                        "review_checks": _dedupe([*recipe.review_checks, *package.review_targets[:6]]),
+                        "metadata": {
+                            **dict(recipe.metadata),
+                            "doc93_reference_channel_policy": True,
+                            "reference_policy_package_id": package.package_id,
+                        },
+                    }
+                )
+            )
+        return plan.model_copy(
+            update={
+                "role_recipes": updated_recipes,
+                "prompt_additions": _dedupe([*plan.prompt_additions, *package.provider_prompt_rules])[:36],
+                "negative_additions": _dedupe([*plan.negative_additions, *package.provider_negative_rules])[:44],
+                "metadata": {
+                    **dict(plan.metadata),
+                    "doc93_reference_channel_policy": True,
+                    "resolved_reference_policy_package": package.model_dump(mode="json"),
+                },
+            }
+        )
+
     def _apply_mode_quality_profile_to_role_plan(
         self,
         plan: RoleSpecificGenerationPlan,
@@ -1379,7 +1497,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         status = "user_anchor_ready" if has_user_anchor else "planned_first_output_anchor"
         prompt_additions = [
             "Identity hero selection: before expanding the suite, establish one clear identity master frame for the person.",
-            "The identity master must show a readable real face, natural head/body proportion, broad face shape, eye spacing, nose-mouth relationship, jawline direction, age impression, hair direction, wardrobe category, and lighting language.",
+            "The identity master must show a readable real face, natural head/body proportion, broad face shape, eye spacing, nose-mouth relationship, jawline direction, and age impression; styling channels remain governed separately.",
             (
                 "Use the user-selected identity/reference image as the strongest identity master; do not override it with an automatic anchor."
                 if has_user_anchor
@@ -1399,7 +1517,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         review_checks = [
             "one image is usable as the identity master",
             "identity master has readable face and natural proportions",
-            "later images keep face/body/hair/wardrobe direction from the identity master",
+            "later images keep face geometry, feature relationships, age direction, and body identity from the identity master",
             "suite roles vary without replacing the person",
         ]
         return IdentityHeroSelectionPlan(
@@ -1465,7 +1583,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 must_keep = _dedupe(
                     [
                         *must_keep,
-                        "preserve the identity master face/body/hair/wardrobe direction",
+                        "preserve the identity master face geometry, feature relationships, age direction, and body identity",
                         "vary only the role-specific expression, pose, camera, crop, or scene depth",
                     ]
                 )
@@ -1508,6 +1626,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         project_identity_anchors: list[ProjectIdentityAnchor],
         identity_hero_plan: IdentityHeroSelectionPlan | None,
         human_photorealism: HumanPhotorealismGuidance | None,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> SubjectIdentityCard:
         applies = subject_type == "character"
         source_output_ids: list[str] = []
@@ -1515,7 +1634,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         source_asset_ids: list[str] = []
         source_anchor_ids: list[str] = []
         source_binding_ids: list[str] = []
-        if selected_outputs:
+        uploaded_identity_bindings = [
+            binding
+            for binding in strong_bindings
+            if binding.use_policy == "identity" and binding.source_type not in {"selected_output", "generated_selected"}
+        ]
+        if uploaded_identity_bindings:
+            source_priority = "strong_reference_binding"
+            source_binding_ids = [binding.binding_id for binding in uploaded_identity_bindings]
+            source_asset_ids = _dedupe(binding.asset_id for binding in uploaded_identity_bindings if binding.asset_id)
+            source_output_ids = _dedupe(binding.output_id for binding in uploaded_identity_bindings if binding.output_id)
+            status = "strong_reference_identity_ready"
+        elif selected_outputs:
             source_priority = "user_selected_output"
             source_output_ids = _dedupe(_identity(item, "output_id", "asset_id") for item in selected_outputs)
             source_candidate_ids = _dedupe(_identity(item, "candidate_id") for item in selected_outputs)
@@ -1550,14 +1680,17 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             source_priority = "none"
             status = "not_applicable"
             applies = False
-        structured_appearance = looks_like_human_structured_appearance_context(user_input)
+        structured_appearance = _reference_channel_is_locked(reference_policy_package, "wardrobe_structure")
+        hair_locked = _reference_channel_is_locked(reference_policy_package, "hair_direction")
 
         identity_keep_rules = [
             "preserve broad face shape, face width/length ratio, age impression, and individual facial temperament",
             "preserve eye shape and spacing, eyelid direction, eyebrow shape, eyebrow thickness/arc, and awake eye expression",
             "preserve nose-mouth relationship, lip shape, jawline direction, chin scale, cheek volume, and neck/shoulder balance",
-            "preserve body type, natural head-to-body proportion, broad hair length/color/style, and wardrobe category when it defines the project",
+            "preserve body type and natural head-to-body proportion",
         ]
+        if hair_locked:
+            identity_keep_rules.append("preserve the explicitly assigned hair direction")
         appearance_structure_rules = _structured_appearance_rules() if structured_appearance else []
         facial_feature_integrity_rules = [
             "keep facial features attractive and harmonious; realism must not make the face less beautiful",
@@ -1614,7 +1747,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "Structured appearance lock: keep the same appearance asset structure across the batch; vary pose, camera, expression, crop, and scene without redesigning the garment or styling system."
             )
         if human_photorealism and human_photorealism.applies:
-            prompt_additions.extend(human_photorealism.reference_preserve_rules[:2])
+            prompt_additions.append(
+                "Human Realism improves rendering quality only and must not expand source-reference inheritance."
+            )
         negative_additions = [
             "ugly realism",
             "flattened facial attractiveness",
@@ -1684,6 +1819,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             metadata={
                 "doc": "78",
                 "doc84_structured_appearance_lock": structured_appearance,
+                "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
+                "reference_policy_package_id": reference_policy_package.package_id if reference_policy_package else None,
+                "uploaded_identity_truth_priority": bool(uploaded_identity_bindings),
                 "requested_count": requested_count,
                 "identity_hero_plan_id": identity_hero_plan.plan_id if identity_hero_plan else None,
                 "user_reference_priority": bool(selected_outputs),
@@ -1913,6 +2051,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         human_photorealism: HumanPhotorealismGuidance | None,
         role_specific_plan: RoleSpecificGenerationPlan,
         advanced_reference_controls: dict[str, Any] | None = None,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> StrictVisualReviewPolicy:
         applies = bool(role_specific_plan.role_recipes)
         retryable = [
@@ -1955,6 +2094,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "skin_texture_beauty_balance_failure",
             *sorted(DOC86_IDENTITY_ISSUE_CODES),
             *sorted(DOC87_REFERENCE_BOUNDARY_ISSUE_CODES),
+            *(
+                sorted(REFERENCE_CHANNEL_ISSUE_CODES)
+                if reference_policy_package and reference_policy_package.applies
+                else []
+            ),
         ]
         prompt_additions = [
             "Strict visual review closure: do not accept outputs that look like generic AI beauty, repeated clones, role-collapsed frames, or weak direct-use photography.",
@@ -2061,6 +2205,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if portrait_reference_policy and portrait_reference_policy.applies:
             prompt_additions.extend(portrait_reference_policy.prompt_rules[:4])
             negative_additions.extend(portrait_reference_policy.blocked_reference_channels[:8])
+        if reference_policy_package and reference_policy_package.applies:
+            prompt_additions.extend(reference_policy_package.review_targets[:6])
+            prompt_additions.extend(reference_policy_package.provider_prompt_rules[:5])
+            negative_additions.extend(reference_policy_package.provider_negative_rules[:10])
         if beautiful_realism_review and beautiful_realism_review.applies:
             prompt_additions.extend(beautiful_realism_review.review_targets[:4])
             negative_additions.extend(_string_list(beautiful_realism_review.retry_patch.get("negative_additions"))[:8])
@@ -2121,6 +2269,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "identity-critical facial feature relationships remain consistent and attractive",
             "portrait reference outputs preserve the same underlying bone structure while allowing styling changes",
             "portrait references provide identity truth but do not override prompt-owned lighting, color, scene, camera, wardrobe, or art direction",
+            "each reference influences only the visual channels assigned by the resolved reference policy",
             "artifact cleanup cannot replace the face with a cleaner but less recognizable person",
             "realism improves skin, light, hair, fabric, and camera texture without degrading beauty",
             "no visible AI mark, watermark, random text, or fake label",
@@ -2142,8 +2291,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             subject_type=subject_type,
             retryable_issue_codes=_dedupe(retryable),
             pass_conditions=pass_conditions,
-            prompt_additions=_dedupe(prompt_additions)[:18],
-            negative_additions=_dedupe(negative_additions)[:52],
+            prompt_additions=_dedupe(prompt_additions)[:24],
+            negative_additions=_dedupe(negative_additions)[:60],
             review_focus=[
                 "identity master selection",
                 "suite role separation",
@@ -2162,7 +2311,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ],
             metadata={
                 "doc": "77",
-                "extends": ["53", "58", "59", "64", "65", "73", "74", "75", "76", "77", "78", "90"],
+                "extends": ["53", "58", "59", "64", "65", "73", "74", "75", "76", "77", "78", "90", "93"],
                 "identity_hero_plan_id": identity_hero_plan.plan_id if identity_hero_plan else None,
                 "subject_identity_card_id": subject_identity_card.card_id
                 if subject_identity_card and subject_identity_card.applies
@@ -2178,6 +2327,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 else None,
                 "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
                 "advanced_reference_controls": advanced_reference_controls,
+                "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
+                "reference_policy_package_id": reference_policy_package.package_id if reference_policy_package else None,
             },
         )
 
@@ -2231,7 +2382,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     file_path=file_path,
                     preview_url=item.get("preview_url") or item.get("thumbnail_url") or item.get("download_url"),
                     role=selected_role,
-                    strength="hard" if policy_lock in {"character", "product"} else "medium",
+                    strength="medium",
                     use_policy=selected_use_policy,
                     lock_targets=self._lock_targets_for_policy(policy_lock, allow_product_language=allow_product_language),
                     provider_input_required=bool(file_path),
@@ -2275,14 +2426,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         normalized = str(role or "").lower()
         if allow_product_language or "product" in normalized:
             return "product_identity"
-        if "face" in normalized or "portrait" in normalized or policy_lock == "character":
-            return "identity"
         if "logo" in normalized or "brand" in normalized:
             return "brand_asset"
         if "composition" in normalized:
             return "composition"
         if "light" in normalized:
             return "lighting"
+        if "style" in normalized or "mood" in normalized or "scene" in normalized or "background" in normalized:
+            return "style"
+        if "face" in normalized or "portrait" in normalized or "identity" in normalized:
+            return "identity"
+        if policy_lock == "character":
+            return "identity"
         return "style"
 
     def _reference_role_for_policy(self, use_policy: str) -> str:
@@ -2298,7 +2453,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if allow_product_language or policy_lock == "product":
             return ["shape", "material", "color", "logo_or_label_position", "proportions"]
         if policy_lock == "character":
-            return ["face_identity", "broad_hair_direction", "wardrobe_category", "body_identity_direction"]
+            return ["face_identity", "body_identity_direction", "natural_complexion_direction"]
         return ["style", "composition", "palette", "lighting"]
 
     def _dedupe_strong_bindings(self, bindings: list[StrongReferenceBinding]) -> list[StrongReferenceBinding]:
@@ -2321,11 +2476,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         strong_bindings: list[StrongReferenceBinding],
         template_policy: dict[str, Any],
         allow_product_language: bool,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> list[VisualIdentityLockProfile]:
         if not strong_bindings and not profile.style_signals:
             return []
         policy_lock = str(template_policy.get("identity_lock_default") or "generic")
-        structured_appearance = looks_like_human_structured_appearance_context(capability_input.user_input)
+        structured_appearance = _reference_channel_is_locked(reference_policy_package, "wardrobe_structure")
+        hair_locked = _reference_channel_is_locked(reference_policy_package, "hair_direction")
+        wardrobe_locked = _reference_channel_is_locked(reference_policy_package, "wardrobe_structure")
+        camera_locked = _reference_channel_is_locked(reference_policy_package, "camera_composition")
+        lighting_locked = _reference_channel_is_locked(reference_policy_package, "lighting_color")
         if allow_product_language or policy_lock == "product":
             subject_type = "product"
             keep_rules = [
@@ -2338,11 +2498,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         elif policy_lock == "character":
             subject_type = "character"
             keep_rules = [
-                "preserve the selected character's recognizable vibe",
-                "keep broad hair direction and wardrobe category coherent unless the prompt asks to change them",
-                "do not inherit reference lighting, scene, camera mood, or whole-image style when the current prompt gives a new direction",
+                "preserve the same person's recognizable face geometry, facial-feature relationships, age direction, and body identity direction",
+                "follow the current prompt for hair, makeup, wardrobe, lighting, scene, camera, mood, and style unless a channel is explicitly locked",
             ]
-            forbidden = ["face identity drift", "random hairstyle change", "outfit direction drift"]
+            forbidden = ["face identity drift", "same beauty type but different person"]
+            if hair_locked:
+                keep_rules.append("keep the explicitly assigned hair direction")
+                forbidden.append("locked hair direction drift")
+            if wardrobe_locked:
+                keep_rules.append("keep the explicitly assigned wardrobe direction")
+                forbidden.append("locked wardrobe direction drift")
             product_lock = {}
             appearance_structure_lock = (
                 {
@@ -2380,7 +2545,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             product_lock = {}
             appearance_structure_lock = {}
         binding_ids = [binding.binding_id for binding in strong_bindings]
-        prompt_constraints = _dedupe([*keep_rules, *profile.composition_rules[:3], *profile.lighting_notes[:3]])
+        prompt_constraints = _dedupe(
+            [
+                *keep_rules,
+                *(profile.composition_rules[:3] if subject_type != "character" or camera_locked else []),
+                *(profile.lighting_notes[:3] if subject_type != "character" or lighting_locked else []),
+            ]
+        )
         negative_constraints = _dedupe([*forbidden, *profile.negative_rules[:4]])
         return [
             VisualIdentityLockProfile(
@@ -2396,12 +2567,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 lock_strength="strong" if any(binding.strength == "hard" for binding in strong_bindings) else "normal",
                 source_binding_ids=binding_ids,
                 face_lock={"preserve": subject_type == "character", "confidence": 0.62 if subject_type == "character" else 0.0},
-                hair_lock={"preserve": subject_type == "character", "confidence": 0.58 if subject_type == "character" else 0.0},
-                wardrobe_lock={"preserve": subject_type == "character", "confidence": 0.55 if subject_type == "character" else 0.0},
+                hair_lock={"preserve": subject_type == "character" and hair_locked, "confidence": 0.7 if hair_locked else 0.0},
+                wardrobe_lock={"preserve": subject_type == "character" and wardrobe_locked, "confidence": 0.7 if wardrobe_locked else 0.0},
                 appearance_structure_lock=appearance_structure_lock,
                 product_lock=product_lock,
-                camera_lock={"rules": profile.lens_notes[:4]},
-                lighting_lock={"rules": profile.lighting_notes[:4]},
+                camera_lock={"rules": profile.lens_notes[:4] if camera_locked or subject_type != "character" else []},
+                lighting_lock={"rules": profile.lighting_notes[:4] if lighting_locked or subject_type != "character" else []},
                 keep_rules=keep_rules,
                 allowed_changes=["new scene details requested by the user", "fresh but compatible composition variants"],
                 forbidden_drift=forbidden,
@@ -2409,13 +2580,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 negative_constraints=negative_constraints,
                 user_visible_summary=self._identity_lock_user_summary(subject_type),
                 confidence=0.74 if strong_bindings else 0.48,
-                metadata={"template_policy": template_policy, "visual_cluster_profile_id": profile.profile_id},
+                metadata={
+                    "template_policy": template_policy,
+                    "visual_cluster_profile_id": profile.profile_id,
+                    "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
+                    "reference_policy_package_id": reference_policy_package.package_id if reference_policy_package else None,
+                },
             )
         ]
 
     def _identity_lock_user_summary(self, subject_type: str) -> list[str]:
         if subject_type == "character":
-            return ["会保持人物气质、发型、服装方向和镜头光感", "会避免换脸、发色漂移和服装大变"]
+            return ["会保持同一个人的长相", "造型、光线和场景按这次要求变化"]
         if subject_type == "product":
             return ["会保持商品形状、材质、颜色和比例", "会避免无关商品和错误标签"]
         return ["会保持已选视觉风格、构图、色彩和光感"]
@@ -2636,6 +2812,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         selected_references: list[dict[str, Any]],
         uploaded_references: list[dict[str, Any]],
         identity_locks: list[VisualIdentityLockProfile],
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> tuple[HumanIdentityAnchorProfile, HumanNaturalVariationPlan]:
         scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
         project_metadata = _as_dict(project_context.get("metadata"))
@@ -2662,6 +2839,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             selected_references=selected_references,
             uploaded_references=uploaded_references,
             identity_lock_profiles=[item.model_dump(mode="json") for item in identity_locks],
+            reference_policy_package=reference_policy_package,
         )
 
     def _requested_image_count(self, capability_input: CapabilityInput, project_context: dict[str, Any]) -> int:
@@ -2745,7 +2923,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ref_id = _identity(reference, "asset_ref_id", "asset_id", "output_id", "reference_id")
             if ref_id:
                 soft.append(ref_id)
-                usage_rules.append("use selected project image as a style anchor")
+                usage_rules.append("use selected project image only for its resolved reference channels")
         for reference in uploaded_references:
             ref_id = _identity(reference, "asset_ref_id", "asset_id", "reference_id")
             if ref_id:
@@ -3757,6 +3935,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                         if cluster.portrait_reference_balance_review is not None
                         else {}
                     ),
+                    "resolved_reference_policy_package": (
+                        cluster.resolved_reference_policy_package.model_dump(mode="json")
+                        if cluster.resolved_reference_policy_package is not None
+                        else {}
+                    ),
                     "mode_differentiation_review": (
                         cluster.mode_differentiation_review.model_dump(mode="json")
                         if cluster.mode_differentiation_review is not None
@@ -3835,6 +4018,16 @@ def _clean_advanced_reference_controls(value: Any) -> dict[str, bool]:
         "preserve_scene_consistency",
     }
     return {key: bool(value[key]) for key in allowed if key in value}
+
+
+def _reference_channel_is_locked(
+    package: ResolvedReferencePolicyPackage | None,
+    channel: str,
+) -> bool:
+    if package is None or not package.applies:
+        return False
+    owner = str(package.effective_channel_owners.get(channel) or "")
+    return owner.startswith("reference:") and owner.rsplit(":", 1)[-1] in {"hard", "medium"}
 
 
 def _dict_list(value: Any) -> list[dict[str, Any]]:

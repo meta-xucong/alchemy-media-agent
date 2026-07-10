@@ -1,5 +1,13 @@
 # 76 V3 Foundation vs Specialized Template Governance
 
+Doc93 compatibility note:
+
+```text
+Doc76 remains the placement authority. Doc93 follows this governance by adding
+one shared Reference Channel Policy child module under the Visual Capability
+Cluster. It does not move inheritance rules into Central Brain or templates.
+```
+
 ## 1. Purpose
 
 This document is a long-term governance rule for V3 development.

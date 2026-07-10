@@ -1,5 +1,14 @@
 # 86 V3 Portrait Bone-Structure Identity Lock Spec
 
+Doc93 authority update:
+
+```text
+Doc86 remains the bone-structure implementation baseline. Doc93 is the current
+channel-ownership authority: bone structure and facial-feature relationships
+remain hard identity truth; hair styling, makeup, wardrobe, lighting, color,
+scene, camera, mood, and whole-image style remain prompt owned by default.
+```
+
 ## 1. Purpose
 
 Doc86 upgrades V3 portrait image-to-image identity quality after Doc85.

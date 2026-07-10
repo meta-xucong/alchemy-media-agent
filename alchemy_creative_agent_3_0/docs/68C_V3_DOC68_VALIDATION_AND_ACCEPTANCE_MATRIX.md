@@ -1,5 +1,13 @@
 # 68C V3 Doc68 Validation And Acceptance Matrix
 
+Doc93 compatibility note:
+
+```text
+Add channel-policy acceptance to this matrix. Same-person identity must remain
+stable while prompt-owned hair, makeup, wardrobe, lighting, scene, camera, and
+style changes are followed without source-reference leakage.
+```
+
 Status: auxiliary validation matrix for Doc68.
 
 ## 1. Focused Test Matrix

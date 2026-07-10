@@ -1038,7 +1038,7 @@ def test_uploaded_portrait_job_asset_enters_context_before_generation(tmp_path) 
     assert snapshot["identity_lock_profiles"][0]["subject_type"] == "character"
 
 
-def test_structured_appearance_project_context_strengthens_identity_lock(tmp_path) -> None:
+def test_identity_only_portrait_does_not_misapply_structured_appearance_lock(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     upload_id = _ready_upload(handlers, tmp_path, role="face_reference", filename="appearance-anchor.png")
     project = handlers.post_projects(
@@ -1057,12 +1057,15 @@ def test_structured_appearance_project_context_strengthens_identity_lock(tmp_pat
     context = handlers.get_project_context(project["project_id"])
 
     assert context["identity_lock_profiles"][0]["subject_type"] == "character"
-    assert context["identity_lock_profiles"][0]["metadata"]["structured_appearance_lock"] is True
+    assert context["identity_lock_profiles"][0]["metadata"]["structured_appearance_lock"] is False
     keep_rules = " ".join(context["identity_lock_profiles"][0]["keep_rules"]).lower()
-    assert "pattern family" in keep_rules
-    assert "accessory placement" in keep_rules
+    assert "pattern family" not in keep_rules
+    assert "accessory placement" not in keep_rules
     plan_additions = " ".join(context["strong_reference_continuation_plan"]["prompt_additions"]).lower()
-    assert "appearance asset structure" in plan_additions
+    assert "appearance asset structure" not in plan_additions
+    policy = context["resolved_reference_policy_package"]["policies"][0]
+    assert policy["identity_geometry"] == "hard"
+    assert policy["wardrobe_structure"] == "prompt_owned"
 
 
 def test_portrait_project_create_marks_uploaded_asset_as_face_reference() -> None:

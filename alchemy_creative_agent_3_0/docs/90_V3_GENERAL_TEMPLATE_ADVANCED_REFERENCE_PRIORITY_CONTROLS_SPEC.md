@@ -1,5 +1,14 @@
 # 90 V3 General Template Advanced Reference Priority Controls Spec
 
+Doc93 authority update:
+
+```text
+Doc90 remains the General Template advanced-control UX authority. Under Doc93,
+`preserve_person_identity` strengthens person identity geometry only. It does
+not silently lock hair styling, makeup, wardrobe, lighting, color, scene,
+camera, mood, or whole-image style.
+```
+
 ## 1. Purpose
 
 Doc90 adds a beginner-friendly advanced control layer for the V3 General

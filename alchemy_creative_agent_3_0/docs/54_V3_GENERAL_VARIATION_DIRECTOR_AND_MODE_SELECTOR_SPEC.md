@@ -1,5 +1,13 @@
 # 54 V3 General Variation Director And Mode Selector Spec
 
+Doc93 compatibility note:
+
+```text
+The four modes remain unchanged. Their variation budgets must consume Doc93
+channel policy: prompt-owned styling changes are allowed, while explicitly
+locked identity, product, appearance, style, or scene channels remain stable.
+```
+
 ## 1. Status And Authority
 
 This document defines how the General Template should decide what kind of

@@ -1,5 +1,14 @@
 # 55 V3 Post Generation Vision Inspection And Review Spec
 
+Doc93 compatibility note:
+
+```text
+Review must now evaluate identity fidelity and prompt-owned channel obedience
+separately. Earlier examples that preserve face, hair, outfit, lens, and light
+together are valid only when those channels were explicitly locked. For an
+ordinary portrait identity reference, source-style leakage is a review failure.
+```
+
 ## 1. Status And Authority
 
 This document is the implementation authority for real post-generation visual

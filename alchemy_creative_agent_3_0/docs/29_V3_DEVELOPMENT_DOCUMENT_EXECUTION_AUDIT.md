@@ -472,12 +472,87 @@ rg -n "subject_type == \"character\"|human_photorealism|anti_ai_face" alchemy_cr
 git diff --check -- AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creative_agent_3_0/docs
 ```
 
-## 8. Audit Conclusion
+## 8. Doc93 Reference Channel Governance Addendum
+
+Doc93 is the current implementation authority for reference inheritance and
+prompt-owned visual channels.
+
+Compatibility result:
 
 ```text
-CURRENT_ACCEPTED_DOCUMENT_STATUS: DOC91 IS THE LATEST HUMAN REALISM PLUGIN GOVERNANCE PLAN; DOC90 REMAINS GENERAL ADVANCED REFERENCE CONTROL AUTHORITY; DOC88 REMAINS PORTRAIT REFERENCE BALANCE AUTHORITY; DOC76 REMAINS PLACEMENT-GOVERNANCE AUTHORITY
+Doc93 keeps the V3 Project / Job / Scenario Pack / Visual Capability Cluster
+architecture.
+Doc93 adds one V3-native Reference Channel Policy child module.
+Doc93 operationalizes Doc85 truth layering, Doc86 bone lock, Doc87 identity /
+style separation, and Doc88 prompt-mood balance.
+Doc93 narrows Doc90 `preserve_person_identity` to identity channels.
+Doc93 does not replace Doc91/92 Human Realism; it prevents Human Realism from
+expanding reference inheritance rights.
+```
+
+Legacy compatibility debt:
+
+```text
+Doc51/55/56/58/61/66 and related implementation notes contain coarse phrases
+that combine face, hair, outfit, camera, lens, lighting, or whole-image style.
+Those phrases remain valid only when the corresponding channels were explicitly
+assigned by the user, selected-output purpose, structured appearance truth, or
+specialized template contract.
+
+For an ordinary portrait identity upload, Doc93 supersedes the coarse default:
+identity geometry is hard; styling, wardrobe, light, scene, camera, and style
+remain prompt owned.
+```
+
+Implementation placement:
+
+```text
+Visual Capability Cluster owns the new policy resolver.
+Portrait Identity owns bone structure and facial-feature relationships.
+Structured Appearance owns explicitly assigned garment / appearance truth.
+Human Realism owns real-camera rendering and anti-AI-face quality.
+Provider, closure, Project Context, review, and retry consume the resolved
+policy and must not re-derive broader inheritance.
+```
+
+Doc93 verification commands:
+
+```text
+rg -n "Doc93|Reference Channel Policy|prompt ownership" AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creative_agent_3_0/docs
+rg -n "face/hair/outfit|identity and style anchor|broad hair.*wardrobe|wardrobe.*lighting|and light" alchemy_creative_agent_3_0/docs alchemy_creative_agent_3_0/app
+git diff --check -- AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creative_agent_3_0/docs
+```
+
+## 9. Audit Conclusion
+
+```text
+CURRENT_ACCEPTED_DOCUMENT_STATUS: DOC93 IS THE LATEST REFERENCE-INHERITANCE AND PROMPT-OWNERSHIP AUTHORITY; DOC92 REMAINS STYLE-AWARE HUMAN REALISM AUTHORITY; DOC91 REMAINS HUMAN REALISM PLACEMENT AUTHORITY; DOC90 REMAINS GENERAL ADVANCED CONTROL UX AUTHORITY UNDER DOC93 CHANNEL SEMANTICS; DOC88 REMAINS PORTRAIT BALANCE BASELINE UNDER DOC93 IMPLEMENTATION CLOSURE; DOC76 REMAINS PLACEMENT-GOVERNANCE AUTHORITY
 CURRENT_ARCHITECTURE_STATUS: KEEP V3 PROJECT MODE + VISUAL CAPABILITY CLUSTER
 CURRENT_IMPLEMENTATION_RULE: CLASSIFY WORK AS FOUNDATION, GENERAL TEMPLATE, OR SPECIALIZED TEMPLATE BEFORE CODING
 CURRENT_TEST_RULE: PROVE CHANGES DO NOT LEAK INTO THE WRONG LAYER
-NEXT_RECOMMENDED_BOUNDARY: USE DOC91 FOR HUMAN REALISM PLUGIN ACTIVATION AND CONSOLIDATION; USE DOC85-88 FOR PORTRAIT IDENTITY TRUTH; USE DOC76 FOR PLACEMENT; USE DOC77 FOR REVIEW/AESTHETIC STABILITY
+NEXT_RECOMMENDED_BOUNDARY: USE DOC93 FOR REFERENCE ROLE, CHANNEL POLICY, PROMPT OWNERSHIP, AND STYLE-LEAKAGE REVIEW; USE DOC91/92 FOR HUMAN REALISM; USE DOC85-88 FOR IDENTITY/TRUTH FOUNDATIONS; USE DOC76 FOR PLACEMENT; USE DOC77 FOR REVIEW/AESTHETIC STABILITY
 ```
+
+## 10. Doc93 Local Implementation Closure
+
+As of 2026-07-10, Doc93 is implemented locally without replacing the V3
+foundation. The implementation adds one child module under the existing Visual
+Capability Cluster and makes Project Context, identity/appearance modules,
+provider compilation, real visual review, and retry consume one resolved
+reference-channel package.
+
+Audit conclusion:
+
+```text
+no new central-brain policy framework
+no template-owned duplicate resolver
+no Human Realism inheritance authority
+ordinary portrait upload inherits identity, not source styling
+explicit prompt owns hair, makeup, wardrobe, light, scene, camera, mood, and style
+explicit same-outfit / style / scene instructions still assign those channels
+uploaded truth outranks selected generated continuation support
+legacy fallback and retry branches are Doc93 channel-safe
+```
+
+Automated verification passed locally. VPS deployment and the same-project
+ancient-style portrait comparison are the remaining live acceptance steps.

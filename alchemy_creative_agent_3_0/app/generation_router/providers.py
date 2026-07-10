@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..creative_core.prompt_language import looks_like_human_structured_appearance_context, product_language_allowed
+from ..creative_core.prompt_language import product_language_allowed
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
@@ -119,6 +119,41 @@ class GenerationProvider:
         cluster = self._visual_cluster(request)
         package = cluster.get("strong_reference_closure_package") if isinstance(cluster, dict) else None
         return dict(package) if isinstance(package, dict) and package.get("active") else {}
+
+    def _resolved_reference_policy_package(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        package = cluster.get("resolved_reference_policy_package") if isinstance(cluster, dict) else None
+        if not isinstance(package, dict):
+            role_plan = self._role_specific_generation_plan(request)
+            metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
+            package = metadata.get("resolved_reference_policy_package") if isinstance(metadata, dict) else None
+        return dict(package) if isinstance(package, dict) and package.get("applies") else {}
+
+    def _reference_channel_policy_for_asset(
+        self,
+        request: GenerationRequest,
+        asset: dict[str, Any],
+    ) -> dict[str, Any]:
+        package = self._resolved_reference_policy_package(request)
+        policies = package.get("policies") if isinstance(package, dict) else None
+        if not isinstance(policies, list):
+            return {}
+        asset_ids = {
+            str(value)
+            for value in (
+                asset.get("asset_id"),
+                asset.get("source_id"),
+                asset.get("asset_ref_id"),
+                asset.get("output_id"),
+            )
+            if value
+        }
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            if str(policy.get("source_asset_id") or "") in asset_ids:
+                return dict(policy)
+        return {}
 
     def _mode_quality_profile(self, request: GenerationRequest) -> dict[str, Any]:
         cluster = self._visual_cluster(request)
@@ -821,7 +856,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         prompt_constraint = (
             "Use this uploaded image as visual evidence for product identity, material, style, or composition."
             if allow_product_language
-            else "Use this uploaded image as a same-person identity reference first, then as style, lighting, composition, or mood evidence."
+            else "Use this uploaded image only for the visual channels assigned by the resolved reference policy."
             if human_photo_context
             else "Use this uploaded image as visual evidence for subject style, lighting, composition, or mood."
         )
@@ -831,8 +866,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             use_policy = str(asset.get("use_policy") or role)
             truth_entry = dict((truth_package.get("sources") or {}).get(asset["asset_id"]) or {})
             truth_layers = self._string_list(truth_entry.get("truth_layers"))
-            lock_targets = [str(item) for item in asset.get("lock_targets", []) if str(item).strip()]
-            if "product" in use_policy:
+            reference_policy = self._reference_channel_policy_for_asset(request, asset)
+            policy_rules = self._string_list(reference_policy.get("provider_prompt_rules"))
+            lock_targets = (
+                self._string_list(reference_policy.get("explicit_user_locks"))
+                if reference_policy
+                else [str(item) for item in asset.get("lock_targets", []) if str(item).strip()]
+            )
+            if policy_rules:
+                reference_constraint = " ".join(policy_rules[:4])
+            elif "product" in use_policy:
                 reference_constraint = (
                     "Use as a strong product identity reference; preserve shape, material, color, proportions, "
                     "logo/label position, and existing label readability without rewriting, translating, blurring, "
@@ -861,9 +904,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             elif human_photo_context:
                 reference_constraint = (
                     "Use as a same-person portrait identity reference; preserve recognizable facial feature "
-                    "relationships, face shape direction, age impression, body type, skin-tone direction, and broad "
-                    "hair/wardrobe direction. The written prompt may change scene, pose, expression, camera angle, "
-                    "and outfit styling, but it must not replace the person's identity."
+                    "relationships, face shape direction, age impression, body type, and skin-tone direction. The written "
+                    "prompt controls hair, makeup, wardrobe, scene, lighting, camera, mood, and style unless explicitly locked."
                 )
             elif "brand" in use_policy or "logo" in role:
                 reference_constraint = "Use as a strong brand asset reference; preserve brand colors, symbol shape, and placement logic."
@@ -911,7 +953,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "strength": asset.get("strength"),
                     "use_policy": asset.get("use_policy"),
                     "source_type": asset.get("source_type"),
-                    "reference_truth_layer": "style_context_truth" if truth_layers else None,
+                    "reference_truth_layer": (
+                        "style_context_truth"
+                        if "style_context_truth" in truth_layers
+                        else truth_layers[0]
+                        if truth_layers
+                        else None
+                    ),
                     "truth_layers": truth_layers,
                     "provider_reference_derivative": False,
                 }
@@ -963,15 +1011,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
     ) -> dict[str, Any]:
         if not reference_assets:
             return {}
-        structured_context = looks_like_human_structured_appearance_context(
-            " ".join(
-                [
-                    str(request.metadata.get("user_input") or ""),
-                    str(request.prompt_compilation.visual_prompt or ""),
-                    str(request.prompt_compilation.negative_prompt or ""),
-                    " ".join(request.prompt_compilation.hard_constraints or []),
-                ]
-            )
+        resolved_policy_package = self._resolved_reference_policy_package(request)
+        policy_payloads = resolved_policy_package.get("policies") if isinstance(resolved_policy_package, dict) else []
+        structured_context = any(
+            isinstance(policy, dict)
+            and str(policy.get("wardrobe_structure") or "") in {"hard", "medium"}
+            for policy in (policy_payloads if isinstance(policy_payloads, list) else [])
         )
         has_uploaded_human_truth = any(
             self._is_uploaded_truth_source(asset)
@@ -998,7 +1043,29 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
             layers: list[str] = []
             priority_note = "style_or_context_reference"
-            if is_product:
+            channel_policy = self._reference_channel_policy_for_asset(request, asset)
+            if channel_policy:
+                if str(channel_policy.get("product_identity") or "") in {"hard", "medium"}:
+                    layers.append("product_identity_truth")
+                if str(channel_policy.get("identity_geometry") or "") in {"hard", "medium"}:
+                    layers.append("portrait_identity_truth")
+                if str(channel_policy.get("wardrobe_structure") or "") in {"hard", "medium"}:
+                    layers.append("structured_appearance_truth")
+                if any(
+                    str(channel_policy.get(channel) or "") in {"hard", "medium", "soft"}
+                    for channel in (
+                        "lighting_color",
+                        "scene_background",
+                        "camera_composition",
+                        "mood_art_direction",
+                        "style_finish",
+                    )
+                ):
+                    layers.append("style_context_truth")
+                priority_note = "doc93_channel_policy_truth_source"
+                if is_selected and (has_uploaded_human_truth or has_uploaded_product_truth):
+                    priority_note = "selected_output_channels_below_uploaded_truth"
+            elif is_product:
                 if is_selected and has_uploaded_product_truth:
                     layers = ["style_context_truth"]
                     priority_note = "selected_output_context_below_uploaded_product_truth"
@@ -1012,7 +1079,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 else:
                     layers = ["portrait_identity_truth", "style_context_truth"]
                     priority_note = "portrait_identity_truth_source"
-                    if structured_context or self._asset_mentions_structured_appearance(asset):
+                    if self._asset_mentions_structured_appearance(asset):
                         layers.insert(1, "structured_appearance_truth")
                         priority_note = "portrait_and_structured_appearance_truth_source"
             else:
@@ -1039,7 +1106,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "sources": sources,
             "priority_rules": [
                 "uploaded human or product truth remains highest for identity-critical details",
-                "selected generated outputs reinforce continuation, style, composition, and mood unless no uploaded truth exists",
+                "selected generated outputs contribute only their resolved channels and never replace uploaded truth or a new explicit prompt",
                 "reference truth beats generic archetype wording",
             ],
             "structured_appearance_context": structured_context,
@@ -1205,6 +1272,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
+        reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
         parts = [
             (
@@ -1216,6 +1284,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 else "Create a polished, directly usable creative image asset."
             ),
             f"Visual direction: {prompt.visual_prompt}",
+            reference_channel_contract,
             portrait_identity_contract,
             f"Asset purpose: {asset.purpose}" if asset else "",
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
@@ -1257,7 +1326,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
             parts.append("Mode quality contract:\n" + "\n".join(line for line in mode_lines if not line.endswith(": ")))
         if human_guidance or (human_photo_context and not allow_product_language):
             positive = self._string_list(human_guidance.get("positive_prompt_fragments"))
-            preserve = self._string_list(human_guidance.get("reference_preserve_rules"))
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
             lines = []
             lines.append(
@@ -1267,12 +1335,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "Attractive realism balance: keep a healthy clear complexion, fresh bright skin tone from soft natural bounce light, gentle cheek warmth, natural lip color, and awake eyes; preserve natural skin tone and real texture, avoiding skin whitening, dull complexion, muddy color cast, underexposed face, harsh facial shadow, or overly matte documentary plainness."
             )
             lines.append(
+                "Identity continuity: preserve the requested person's recognizable face and body identity when identity continuity is part of the task; Human Realism must not expand reference inheritance into hair, wardrobe, lighting, scene, camera, or style."
+            )
+            lines.append(
                 "East Asian portrait aesthetic guard: for East Asian fresh, beauty, or summer portrait requests with no explicit tan, dark, or bronze instruction, keep a clean fair luminous complexion from high-key daylight, soft bounce light, exposure, and color balance; do not darken or tan the skin by default; avoid fake whitening masks or skin smoothing; preserve natural head-to-body, neck, shoulder, and upper-body proportions."
             )
             if positive:
                 lines.append("Photoreal human rendering: " + "; ".join(positive[:8]))
-            if preserve:
-                lines.append("Identity continuity: " + "; ".join(preserve[:4]))
             if do_not_inherit and reference_assets:
                 lines.append("Reference cleanup: " + "; ".join(do_not_inherit[:4]))
             if lines:
@@ -1300,25 +1369,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
             conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
             if conflict_rules:
                 parts.append("Uploaded portrait reference priority:\n" + "\n".join(conflict_rules[:6]))
-            strong_reference_rules = []
-            for asset in reference_assets:
-                use_policy = str(asset.get("use_policy") or asset.get("role") or "")
-                if "product" in use_policy:
-                    strong_reference_rules.append(
-                        "Preserve the selected product identity instead of inventing a new product; keep existing label/logo details readable and unobscured when visible."
-                    )
-                elif "identity" in use_policy:
-                    strong_reference_rules.append(
-                        "Preserve the selected person's broad face shape, eye shape and spacing, nose-mouth relationship, jawline direction, age impression, body type, broad hair or wardrobe direction, and light; when styling defines the project, keep the same appearance asset structure, material behavior, pattern family, trim placement, and accessory placement across the batch; do not copy the exact same expression, pose, head angle, camera angle, or crop across the batch."
-                    )
-                elif human_photo_context and not any(token in use_policy for token in ["brand", "logo"]):
-                    strong_reference_rules.append(
-                        "Treat uploaded portrait-style references as same-person identity anchors; prompt adjectives may guide mood, pose, scene, and limited styling variation, but must not replace facial feature relationships, face-shape direction, body type, natural skin-tone direction, or the core appearance asset structure when styling defines the project."
-                    )
-                elif "brand" in use_policy:
-                    strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
-            if strong_reference_rules:
-                parts.append("Strong reference rules: " + " ".join(dict.fromkeys(strong_reference_rules)))
+            if not self._resolved_reference_policy_package(request):
+                strong_reference_rules = []
+                for asset in reference_assets:
+                    use_policy = str(asset.get("use_policy") or asset.get("role") or "")
+                    if "product" in use_policy:
+                        strong_reference_rules.append(
+                            "Preserve the selected product identity instead of inventing a new product; keep existing label/logo details readable and unobscured when visible."
+                        )
+                    elif "identity" in use_policy or human_photo_context:
+                        strong_reference_rules.append(
+                            "Use the portrait reference as same-person identity truth while the current prompt controls hair, makeup, wardrobe, lighting, scene, camera, mood, and style."
+                        )
+                    elif "brand" in use_policy:
+                        strong_reference_rules.append("Preserve selected brand asset colors, symbol shape, and placement logic.")
+                if strong_reference_rules:
+                    parts.append("Strong reference rules: " + " ".join(dict.fromkeys(strong_reference_rules)))
             truth_prompt = self._reference_truth_prompt(
                 request,
                 reference_assets,
@@ -1354,7 +1420,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lines = [
             "Reference truth layering contract:",
             "Reference truth has priority over generic archetype wording in the text prompt.",
-            "Uploaded truth sources remain identity-critical; selected generated references only reinforce continuation/style/composition unless no uploaded truth exists.",
+            "Uploaded truth sources remain identity-critical; selected generated references contribute only their Doc93-assigned channels and never override a new explicit prompt.",
         ]
         for asset_id, item in sources.items():
             layers = self._string_list(item.get("truth_layers"))
@@ -1364,7 +1430,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             lines.append(f"- {asset_id}: {', '.join(layers)} ({label})")
         if any("portrait_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
             lines.append(
-                "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; vary only expression, gaze, pose, head angle, camera angle, crop, scene, light, and small hair movement."
+                "For portrait identity truth, preserve exact facial feature relationships, face shape direction, eyebrow/eye/nose/mouth/jaw/chin relationships, natural age impression, body identity direction, and natural skin-tone direction; follow the current prompt for hair, makeup, wardrobe, accessories, camera, crop, scene, light, mood, and style unless an individual channel is explicitly locked."
             )
             lines.append(
                 "Same-person identity is stricter than same archetype: do not narrow or sharpen the face, make a V-shaped chin, enlarge eyes, shrink the mouth, reshape lips, or recast the reference into a scenario-specific beauty template."
@@ -1420,11 +1486,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "\u6539\u6210\u53e6\u4e00\u4e2a\u4eba",
         ]
         lower = prompt_text.lower()
-        structured_appearance = looks_like_human_structured_appearance_context(
-            " ".join([prompt_text, str(request.metadata.get("user_input") or "")])
+        reference_policy_package = self._resolved_reference_policy_package(request)
+        effective_owners = (
+            reference_policy_package.get("effective_channel_owners")
+            if isinstance(reference_policy_package.get("effective_channel_owners"), dict)
+            else {}
         )
+        wardrobe_owner = str(effective_owners.get("wardrobe_structure") or "")
+        structured_appearance = wardrobe_owner.startswith("reference:") and wardrobe_owner.rsplit(":", 1)[-1] in {
+            "hard",
+            "medium",
+        }
         rules = [
             "The uploaded portrait reference has higher priority for identity than generic beauty words in the written prompt.",
+            "Generic beauty, mood, wardrobe, and scene wording must not replace facial feature relationships from the uploaded portrait identity truth.",
             "Preserve the same recognizable person: face outline width, face width/length ratio, temple-cheek-jaw contour, cheek fullness, eye shape and spacing, base eye size, nose-mouth relationship, mouth scale, lip contour family, jaw/chin direction, age impression, body type, and natural skin-tone direction.",
             (
                 "Allow the prompt to change pose, expression, gaze, camera angle, scene, lighting, crop, and limited fabric motion; do not redesign the core appearance asset unless the user explicitly asks for a new one."
@@ -1510,7 +1585,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
             return 0
-        if "doc90" in lowered or "advanced reference priority" in lowered:
+        if "doc90" in lowered or "advanced reference priority" in lowered or "doc93" in lowered or "reference channel policy" in lowered:
             return 0
         if "doc88 prompt truth" in lowered or "doc88 balance contract" in lowered:
             return 0
@@ -1543,7 +1618,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 1200
         if line.startswith("Avoid:"):
             return 700
-        if "Doc90" in line or "advanced reference priority" in line:
+        if "Doc90" in line or "advanced reference priority" in line or "Doc93" in line or "Reference channel policy" in line:
             return 900
         if line.startswith("Reference truth layering contract") or "portrait identity truth" in line:
             return 760
@@ -1564,6 +1639,26 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if max_chars <= 0 or len(value) <= max_chars:
             return value
         return value[: max(1, max_chars - 3)].rstrip(" ,;") + "..."
+
+    def _reference_channel_prompt_guidance(self, request: GenerationRequest) -> str:
+        package = self._resolved_reference_policy_package(request)
+        if not package:
+            return ""
+        prompt_rules = self._string_list(package.get("provider_prompt_rules"))
+        effective_owners = package.get("effective_channel_owners")
+        owner_lines = []
+        if isinstance(effective_owners, dict):
+            owner_lines = [
+                f"{channel}={owner}"
+                for channel, owner in effective_owners.items()
+                if str(owner or "").startswith("reference:")
+            ]
+        lines = [
+            "Doc93 reference-channel contract: reference images may influence only their assigned channels.",
+            *prompt_rules[:10],
+            "Effective reference-owned channels: " + "; ".join(owner_lines[:10]) if owner_lines else "",
+        ]
+        return "Reference channel policy:\n" + "\n".join(line for line in lines if line)
 
     def _portrait_bone_structure_prompt_guidance(self, request: GenerationRequest) -> str:
         role_plan = self._role_specific_generation_plan(request)

@@ -285,6 +285,7 @@ class ProjectContextPackage(V3BaseModel):
     identity_lock_profiles: list[dict[str, Any]] = Field(default_factory=list)
     project_identity_anchors: list[dict[str, Any]] = Field(default_factory=list)
     strong_reference_continuation_plan: dict[str, Any] = Field(default_factory=dict)
+    resolved_reference_policy_package: dict[str, Any] = Field(default_factory=dict)
     general_suite_role_plan: dict[str, Any] = Field(default_factory=dict)
     batch_identity_diversity_review: dict[str, Any] = Field(default_factory=dict)
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)

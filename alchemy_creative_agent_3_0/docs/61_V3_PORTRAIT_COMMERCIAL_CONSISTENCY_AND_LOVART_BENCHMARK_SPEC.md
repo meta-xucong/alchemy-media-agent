@@ -1,5 +1,14 @@
 # 61 V3 Portrait Commercial Consistency And Lovart Benchmark Spec
 
+Doc93 compatibility note:
+
+```text
+Commercial consistency must be measured per channel. Prompt-directed changes
+to hair styling, makeup, wardrobe, lighting, scene, camera, or mood are not
+identity drift. Those channels are continuity requirements only when the user
+or active template explicitly locks them.
+```
+
 ## 1. Status And Authority
 
 This document is the portrait validation authority after documents 56-60.

@@ -389,10 +389,14 @@ def _fallback_human_variation_contract(
         "anchor_source": "prompt_only",
         "locked_traits": [
             "same recognizable person and body type",
-            "same broad hair and styling direction",
+            "same identity direction while the current prompt owns hair, makeup, wardrobe, lighting, scene, camera, and style",
             "same visual world",
         ],
-        "metadata": {"source": "fallback_no_cluster", "doc67_boundary_safe": True},
+        "metadata": {
+            "source": "fallback_no_cluster",
+            "doc67_boundary_safe": True,
+            "doc93_reference_channel_safe": True,
+        },
     }
     plan = {
         "applies": True,

@@ -446,6 +446,7 @@ Document 83: retry-delivery presentation and uploaded portrait reference conflic
 Documents 84-90: structured appearance identity, image-to-image reference truth, portrait bone-structure locks, identity/style separation, portrait reference balance, portrait stability testing, and General Template advanced reference priority controls.
 Document 91: current Human Realism Plugin governance. Real-human rendering, anti-AI-face rules, child/model realism, and cross-template human realism activation belong in the shared Visual Capability Cluster; identity truth remains owned by the portrait identity/reference modules.
 Document 92: style-aware Human Realism tuning. Moody, dark, ancient/traditional, cinematic, low-key, or melancholic portraits must not receive generic bright/fresh/luminous/high-key commercial skin pressure; AI-feel should be reduced through texture, controlled highlights, and anti-plastic rules while preserving the requested mood.
+Document 93: current reference-channel and prompt-ownership authority. Reference role and per-channel policy decide what may be inherited; ordinary portrait uploads preserve identity geometry but do not automatically preserve hair, makeup, wardrobe, lighting, scene, camera, or whole-image style. Human Realism remains independent from inheritance governance.
 V3.8 Project Mode: current accepted architecture.
 General Template: first active project template.
 E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.

@@ -1,5 +1,14 @@
 # 87 V3 Portrait Reference Identity And Style Separation Spec
 
+Doc93 authority update:
+
+```text
+Doc87 remains the identity/style separation baseline. Doc93 operationalizes it
+through reference roles, per-channel strength, prompt ownership, provider
+compilation, review, and retry. Where this document leaves broad hair direction
+or selected style support implicit, Doc93 channel rules decide the result.
+```
+
 ## 1. Purpose
 
 Doc87 is the refined authority for V3 portrait image-to-image generation after

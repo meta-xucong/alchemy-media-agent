@@ -1,5 +1,14 @@
 # 78 V3 Long-Term Identity And Beautiful Realism Final Tuning
 
+Doc93 compatibility note:
+
+```text
+Long-term identity and beautiful realism remain foundation goals. Doc93
+separates their channels: same-person geometry remains stable, Human Realism
+keeps the person attractive and photographed, and prompt-directed styling
+changes must not be misclassified as identity drift.
+```
+
 ## 1. Purpose
 
 Doc78 is the final foundation-quality tuning plan before moving to the next
@@ -447,4 +456,3 @@ It targets long-term identity and beautiful realism balance.
 It does not supersede Doc76 placement governance.
 It extends Doc77 aesthetic stability rather than adding a new vertical workflow.
 ```
-

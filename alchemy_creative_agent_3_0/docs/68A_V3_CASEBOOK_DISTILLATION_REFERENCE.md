@@ -1,5 +1,13 @@
 # 68A V3 Casebook Distillation Reference
 
+Doc93 compatibility note:
+
+```text
+This casebook remains advisory evidence. Any broad face/body/hair/wardrobe
+recipe is conditional guidance, not a default identity lock. Doc93 reference
+role and channel policy decide what reaches generation.
+```
+
 Status: auxiliary reference for Doc68.
 
 This document explains how to turn V2 case experience and GPT-Image-2 prompt
@@ -224,4 +232,3 @@ strong_reference_closure_package.provider_prompt_rules
 provider final prompt lines
 post-generation review issue language
 ```
-

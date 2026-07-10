@@ -1,5 +1,14 @@
 # 84 V3 Structured Appearance Identity And General Prompt Purity Closure Spec
 
+Doc93 compatibility note:
+
+```text
+Doc84 remains the structured appearance authority. Its hard appearance lock is
+activated only by an explicit appearance reference, explicit same-outfit intent,
+selected-output purpose, or specialized template truth requirement. An ordinary
+portrait identity upload must not activate it by default.
+```
+
 ## 1. Purpose
 
 This document closes two related V3 quality gaps using one generic solution:

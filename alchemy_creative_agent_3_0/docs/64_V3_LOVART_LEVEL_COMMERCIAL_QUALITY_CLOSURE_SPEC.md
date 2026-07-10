@@ -1,5 +1,13 @@
 # 64 V3 Lovart-Level Commercial Quality Closure Spec
 
+Doc93 compatibility note:
+
+```text
+Commercial quality closure remains valid. Consistency must be scored per
+resolved channel; prompt-directed differences are not drift, and an ordinary
+portrait reference cannot impose source wardrobe, light, scene, or style.
+```
+
 ## 1. Status And Authority
 
 Doc64 is the next quality-closure plan after Doc63.

@@ -1,5 +1,15 @@
 # 51 V3 Visual Consistency Pro And Lovart Gap Closure Spec
 
+Doc93 compatibility note:
+
+```text
+Doc93 is the current reference-inheritance authority. Coarse locks in this
+document that group face, hair, outfit, camera, lens, lighting, or style do not
+apply by default to an ordinary portrait identity upload. They apply only to
+channels explicitly assigned by the user, reference role, selected-output
+purpose, structured appearance truth, or specialized template contract.
+```
+
 Current authority note:
 
 ```text

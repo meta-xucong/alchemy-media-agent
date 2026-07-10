@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -88,16 +89,19 @@ class OpenAIVisionInspectionProvider:
     def _inspect_with_responses(self, client: Any, prompt: str, data_url: str, metadata: dict[str, Any]) -> str:
         model = self._model(metadata)
         timeout = self._timeout()
+        reference_data_urls = _inspection_reference_data_urls(metadata)
+        response_content = [
+            {"type": "input_text", "text": prompt},
+            {"type": "input_image", "image_url": data_url},
+            *[{"type": "input_image", "image_url": item} for item in reference_data_urls],
+        ]
         try:
             response = client.responses.create(
                 model=model,
                 input=[
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": prompt},
-                            {"type": "input_image", "image_url": data_url},
-                        ],
+                        "content": response_content,
                     }
                 ],
                 text={"format": {"type": "json_object"}},
@@ -117,6 +121,10 @@ class OpenAIVisionInspectionProvider:
                     "content": [
                         {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": data_url}},
+                        *[
+                            {"type": "image_url", "image_url": {"url": item}}
+                            for item in reference_data_urls
+                        ],
                     ],
                 }
             ],
@@ -169,17 +177,32 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
     user_goal = str(metadata.get("user_input") or metadata.get("original_user_input") or "").strip()
     template_id = str(metadata.get("template_id") or metadata.get("scenario_id") or "general_creative")
     project_summary = metadata.get("project_context_summary") or metadata.get("project_memory_summary") or {}
+    project_context = metadata.get("project_context_snapshot") if isinstance(metadata.get("project_context_snapshot"), dict) else {}
+    reference_policy = (
+        metadata.get("resolved_reference_policy_package")
+        if isinstance(metadata.get("resolved_reference_policy_package"), dict)
+        else project_context.get("resolved_reference_policy_package")
+        if isinstance(project_context, dict)
+        else {}
+    )
+    reference_count = len(_inspection_reference_paths(metadata))
     return "\n".join(
         [
             "You are V3's post-generation visual inspector.",
             "Inspect the attached generated image only after it exists.",
+            (
+                "Image 1 is the generated result. Following images are reference truth/context images in priority order; compare only the channels assigned by the reference policy."
+                if reference_count
+                else "Image 1 is the generated result; no readable reference image was supplied to this inspection."
+            ),
             "Return strict JSON. Do not include markdown.",
-            "Judge visible text artifacts, watermarks, collage/split panels, identity or style drift, long-term identity-card continuity, facial-feature aesthetic integrity, eyebrow/eye/nose-mouth/jaw drift, beautiful-realism balance, realism that makes the subject less attractive, product label/logo readability, ecommerce slot fidelity, unrelated objects, anatomy/face artifacts, over-smoothed AI-face realism, East Asian fresh portrait complexion/proportion issues, repeated expression/pose/head angle across a set, weak lifestyle context, lighting/composition mismatch, subject readability, composition balance, exposure stability, color-grade stability, depth/material separation, generic stock-photo finish, overprocessed HDR or synthetic detail, and direct-use visual polish.",
+            "Judge visible text artifacts, watermarks, collage/split panels, identity or style drift, long-term identity-card continuity, facial-feature aesthetic integrity, eyebrow/eye/nose-mouth/jaw drift, beautiful-realism balance, realism that makes the subject less attractive, product label/logo readability, ecommerce slot fidelity, unrelated objects, anatomy/face artifacts, over-smoothed AI-face realism, East Asian fresh portrait complexion/proportion issues, repeated expression/pose/head angle across a set, weak lifestyle context, lighting/composition mismatch, subject readability, composition balance, exposure stability, color-grade stability, depth/material separation, generic stock-photo finish, overprocessed HDR or synthetic detail, and direct-use visual polish. When reference images are present, independently score identity truth and prompt-owned channel obedience; report source-style leakage even if the image is attractive.",
             "Use beginner-safe wording in summaries. For general_creative, say subject/object/visual direction instead of product/ecommerce language.",
             f"Template: {template_id}",
             f"User goal: {user_goal}",
             f"Project context summary: {json.dumps(project_summary, ensure_ascii=False)[:1200]}",
-            "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, ecommerce_slot_mismatch, ecommerce_suite_role_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, doll_like_child_face, adultified_child_model, synthetic_child_skin, pageant_polish_child_face, frozen_child_smile, unreal_child_eyes, unreal_child_teeth, child_face_ai_render, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
+            f"Resolved reference policy: {json.dumps(reference_policy, ensure_ascii=False)[:2200]}",
+            "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, source_hair_overinherited, source_makeup_overinherited, source_wardrobe_overinherited, source_lighting_overinherited, source_color_grade_overinherited, source_scene_overinherited, source_camera_overinherited, source_whole_style_overinherited, reference_used_as_style_when_identity_only, prompt_owned_channel_ignored, selected_anchor_overrode_current_prompt, structured_appearance_lock_misapplied, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, ecommerce_slot_mismatch, ecommerce_suite_role_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, doll_like_child_face, adultified_child_model, synthetic_child_skin, pageant_polish_child_face, frozen_child_smile, unreal_child_eyes, unreal_child_teeth, child_face_ai_render, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
             'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review","confidence":0.0,"issue_codes":[],"scores":{"artifact_safety":0.0,"composition":0.0,"commercial_finish":0.0,"identity_consistency":0.0,"overall":0.0},"preserved_elements":[],"drift_warnings":[],"artifact_warnings":[],"summary":[],"retry_patch":{}}',
         ]
     )
@@ -189,6 +212,63 @@ def _image_data_url(path: Path, mime_type: str | None) -> str:
     mime = mime_type or _mime_from_path(path)
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
+
+
+def _inspection_reference_data_urls(metadata: dict[str, Any]) -> list[str]:
+    return [_inspection_image_data_url(path) for path in _inspection_reference_paths(metadata)]
+
+
+def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:
+    context = metadata.get("project_context_snapshot")
+    if not isinstance(context, dict):
+        context = {}
+    candidates: list[dict[str, Any]] = []
+    for key in ("uploaded_reference_assets", "selected_visual_references", "strong_reference_bindings"):
+        values = context.get(key)
+        if isinstance(values, list):
+            candidates.extend(item for item in values if isinstance(item, dict))
+    direct = metadata.get("uploaded_assets")
+    if isinstance(direct, list):
+        candidates.extend(item for item in direct if isinstance(item, dict))
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            0 if str(item.get("source_type") or "").lower() == "uploaded" else 1,
+            0 if "identity" in str(item.get("use_policy") or item.get("role") or "").lower() else 1,
+        ),
+    )
+    result: list[Path] = []
+    seen: set[str] = set()
+    for item in ranked:
+        value = item.get("file_path") or item.get("preview_path") or item.get("thumbnail_path")
+        if not value:
+            continue
+        path = Path(str(value))
+        if not path.exists() or not path.is_file():
+            continue
+        resolved = str(path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        result.append(path)
+        if len(result) >= 2:
+            break
+    return result
+
+
+def _inspection_image_data_url(path: Path) -> str:
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as raw:
+            image = ImageOps.exif_transpose(raw).convert("RGB")
+            image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=84, optimize=True)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception:
+        return _image_data_url(path, None)
 
 
 def _mime_from_path(path: Path) -> str:

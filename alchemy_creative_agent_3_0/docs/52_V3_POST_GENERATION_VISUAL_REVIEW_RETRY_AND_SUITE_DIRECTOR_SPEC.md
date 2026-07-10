@@ -1,5 +1,13 @@
 # 52 V3 Post Generation Visual Review Retry And Suite Director Spec
 
+Doc93 compatibility note:
+
+```text
+Suite variation and retry remain valid, but identity drift and prompt-directed
+styling changes are different classes. Hair, wardrobe, lighting, scene, camera,
+or style changes are failures only when their channels were explicitly locked.
+```
+
 ## 1. Status And Authority
 
 This document is the next development authority after document `51`.

@@ -431,7 +431,35 @@ V3 foundation is ready when:
 11. V3 has a central-brain + multi-agent extension structure.
 ```
 
-## 18. Strategic Reminder
+## 18. Reference Channel And Prompt Ownership
+
+Doc93 is the current foundation authority for reference inheritance.
+
+Hard rule:
+
+```text
+Reference role decides what may be inherited.
+Per-channel policy decides inheritance strength.
+Explicit current-prompt instructions own styling channels.
+Human Realism improves rendering and cannot expand inheritance rights.
+```
+
+An ordinary uploaded portrait reference defaults to:
+
+```text
+hard: underlying identity geometry and facial-feature relationships
+medium: body identity and natural complexion direction when relevant
+soft: broad hair direction only when the prompt is silent
+prompt-owned: makeup, hair styling, wardrobe, lighting, color, scene, camera,
+mood, art direction, and whole-image style
+```
+
+Do not add new hard-coded provider, closure, project-context, or retry wording
+that turns `preserve_person_identity` into a hair, wardrobe, light, scene, or
+style lock. Use the V3-native Reference Channel Policy child module defined by
+Doc93.
+
+## 19. Strategic Reminder
 
 Do not build a Lovart clone.
 

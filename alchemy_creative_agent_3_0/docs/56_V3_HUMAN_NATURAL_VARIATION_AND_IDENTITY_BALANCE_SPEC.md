@@ -1,5 +1,15 @@
 # 56 V3 Human Natural Variation And Identity Balance Spec
 
+Doc93 compatibility note:
+
+```text
+Natural variation remains required. Any earlier `identity and style anchor`
+wording is narrowed by Doc93: an ordinary portrait upload provides identity
+truth, while style channels remain prompt owned unless explicitly assigned.
+Selected outputs may support approved style direction but cannot override the
+current explicit prompt or uploaded identity truth.
+```
+
 ## 1. Status And Authority
 
 This document is the next optimization authority after documents `51`, `54`,

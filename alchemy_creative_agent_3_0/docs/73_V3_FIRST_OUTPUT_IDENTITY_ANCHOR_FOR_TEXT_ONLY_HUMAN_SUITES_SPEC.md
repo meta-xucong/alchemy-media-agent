@@ -1,5 +1,14 @@
 # 73 V3 First Output Identity Anchor For Text-Only Human Suites Spec
 
+Doc93 compatibility note:
+
+```text
+Doc73 remains valid for text-only suites with no uploaded or user-selected
+truth source. A temporary first-output anchor may stabilize identity, but its
+style, wardrobe, light, and scene channels remain subject to the current prompt
+and mode role. Uploaded truth sources always retain their channel ownership.
+```
+
 ## 1. Purpose
 
 Doc73 fixes a real-output gap found after Doc72:

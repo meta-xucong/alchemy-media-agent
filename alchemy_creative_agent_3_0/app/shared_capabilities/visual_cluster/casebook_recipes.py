@@ -116,7 +116,7 @@ def human_photorealism_casebook(
         "AI portrait filter look",
     ]
     preserve = [
-        "preserve identity through stable face-shape direction, age impression, feature relationships, body type, and broad hair/wardrobe family",
+        "preserve identity through stable face-shape direction, age impression, feature relationships, and body type; reference-channel policy separately owns hair and wardrobe",
         "keep identity consistent while treating each output as a different real camera frame, not a copied still",
     ]
     do_not_inherit = [
@@ -297,12 +297,12 @@ def strong_reference_casebook_rules(subject_type: str) -> dict[str, list[str]]:
         return {
             "allowed_variations": [
                 "vary expression, gaze, head angle, body turn, hand placement, crop, and camera distance like a real photoshoot",
-                "allow minor hair movement, parting, volume, and styling variation while keeping broad hair direction",
+                "allow prompt-directed hair movement, parting, volume, and styling variation without treating source hair as identity truth",
             ],
             "forbidden_drift": [
                 "same frozen face copied from the reference",
                 "beauty-filter identity replacement",
-                "loss of age impression, body type, broad face shape, or hair direction",
+                "loss of age impression, body type, or broad face shape",
             ],
             "provider_prompt_rules": [
                 "Treat the selected person as identity truth, but direct the next frame as a new photographed moment with natural variation.",

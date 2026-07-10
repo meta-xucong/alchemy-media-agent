@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...creative_core.rules import stable_id
-from .contracts import ProjectIdentityAnchor, StrongReferenceBinding, VisualIdentityLockProfile
+from .contracts import ProjectIdentityAnchor, ResolvedReferencePolicyPackage, StrongReferenceBinding, VisualIdentityLockProfile
 
 
 class ProjectIdentityAnchorBuilder:
@@ -20,6 +20,7 @@ class ProjectIdentityAnchorBuilder:
         strong_bindings: list[StrongReferenceBinding],
         identity_locks: list[VisualIdentityLockProfile],
         template_policy: dict[str, Any],
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> list[ProjectIdentityAnchor]:
         if not selected_outputs and not strong_bindings:
             return []
@@ -31,12 +32,20 @@ class ProjectIdentityAnchorBuilder:
         hard_binding = any(binding.strength == "hard" for binding in strong_bindings)
         provider_required = any(binding.provider_input_required for binding in strong_bindings)
         prompt_only = bool(strong_bindings) and not provider_required
-        keep_rules, allowed_variations, forbidden_drift = _rules_for_subject(subject_type)
-        style_rules = _dedupe(
-            rule
-            for lock in identity_locks
-            for rule in [*lock.keep_rules, *lock.prompt_constraints]
-        )[:8]
+        keep_rules, allowed_variations, forbidden_drift = _rules_for_subject(
+            subject_type,
+            reference_policy_package=reference_policy_package,
+        )
+        style_reference_active = _channel_is_reference_owned(reference_policy_package, "style_finish")
+        style_rules = (
+            _dedupe(
+                rule
+                for lock in identity_locks
+                for rule in [*lock.keep_rules, *lock.prompt_constraints]
+            )[:8]
+            if subject_type != "character" or style_reference_active
+            else []
+        )
         return [
             ProjectIdentityAnchor(
                 anchor_id=stable_id(
@@ -66,6 +75,8 @@ class ProjectIdentityAnchorBuilder:
                     "template_policy": template_policy.get("policy_id"),
                     "selected_output_count": len(selected_outputs),
                     "strong_binding_count": len(strong_bindings),
+                    "doc93_reference_channel_policy": bool(reference_policy_package and reference_policy_package.applies),
+                    "reference_policy_package_id": reference_policy_package.package_id if reference_policy_package else None,
                 },
             )
         ]
@@ -79,15 +90,30 @@ def _subject_type(template_policy: dict[str, Any], identity_locks: list[VisualId
     return {"character": "character", "product": "product"}.get(value, "generic")
 
 
-def _rules_for_subject(subject_type: str) -> tuple[list[str], list[str], list[str]]:
+def _rules_for_subject(
+    subject_type: str,
+    *,
+    reference_policy_package: ResolvedReferencePolicyPackage | None = None,
+) -> tuple[list[str], list[str], list[str]]:
     if subject_type == "character":
+        keep = [
+            "keep the same recognizable person identity",
+            "preserve face shape, feature relationships, body type, and broad age direction",
+        ]
+        forbidden = [
+            "identity drift",
+            "face swap",
+            "major body type drift",
+            "same exact expression, pose, and head angle across the full batch",
+        ]
+        if _channel_is_reference_owned(reference_policy_package, "hair_direction"):
+            keep.append("preserve the explicitly assigned hair direction")
+            forbidden.append("locked hair direction drift")
+        if _channel_is_reference_owned(reference_policy_package, "wardrobe_structure"):
+            keep.append("preserve the explicitly assigned wardrobe structure")
+            forbidden.append("locked wardrobe structure drift")
         return (
-            [
-                "keep the same recognizable person identity",
-                "preserve face shape, feature relationships, body type, and broad age direction",
-                "preserve major hair color and broad hair length direction",
-                "preserve wardrobe category unless the user asks to change it",
-            ],
+            keep,
             [
                 "expression",
                 "gaze",
@@ -97,13 +123,7 @@ def _rules_for_subject(subject_type: str) -> tuple[list[str], list[str], list[st
                 "small hair movement or styling detail",
                 "compatible scene or background",
             ],
-            [
-                "identity drift",
-                "face swap",
-                "major body type drift",
-                "major hair color or length drift unless requested",
-                "same exact expression, pose, and head angle across the full batch",
-            ],
+            forbidden,
         )
     if subject_type == "product":
         return (
@@ -119,6 +139,13 @@ def _rules_for_subject(subject_type: str) -> tuple[list[str], list[str], list[st
         ["framing", "crop", "scene detail", "camera distance"],
         ["style drift", "unrelated object drift", "cluttered composition"],
     )
+
+
+def _channel_is_reference_owned(package: ResolvedReferencePolicyPackage | None, channel: str) -> bool:
+    if package is None or not package.applies:
+        return False
+    owner = str(package.effective_channel_owners.get(channel) or "")
+    return owner.startswith("reference:") and owner.rsplit(":", 1)[-1] in {"hard", "medium"}
 
 
 def _summary(subject_type: str, provider_required: bool) -> list[str]:

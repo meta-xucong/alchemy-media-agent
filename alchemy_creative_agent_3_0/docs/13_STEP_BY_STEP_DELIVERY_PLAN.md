@@ -211,6 +211,7 @@ Use this map when a Codex implementation task begins from the current stage:
 86 -> Portrait bone-structure identity lock; referenced portraits must remain recognizably the same person rather than merely the same beauty type.
 87 -> Portrait reference identity/style separation; uploaded portrait references provide identity by default while prompt-owned lighting, color, scene, mood, camera, wardrobe, and art direction remain controlled by the current prompt unless explicitly marked otherwise.
 88 -> Portrait reference balance and prompt mood preservation; uploaded identity truth, user-approved visual direction, and current prompt mood must be preserved together, and identity repair must not break tone, atmosphere, or prompt intent.
+93 -> Reference-channel policy and prompt-ownership governance; ordinary portrait uploads preserve identity geometry only by default, while explicit current-prompt styling channels remain authoritative and Human Realism cannot broaden inheritance.
 ```
 
 Current code-stage priority:
@@ -246,6 +247,7 @@ Current code-stage priority:
 28. Apply 81 whenever real provider generation can fail before any candidate image exists; this is provider-failure recovery, not visual-quality retry, and must stay bounded under Doc53 loop-safety rules.
 29. Apply 83-85 as the next reference-image closure chain: 83 governs uploaded-reference priority and retry delivery; 84 governs prompt purity and structure-level appearance continuity; 85 governs true image-to-image identity transfer and reference-truth layering for people, products, and structured appearance assets.
 30. Apply 86-88 as the portrait image-to-image refinement chain: 86 locks same-person bone structure; 87 separates identity inheritance from prompt-owned style; 88 prevents over-hard identity repair from damaging prompt mood or user-approved positive visual direction.
+31. Apply Doc93 as the implementation closure for all reference assets: resolve asset role, per-channel strength, prompt ownership, selected-output support, review, and retry before provider prompt compilation.
 31. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 

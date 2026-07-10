@@ -1,5 +1,14 @@
 # 58 V3 Identity Anchor Strong Reference And Suite Director Spec
 
+Doc93 compatibility note:
+
+```text
+Strong identity continuation remains valid. Hair, wardrobe, lighting, camera,
+and whole-image style continuity now require explicit Reference Channel Policy
+assignment. A selected output is not automatically a combined identity-and-
+style anchor for every channel.
+```
+
 ## 1. Status And Authority
 
 This document is the next development authority after documents `51`, `54`,

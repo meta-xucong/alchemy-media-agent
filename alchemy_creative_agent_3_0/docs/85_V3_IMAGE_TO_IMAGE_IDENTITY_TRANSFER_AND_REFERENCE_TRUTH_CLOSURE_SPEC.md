@@ -1,5 +1,14 @@
 # 85 V3 Image-To-Image Identity Transfer And Reference Truth Closure Spec
 
+Doc93 authority update:
+
+```text
+Doc85 remains the reference-truth foundation. Doc93 is the current
+implementation authority for per-channel truth strength, prompt ownership,
+selected-output support, and conflict resolution. Whole-image inheritance must
+not be inferred from an identity truth source.
+```
+
 ## 1. Purpose
 
 This document closes the next V3 gap after Doc84.

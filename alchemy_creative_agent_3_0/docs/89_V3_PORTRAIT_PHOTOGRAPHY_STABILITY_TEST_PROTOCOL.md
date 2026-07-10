@@ -1,5 +1,14 @@
 # 89 V3 Portrait Photography Stability Test Protocol
 
+Doc93 authority update:
+
+```text
+Doc89 remains the portrait stability test protocol. Add Doc93 channel-obedience
+acceptance: the same person must remain recognizable while explicit prompt hair,
+makeup, wardrobe, lighting, color, scene, camera, and mood changes are followed
+without source-photo style leakage.
+```
+
 ## 1. 文档目的
 
 本文档把 V3 通用模板中的“人像摄影稳定性测试流程”固化为标准验收协议。

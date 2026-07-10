@@ -1,5 +1,13 @@
 # 69 V3 Prompt Atom Realism And Reference Absorption Spec
 
+Doc93 compatibility note:
+
+```text
+Prompt atoms remain reusable guidance. Reference-derived atoms must carry their
+source role and allowed channel, and must be dropped when they conflict with a
+current prompt-owned channel.
+```
+
 Status: accepted optimization document after Doc68.
 
 This document answers the latest audit question:

@@ -1,5 +1,13 @@
 # 68 V3 Casebook-Guided Photographic Recipe Tuning Spec
 
+Doc93 compatibility note:
+
+```text
+Casebook recipes may improve craft and realism but cannot expand reference
+inheritance. Recipe identity, hair, wardrobe, light, and scene examples must be
+filtered through the resolved channel policy before provider compilation.
+```
+
 Status: accepted next-stage optimization spec.
 
 This document is the implementation authority after document 67. It tightens

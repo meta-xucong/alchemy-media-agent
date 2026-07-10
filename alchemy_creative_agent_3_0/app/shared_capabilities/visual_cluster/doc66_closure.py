@@ -10,6 +10,7 @@ from .contracts import (
     HumanPhotorealismGuidance,
     ModeQualityProfile,
     ProjectIdentityAnchor,
+    ResolvedReferencePolicyPackage,
     StrongReferenceClosurePackage,
     StrongReferenceContinuationPlan,
     VisualIdentityLockProfile,
@@ -35,6 +36,7 @@ class StrongReferenceClosureBuilder:
         anchors: list[ProjectIdentityAnchor],
         identity_locks: list[VisualIdentityLockProfile],
         human_photorealism: HumanPhotorealismGuidance | None,
+        reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> StrongReferenceClosurePackage:
         provider_ids = _dedupe(continuation_plan.provider_required_reference_ids if continuation_plan else [])
         prompt_only_ids = _dedupe(continuation_plan.prompt_only_reference_ids if continuation_plan else [])
@@ -42,18 +44,41 @@ class StrongReferenceClosureBuilder:
         active = bool(provider_ids or prompt_only_ids or anchors)
         reference_strength = "hard" if provider_ids else "prompt_only" if prompt_only_ids or anchors else "none"
         casebook_rules = strong_reference_casebook_rules(subject_type)
+        policy_active = bool(reference_policy_package and reference_policy_package.applies)
         identity_keep_rules = _dedupe(
             [
                 *[rule for lock in identity_locks for rule in lock.keep_rules],
                 *[rule for lock in identity_locks for rule in lock.prompt_constraints],
                 *[rule for anchor in anchors for rule in anchor.identity_keep_rules],
-                *(human_photorealism.reference_preserve_rules if human_photorealism and human_photorealism.applies else []),
+                *(
+                    []
+                    if policy_active
+                    else human_photorealism.reference_preserve_rules
+                    if human_photorealism and human_photorealism.applies
+                    else []
+                ),
             ]
         )[:14]
+        style_reference_active = bool(
+            reference_policy_package
+            and any(
+                policy.style_finish in {"hard", "medium"}
+                or policy.mood_art_direction in {"hard", "medium"}
+                for policy in reference_policy_package.policies
+            )
+        )
         style_keep_rules = _dedupe(
             [
-                *[rule for anchor in anchors for rule in anchor.style_keep_rules],
-                *(continuation_plan.prompt_additions if continuation_plan else []),
+                *(
+                    [rule for anchor in anchors for rule in anchor.style_keep_rules]
+                    if not policy_active or style_reference_active
+                    else []
+                ),
+                *(
+                    continuation_plan.prompt_additions
+                    if continuation_plan and (not policy_active or style_reference_active)
+                    else []
+                ),
             ]
         )[:12]
         allowed_variations = _dedupe(
@@ -92,13 +117,25 @@ class StrongReferenceClosureBuilder:
             style_keep_rules=style_keep_rules,
             allowed_variations=allowed_variations,
             forbidden_drift=forbidden_drift,
+            reference_policy_package=reference_policy_package,
         )
         provider_rules = _dedupe(
             [
                 *provider_rules,
-                *_string_list(casebook_rules.get("provider_prompt_rules")),
+                *(
+                    []
+                    if policy_active and subject_type == "character"
+                    else _string_list(casebook_rules.get("provider_prompt_rules"))
+                ),
             ]
-        )[:10]
+        )[:16]
+        if policy_active:
+            negative_rules = _dedupe(
+                [
+                    *negative_rules,
+                    *reference_policy_package.provider_negative_rules,
+                ]
+            )[:24]
         return StrongReferenceClosurePackage(
             closure_id=stable_id("strong_reference_closure", project_id, job_id, subject_type, ",".join(provider_ids), ",".join(prompt_only_ids)),
             project_id=project_id,
@@ -124,6 +161,10 @@ class StrongReferenceClosureBuilder:
                 "human_photorealism_applies": bool(human_photorealism and human_photorealism.applies),
                 "doc68_casebook_recipe": True,
                 "casebook_recipe_library": VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
+                "doc93_reference_channel_policy": policy_active,
+                "reference_policy_package_id": (
+                    reference_policy_package.package_id if reference_policy_package else None
+                ),
             },
         )
 
@@ -137,13 +178,23 @@ class StrongReferenceClosureBuilder:
         style_keep_rules: list[str],
         allowed_variations: list[str],
         forbidden_drift: list[str],
+        reference_policy_package: ResolvedReferencePolicyPackage | None,
     ) -> list[str]:
         if reference_strength == "none":
             return []
+        if reference_policy_package and reference_policy_package.applies:
+            return _dedupe(
+                [
+                    *reference_policy_package.provider_prompt_rules,
+                    "Preserve identity through stable traits; do not clone the exact source frame.",
+                    "Allowed variation: " + "; ".join(allowed_variations[:5]) if allowed_variations else "",
+                    "Do not drift: " + "; ".join(forbidden_drift[:5]) if forbidden_drift else "",
+                ]
+            )
         if subject_type == "product":
             lead = "Use selected references as product truth: preserve product shape, material, color, proportions, label/logo placement, and package silhouette."
         elif subject_type == "character":
-            lead = "Use selected references as identity truth: preserve recognizable person direction, broad face shape, age direction, body type, broad hair direction, and wardrobe category; follow the current prompt for lighting, scene, camera mood, and style unless the reference is explicitly style guidance."
+            lead = "Use selected references as person identity truth only; preserve recognizable face geometry and body identity while the current prompt controls styling, lighting, scene, camera, and style unless a channel is explicitly assigned to a reference."
         else:
             lead = "Use selected references as visual truth: preserve the selected style world, composition language, lighting, and subject direction."
         rules = [

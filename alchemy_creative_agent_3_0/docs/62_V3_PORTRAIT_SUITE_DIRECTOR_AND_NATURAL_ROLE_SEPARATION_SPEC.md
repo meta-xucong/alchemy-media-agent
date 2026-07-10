@@ -1,5 +1,14 @@
 # 62 V3 Portrait Suite Director And Natural Role Separation Spec
 
+Doc93 compatibility note:
+
+```text
+Portrait suite roles remain valid. Broad hair or wardrobe continuity is not a
+default identity requirement; it applies only when those channels are explicit
+suite constraints. Prompt-directed styling changes must remain available while
+the same person's identity geometry stays recognizable.
+```
+
 ## 1. Status And Authority
 
 Doc62 is the implementation optimization layer after Doc61.

@@ -1,5 +1,13 @@
 # 66 V3 Strong Reference Real Review And Precise Retry Closure Spec
 
+Doc93 compatibility note:
+
+```text
+Doc66 remains the closure and precise-retry mechanism. It must consume the
+resolved Doc93 channel policy and must not derive face + hair + wardrobe + light
+continuity from `subject_type == character` or reference strength alone.
+```
+
 ## 1. Status And Authority
 
 Doc66 is the next Lovart-gap optimization after Doc65.
