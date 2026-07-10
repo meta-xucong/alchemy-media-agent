@@ -1002,6 +1002,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
+                        "identity_context_reduced_by_tight_crop": bool(
+                            derivative.get("identity_context_reduced_by_tight_crop")
+                        ),
                     }
                 )
             if self._should_include_original_reference(
@@ -1369,6 +1372,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback_to_original": bool(item.get("fallback_to_original")),
                     "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
+                    "identity_context_reduced_by_tight_crop": bool(
+                        item.get("identity_context_reduced_by_tight_crop")
+                    ),
                     "filename": item.get("filename"),
                 }
             )

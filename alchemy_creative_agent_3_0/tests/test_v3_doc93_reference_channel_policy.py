@@ -314,14 +314,15 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert len(provider_assets) == 1
     assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
     assert provider_assets[0]["identity_color_neutralized"] is True
-    assert provider_assets[0]["identity_background_neutralized"] is True
+    assert provider_assets[0]["identity_background_neutralized"] is False
+    assert provider_assets[0]["identity_context_reduced_by_tight_crop"] is True
     with Image.open(provider_assets[0]["storage_path"]).convert("RGB") as focused:
         assert focused.width <= 120
         assert focused.height <= 120
         corner = focused.getpixel((0, 0))
         red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
-    assert max(corner) - min(corner) <= 3
-    assert max(abs(channel - 128) for channel in corner) <= 8
+    assert max(corner) - min(corner) <= 20
+    assert corner != (128, 128, 128)
     assert max(red, green, blue) - min(red, green, blue) <= 20
 
 

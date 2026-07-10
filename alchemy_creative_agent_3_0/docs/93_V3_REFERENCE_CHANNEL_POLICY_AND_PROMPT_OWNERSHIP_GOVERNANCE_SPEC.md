@@ -802,10 +802,16 @@ For an ordinary portrait identity reference:
 deduplicate byte-identical references after normalizing identity-role aliases
 create a tight provider-only head-and-face identity crop
 neutralize most color in that identity crop
-place the focused face evidence on a neutral feathered background
+reduce old-scene context through the tight crop without synthesizing a matte
 send the focused identity crop instead of the full old frame
 record suppressed full-frame identity source ids in provider metadata
 ```
+
+Do not place identity evidence on an artificial feathered or flat-color
+background. Live gateway acceptance proved that such synthetic identity cards
+can be rejected even when an ordinary JPEG crop succeeds. Compatibility takes
+priority: preserve valid image geometry, use the tighter crop and near-neutral
+color only, and let channel policy prevent old-scene inheritance.
 
 If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
 `400 / bad_response_status_code / openai_error`, classify only that generic
