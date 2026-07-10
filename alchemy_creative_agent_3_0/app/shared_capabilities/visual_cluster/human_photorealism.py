@@ -38,7 +38,6 @@ _HUMAN_TERMS = {
     "fashion model",
     "child model",
     "kid model",
-    "kidswear",
     "baby",
     "boy",
     "child",
@@ -70,7 +69,6 @@ _CHINESE_HUMAN_TERMS = {
     "\u513f\u7ae5",
     "\u5c0f\u670b\u53cb",
     "\u5b9d\u5b9d",
-    "\u7ae5\u88c5",
     "\u7a7f\u7740",
     "\u4e0a\u8eab",
     "\u624b",
@@ -126,8 +124,6 @@ _PRODUCT_WITH_HUMAN_TERMS = {
     "apparel",
     "clothing",
     "clothes",
-    "kidswear",
-    "childrenswear",
     "fashion",
     "garment",
     "dress",
@@ -154,10 +150,8 @@ _PRODUCT_WITH_HUMAN_TERMS = {
 
 _CHINESE_PRODUCT_WITH_HUMAN_TERMS = {
     "\u670d\u88c5",
-    "\u7ae5\u88c5",
     "\u5973\u88c5",
     "\u7537\u88c5",
-    "\u6c49\u670d",
     "\u88d9",
     "\u5916\u5957",
     "\u978b",
@@ -182,8 +176,6 @@ _CHILD_TERMS = {
     "girl",
     "teen",
     "toddler",
-    "kidswear",
-    "childrenswear",
 }
 
 _CHINESE_CHILD_TERMS = {
@@ -195,7 +187,24 @@ _CHINESE_CHILD_TERMS = {
     "\u5973\u5b69",
     "\u5c11\u5e74",
     "\u5c11\u5973",
-    "\u7ae5\u88c5",
+}
+
+_EXPLICIT_AGE_TERMS = _CHILD_TERMS | {
+    "adult",
+    "young adult",
+    "middle-aged",
+    "middle aged",
+    "senior",
+    "elderly",
+    "older person",
+}
+
+_CHINESE_EXPLICIT_AGE_TERMS = _CHINESE_CHILD_TERMS | {
+    "\u6210\u5e74\u4eba",
+    "\u9752\u5e74",
+    "\u4e2d\u5e74",
+    "\u8001\u5e74",
+    "\u8001\u4eba",
 }
 
 _HAND_OR_SKIN_TERMS = {
@@ -217,81 +226,40 @@ _CHINESE_HAND_OR_SKIN_TERMS = {
     "\u76ae\u80a4",
 }
 
-_MOODY_TRADITIONAL_TERMS = {
-    "ancient",
-    "traditional",
-    "gufeng",
-    "hanfu",
-    "cinematic",
-    "moody",
+_LOW_KEY_TERMS = {
     "low-key",
     "low key",
     "dark",
     "night",
-    "melancholic",
-    "cold blue",
-    "silver",
-    "soft-focus film",
-    "film noir",
     "spotlight",
     "shadow-rich",
+    "deep shadow",
+    "understated exposure",
 }
 
-_CHINESE_MOODY_TRADITIONAL_TERMS = {
-    "\u53e4\u98ce",
-    "\u56fd\u98ce",
-    "\u6c49\u670d",
-    "\u53e4\u88c5",
-    "\u53e4\u5178",
-    "\u7535\u5f71",
+_CHINESE_LOW_KEY_TERMS = {
     "\u6697\u8c03",
-    "\u6e05\u51b7",
-    "\u5fe7\u90c1",
-    "\u51b7\u9752",
-    "\u94f6\u767d",
     "\u4f4e\u8c03",
-    "\u67d4\u7126",
     "\u5c40\u90e8\u805a\u5149",
     "\u591c",
     "\u9634\u5f71",
 }
 
-_BRIGHT_FRESH_TERMS = {
-    "summer",
+_HIGH_KEY_TERMS = {
     "daylight",
-    "fresh",
     "clean bright",
     "high-key",
     "high key",
-    "bright social",
     "sunny",
-    "healthy clear complexion",
+    "bright exposure",
+    "soft daylight",
 }
 
-_CHINESE_BRIGHT_FRESH_TERMS = {
-    "\u590f\u65e5",
-    "\u590f\u5929",
+_CHINESE_HIGH_KEY_TERMS = {
     "\u660e\u4eae",
-    "\u6e05\u723d",
-    "\u6e05\u65b0",
     "\u65e5\u5149",
     "\u9ad8\u8c03",
     "\u5e72\u51c0\u900f\u4eae",
-}
-
-_MOODY_SUPPRESSED_POSITIVE_TERMS = {
-    "healthy clear complexion",
-    "clean high-key",
-    "summer daylight",
-    "fresh bright skin",
-    "fresh bright",
-    "soft natural bounce light",
-    "bounce light",
-    "for east asian fresh",
-    "do not darken or tan east asian skin",
-    "clean fair luminous complexion",
-    "gentle cheek warmth",
-    "beauty portrait briefs",
 }
 
 _ANTI_AI_FACE_ISSUES = {
@@ -350,6 +318,12 @@ _ANTI_AI_FACE_ISSUES = {
     "unreal_child_eyes",
     "unreal_child_teeth",
     "child_face_ai_render",
+    "age_identity_drift",
+    "age_inappropriate_rendering",
+    "complexion_direction_drift",
+    "unintended_skin_darkening",
+    "unintended_skin_lightening",
+    "unflattering_skin_color_cast",
 }
 
 
@@ -399,10 +373,9 @@ class HumanPhotorealismLayer:
             )
 
         realism_level = self._realism_level(user_input, metadata)
-        human_subject_kind = str(activation.get("human_subject_kind") or "adult_portrait")
+        human_subject_kind = str(activation.get("human_subject_kind") or "person")
         style_profile = str(activation.get("style_profile") or "neutral_real_camera")
-        is_child_model = human_subject_kind == "child_or_teen_model"
-        is_moody_traditional = style_profile == "moody_cinematic_traditional"
+        rendering_profile = dict(activation.get("universal_rendering_profile") or {})
         positives = [
             "real camera photograph, not a rendered or AI-beauty face",
             "natural human skin texture with subtle pores, fine detail, and small tonal variation",
@@ -417,33 +390,13 @@ class HumanPhotorealismLayer:
             "attractive commercial portrait, but grounded in a real captured moment rather than a beauty-app or idol photocard finish",
             "commercial polish means camera-ready human realism, not skin blur, face slimming, enlarged eyes, or liquified facial geometry",
             "retain individual facial character: real eyelid folds, lip texture, natural jaw contour, and small non-identical cheek transitions",
-            "in bright daylight, keep pore-level skin detail, under-eye shadows, lip texture, and tiny neck or shoulder tone differences instead of a uniform glow",
             "prefer quiet neutral expression or imperfect half-smile over a sweet template smile unless the user explicitly asks for a big smile",
-            "healthy clear complexion and fresh bright skin tone created by soft natural bounce light, not by skin whitening or beauty-filter smoothing",
-            "clean high-key summer daylight keeps the face flattering, awake, and fresh while preserving natural skin tone, ethnicity, and real texture",
-            "gentle cheek warmth and natural lip color keep the portrait attractive without returning to poreless glow",
-            "for East Asian fresh, summer, or beauty portrait briefs, keep a clean fair luminous complexion when the user did not request tan, dark, or bronze skin",
-            "do not darken or tan East Asian skin by default; use high-key daylight, soft bounce light, and color balance to keep the face clear and luminous",
+            "preserve the subject's natural complexion direction from the reference or explicit prompt; exposure and color grading must not accidentally gray, darken, bleach, tan, or flatten the skin",
+            "preserve the requested or referenced age band through age-consistent facial and body relationships without adultification, infantilization, or doll-like morphology",
             "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop in close portraits",
             "keep harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle without beauty-filter reshaping",
         ]
-        if is_child_model:
-            positives.extend(
-                [
-                    "real child or teen photography with age-appropriate facial proportions, relaxed expression, and believable real-camera skin texture",
-                    "commercial catalog polish must still feel like a real child model, not a doll, toy, mannequin, or pageant retouch",
-                    "keep natural child eyes, cheeks, hairline, teeth, neck, and shoulder proportions with gentle real daylight or studio light",
-                ]
-            )
-        if is_moody_traditional:
-            positives.extend(
-                [
-                    "moody cinematic human realism: keep soft-matte photographed skin texture under low-key cold light, not glossy beauty-filter skin",
-                    "preserve the requested dark, cold, traditional, filmic mood; do not brighten the face into a fresh commercial daylight portrait",
-                    "forehead, nose bridge, cheeks, and lips should have controlled photographic highlight roll-off with visible fine texture, never oily or waxy shine",
-                    "ancient or traditional styling stays elegant and beautiful through bone structure, expression, fabric detail, and lens depth rather than plastic polish",
-                ]
-            )
+        positives.extend(_rendering_positive_fragments(rendering_profile))
         if has_identity_reference:
             positives.append(
                 "preserve the reference person's recognizable identity direction while making the face look more like a real photographed person"
@@ -474,7 +427,7 @@ class HumanPhotorealismLayer:
             "over-sharpened glossy eyes",
             "identical face angle across the whole set",
             "beauty-app face",
-            "idol photocard polish",
+            "over-polished collectible portrait-card finish",
             "skin-blur retouching",
             "flawless porcelain mask",
             "over-uniform skin tone",
@@ -483,7 +436,7 @@ class HumanPhotorealismLayer:
             "auto face-slimming",
             "enlarged beauty-filter eyes",
             "perfect V-shaped chin",
-            "flawless K-idol beauty retouch",
+            "culturally generic idol-style beauty retouch",
             "liquified face proportions",
             "algorithmically pretty generic face",
             "too-clean stock-photo model face",
@@ -491,7 +444,7 @@ class HumanPhotorealismLayer:
             "dewy plastic makeup skin",
             "cosmetic-ad poreless glow",
             "bright sun erasing all face texture",
-            "sweet K-idol template smile",
+            "sweet template celebrity smile",
             "perfect cute influencer smile",
             "dull complexion",
             "muddy skin tone",
@@ -500,12 +453,8 @@ class HumanPhotorealismLayer:
             "harsh facial shadow",
             "tired expression",
             "overly matte documentary look",
-            "unflattering dark tan or bronze cast unless requested",
-            "suppressed fair complexion",
-            "unnecessarily darkened East Asian skin",
-            "forced tan or bronze cast unless requested",
-            "gray-brown skin cast",
-            "dull yellow or green facial cast",
+            "unintended complexion darkening or lightening",
+            "unrequested tan, bronze, gray, yellow, or green facial cast",
             "fake whitening mask",
             "bleached beauty-filter skin",
             "oversized head",
@@ -520,39 +469,12 @@ class HumanPhotorealismLayer:
             "flattened facial attractiveness",
             "skin whitening filter",
             "beauty-app glow",
+            "age-inappropriate facial morphology",
+            "adultification or infantilization",
+            "age-inappropriate beauty retouching",
         ]
-        if is_moody_traditional:
-            negatives.extend(
-                [
-                    "oily face",
-                    "greasy forehead",
-                    "plastic nose bridge",
-                    "waxy cheek highlight",
-                    "wet glossy makeup skin",
-                    "dewy beauty-filter skin",
-                    "over-bright fresh commercial beauty lighting",
-                    "high-key summer daylight look",
-                    "bright bounce-light portrait look",
-                    "porcelain fantasy doll face",
-                ]
-            )
-        if is_child_model:
-            negatives.extend(
-                [
-                    "doll-like child face",
-                    "plastic toy face",
-                    "adult beauty makeup on child",
-                    "pageant-model polish",
-                    "frozen perfect child smile",
-                    "over-large glossy child eyes",
-                    "over-smoothed child skin",
-                    "synthetic catalog mannequin child",
-                    "unreal child teeth",
-                    "AI child model face",
-                ]
-            )
+        negatives.extend(_rendering_negative_fragments(rendering_profile))
         negatives.extend(_string_list(casebook.get("negative_prompt_fragments")))
-        positives = _style_aware_positive_fragments(positives, style_profile)
         preserve = [
             "keep the same broad face shape, age direction, body type, and recognizable identity cues",
             "allow expression, pose, head angle, camera angle, crop, and small hair styling changes so the set feels photographed",
@@ -575,24 +497,12 @@ class HumanPhotorealismLayer:
             "real-camera imperfection is visible without making the image look low quality",
             "face avoids beauty-app polish, idol photocard symmetry, and skin-blur retouching",
             "commercial finish is camera-ready and human, not beautified facial geometry",
-            "face looks fresh, healthy, bright, and attractive without losing real skin texture or natural skin tone",
-            "East Asian fresh portraits keep fair luminous complexion unless a darker or tanned look is explicitly requested",
+            "face remains attractive and correctly exposed without losing real skin texture or the requested complexion direction",
+            "exposure and color grading preserve the reference or explicitly requested complexion rather than imposing a demographic default",
+            "facial and body morphology remain consistent with the requested or referenced age band",
             "close crops keep natural head, neck, shoulder, and upper-body proportions",
         ]
-        if is_child_model:
-            review_targets.extend(
-                [
-                    "child or teen model face looks age-appropriate and photographed, not doll-like",
-                    "child skin, eyes, teeth, cheeks, and expression avoid synthetic catalog-model polish",
-                ]
-            )
-        if is_moody_traditional:
-            review_targets.extend(
-                [
-                    "moody traditional portrait keeps real skin texture without oily forehead, waxy cheeks, or plastic nose highlight",
-                    "face realism preserves the requested cold dark film atmosphere instead of becoming bright commercial beauty lighting",
-                ]
-            )
+        review_targets.extend(_rendering_review_targets(rendering_profile))
         review_targets.extend(_string_list(casebook.get("review_targets")))
         casebook_retry = casebook.get("retry_patch_templates") if isinstance(casebook.get("retry_patch_templates"), dict) else {}
         retry_patch_templates = {
@@ -602,69 +512,16 @@ class HumanPhotorealismLayer:
                 "repair the face toward natural photographed skin texture, believable expression, realistic eyes, non-plastic highlights, and real lens depth",
                 "repair toward soft real-camera capture: fine grain, slight edge softness, natural skin tone variation, loose hair, fabric detail, and a candid non-template expression",
                 "repair away from face-slimming filters, enlarged beauty eyes, liquified jaw/chin, and generic AI-beauty identity while keeping the person attractive",
-                "repair bright outdoor portraits so sunlight preserves skin pores, under-eye texture, lip detail, and natural neck/shoulder tonal variation instead of a poreless glow",
+                "repair prompt-defined facial lighting so its intended exposure key preserves skin pores, under-eye texture, lip detail, and natural neck/shoulder tonal variation instead of a poreless glow",
                 "repair template-smile portraits toward a quiet neutral expression or imperfect half-smile with natural mouth tension",
-                "repair dull or underexposed portraits with soft natural bounce light, healthy clear complexion, clean bright summer daylight, gentle cheek warmth, and natural skin tone preserved",
-                "repair East Asian fresh portraits toward clean fair luminous complexion through exposure, bounce light, and color balance; avoid fake whitening, skin smoothing, or face replacement",
+                "repair exposure or color-cast drift while preserving the reference or explicitly requested complexion direction; avoid whitening masks, forced tanning, skin smoothing, or face replacement",
+                "repair age drift toward the requested or referenced age band with age-consistent face, eyes, cheeks, teeth, neck, shoulders, expression, and skin response",
                 "repair close portrait framing so the head-to-body ratio, neck, shoulders, and upper-body crop look natural and flattering",
+                *_rendering_retry_fragments(rendering_profile),
                 *_string_list(casebook_retry.get("artifact_repair")),
             ],
             "identity_reinforcement": _dedupe([*preserve, *_string_list(casebook_retry.get("identity_reinforcement"))]),
         }
-        if is_child_model:
-            retry_patch_templates["prompt_additions"] = _dedupe(
-                [
-                    *retry_patch_templates["prompt_additions"],
-                    "real child or teen photography with age-appropriate facial proportions, natural skin, believable eyes, and relaxed expression",
-                ]
-            )
-            retry_patch_templates["artifact_repair"] = _dedupe(
-                [
-                    *retry_patch_templates["artifact_repair"],
-                    "repair child or teen model faces toward age-appropriate real-camera photography: natural cheeks, eyes, teeth, skin texture, and relaxed expression without doll, toy, or pageant polish",
-                ]
-            )
-            retry_patch_templates["negative_additions"] = _dedupe(
-                [
-                    *retry_patch_templates["negative_additions"],
-                    "doll-like child face",
-                    "adultified child model",
-                    "synthetic child skin",
-                    "pageant-polished child face",
-                    "frozen child smile",
-                    "unreal child eyes",
-                    "unreal child teeth",
-                    "AI child model face",
-                ]
-            )
-        if is_moody_traditional:
-            retry_patch_templates["prompt_additions"] = _style_aware_positive_fragments(
-                [
-                    *retry_patch_templates["prompt_additions"],
-                    "repair moody traditional portraits toward soft-matte photographed skin, restrained highlight roll-off, real pores, and cold cinematic atmosphere",
-                ],
-                style_profile,
-            )
-            retry_patch_templates["artifact_repair"] = _dedupe(
-                [
-                    *retry_patch_templates["artifact_repair"],
-                    "reduce oily forehead, waxy nose bridge, glossy cheeks, and plastic beauty-filter shine while preserving elegant ancient-style beauty and cold film lighting",
-                ]
-            )
-            retry_patch_templates["negative_additions"] = _dedupe(
-                [
-                    *retry_patch_templates["negative_additions"],
-                    "oily face",
-                    "greasy forehead",
-                    "plastic nose bridge",
-                    "waxy cheek highlight",
-                    "wet glossy makeup skin",
-                    "dewy beauty-filter skin",
-                    "over-bright fresh commercial beauty lighting",
-                    "high-key summer daylight look",
-                    "porcelain fantasy doll face",
-                ]
-            )
         return HumanPhotorealismGuidance(
             guidance_id=guidance_id,
             project_id=project_id,
@@ -690,7 +547,9 @@ class HumanPhotorealismLayer:
                 "enable_reason": reason,
                 "doc91_human_realism_plugin": True,
                 "doc92_style_aware_ai_feel_suppression": True,
+                "doc94_universal_rendering_profile": True,
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
+                "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": has_identity_reference,
                 "doc68_casebook_recipe": True,
                 "casebook_recipe_library": VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
@@ -754,11 +613,11 @@ class HumanPhotorealismLayer:
         filtered = [code for code in _dedupe(issue_codes) if code in _ANTI_AI_FACE_ISSUES]
         if not filtered:
             return {}
-        user_input = (
-            "real child model photography, avoid doll-like child face"
-            if child_model or any(code.startswith(("child_", "doll_like_child", "adultified_child", "synthetic_child", "pageant_")) for code in filtered)
-            else "real human portrait photography, avoid AI beauty face"
+        legacy_age_issue = child_model or any(
+            code.startswith(("child_", "doll_like_child", "adultified_child", "synthetic_child", "pageant_"))
+            for code in filtered
         )
+        user_input = "real human photography with natural identity, age fidelity, and no synthetic beauty-face rendering"
         guidance = self.build(
             project_id=None,
             job_id=None,
@@ -770,8 +629,10 @@ class HumanPhotorealismLayer:
             has_identity_reference=True,
             metadata={
                 "force_human_realism_plugin": True,
-                "human_subject_kind": "child_or_teen_model" if child_model else "adult_portrait",
-                "human_realism_strictness": "child_strict" if child_model else "commercial_strict",
+                "human_subject_kind": "person",
+                "human_realism_strictness": "commercial_strict",
+                "age_fidelity": "follow_explicit_prompt" if legacy_age_issue else "preserve_reference",
+                "legacy_age_issue_alias": legacy_age_issue,
             },
         )
         review = self.review(
@@ -805,7 +666,8 @@ class HumanPhotorealismLayer:
                 subject_type=subject_type,
             )
         if _truthy(metadata.get("force_human_realism_plugin")):
-            forced_kind = str(metadata.get("human_subject_kind") or "adult_portrait")
+            forced_kind = str(metadata.get("human_subject_kind") or "person")
+            rendering_profile = _universal_rendering_profile("", metadata=metadata)
             return _activation_payload(
                 applies=True,
                 primary_reason="forced_by_metadata",
@@ -813,7 +675,8 @@ class HumanPhotorealismLayer:
                 subject_type=subject_type,
                 human_subject_kind=forced_kind,
                 strictness=str(metadata.get("human_realism_strictness") or "commercial_strict"),
-                style_profile=str(metadata.get("human_realism_style_profile") or _style_profile_for_text("", forced_kind)),
+                style_profile=str(metadata.get("human_realism_style_profile") or rendering_profile["profile_id"]),
+                universal_rendering_profile=rendering_profile,
                 evidence={"metadata": ["force_human_realism_plugin"]},
             )
 
@@ -848,13 +711,9 @@ class HumanPhotorealismLayer:
         if any(token in text for token in ["ecommerce", "product", "listing"]) and "product_with_human_signal" in reason_codes:
             reason_codes.append("ecommerce_human_model_detected")
 
-        is_child = _contains_any(text, _CHILD_TERMS) or _contains_any(text, _CHINESE_CHILD_TERMS)
+        explicit_age_signal = _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS)
         is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
-        if is_child:
-            human_subject_kind = "child_or_teen_model"
-            strictness = "child_strict"
-            reason_codes.append("child_or_teen_model_detected")
-        elif any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
+        if any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
             human_subject_kind = "product_on_person"
             strictness = "commercial_strict"
         elif is_hand_or_skin and not any(token in text for token in ["face", "\u8138", "portrait", "\u4eba\u50cf"]):
@@ -862,11 +721,13 @@ class HumanPhotorealismLayer:
             strictness = "balanced"
             reason_codes.append("hand_or_skin_detail_detected")
         elif "model" in text or "\u6a21\u7279" in text:
-            human_subject_kind = "fashion_model"
+            human_subject_kind = "person"
             strictness = "commercial_strict"
         else:
-            human_subject_kind = "adult_portrait"
+            human_subject_kind = "person"
             strictness = "commercial_strict" if any(token in text for token in ["commercial", "cover", "campaign", "\u5546\u4e1a", "\u5c01\u9762"]) else "balanced"
+        if explicit_age_signal:
+            reason_codes.append("explicit_age_fidelity_signal")
 
         reason_codes = _dedupe(reason_codes)
         if not reason_codes:
@@ -879,7 +740,10 @@ class HumanPhotorealismLayer:
             )
 
         evidence["text_signals"] = reason_codes
-        style_profile = _style_profile_for_text(text, human_subject_kind)
+        rendering_profile = _universal_rendering_profile(
+            text,
+            metadata={**metadata, "age_fidelity": "follow_explicit_prompt" if explicit_age_signal else metadata.get("age_fidelity")},
+        )
         return _activation_payload(
             applies=True,
             primary_reason=reason_codes[0],
@@ -887,7 +751,8 @@ class HumanPhotorealismLayer:
             subject_type=subject_type,
             human_subject_kind=human_subject_kind,
             strictness=strictness,
-            style_profile=style_profile,
+            style_profile=rendering_profile["profile_id"],
+            universal_rendering_profile=rendering_profile,
             evidence=evidence,
         )
 
@@ -976,30 +841,111 @@ def _stylized_requested(text: str) -> bool:
     return False
 
 
-def _style_profile_for_text(text: str, human_subject_kind: str) -> str:
-    if human_subject_kind == "child_or_teen_model":
-        return "child_catalog_natural"
-    if human_subject_kind == "hand_or_skin_detail":
-        return "hand_or_skin_detail"
-    moody = _contains_any(text, _MOODY_TRADITIONAL_TERMS) or _contains_any(text, _CHINESE_MOODY_TRADITIONAL_TERMS)
-    bright = _contains_any(text, _BRIGHT_FRESH_TERMS) or _contains_any(text, _CHINESE_BRIGHT_FRESH_TERMS)
-    if moody:
-        return "moody_cinematic_traditional"
-    if bright:
-        return "bright_fresh_commercial"
-    return "neutral_real_camera"
+def _universal_rendering_profile(text: str, *, metadata: dict[str, Any]) -> dict[str, Any]:
+    explicit = metadata.get("human_rendering_profile")
+    explicit = dict(explicit) if isinstance(explicit, dict) else {}
+    low_key = _contains_any(text, _LOW_KEY_TERMS) or _contains_any(text, _CHINESE_LOW_KEY_TERMS)
+    high_key = _contains_any(text, _HIGH_KEY_TERMS) or _contains_any(text, _CHINESE_HIGH_KEY_TERMS)
+    exposure_key = str(explicit.get("exposure_key") or metadata.get("exposure_key") or "").strip().lower()
+    if exposure_key not in {"low", "medium", "high", "prompt_defined"}:
+        exposure_key = "low" if low_key else "high" if high_key else "prompt_defined"
+    skin_specularity = str(
+        explicit.get("skin_specularity") or metadata.get("skin_specularity") or "prompt_defined"
+    ).strip().lower()
+    if skin_specularity not in {"matte", "natural", "luminous", "prompt_defined"}:
+        skin_specularity = "prompt_defined"
+    age_fidelity = str(
+        explicit.get("age_fidelity") or metadata.get("age_fidelity") or "preserve_reference"
+    ).strip().lower()
+    if age_fidelity not in {"preserve_reference", "follow_explicit_prompt", "neutral"}:
+        age_fidelity = "preserve_reference"
+    complexion_policy = str(
+        explicit.get("complexion_policy") or metadata.get("complexion_policy") or "preserve_reference"
+    ).strip().lower()
+    if complexion_policy not in {"preserve_reference", "follow_explicit_prompt", "neutral"}:
+        complexion_policy = "preserve_reference"
+    profile_id = {
+        "low": "low_key_texture_preserving",
+        "high": "high_key_texture_preserving",
+        "medium": "balanced_texture_preserving",
+    }.get(exposure_key, "neutral_real_camera")
+    return {
+        "profile_id": profile_id,
+        "real_human_intent": True,
+        "exposure_key": exposure_key,
+        "contrast_direction": str(explicit.get("contrast_direction") or "prompt_defined"),
+        "color_temperature": str(explicit.get("color_temperature") or "prompt_defined"),
+        "skin_specularity": skin_specularity,
+        "skin_texture": str(explicit.get("skin_texture") or "natural"),
+        "complexion_policy": complexion_policy,
+        "age_fidelity": age_fidelity,
+        "identity_priority": str(explicit.get("identity_priority") or "normal"),
+        "doc": "94",
+    }
 
 
-def _style_aware_positive_fragments(fragments: list[str], style_profile: str) -> list[str]:
-    if style_profile != "moody_cinematic_traditional":
-        return _dedupe(fragments)
-    filtered: list[str] = []
-    for fragment in fragments:
-        lowered = fragment.lower()
-        if any(term in lowered for term in _MOODY_SUPPRESSED_POSITIVE_TERMS):
-            continue
-        filtered.append(fragment)
-    return _dedupe(filtered)
+def _rendering_positive_fragments(profile: dict[str, Any]) -> list[str]:
+    exposure_key = str(profile.get("exposure_key") or "prompt_defined")
+    fragments: list[str] = []
+    if exposure_key == "low":
+        fragments.extend(
+            [
+                "under a low exposure key, keep readable facial planes, fine skin texture, and controlled highlight roll-off without oily or waxy shine",
+                "preserve the prompt's shadow depth and contrast instead of replacing it with generic bright commercial face lighting",
+            ]
+        )
+    elif exposure_key == "high":
+        fragments.extend(
+            [
+                "under a high exposure key, keep eyelid, under-eye, lip, pore, neck, and shoulder detail instead of washing the face into a uniform glow",
+                "use prompt-consistent flattering light while preserving natural complexion and real texture rather than a whitening or smoothing filter",
+            ]
+        )
+    else:
+        fragments.append(
+            "follow the prompt's exposure and color direction while preserving facial texture, natural complexion, and believable highlight response"
+        )
+    return fragments
+
+
+def _rendering_negative_fragments(profile: dict[str, Any]) -> list[str]:
+    exposure_key = str(profile.get("exposure_key") or "prompt_defined")
+    if exposure_key == "low":
+        return [
+            "oily forehead or cheeks in low-key light",
+            "waxy nose-bridge highlight",
+            "crushed facial planes with lost identity detail",
+            "generic high-key commercial face lighting overriding the prompt",
+        ]
+    if exposure_key == "high":
+        return [
+            "washed-out facial texture",
+            "bright exposure erasing eyelid, lip, pore, neck, or shoulder detail",
+            "uniform whitening-mask glow",
+        ]
+    return ["prompt-inconsistent facial exposure", "plastic or waxy highlight response"]
+
+
+def _rendering_review_targets(profile: dict[str, Any]) -> list[str]:
+    exposure_key = str(profile.get("exposure_key") or "prompt_defined")
+    return [
+        f"skin texture and facial planes remain believable under the requested {exposure_key} exposure direction",
+        "complexion follows reference truth or explicit prompt direction without demographic defaults",
+        "age identity remains consistent without adultification, infantilization, or doll-like morphology",
+    ]
+
+
+def _rendering_retry_fragments(profile: dict[str, Any]) -> list[str]:
+    exposure_key = str(profile.get("exposure_key") or "prompt_defined")
+    if exposure_key == "low":
+        return [
+            "repair low-key facial rendering with restrained specular highlights, readable bone planes, real pores, and preserved shadow atmosphere"
+        ]
+    if exposure_key == "high":
+        return [
+            "repair high-key facial rendering so bright exposure retains pores, eyelid folds, lip texture, under-eye detail, and natural complexion"
+        ]
+    return ["repair facial exposure and skin response to match the prompt while preserving natural texture and complexion"]
 
 
 def _activation_payload(
@@ -1013,10 +959,11 @@ def _activation_payload(
     human_subject_kind: str = "none",
     strictness: str = "off",
     style_profile: str = "neutral_real_camera",
+    universal_rendering_profile: dict[str, Any] | None = None,
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if applies and human_subject_kind == "none":
-        human_subject_kind = "adult_portrait"
+        human_subject_kind = "person"
     if applies and strictness == "off":
         strictness = "balanced"
     review_codes = list(_ANTI_AI_FACE_ISSUES) if applies else []
@@ -1030,6 +977,7 @@ def _activation_payload(
         "human_subject_kind": human_subject_kind,
         "strictness": strictness,
         "style_profile": style_profile if applies else "stylized_disabled" if disabled_by_style else "off",
+        "universal_rendering_profile": dict(universal_rendering_profile or {}),
         "review_issue_codes": review_codes,
         "evidence": evidence or {},
         "doc": "91",

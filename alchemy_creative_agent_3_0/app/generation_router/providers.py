@@ -1033,11 +1033,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "derivative_kind": derivative.get("derivative_kind"),
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
+                        "identity_color_retention": derivative.get("identity_color_retention"),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                         "identity_context_reduced_by_tight_crop": bool(
                             derivative.get("identity_context_reduced_by_tight_crop")
                         ),
                         "identity_gateway_min_edge_px": derivative.get("identity_gateway_min_edge_px"),
+                        "identity_evidence_scope": derivative.get("identity_evidence_scope"),
+                        "provider_reference_bytes": self._provider_reference_file_size(derivative.get("path")),
                     }
                 )
             if self._should_include_original_reference(
@@ -1089,6 +1092,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "operation": "image_edit_with_reference_images" if assets else "generate",
                 "reference_image_asset_ids": [item["asset_id"] for item in assets],
                 "reference_image_count": len(assets),
+                "provider_reference_total_bytes": sum(
+                    int(item.get("provider_reference_bytes") or 0) for item in assets
+                ),
+                "identity_evidence_scopes": _dedupe(
+                    [
+                        str(item.get("identity_evidence_scope") or "")
+                        for item in assets
+                        if item.get("identity_evidence_scope")
+                    ]
+                ),
                 "original_reference_asset_ids": [asset["asset_id"] for asset in reference_assets],
                 "suppressed_full_frame_identity_asset_ids": suppressed_original_ids,
                 "reference_truth_layers": [
@@ -1388,6 +1401,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         return f"Use {filename} as style and context truth only."
 
+    def _provider_reference_file_size(self, path: Any) -> int | None:
+        try:
+            return int(Path(str(path)).stat().st_size)
+        except (OSError, TypeError, ValueError):
+            return None
+
     def _provider_reference_asset_summary(self, asset_plan: dict[str, Any]) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
         for item in asset_plan.get("assets", []) if isinstance(asset_plan, dict) else []:
@@ -1404,11 +1423,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "derivative_kind": item.get("derivative_kind"),
                     "fallback_to_original": bool(item.get("fallback_to_original")),
                     "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
+                    "identity_color_retention": item.get("identity_color_retention"),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "identity_context_reduced_by_tight_crop": bool(
                         item.get("identity_context_reduced_by_tight_crop")
                     ),
                     "identity_gateway_min_edge_px": item.get("identity_gateway_min_edge_px"),
+                    "identity_evidence_scope": item.get("identity_evidence_scope"),
+                    "provider_reference_bytes": item.get("provider_reference_bytes"),
                     "filename": item.get("filename"),
                 }
             )
@@ -1490,9 +1512,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
             lines = [
                 "Polish interpretation: camera-ready real-person photography, never beauty-app face reshaping, face slimming, enlarged eyes, V-shaped chin, or skin-blur retouch.",
-                "Attractive realism balance: keep a healthy clear complexion, natural skin tone, and an attractive natural face with believable texture, soft natural bounce light, awake eyes, natural lips, and no plastic, waxy, skin whitening, or beauty-filter retouch.",
+                "Attractive realism balance: preserve the reference or explicitly requested complexion direction and an attractive natural face with believable texture, prompt-consistent light, awake eyes, natural lips, and no plastic, waxy, whitening, tanning, or beauty-filter retouch.",
                 "Identity continuity: Human Realism improves rendering only; it never expands reference ownership into hair, wardrobe, lighting, scene, camera, or style.",
-                "East Asian portrait aesthetic guard: unless tan, dark, or bronze skin is requested, keep a clean fair luminous complexion and do not darken or tan the skin by default; use exposure and color balance rather than fake whitening masks or smoothing; preserve natural head-to-body, neck, shoulder, and upper-body proportions.",
+                "Universal complexion and proportion guard: preserve reference or explicit prompt complexion, age direction, and natural head-to-body, neck, shoulder, and upper-body proportions; do not impose demographic lightness, tanning, or beauty-template geometry.",
                 "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",
             ]
             if positive:
@@ -1975,7 +1997,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 0
         if "portrait identity truth" in lowered or "same-person identity is stricter" in lowered:
             return 1
-        if "human realism" in lowered or "photoreal human" in lowered or "east asian portrait" in lowered:
+        if "human realism" in lowered or "photoreal human" in lowered or "universal complexion" in lowered:
             return 1
         if "attractive realism" in lowered or "identity continuity" in lowered or "subject identity" in lowered:
             return 1
@@ -2111,18 +2133,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             (rule for rule in approved_anchor_rules if "positive visual direction anchors" in rule.lower()),
             approved_anchor_rules[0] if approved_anchor_rules else "",
         )
-        selected_bone_traits = _dedupe(
-            [
-                *bone_traits[:2],
-                *[trait for trait in bone_traits if "original facial outline width" in trait.lower()][:1],
-            ]
-        )
-        selected_feature_traits = _dedupe(
-            [
-                *feature_traits[:2],
-                *[trait for trait in feature_traits if "mouth scale" in trait.lower()][:1],
-            ]
-        )
+        selected_bone_traits = _dedupe(bone_traits[:6])
+        selected_feature_traits = _dedupe(feature_traits[:7])
         lines = [
             "Doc88 balance contract: keep current prompt mood, uploaded identity truth, and approved visual direction together."
             if balance_policy
@@ -2142,7 +2154,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Bone structure to preserve: " + "; ".join(selected_bone_traits) if selected_bone_traits else "",
             "Facial-feature relationships to preserve: " + "; ".join(selected_feature_traits) if selected_feature_traits else "",
             "Allowed surface styling changes: " + "; ".join(allowed[:5]) if allowed else "",
-            "Forbidden identity drift: " + "; ".join(_dedupe([*compact_negatives[:3], *forbidden[:4]])) if forbidden else "",
+            "Forbidden identity drift: " + "; ".join(_dedupe([*compact_negatives[:3], *forbidden[:7]])) if forbidden else "",
             "Styling scope: " + "; ".join(styling_rules[:1]) if styling_rules else "",
         ]
         return "Portrait identity contract:\n" + "\n".join(line for line in lines if line)
@@ -2256,7 +2268,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     for rule in negative_rules
                     if rule
                     in {
-                        "Korean glass skin",
+                        "poreless glass-like skin",
                         "oily shiny face",
                         "nose-tip highlight",
                         "silicone face",

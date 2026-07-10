@@ -1,5 +1,14 @@
 # 72 V3 East Asian Fair Complexion And Proportion Guard Spec
 
+Doc94 supersession note:
+
+```text
+Doc72 remains a historical regression record. Its proportion, flattering-light,
+and unintended-color-cast lessons are retained through Doc94's universal
+human-rendering variables. East Asian, summer, and fair-complexion wording no
+longer defines a shared runtime branch or unconditional provider default.
+```
+
 ## 1. Purpose
 
 Doc72 is a narrow compatibility pass after Doc71.

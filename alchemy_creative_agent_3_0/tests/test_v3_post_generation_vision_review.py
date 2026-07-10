@@ -551,6 +551,116 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
     assert cluster_review["final_review"]["status"] == "pass"
 
 
+def test_doc95_worse_retry_does_not_replace_stronger_initial_attempt(tmp_path) -> None:
+    provider = _SequencedVisionProvider(
+        [
+            {
+                "status": "fail_retryable",
+                "confidence": 0.94,
+                "issue_codes": ["visible_text_artifact"],
+                "scores": {
+                    "same_person_readability": 0.96,
+                    "prompt_owned_channel_obedience": 0.95,
+                    "human_realism": 0.91,
+                    "commercial_finish": 0.90,
+                },
+            },
+            {
+                "status": "fail_retryable",
+                "confidence": 0.92,
+                "issue_codes": ["visible_text_artifact"],
+                "scores": {
+                    "same_person_readability": 0.55,
+                    "prompt_owned_channel_obedience": 0.72,
+                    "human_realism": 0.67,
+                    "commercial_finish": 0.70,
+                },
+            },
+        ]
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 1},
+        },
+    )
+
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    preference = record.generation_result.metadata["reviewed_delivery_preference"]
+    assert preference["preferred_attempt_index"] == 0
+    assert preference["latest_attempt_won"] is False
+    assert preference["ranked_attempts"][0]["score"] > preference["ranked_attempts"][1]["score"]
+
+
+def test_doc95_delivery_selection_compares_each_suite_role_independently(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    generated = record.generation_result
+
+    def inspection(output_id: str, asset_id: str, score: float, issue_code: str | None = None) -> dict:
+        return {
+            "output_id": output_id,
+            "asset_id": asset_id,
+            "status": "fail_retryable" if issue_code else "warning",
+            "detected_issues": [{"code": issue_code}] if issue_code else [],
+            "score_card": {
+                "same_person_readability": score,
+                "prompt_owned_channel_obedience": score,
+                "human_realism": score,
+                "commercial_finish": score,
+            },
+        }
+
+    package = {
+        "review_attempts": [
+            {
+                "stage": "initial",
+                "attempt_index": 0,
+                "output_ids": ["initial_a", "initial_b"],
+                "statuses": ["warning"],
+                "issue_codes": [],
+                "inspections": [inspection("initial_a", "role_a", 0.94), inspection("initial_b", "role_b", 0.62)],
+            },
+            {
+                "stage": "final_retry",
+                "attempt_index": 1,
+                "output_ids": ["retry_a", "retry_b"],
+                "statuses": ["warning"],
+                "issue_codes": [],
+                "inspections": [
+                    inspection("retry_a", "role_a", 0.99, "same_type_not_same_person"),
+                    inspection("retry_b", "role_b", 0.91),
+                ],
+            },
+        ]
+    }
+    candidate = generated.model_copy(
+        update={"metadata": {**dict(generated.metadata), "post_generation_review_package": package}}
+    )
+
+    preferred = service._apply_reviewed_delivery_preference(candidate)  # noqa: SLF001
+    preference = preferred.metadata["reviewed_delivery_preference"]
+
+    assert preference["selection_scope"] == "per_asset_role"
+    assert set(preference["preferred_output_ids"]) == {"initial_a", "retry_b"}
+    assert preference["preferred_attempt_index"] is None
+    retry_a = next(item for item in preference["ranked_outputs"] if item["output_id"] == "retry_a")
+    assert retry_a["hard_gate_passed"] is False
+    assert retry_a["hard_gate_failures"] == ["identity_truth_not_respected"]
+
+
 def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:
     service = _service(
         tmp_path,

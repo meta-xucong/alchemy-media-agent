@@ -459,7 +459,32 @@ that turns `preserve_person_identity` into a hair, wardrobe, light, scene, or
 style lock. Use the V3-native Reference Channel Policy child module defined by
 Doc93.
 
-## 19. Strategic Reminder
+## 19. Universal Visual Capability Rule
+
+Doc94 is the authority for shared visual-runtime generality.
+
+Historical scene, wardrobe, demographic, marketplace, or subject-category
+cases may be used as regression fixtures. They must not become named runtime
+profiles, keyword branches, default prompt recipes, or Central Brain rules.
+Shared behavior must be expressed through orthogonal visual variables such as
+identity geometry, age fidelity, exposure key, contrast, color temperature,
+complexion preservation, skin specularity, texture, and prompt-owned channels.
+
+Any new shared visual rule must pass a three-scene reuse test. If it cannot
+improve at least three unrelated scenes without category vocabulary, it belongs
+in a future specialized Scenario Pack or in tests, not in the shared cluster.
+
+## 20. Portrait Identity Evidence And Delivery Rule
+
+Doc95 is the authority for identity-only portrait evidence and reviewed result
+selection. The shared runtime must preserve complementary feature-detail and
+head-geometry evidence, protect the complete identity-critical prompt block,
+compare generated output with reference truth, and treat retries as candidates.
+A later retry must never replace a stronger earlier result merely because it is
+newer. Multi-image sets are compared per asset role whenever review evidence
+supports that mapping.
+
+## 21. Strategic Reminder
 
 Do not build a Lovart clone.
 

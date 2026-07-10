@@ -106,7 +106,7 @@ def test_doc75_visual_cluster_exposes_identity_hero_and_strict_policy() -> None:
     assert strict_policy["applies"] is True
     assert strict_policy["strictness"] == "commercial_strict"
     assert "generic_ai_beauty_identity" in strict_policy["retryable_issue_codes"]
-    assert "Korean glass skin" in strict_policy["negative_additions"]
+    assert "poreless glass-like skin" in strict_policy["negative_additions"]
     assert "3D render" in strict_policy["negative_additions"]
     assert role_plan["metadata"]["doc75_strict_visual_review"] is True
     assert role_keys == [
@@ -183,7 +183,7 @@ def test_doc75_provider_prompt_consumes_identity_hero_and_strict_review_rules() 
     assert "Strict visual pass conditions:" in final_prompt
     assert "identity master" in final_prompt
     assert "generic AI beauty" in final_prompt
-    assert "Korean glass skin" in final_prompt
+    assert "poreless glass-like skin" in final_prompt
     assert "3D render" in final_prompt
 
 

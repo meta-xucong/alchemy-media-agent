@@ -287,6 +287,47 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "selection_candidate_distance_risk",
 }
 
+DELIVERY_IDENTITY_HARD_GATE_ISSUES = {
+    "identity_drift",
+    "identity_card_missing",
+    "identity_card_not_applied",
+    "identity_feature_drift",
+    "bone_structure_drift",
+    "face_shape_drift",
+    "cheek_jaw_chin_drift",
+    "eye_shape_or_spacing_identity_drift",
+    "eyebrow_eye_relationship_drift",
+    "nose_mouth_relationship_identity_drift",
+    "lip_contour_identity_drift",
+    "styling_changed_face_geometry",
+    "archetype_overrode_reference_identity",
+    "same_type_not_same_person",
+    "same_type_but_different_person",
+    "identity_reference_underweighted",
+    "prompt_face_description_replaced_reference_geometry",
+    "generic_sweet_model_replaced_reference",
+}
+
+DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES = {
+    "prompt_owned_channel_ignored",
+    "selected_anchor_overrode_current_prompt",
+    "reference_used_as_style_when_identity_only",
+    "prompt_style_underweighted",
+    "identity_repair_damaged_prompt_direction",
+    "prompt_mood_regression",
+    "prompt_color_tone_regression",
+    "source_hair_overinherited",
+    "source_makeup_overinherited",
+    "source_wardrobe_overinherited",
+    "source_lighting_overinherited",
+    "source_color_temperature_overinherited",
+    "source_color_grade_overinherited",
+    "source_scene_overinherited",
+    "source_camera_overinherited",
+    "source_camera_mood_overinherited",
+    "source_whole_style_overinherited",
+}
+
 VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
     "provider_error",
     "provider_timeout",
@@ -569,6 +610,7 @@ class V3ProductApiService:
             provider_strategy=provider_strategy,
             generation_result=generation_result,
         )
+        generation_result = self._apply_reviewed_delivery_preference(generation_result)
         record.generation_result = generation_result
         record.scenario_resolution = generation_runtime_result.scenario_resolution
         record.capability_run = generation_runtime_result.capability_run
@@ -1952,6 +1994,259 @@ class V3ProductApiService:
             }
         )
         return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), "visual_auto_retry": summary}})
+
+    def _apply_reviewed_delivery_preference(self, result: PlanningResult) -> PlanningResult:
+        package = result.metadata.get("post_generation_review_package")
+        if not isinstance(package, dict):
+            return result
+        attempts = package.get("review_attempts")
+        if not isinstance(attempts, list) or len(attempts) < 2:
+            return result
+
+        ranked: list[dict[str, Any]] = []
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            output_ids = self._dedupe_strings(attempt.get("output_ids"))
+            if not output_ids:
+                continue
+            score, hard_gate_passed = self._review_attempt_delivery_score(attempt)
+            ranked.append(
+                {
+                    "attempt_index": self._safe_int(attempt.get("attempt_index"), default=0) or 0,
+                    "stage": str(attempt.get("stage") or "review"),
+                    "output_ids": output_ids,
+                    "score": score,
+                    "hard_gate_passed": hard_gate_passed,
+                    "statuses": self._dedupe_strings(attempt.get("statuses")),
+                    "issue_codes": self._dedupe_strings(attempt.get("issue_codes")),
+                }
+            )
+        if len(ranked) < 2:
+            return result
+
+        ranked_outputs: list[dict[str, Any]] = []
+        for attempt_summary in ranked:
+            attempt = next(
+                (
+                    item
+                    for item in attempts
+                    if isinstance(item, dict)
+                    and (self._safe_int(item.get("attempt_index"), default=0) or 0)
+                    == attempt_summary["attempt_index"]
+                    and str(item.get("stage") or "review") == attempt_summary["stage"]
+                ),
+                {},
+            )
+            inspections = [item for item in attempt.get("inspections", []) if isinstance(item, dict)]
+            inspections_by_output = {
+                str(item.get("output_id")): item
+                for item in inspections
+                if str(item.get("output_id") or "").strip()
+            }
+            for position, output_id in enumerate(attempt_summary["output_ids"]):
+                inspection = inspections_by_output.get(output_id)
+                if inspection is None and position < len(inspections):
+                    inspection = inspections[position]
+                score = attempt_summary["score"]
+                hard_gate_passed = attempt_summary["hard_gate_passed"]
+                hard_gate_failures: list[str] = []
+                asset_id = ""
+                if inspection is not None:
+                    score, hard_gate_passed, hard_gate_failures = self._review_inspection_delivery_score(inspection)
+                    asset_id = str(inspection.get("asset_id") or "").strip()
+                ranked_outputs.append(
+                    {
+                        "output_id": output_id,
+                        "asset_id": asset_id,
+                        "role_key": asset_id or f"position:{position}",
+                        "attempt_index": attempt_summary["attempt_index"],
+                        "stage": attempt_summary["stage"],
+                        "score": score,
+                        "hard_gate_passed": hard_gate_passed,
+                        "hard_gate_failures": hard_gate_failures,
+                    }
+                )
+
+        role_groups: dict[str, list[dict[str, Any]]] = {}
+        for item in ranked_outputs:
+            role_groups.setdefault(item["role_key"], []).append(item)
+        per_role_comparison = bool(role_groups) and any(
+            len({item["attempt_index"] for item in group}) > 1
+            for group in role_groups.values()
+        )
+        if per_role_comparison:
+            winners: list[dict[str, Any]] = []
+            for role_key in sorted(role_groups):
+                group = role_groups[role_key]
+                eligible = [item for item in group if item["hard_gate_passed"]] or group
+                winners.append(max(eligible, key=lambda item: (item["score"], -item["attempt_index"])))
+        else:
+            eligible = [item for item in ranked if item["hard_gate_passed"]] or ranked
+            attempt_winner = max(eligible, key=lambda item: (item["score"], -item["attempt_index"]))
+            winners = [
+                item
+                for item in ranked_outputs
+                if item["attempt_index"] == attempt_winner["attempt_index"]
+            ]
+            if not winners:
+                winners = [
+                    {
+                        "output_id": output_id,
+                        "asset_id": "",
+                        "role_key": f"attempt:{attempt_winner['attempt_index']}",
+                        "attempt_index": attempt_winner["attempt_index"],
+                        "stage": attempt_winner["stage"],
+                        "score": attempt_winner["score"],
+                        "hard_gate_passed": attempt_winner["hard_gate_passed"],
+                        "hard_gate_failures": [],
+                    }
+                    for output_id in attempt_winner["output_ids"]
+                ]
+
+        preferred_output_ids = self._dedupe_strings(item["output_id"] for item in winners)
+        winner_attempts = sorted({item["attempt_index"] for item in winners})
+        latest_attempt = max(item["attempt_index"] for item in ranked)
+        preferred_score = sum(item["score"] for item in winners) / max(1, len(winners))
+        preference = {
+            "policy": "doc95_reviewed_best_attempt",
+            "selection_scope": "per_asset_role" if per_role_comparison else "attempt",
+            "preferred_output_ids": preferred_output_ids,
+            "preferred_attempt_index": winner_attempts[0] if len(winner_attempts) == 1 else None,
+            "preferred_attempt_indexes": winner_attempts,
+            "preferred_score": round(preferred_score, 4),
+            "latest_attempt_won": bool(winner_attempts and winner_attempts == [latest_attempt]),
+            "ranked_attempts": ranked,
+            "ranked_outputs": ranked_outputs,
+            "append_only_attempt_history": True,
+        }
+        preferred = set(preference["preferred_output_ids"])
+        for item in ranked_outputs:
+            updater = getattr(self.output_store, "update_metadata", None)
+            if callable(updater):
+                updater(
+                    item["output_id"],
+                    {
+                        "delivery_preferred_output": item["output_id"] in preferred,
+                        "delivery_preference_policy": preference["policy"],
+                        "delivery_preference_score": item["score"],
+                        "delivery_preference_attempt_index": item["attempt_index"],
+                        "delivery_preference_role_key": item["role_key"],
+                        "delivery_preference_hard_gate_passed": item["hard_gate_passed"],
+                        "delivery_preference_hard_gate_failures": list(item["hard_gate_failures"]),
+                    },
+                )
+
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "manifest": {**dict(result.asset_pack.manifest), "reviewed_delivery_preference": preference},
+                "metadata": {**dict(result.asset_pack.metadata), "reviewed_delivery_preference": preference},
+            }
+        )
+        return result.model_copy(
+            update={
+                "asset_pack": asset_pack,
+                "metadata": {**dict(result.metadata), "reviewed_delivery_preference": preference},
+            }
+        )
+
+    def _review_attempt_delivery_score(self, attempt: dict[str, Any]) -> tuple[float, bool]:
+        inspections = [item for item in attempt.get("inspections", []) if isinstance(item, dict)]
+        statuses = set(self._dedupe_strings(attempt.get("statuses")))
+        issue_codes = set(self._dedupe_strings(attempt.get("issue_codes")))
+        hard_gate_passed = not bool(
+            statuses.intersection({"fail_final"})
+            or issue_codes.intersection(DELIVERY_IDENTITY_HARD_GATE_ISSUES)
+            or issue_codes.intersection(DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES)
+        )
+        status_score = 0.0
+        if statuses and statuses <= {"pass"}:
+            status_score = 1.0
+        elif "warning" in statuses:
+            status_score = 0.80
+        elif "manual_review" in statuses:
+            status_score = 0.55
+        elif "fail_retryable" in statuses:
+            status_score = 0.30
+
+        dimension_scores: list[float] = []
+        for inspection in inspections:
+            card = inspection.get("score_card") if isinstance(inspection.get("score_card"), dict) else {}
+            identity = self._normalized_review_score(
+                card.get("same_person_readability", card.get("identity_consistency"))
+            )
+            prompt = self._normalized_review_score(
+                card.get("prompt_owned_channel_obedience", card.get("composition"))
+            )
+            human = self._normalized_review_score(card.get("human_realism", card.get("artifact_safety")))
+            commercial = self._normalized_review_score(card.get("commercial_finish", card.get("overall")))
+            available = [value for value in (identity, prompt, human, commercial) if value is not None]
+            if not available:
+                continue
+            identity = identity if identity is not None else sum(available) / len(available)
+            prompt = prompt if prompt is not None else sum(available) / len(available)
+            human = human if human is not None else sum(available) / len(available)
+            commercial = commercial if commercial is not None else sum(available) / len(available)
+            dimension_scores.append(identity * 0.45 + prompt * 0.25 + human * 0.15 + commercial * 0.15)
+        quality_score = sum(dimension_scores) / len(dimension_scores) if dimension_scores else status_score
+        return round(quality_score * 0.70 + status_score * 0.30, 4), hard_gate_passed
+
+    def _review_inspection_delivery_score(self, inspection: dict[str, Any]) -> tuple[float, bool, list[str]]:
+        status = str(inspection.get("status") or "").strip()
+        detected = [item for item in inspection.get("detected_issues", []) if isinstance(item, dict)]
+        issue_codes = set(
+            self._dedupe_strings(
+                [item.get("code") for item in detected]
+                + list(inspection.get("issue_codes", []) if isinstance(inspection.get("issue_codes"), list) else [])
+            )
+        )
+        hard_gate_failures: list[str] = []
+        if status == "fail_final":
+            hard_gate_failures.append("fail_final")
+        if issue_codes.intersection(DELIVERY_IDENTITY_HARD_GATE_ISSUES):
+            hard_gate_failures.append("identity_truth_not_respected")
+        if issue_codes.intersection(DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES):
+            hard_gate_failures.append("prompt_owned_channel_not_respected")
+
+        status_score = {
+            "pass": 1.0,
+            "warning": 0.80,
+            "manual_review": 0.55,
+            "fail_retryable": 0.30,
+            "fail_final": 0.0,
+        }.get(status, 0.45)
+        card = inspection.get("score_card") if isinstance(inspection.get("score_card"), dict) else {}
+        values = [self._normalized_review_score(value) for value in card.values()]
+        available = [value for value in values if value is not None]
+        fallback = sum(available) / len(available) if available else status_score
+        identity = self._normalized_review_score(
+            card.get("same_person_readability", card.get("identity_consistency"))
+        )
+        prompt = self._normalized_review_score(
+            card.get("prompt_owned_channel_obedience", card.get("composition"))
+        )
+        human = self._normalized_review_score(card.get("human_realism", card.get("artifact_safety")))
+        commercial = self._normalized_review_score(card.get("commercial_finish", card.get("overall")))
+        quality_score = (
+            (identity if identity is not None else fallback) * 0.45
+            + (prompt if prompt is not None else fallback) * 0.25
+            + (human if human is not None else fallback) * 0.15
+            + (commercial if commercial is not None else fallback) * 0.15
+        )
+        return (
+            round(quality_score * 0.70 + status_score * 0.30, 4),
+            not hard_gate_failures,
+            hard_gate_failures,
+        )
+
+    def _normalized_review_score(self, value: Any) -> float | None:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return None
+        if score > 1.0:
+            score /= 100.0
+        return max(0.0, min(1.0, score))
 
     def _visual_retry_execution_record(
         self,

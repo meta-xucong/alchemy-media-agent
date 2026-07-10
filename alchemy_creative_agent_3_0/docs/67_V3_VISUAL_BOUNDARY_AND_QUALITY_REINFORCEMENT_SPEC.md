@@ -1,5 +1,13 @@
 # 67 V3 Visual Boundary And Quality Reinforcement Spec
 
+Doc94 correction note:
+
+```text
+Doc67 remains the module-boundary authority. Its named real-generation cases
+are regression fixtures only. They cannot become category-specific shared
+runtime rules; Doc94 owns the anti-overfitting gate.
+```
+
 Status: accepted current-stage optimization spec.
 
 This document is the next implementation authority after document 66.

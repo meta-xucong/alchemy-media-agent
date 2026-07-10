@@ -1,5 +1,14 @@
 # 75 V3 Identity Hero, Suite Director, And Strict Review Closure
 
+Doc94/95 correction note:
+
+```text
+Doc75 remains the identity-hero, suite-role, and strict-review baseline. Its
+named portrait cases and negative terms are historical fixtures, not shared
+runtime profiles. Doc94 owns universal visual variables; Doc95 owns complete
+identity evidence and per-role best-result selection after retry.
+```
+
 ## 1. Purpose
 
 This document is the current authority for the next General Template quality

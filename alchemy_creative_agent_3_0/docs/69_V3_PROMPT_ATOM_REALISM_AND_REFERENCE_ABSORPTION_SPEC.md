@@ -1,5 +1,13 @@
 # 69 V3 Prompt Atom Realism And Reference Absorption Spec
 
+Doc94 correction note:
+
+```text
+Doc69 remains the reusable prompt-atom baseline. Atoms must describe portable
+visual properties and cannot encode a named demographic, costume, season,
+market, or historical case as a default shared recipe. Named cases remain tests.
+```
+
 Doc93 compatibility note:
 
 ```text

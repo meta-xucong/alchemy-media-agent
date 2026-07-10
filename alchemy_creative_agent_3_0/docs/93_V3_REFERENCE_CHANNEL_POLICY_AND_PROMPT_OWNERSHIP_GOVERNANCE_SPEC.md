@@ -1,5 +1,14 @@
 # 93 V3 Reference Channel Policy And Prompt Ownership Governance Spec
 
+Doc94/95 compatibility note:
+
+```text
+Doc93 remains the reference-channel authority. Doc94 removes narrow scene
+vocabulary from shared runtime rules. Doc95 strengthens identity evidence and
+best-result selection without restoring identity-only full-frame source
+inheritance or weakening current-prompt ownership.
+```
+
 ## 0. Status And Authority
 
 This document is the current V3 foundation authority for deciding:

@@ -1,5 +1,14 @@
 # 70 V3 Human Real-Camera AI Feel Reduction Tuning Spec
 
+Doc94 correction note:
+
+```text
+Doc70's real-camera and anti-filter principles remain active. Named ethnicity,
+season, or beauty-style examples are validation fixtures, not runtime routing
+conditions. The current implementation uses universal texture, specularity,
+asymmetry, age-fidelity, and camera-response variables.
+```
+
 Status: accepted micro-tuning document after Doc69.
 
 This document is a narrow quality pass. It does not add a new architecture

@@ -66,10 +66,10 @@ def test_doc70_human_guidance_adds_real_camera_and_anti_beauty_app_rules() -> No
     assert "auto face-slimming" in negatives
     assert "liquified face proportions" in negatives
     assert "camera-ready human realism" in positives
-    assert "bright daylight" in positives
+    assert "follow the prompt's exposure and color direction" in positives
     assert "imperfect half-smile" in positives
     assert "uniform luminous skin" in negatives
-    assert "sweet K-idol template smile" in negatives
+    assert "sweet template celebrity smile" in negatives
     assert "soft real-camera capture" in retry
     assert "face-slimming filters" in retry
     assert "poreless glow" in retry

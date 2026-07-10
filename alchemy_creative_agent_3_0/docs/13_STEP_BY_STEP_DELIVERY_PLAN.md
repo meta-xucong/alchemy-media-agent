@@ -248,7 +248,9 @@ Current code-stage priority:
 29. Apply 83-85 as the next reference-image closure chain: 83 governs uploaded-reference priority and retry delivery; 84 governs prompt purity and structure-level appearance continuity; 85 governs true image-to-image identity transfer and reference-truth layering for people, products, and structured appearance assets.
 30. Apply 86-88 as the portrait image-to-image refinement chain: 86 locks same-person bone structure; 87 separates identity inheritance from prompt-owned style; 88 prevents over-hard identity repair from damaging prompt mood or user-approved positive visual direction.
 31. Apply Doc93 as the implementation closure for all reference assets: resolve asset role, per-channel strength, prompt ownership, selected-output support, review, and retry before provider prompt compilation.
-31. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+32. Apply Doc94 before further foundation tuning: remove narrow case-driven runtime branches and express shared quality through orthogonal visual variables while preserving legacy metadata readability.
+33. Apply Doc95 after Doc94: strengthen universal portrait identity through complementary evidence, a protected complete identity contract, reference-backed review, and best-attempt delivery selection.
+34. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 
 ## 2. V3.0 Foundation

@@ -358,6 +358,7 @@ class VisionOutputInspector:
                 "provider_name": provider_name,
                 "provider_status": payload.get("status"),
                 "provider_issue_codes": issue_codes,
+                "identity_deltas": _string_list(payload.get("identity_deltas")),
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},
@@ -1048,6 +1049,12 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             "suppressed_fair_complexion",
             "forced_tan_or_bronze_cast",
             "gray_brown_skin_cast",
+            "complexion_direction_drift",
+            "unintended_skin_darkening",
+            "unintended_skin_lightening",
+            "unflattering_skin_color_cast",
+            "age_identity_drift",
+            "age_inappropriate_rendering",
             "head_body_proportion_distortion",
             "oversized_head",
             "compressed_neck_shoulders",
@@ -1055,25 +1062,22 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
         }:
             prompt_additions.extend(
                 [
-                    "for East Asian fresh portrait styling, restore a clean fair luminous complexion through high-key daylight, soft bounce light, exposure, and color balance",
-                    "do not darken or tan East Asian skin by default unless the user explicitly asked for a tan, dark, bronze, or sun-tanned look",
+                    "restore the reference or explicitly requested complexion direction through prompt-consistent exposure and color balance without whitening, forced tanning, or demographic defaults",
+                    "restore the requested or referenced age band through age-consistent facial and body relationships without adultification, infantilization, or doll-like morphology",
                     "keep the person attractive and realistic with harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle",
                     "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop",
                 ]
             )
             artifact_repair.append(
-                "repair complexion toward clean fair luminous East Asian skin tone with real texture; avoid fake whitening masks, bleached beauty filters, or skin smoothing"
+                "repair complexion toward reference or explicit prompt truth with real texture; avoid whitening masks, forced tanning, bleached beauty filters, or skin smoothing"
             )
             composition_repair.append(
                 "repair the close crop so face scale, head-to-body ratio, neck, shoulders, and upper-body proportions look natural and flattering"
             )
             negative_additions.extend(
                 [
-                    "suppressed fair complexion",
-                    "unnecessarily darkened East Asian skin",
-                    "forced tan or bronze cast",
-                    "gray-brown skin cast",
-                    "dull yellow or green facial cast",
+                    "unintended complexion darkening or lightening",
+                    "unrequested tan, bronze, gray, yellow, or green facial cast",
                     "fake whitening mask",
                     "bleached beauty-filter skin",
                     "oversized head",
@@ -1093,7 +1097,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "repair the image with Doc78 beautiful realism: beauty is the visual goal, realism is the rendering method",
                     "preserve same-person facial feature relationships: attractive eyebrow shape and arc, awake eye shape and spacing, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance",
                     "make realism come from photographed skin texture, soft natural light, hair strands, fabric detail, lens depth, natural facial tension, and small asymmetries",
-                    "keep a clean fresh luminous complexion when the brief implies East Asian beauty; do not force tan, muddy skin, harsh shadow, or tired documentary ugliness",
+                    "preserve the reference or explicitly requested complexion direction; do not force demographic lightness, tanning, muddy color, harsh unflattering shadow, or tired documentary ugliness",
                 ]
             )
             identity_reinforcement.append(
@@ -1171,7 +1175,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "add natural camera, skin, hair, fabric, and environment imperfections while keeping a polished professional finish",
                     "reduce beauty-app polish with soft 35mm or CCD-like capture, skin tone variation, eyelid/under-eye detail, loose hair, and candid mouth tension",
                     "preserve individual facial geometry without face-slimming, enlarged beauty eyes, perfect V-shaped chin, or generic AI-beauty proportions",
-                    "restore fresh attractiveness with soft natural bounce light, healthy clear complexion, clean bright daylight, gentle cheek warmth, and natural skin tone preserved",
+                    "restore attractive prompt-consistent facial exposure and color balance while preserving the reference or explicitly requested complexion direction and visible skin texture",
                 ]
             )
             artifact_repair.append(
@@ -1184,7 +1188,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 "remove beauty-filter facial reshaping; keep natural jaw contour, real eyelid folds, lip texture, and slight facial asymmetry"
             )
             artifact_repair.append(
-                "lift dull or dark facial lighting with real bounce light and healthier color balance while retaining visible skin texture and natural skin tone"
+                "repair facial exposure or color-cast drift within the prompt's intended lighting key while retaining visible skin texture and the reference or explicitly requested complexion direction"
             )
             identity_reinforcement.append(
                 "keep broad face shape, age direction, body type, and recognizable identity cues while following the current prompt for hair unless that channel is explicitly locked"

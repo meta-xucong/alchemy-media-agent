@@ -1476,6 +1476,44 @@ def test_project_outputs_keep_complete_original_when_retry_is_incomplete(tmp_pat
     assert all(item["metadata"]["delivery_final_attempt_index"] == 0 for item in outputs)
 
 
+def test_doc95_project_outputs_honor_reviewed_original_over_worse_complete_retry(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create two reviewed portraits", "title": "Reviewed Batch"})[
+        "project"
+    ]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create two matching portraits"})
+    original_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=0,
+        count=2,
+        prefix="reviewed_original",
+    )
+    retry_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=1,
+        count=2,
+        prefix="worse_retry",
+    )
+    for output_id in original_ids:
+        handlers.service.output_store.update_metadata(output_id, {"delivery_preferred_output": True})
+    for output_id in retry_ids:
+        handlers.service.output_store.update_metadata(output_id, {"delivery_preferred_output": False})
+
+    outputs = [
+        item
+        for item in handlers.get_project_outputs(limit=20, compact=True)["items"]
+        if item["project_id"] == project["project_id"]
+    ]
+    final_ids = {item["output_id"] for item in outputs if item["delivery_state"] == "final_delivery"}
+    superseded_ids = {item["output_id"] for item in outputs if item["delivery_state"] == "superseded"}
+
+    assert final_ids == set(original_ids)
+    assert superseded_ids == set(retry_ids)
+    assert all(item["metadata"]["reviewed_best_attempt"] is True for item in outputs)
+
+
 def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     first_project = handlers.post_projects(

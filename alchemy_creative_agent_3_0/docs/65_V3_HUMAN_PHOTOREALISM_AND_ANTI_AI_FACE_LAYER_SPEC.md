@@ -1,5 +1,14 @@
 # 65 V3 Human Photorealism And Anti-AI Face Layer Spec
 
+Doc94 correction note:
+
+```text
+Doc65 remains the foundation for photographed-human realism and anti-AI-face
+quality. Any named demographic, season, wardrobe, or historical validation case
+in this document is test evidence only. It must not create a shared runtime
+profile or prompt branch. Doc94 owns universal rendering variables.
+```
+
 Doc93 compatibility note:
 
 ```text

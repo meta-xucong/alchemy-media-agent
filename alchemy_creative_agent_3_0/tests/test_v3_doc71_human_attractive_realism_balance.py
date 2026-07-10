@@ -57,18 +57,17 @@ def test_doc71_guidance_balances_real_texture_with_healthy_beauty() -> None:
         guidance.metadata["human_attractive_realism_balance_library"]
         == VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID
     )
-    assert "healthy clear complexion" in positives
-    assert "soft natural bounce light" in positives
-    assert "fresh bright skin tone" in positives
-    assert "natural skin tone" in positives
+    assert "preserve the subject's natural complexion direction" in positives
+    assert "prompt's exposure and color direction" in positives
+    assert "flattering real-camera face angle" in positives
     assert "dull complexion" in negatives
     assert "muddy skin tone" in negatives
     assert "underexposed face" in negatives
     assert "harsh facial shadow" in negatives
     assert "skin whitening filter" in negatives
     assert "beauty-app face" in negatives
-    assert "soft natural bounce light" in retry
-    assert "natural skin tone preserved" in retry
+    assert "explicitly requested complexion direction" in retry
+    assert "intended exposure key" in retry
 
 
 def test_doc71_provider_prompt_renders_attractive_realism_balance() -> None:
@@ -124,10 +123,10 @@ def test_doc71_provider_prompt_renders_attractive_realism_balance() -> None:
     lowered = final_prompt.lower()
 
     assert "Attractive realism balance:" in final_prompt
-    assert "healthy clear complexion" in final_prompt
-    assert "soft natural bounce light" in final_prompt
-    assert "natural skin tone" in final_prompt
-    assert "skin whitening" in final_prompt
+    assert "explicitly requested complexion direction" in final_prompt
+    assert "prompt-consistent light" in final_prompt
+    assert "natural face with believable texture" in final_prompt
+    assert "whitening" in final_prompt
     assert "beauty-filter retouch" in final_prompt
     assert "commercial product image asset" not in lowered
     assert "product label" not in lowered
@@ -186,9 +185,9 @@ def test_doc71_complexion_issue_codes_create_bounded_retry_patch() -> None:
     assert report.status == "fail_retryable"
     assert "dull_complexion" in [issue["code"] for issue in report.detected_issues]
     assert "underexposed_face" in [issue["code"] for issue in report.detected_issues]
-    assert "soft natural bounce light" in patch_text
-    assert "healthy clear complexion" in patch_text
-    assert "natural skin tone preserved" in patch_text
+    assert "prompt-consistent facial exposure" in patch_text
+    assert "explicitly requested complexion direction" in patch_text
+    assert "visible skin texture" in patch_text
     assert "skin whitening filter" in patch_text
 
 

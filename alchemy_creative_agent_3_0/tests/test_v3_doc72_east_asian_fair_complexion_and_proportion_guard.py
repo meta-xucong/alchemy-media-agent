@@ -54,18 +54,17 @@ def test_doc72_guidance_protects_fair_complexion_and_portrait_proportion() -> No
         guidance.metadata["human_east_asian_fair_complexion_guard_library"]
         == VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID
     )
-    assert "clean fair luminous complexion" in positives
-    assert "do not darken or tan East Asian skin by default" in positives
+    assert "preserve the subject's natural complexion direction" in positives
+    assert "must not accidentally gray, darken, bleach, tan, or flatten the skin" in positives
     assert "natural head-to-body proportion" in positives
     assert "balanced neck and shoulder line" in positives
     assert "harmonious natural facial features" in positives
-    assert "suppressed fair complexion" in negatives
-    assert "forced tan or bronze cast unless requested" in negatives
-    assert "gray-brown skin cast" in negatives
+    assert "unintended complexion darkening or lightening" in negatives
+    assert "unrequested tan, bronze, gray, yellow, or green facial cast" in negatives
     assert "oversized head" in negatives
     assert "short compressed neck" in negatives
     assert "bad head-to-body ratio" in negatives
-    assert "clean fair luminous complexion" in retry
+    assert "preserving the reference or explicitly requested complexion direction" in retry
     assert "head-to-body ratio" in retry
 
 
@@ -121,11 +120,10 @@ def test_doc72_provider_prompt_renders_guard_without_product_language() -> None:
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
     lowered = final_prompt.lower()
 
-    assert "East Asian portrait aesthetic guard:" in final_prompt
-    assert "clean fair luminous complexion" in final_prompt
-    assert "do not darken or tan the skin by default" in final_prompt
+    assert "Universal complexion and proportion guard:" in final_prompt
+    assert "preserve reference or explicit prompt complexion" in final_prompt
     assert "natural head-to-body, neck, shoulder, and upper-body proportions" in final_prompt
-    assert "fake whitening masks" in final_prompt
+    assert "demographic lightness" in final_prompt
     assert "commercial product image asset" not in lowered
     assert "product label" not in lowered
 
@@ -193,9 +191,9 @@ def test_doc72_issue_codes_create_retry_patch() -> None:
     assert report.status == "fail_retryable"
     assert "suppressed_fair_complexion" in [issue["code"] for issue in report.detected_issues]
     assert "head_body_proportion_distortion" in [issue["code"] for issue in report.detected_issues]
-    assert "clean fair luminous complexion" in patch_text
-    assert "do not darken or tan East Asian skin by default" in patch_text
-    assert "fake whitening masks" in patch_text
+    assert "reference or explicitly requested complexion direction" in patch_text
+    assert "without whitening, forced tanning, or demographic defaults" in patch_text
+    assert "whitening masks" in patch_text
     assert "head-to-body ratio" in patch_text
     assert "compressed shoulders" in patch_text
 

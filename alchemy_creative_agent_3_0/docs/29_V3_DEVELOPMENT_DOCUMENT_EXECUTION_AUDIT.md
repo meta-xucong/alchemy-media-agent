@@ -556,3 +556,37 @@ legacy fallback and retry branches are Doc93 channel-safe
 
 Automated verification passed locally. VPS deployment and the same-project
 ancient-style portrait comparison are the remaining live acceptance steps.
+
+## 11. Doc94/95 Universalization And Identity Reinforcement Addendum
+
+Doc94 corrects a content-level boundary drift without changing V3 architecture:
+
+```text
+historical ancient-style, kidswear, East Asian summer, and similar examples
+remain regression fixtures
+shared runtime code uses age fidelity, exposure key, contrast, color
+temperature, skin response, complexion preservation, and identity truth
+legacy metadata remains readable but does not keep emitting narrow recipes
+```
+
+Doc95 then strengthens same-person performance inside the same Visual
+Capability Cluster:
+
+```text
+two complementary identity derivatives replace one over-tight crop
+identity-only full source frames remain suppressed under Doc93
+the 15k provider materializer protects the complete identity-critical block
+real review compares output with reference truth
+retry becomes a candidate and does not automatically replace a better result
+```
+
+Current implementation sequence:
+
+```text
+Doc94 documentation and source audit
+Doc94 runtime correction and compatibility tests
+Doc95 identity evidence and prompt protection
+Doc95 review/delivery preference closure
+cross-scene focused tests
+full regression and real-image acceptance
+```

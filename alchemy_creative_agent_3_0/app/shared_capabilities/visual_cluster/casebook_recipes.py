@@ -42,14 +42,10 @@ def human_photorealism_casebook(
         "documentary-adjacent commercial portrait feeling: publishable and attractive, but not a studio-beauty or idol-card retouch",
         "natural individuality in face proportions, lip texture, eyelid folds, jaw contour, and cheek transitions instead of algorithmically perfect features",
         "one small real-world flaw may remain visible, such as a stray hair, slight squint, uneven smile corner, soft focus edge, or subtle skin redness",
-        "bright daylight still preserves pore-level skin texture, eyelid folds, under-eye shadows, lip texture, and tiny neck/shoulder tonal changes",
         "quiet neutral expression or imperfect half-smile is preferred over a sweet template cover smile unless the user explicitly asks for a big smile",
-        "healthy clear complexion and fresh bright skin tone created by flattering light, not by skin whitening or beauty-filter smoothing",
-        "soft natural bounce light lifts facial shadows while preserving natural skin tone, ethnicity, and real texture",
-        "clean high-key summer daylight with gentle cheek warmth, awake eyes, and natural lip color",
-        "clean fair luminous complexion for East Asian fresh or summer beauty portraits when no tan, dark, or bronze look is requested",
-        "bright translucent facial color from high-key daylight, exposure, and soft bounce light rather than whitening filters",
-        "do not darken or tan East Asian skin by default; preserve natural East Asian identity and real skin texture",
+        "prompt-defined exposure preserves pore-level skin texture, eyelid folds, under-eye shadows, lip texture, and tiny neck/shoulder tonal changes",
+        "preserve the reference or explicitly requested complexion direction through balanced exposure and color response rather than whitening, tanning, or smoothing filters",
+        "preserve age-consistent facial and body relationships without adultification, infantilization, or doll-like morphology",
         "natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop",
         "harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle",
     ]
@@ -65,7 +61,7 @@ def human_photorealism_casebook(
         "auto face-slimming",
         "enlarged beauty-filter eyes",
         "perfect V-shaped chin",
-        "flawless K-idol beauty retouch",
+        "generic idol-style beauty retouch",
         "liquified face proportions",
         "algorithmically pretty generic face",
         "too-clean stock-photo model face",
@@ -73,7 +69,7 @@ def human_photorealism_casebook(
         "dewy plastic makeup skin",
         "cosmetic-ad poreless glow",
         "bright sun erasing all face texture",
-        "sweet K-idol template smile",
+        "sweet celebrity-template smile",
         "perfect cute influencer smile",
         "dull complexion",
         "muddy skin tone",
@@ -82,12 +78,8 @@ def human_photorealism_casebook(
         "harsh facial shadow",
         "tired expression",
         "overly matte documentary look",
-        "unflattering dark tan or bronze cast unless requested",
-        "suppressed fair complexion",
-        "unnecessarily darkened East Asian skin",
-        "forced tan or bronze cast unless requested",
-        "gray-brown skin cast",
-        "dull yellow or green facial cast",
+        "unintended complexion darkening or lightening",
+        "unrequested tan, bronze, gray, yellow, or green facial cast",
         "fake whitening mask",
         "bleached beauty-filter skin",
         "oversized head",
@@ -131,8 +123,8 @@ def human_photorealism_casebook(
         "camera, fabric, hair, and environmental details make the frame read as a real photograph",
         "portrait looks attractive but still grounded in a real camera capture, not a beauty-app render",
         "commercial finish reads as camera-ready realism rather than face-smoothing retouch",
-        "face looks fresh, healthy, and flattering without losing real skin texture or natural skin tone",
-        "East Asian fresh portraits keep clean fair luminous complexion unless a tan or darker look is explicitly requested",
+        "face looks attractive and correctly exposed without losing real skin texture or the requested complexion direction",
+        "age identity remains consistent with the reference or explicit prompt",
         "close crops keep natural head, neck, shoulder, and upper-body proportions",
     ]
 
@@ -179,8 +171,8 @@ def human_photorealism_casebook(
             "negative_additions": negative,
             "artifact_repair": [
                 "repair toward real photographed skin texture, specific micro-expression, natural eyes, true hairline detail, and non-plastic light response",
-                "repair toward healthy clear complexion with soft natural bounce light, clean bright daylight, gentle cheek warmth, and natural skin tone preserved",
-                "repair toward clean fair luminous complexion for East Asian fresh portraits through exposure, color balance, and soft bounce light; do not use fake whitening or skin smoothing",
+                "repair exposure and color response while preserving the reference or explicitly requested complexion direction; do not use fake whitening, forced tanning, or skin smoothing",
+                "repair age drift toward the reference or explicitly requested age band without adultification, infantilization, or doll-like morphology",
                 "repair close portrait crops so head-to-body, neck, shoulder, and upper-body proportions look natural and flattering",
             ],
             "identity_reinforcement": preserve,
@@ -393,10 +385,8 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "subtle halation or highlight bloom that feels optical, not glossy AI shine",
         "clear light source direction with soft highlight roll-off",
         "natural skin response to light, not waxy cheek shine",
-        "soft natural bounce light lifts the face and keeps skin clean, bright, and healthy without flattening texture",
-        "high-key summer daylight stays fresh and flattering while avoiding overexposure or a gray color cast",
-        "clean fair luminous complexion is preserved for East Asian fresh portrait styling unless a tan, dark, or bronze look is requested",
-        "soft bounce light and color balance lift the face without fake whitening or skin smoothing",
+        "prompt-consistent face light preserves identity planes, natural complexion, and texture without forcing a high-key or low-key look",
+        "exposure and color balance follow the requested visual direction without fake whitening, forced tanning, or skin smoothing",
     ]
     texture = [
         "skin tone variation around eyelids, under-eye area, nose, neck, and shoulders",
@@ -406,8 +396,8 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "hairline detail, flyaways, fabric wrinkles, and clothing drape",
         "individual facial character: natural jaw contour, real eyelid folds, lip texture, and slight non-identical cheek transitions",
         "publishable documentary-commercial polish without beauty-app smoothing or face-shape liquify",
-        "bright outdoor light keeps real under-eye detail, lip texture, skin pores, and small shoulder/neck tone differences",
-        "healthy clear complexion, gentle cheek warmth, natural lip color, and awake eyes while preserving natural skin tone",
+        "the requested exposure keeps real under-eye detail, lip texture, skin pores, and small shoulder/neck tone differences",
+        "attractive complexion, natural lip color, and awake eyes while preserving reference or explicit prompt skin direction",
         "natural head-to-body ratio, balanced neck and shoulder line, and flattering upper-body crop",
         "harmonious natural features with awake eyes and relaxed facial muscles, not a face reshaped by beauty filters",
     ]
@@ -427,7 +417,7 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "auto face-slimming",
         "enlarged beauty-filter eyes",
         "perfect V-shaped chin",
-        "flawless K-idol beauty retouch",
+        "generic idol-style beauty retouch",
         "liquified face proportions",
         "algorithmically pretty generic face",
         "too-clean stock-photo model face",
@@ -442,11 +432,8 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "harsh facial shadow",
         "tired expression",
         "overly matte documentary look",
-        "suppressed fair complexion",
-        "unnecessarily darkened East Asian skin",
-        "forced tan or bronze cast unless requested",
-        "gray-brown skin cast",
-        "dull yellow or green facial cast",
+        "unintended complexion darkening or lightening",
+        "unrequested tan, bronze, gray, yellow, or green facial cast",
         "oversized head",
         "enlarged face scale",
         "short compressed neck",
@@ -468,8 +455,8 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "real-camera imperfection is visible without making the photo look low quality",
         "face remains attractive but not beauty-app perfect",
         "polish is interpreted as camera-ready craft, not retouched skin or beautified facial geometry",
-        "attractiveness comes from flattering real light and fresh color, not whitening or smoothing filters",
-        "East Asian fair luminous complexion is protected without fake whitening",
+        "attractiveness comes from flattering prompt-consistent light and color, not whitening, forced tanning, or smoothing filters",
+        "reference or explicit prompt complexion direction is protected without demographic defaults",
         "head, neck, shoulder, and upper-body proportions stay natural in close crops",
         "camera/pose/face angle serves this role",
         "not a generic AI beauty portrait",
@@ -478,8 +465,7 @@ def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dic
         "Use a real-photo portrait atom stack: lens, light, skin, hair, fabric, and environment details must make this feel photographed. "
         "Real-camera imperfection should win over beauty-app polish, while identity is preserved through stable traits and each output keeps a natural new-frame variation. "
         "If the brief asks for polished or commercial quality, interpret that as camera-ready documentary-commercial craft, not skin smoothing, face slimming, or idol-card retouch. "
-        "Keep the face fresh and attractive with clean bounce light, healthy complexion, and natural skin tone preserved."
-        " For East Asian fresh portrait styling, do not suppress fair luminous complexion unless the user requested tan, dark, or bronze skin."
+        "Keep the face attractive with prompt-consistent light, reference or explicit prompt complexion, and natural skin texture preserved."
         " Preserve natural head-to-body, neck, shoulder, and upper-body proportions in close crops."
     )
     overlay = _atom_overlay(

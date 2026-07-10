@@ -45,6 +45,7 @@ def prepare_reference_truth_derivatives(
         derivatives: list[dict[str, Any]] = []
         if "portrait_identity_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="portrait_identity_crop"))
+            derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="portrait_identity_geometry_crop"))
         if "product_identity_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="product_truth_crop"))
         if "structured_appearance_truth" in layers:
@@ -104,6 +105,7 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
             fallback = True
     truth_layer = {
         "portrait_identity_crop": "portrait_identity_truth",
+        "portrait_identity_geometry_crop": "portrait_identity_truth",
         "product_truth_crop": "product_identity_truth",
         "appearance_truth_crop": "structured_appearance_truth",
     }.get(kind, "style_context_truth")
@@ -114,10 +116,16 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "path": str(target),
         "path_name": Path(str(target)).name,
         "fallback_to_original": bool(fallback),
-        "identity_color_neutralized": kind == "portrait_identity_crop" and not fallback,
+        "identity_color_neutralized": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
+        "identity_color_retention": (
+            0.55 if kind == "portrait_identity_crop" else 0.30 if kind == "portrait_identity_geometry_crop" else None
+        ),
         "identity_background_neutralized": False,
-        "identity_context_reduced_by_tight_crop": kind == "portrait_identity_crop" and not fallback,
-        "identity_gateway_min_edge_px": 512 if kind == "portrait_identity_crop" and not fallback else None,
+        "identity_context_reduced_by_tight_crop": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
+        "identity_evidence_scope": (
+            "feature_detail" if kind == "portrait_identity_crop" else "head_geometry" if kind == "portrait_identity_geometry_crop" else None
+        ),
+        "identity_gateway_min_edge_px": 512 if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback else None,
         "provider_only": True,
     }
 
@@ -129,11 +137,13 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
         return source
 
     max_bytes = max(128_000, int(settings.openai_image_reference_max_upload_bytes))
+    if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
+        max_bytes = min(max_bytes, 480_000)
     max_edge = max(512, int(settings.openai_image_reference_max_edge))
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-gateway-face-v5:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v1:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -146,10 +156,11 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
         image = _to_rgb_on_white(image, Image)
         box = _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
-        if kind == "portrait_identity_crop":
+        if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
             from PIL import ImageEnhance
 
-            cropped = ImageEnhance.Color(cropped).enhance(0.08)
+            color_retention = 0.55 if kind == "portrait_identity_crop" else 0.30
+            cropped = ImageEnhance.Color(cropped).enhance(color_retention)
             minimum_edge = min(512, max_edge)
             if min(cropped.size) < minimum_edge:
                 scale = minimum_edge / max(1, min(cropped.size))
@@ -184,20 +195,36 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
         return (0, 0, max(1, width), max(1, height))
     if kind == "portrait_identity_crop":
         if height > width * 1.15:
-            crop_w = int(width * 0.62)
-            crop_h = int(height * 0.39)
+            crop_w = int(width * 0.76)
+            crop_h = int(height * 0.48)
             center_x = width * 0.5
-            center_y = height * 0.28
+            center_y = height * 0.31
         elif width > height * 1.15:
-            crop_w = int(width * 0.32)
-            crop_h = int(height * 0.64)
+            crop_w = int(width * 0.42)
+            crop_h = int(height * 0.72)
             center_x = width * 0.5
             center_y = height * 0.42
         else:
-            crop_w = int(width * 0.46)
-            crop_h = int(height * 0.46)
+            crop_w = int(width * 0.62)
+            crop_h = int(height * 0.58)
             center_x = width * 0.5
-            center_y = height * 0.31
+            center_y = height * 0.34
+    elif kind == "portrait_identity_geometry_crop":
+        if height > width * 1.15:
+            crop_w = int(width * 0.90)
+            crop_h = int(height * 0.64)
+            center_x = width * 0.5
+            center_y = height * 0.35
+        elif width > height * 1.15:
+            crop_w = int(width * 0.58)
+            crop_h = int(height * 0.92)
+            center_x = width * 0.5
+            center_y = height * 0.45
+        else:
+            crop_w = int(width * 0.78)
+            crop_h = int(height * 0.74)
+            center_x = width * 0.5
+            center_y = height * 0.38
     elif kind == "appearance_truth_crop":
         crop_w = int(width * 0.88)
         crop_h = int(height * 0.92)

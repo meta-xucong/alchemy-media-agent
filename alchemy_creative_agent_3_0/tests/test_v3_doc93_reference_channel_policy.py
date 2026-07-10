@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
@@ -309,22 +310,31 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert len(references) == 1
     assert references[0]["metadata"]["doc93_content_role_deduplicated"] is True
     assert references[0]["metadata"]["deduplicated_source_asset_ids"] == ["uploaded_face_duplicate"]
-    assert input_plan["reference_image_count"] == 1
+    assert input_plan["reference_image_count"] == 2
     assert input_plan["suppressed_full_frame_identity_asset_ids"] == ["uploaded_face_truth"]
-    assert len(provider_assets) == 1
+    assert input_plan["identity_evidence_scopes"] == ["feature_detail", "head_geometry"]
+    assert input_plan["provider_reference_total_bytes"] <= 960_000
+    assert len(provider_assets) == 2
     assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
+    assert provider_assets[1]["derivative_kind"] == "portrait_identity_geometry_crop"
     assert provider_assets[0]["identity_color_neutralized"] is True
     assert provider_assets[0]["identity_background_neutralized"] is False
     assert provider_assets[0]["identity_context_reduced_by_tight_crop"] is True
     assert provider_assets[0]["identity_gateway_min_edge_px"] == 512
+    assert provider_assets[0]["identity_evidence_scope"] == "feature_detail"
+    assert provider_assets[1]["identity_evidence_scope"] == "head_geometry"
+    assert provider_assets[0]["provider_reference_bytes"] <= 480_000
+    assert provider_assets[1]["provider_reference_bytes"] <= 480_000
+    assert Path(provider_assets[0]["storage_path"]).read_bytes() != Path(
+        provider_assets[1]["storage_path"]
+    ).read_bytes()
     with Image.open(provider_assets[0]["storage_path"]).convert("RGB") as focused:
-        assert focused.width == 512
-        assert focused.height == 512
+        assert min(focused.size) == 512
         corner = focused.getpixel((0, 0))
         red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
-    assert max(corner) - min(corner) <= 20
     assert corner != (128, 128, 128)
-    assert max(red, green, blue) - min(red, green, blue) <= 20
+    assert 20 < max(corner) - min(corner) < 180
+    assert 20 < max(red, green, blue) - min(red, green, blue) < 180
 
 
 def test_doc93_reference_conditioned_real_generation_defaults_to_live_review() -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from io import BytesIO
 import json
@@ -168,6 +168,15 @@ class V3GeneratedOutputStore:
         _safe_remove_tree(self.storage_root, output_dir)
         self._invalidate_cache()
         return True
+
+    def update_metadata(self, output_id: str, updates: dict) -> V3GeneratedOutputRecord | None:
+        record = self.get_output(output_id)
+        if record is None:
+            return None
+        updated = replace(record, metadata={**dict(record.metadata or {}), **dict(updates or {})})
+        self._write_record(updated)
+        self._invalidate_cache()
+        return updated
 
     def _write_record(self, record: V3GeneratedOutputRecord) -> None:
         path = self._record_path(record.output_id)

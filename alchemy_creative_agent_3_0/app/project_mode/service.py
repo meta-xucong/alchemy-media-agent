@@ -3118,16 +3118,28 @@ class V3ProjectModeService:
         for group in attempt_groups.values():
             group.sort(key=lambda item: item.created_at or "")
         sorted_attempts = sorted(attempt_groups)
-        complete_attempts = [
-            attempt
-            for attempt in sorted_attempts
-            if len(attempt_groups.get(attempt, [])) >= requested_count
+        preferred_records = [
+            record
+            for record in usable_records
+            if bool((getattr(record, "metadata", None) or {}).get("delivery_preferred_output"))
         ]
-        final_attempt = complete_attempts[-1] if complete_attempts else max(
-            sorted_attempts,
-            key=lambda attempt: (len(attempt_groups.get(attempt, [])), attempt),
-        )
-        final_records = attempt_groups.get(final_attempt, [])[:requested_count]
+        preference_active = bool(preferred_records)
+        if preference_active:
+            preferred_records.sort(key=lambda item: item.created_at or "")
+            final_records = preferred_records[:requested_count]
+            final_attempt = self._output_record_retry_attempt(final_records[0])
+        else:
+            complete_attempts = [
+                attempt
+                for attempt in sorted_attempts
+                if len(attempt_groups.get(attempt, [])) >= requested_count
+            ]
+            final_attempt = complete_attempts[-1] if complete_attempts else max(
+                sorted_attempts,
+                key=lambda attempt: (len(attempt_groups.get(attempt, [])), attempt),
+            )
+            final_records = attempt_groups.get(final_attempt, [])[:requested_count]
+        final_attempts = sorted({self._output_record_retry_attempt(record) for record in final_records})
         final_ids = {self._output_record_identity(record) for record in final_records}
         annotations: dict[str, dict[str, Any]] = {}
         for attempt, group in attempt_groups.items():
@@ -3137,15 +3149,19 @@ class V3ProjectModeService:
                 if not identity:
                     continue
                 delivery_state = "final_delivery" if identity in final_ids else "process_only"
-                if attempt < final_attempt and final_ids:
+                if preference_active and identity not in final_ids:
+                    delivery_state = "superseded"
+                elif attempt < final_attempt and final_ids:
                     delivery_state = "superseded"
                 annotations[identity] = {
                     "delivery_state": delivery_state,
                     "delivery_attempt_index": attempt,
                     "delivery_final_attempt_index": final_attempt,
+                    "delivery_final_attempt_indexes": final_attempts,
                     "delivery_requested_image_count": requested_count,
                     "delivery_group_output_count": len(group),
                     "retry_superseded": delivery_state == "superseded",
+                    "reviewed_best_attempt": preference_active,
                     "retry_reason_codes": retry_codes,
                 }
         return annotations

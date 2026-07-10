@@ -1,5 +1,15 @@
 # 71 V3 Human Attractive Realism Balance Spec
 
+Doc94 correction note:
+
+```text
+Doc71's attractive-realism balance remains active, but its bright summer
+treatment is one historical test condition only. It must not be injected into
+low-key, documentary, indoor, mature-subject, or other unrelated requests.
+Exposure, complexion, color, and beauty treatment follow prompt/reference truth
+through Doc94's universal rendering profile.
+```
+
 Status: accepted micro-tuning document after Doc70.
 
 Doc70 successfully reduced the obvious AI-beauty feel in photoreal human

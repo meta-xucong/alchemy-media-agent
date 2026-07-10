@@ -1,5 +1,14 @@
 # 78 V3 Long-Term Identity And Beautiful Realism Final Tuning
 
+Doc94/95 correction note:
+
+```text
+Doc78 remains a long-term identity and beautiful-realism objective. Named
+demographic or seasonal complexion treatments are historical validation only.
+Doc94 governs universal rendering; Doc95 governs identity evidence, review
+dimensions, and best-result delivery.
+```
+
 Doc93 compatibility note:
 
 ```text

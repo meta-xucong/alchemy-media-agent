@@ -1,5 +1,15 @@
 # 91 V3 Human Realism Plugin Governance Spec
 
+Doc94 correction note:
+
+```text
+Doc91 remains the ownership authority for the Human Realism Plugin. Doc94
+supersedes child/kidswear, East Asian summer/fair, and other narrow named
+runtime profiles. New jobs use generic age fidelity, exposure, skin response,
+complexion preservation, and real-human rendering variables. Legacy metadata
+and issue codes remain readable only for compatibility.
+```
+
 Doc93 compatibility note:
 
 ```text

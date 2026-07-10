@@ -141,12 +141,12 @@ def test_doc91_ecommerce_kidswear_model_activates_human_realism_for_product_subj
     assert guidance.applies is True
     assert plugin["applies"] is True
     assert plugin["subject_type"] == "product"
-    assert plugin["human_subject_kind"] == "child_or_teen_model"
-    assert plugin["strictness"] == "child_strict"
-    assert plugin["style_profile"] == "child_catalog_natural"
+    assert plugin["human_subject_kind"] == "product_on_person"
+    assert plugin["strictness"] == "commercial_strict"
+    assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
     assert plugin["disabled_by_style"] is False
     assert "ecommerce_human_model_detected" in plugin["reason_codes"]
-    assert "doll-like child face" in guidance.negative_prompt_fragments
+    assert "age-inappropriate facial morphology" in guidance.negative_prompt_fragments
 
 
 def test_doc92_moody_traditional_portrait_suppresses_bright_fresh_skin_pressure() -> None:
@@ -171,15 +171,15 @@ def test_doc92_moody_traditional_portrait_suppresses_bright_fresh_skin_pressure(
     negatives = " ".join(guidance.negative_prompt_fragments).lower()
 
     assert guidance.applies is True
-    assert plugin["style_profile"] == "moody_cinematic_traditional"
+    assert plugin["style_profile"] == "low_key_texture_preserving"
     assert "natural human skin texture" in positives
     assert "clean high-key summer daylight" not in positives
     assert "soft natural bounce light" not in positives
-    assert "clean fair luminous complexion" not in positives
-    assert "moody cinematic human realism" in positives
-    assert "oily face" in negatives
-    assert "plastic nose bridge" in negatives
-    assert "over-bright fresh commercial beauty lighting" in negatives
+    assert "demographic default" not in positives
+    assert "under a low exposure key" in positives
+    assert "oily forehead or cheeks in low-key light" in negatives
+    assert "waxy nose-bridge highlight" in negatives
+    assert "generic high-key commercial face lighting overriding the prompt" in negatives
 
 
 def test_doc92_bright_summer_portrait_keeps_fresh_commercial_profile() -> None:
@@ -199,9 +199,9 @@ def test_doc92_bright_summer_portrait_keeps_fresh_commercial_profile() -> None:
     plugin = guidance.metadata["human_realism_plugin"]
     positives = " ".join(guidance.positive_prompt_fragments).lower()
 
-    assert plugin["style_profile"] == "bright_fresh_commercial"
-    assert "clean high-key summer daylight" in positives
-    assert "soft natural bounce light" in positives
+    assert plugin["style_profile"] == "high_key_texture_preserving"
+    assert "under a high exposure key" in positives
+    assert "whitening or smoothing filter" in positives
 
 
 def test_doc91_visual_cluster_exports_plugin_metadata_for_product_on_model() -> None:
@@ -229,7 +229,8 @@ def test_doc91_visual_cluster_exports_plugin_metadata_for_product_on_model() -> 
 
     assert plugin["applies"] is True
     assert plugin["subject_type"] == "product"
-    assert plugin["human_subject_kind"] == "child_or_teen_model"
+    assert plugin["human_subject_kind"] == "product_on_person"
+    assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
     assert "human_photorealism_layer" in cluster["child_module_ids"]
     assert "anti_ai_face_review" in cluster["child_module_ids"]
 
@@ -266,9 +267,9 @@ def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None
         ]
     )
 
-    assert "real child or teen photography" in patch_text
-    assert "doll-like child face" in patch_text
-    assert "pageant" in patch_text
+    assert "requested or referenced age band" in patch_text
+    assert "adultification" in patch_text
+    assert "doll-like morphology" in patch_text
 
 
 def test_doc92_child_model_retry_patch_does_not_depend_on_moody_traditional_style() -> None:
@@ -293,8 +294,8 @@ def test_doc92_child_model_retry_patch_does_not_depend_on_moody_traditional_styl
         ]
     ).lower()
 
-    assert guidance.metadata["human_realism_plugin"]["human_subject_kind"] == "child_or_teen_model"
-    assert guidance.metadata["human_realism_plugin"]["style_profile"] != "moody_cinematic_traditional"
-    assert "repair child or teen model faces" in retry_text
-    assert "doll-like child face" in retry_text
-    assert "pageant" in retry_text
+    assert guidance.metadata["human_realism_plugin"]["human_subject_kind"] == "product_on_person"
+    assert guidance.metadata["human_realism_plugin"]["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
+    assert "repair age drift" in retry_text
+    assert "adultification" in retry_text
+    assert "doll-like morphology" in retry_text

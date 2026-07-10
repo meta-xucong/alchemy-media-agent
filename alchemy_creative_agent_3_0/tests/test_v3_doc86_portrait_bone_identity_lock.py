@@ -161,6 +161,17 @@ def test_doc86_provider_prompt_keeps_identity_contract_after_doc88_visual_direct
     assert "Visual direction:" in prompt
     assert prompt.index("Visual direction:") < prompt.index("Portrait identity contract:")
     assert "without redesigning the face" in prompt
+    for protected_dimension in (
+        "face width/length ratio",
+        "forehead-to-midface-to-lower-face proportion",
+        "cheek volume and cheekbone direction",
+        "jaw width, jawline slope, and chin scale",
+        "eyebrow base shape, thickness family, and visual temperament",
+        "eye spacing and base eye shape",
+        "nose bridge, nose tip, nose wing, and mouth relationship",
+        "philtrum, mouth width, lip contour, and lip fullness family",
+    ):
+        assert protected_dimension in prompt
 
 
 def test_doc86_same_type_not_same_person_triggers_retry_patch() -> None:

@@ -1701,7 +1701,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         beautiful_realism_rules = [
             "beauty is the visual goal and realism is the rendering method",
             "use skin texture, natural light/shadow, real hair strands, fabric folds, and camera texture as realism evidence",
-            "keep clean fair luminous East Asian complexion when appropriate and not contradicted by the user",
+            "preserve reference or explicitly requested complexion through prompt-consistent light and color without demographic defaults",
             "avoid ugly realism: dark muddy skin, tired expression, harsh unflattering shadow, or degraded facial proportions",
         ]
         allowed_variations = [
@@ -2136,7 +2136,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "same exact expression repeated",
             "same exact head angle repeated",
             "same exact pose repeated",
-            "Korean glass skin",
+            "poreless glass-like skin",
             "oily shiny face",
             "nose-tip highlight",
             "silicone face",
@@ -2183,12 +2183,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "oversized_head",
                     "compressed_neck_shoulders",
                     "unflattering_face_drift",
+                    "complexion_direction_drift",
+                    "unintended_skin_darkening",
+                    "unintended_skin_lightening",
+                    "unflattering_skin_color_cast",
+                    "age_identity_drift",
+                    "age_inappropriate_rendering",
                 ]
             )
             prompt_additions.extend(
                 [
                     "For human portraits, keep the person attractive through real light, expression, styling, and color balance rather than face reshaping, wax skin, or poreless beauty filtering.",
-                    "For East Asian summer/fresh portraits, keep clean fair luminous complexion unless the user explicitly asks for tan, dark, bronze, or sunburned skin.",
+                    "Preserve the reference or explicitly requested complexion and age direction; exposure, color grading, and commercial polish must not impose demographic lightness, tanning, age drift, or beauty-template geometry.",
                 ]
             )
         if identity_hero_plan and identity_hero_plan.applies:

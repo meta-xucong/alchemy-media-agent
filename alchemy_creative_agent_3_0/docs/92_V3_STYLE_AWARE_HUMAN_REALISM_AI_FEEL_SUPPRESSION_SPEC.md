@@ -1,5 +1,14 @@
 # 92 V3 Style-Aware Human Realism AI-Feel Suppression Spec
 
+Doc94 correction note:
+
+```text
+Doc92's valid requirement is that realism must respect the requested visual
+conditions. Its named ancient/traditional, child-catalog, East Asian-summer,
+and similar profiles are superseded by Doc94's orthogonal rendering profile.
+Those scenes remain regression fixtures, not shared runtime branches.
+```
+
 Doc93 compatibility note:
 
 ```text
