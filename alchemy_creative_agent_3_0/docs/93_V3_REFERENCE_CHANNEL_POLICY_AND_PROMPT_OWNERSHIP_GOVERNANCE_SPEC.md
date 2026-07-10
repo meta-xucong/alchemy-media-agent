@@ -813,6 +813,12 @@ can be rejected even when an ordinary JPEG crop succeeds. Compatibility takes
 priority: preserve valid image geometry, use the tighter crop and near-neutral
 color only, and let channel policy prevent old-scene inheritance.
 
+The focused crop must remain gateway-valid. If its short edge falls below 512
+pixels, upscale that same tight crop proportionally to a 512-pixel short edge
+before encoding. Do not widen the crop or restore old-scene pixels. This keeps
+identity evidence narrow while satisfying gateways that reject smaller edit
+inputs with only a generic `400 / openai_error` wrapper.
+
 If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
 `400 / bad_response_status_code / openai_error`, classify only that generic
 wrapper as transient and allow one fresh provider request. Explicit malformed

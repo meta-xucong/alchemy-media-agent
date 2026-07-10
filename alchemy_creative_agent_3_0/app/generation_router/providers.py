@@ -1005,6 +1005,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "identity_context_reduced_by_tight_crop": bool(
                             derivative.get("identity_context_reduced_by_tight_crop")
                         ),
+                        "identity_gateway_min_edge_px": derivative.get("identity_gateway_min_edge_px"),
                     }
                 )
             if self._should_include_original_reference(
@@ -1375,6 +1376,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "identity_context_reduced_by_tight_crop": bool(
                         item.get("identity_context_reduced_by_tight_crop")
                     ),
+                    "identity_gateway_min_edge_px": item.get("identity_gateway_min_edge_px"),
                     "filename": item.get("filename"),
                 }
             )
