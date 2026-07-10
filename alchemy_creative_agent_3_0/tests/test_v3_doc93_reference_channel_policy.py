@@ -313,8 +313,33 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
     assert provider_assets[0]["identity_color_neutralized"] is True
     with Image.open(provider_assets[0]["storage_path"]).convert("RGB") as focused:
+        assert focused.width <= 140
+        assert focused.height <= 140
         red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
     assert max(red, green, blue) - min(red, green, blue) <= 20
+
+
+def test_doc93_reference_conditioned_real_generation_defaults_to_live_review() -> None:
+    service = V3ProductApiService()
+    metadata = {
+        "require_real_images": True,
+        "project_context_snapshot": {
+            "uploaded_reference_assets": [{"asset_id": "uploaded_face_truth"}],
+            "resolved_reference_policy_package": {"applies": True},
+        },
+    }
+
+    assert service._reference_conditioned_real_review_required(metadata, quality_mode="standard") is True  # noqa: SLF001
+    assert service._reference_conditioned_real_review_required(metadata, quality_mode="strict") is True  # noqa: SLF001
+    assert service._reference_conditioned_real_review_required(metadata, quality_mode="explore") is False  # noqa: SLF001
+    assert service._reference_conditioned_real_review_required(  # noqa: SLF001
+        {**metadata, "disable_real_vision_inspection": True},
+        quality_mode="standard",
+    ) is False
+    assert service._reference_conditioned_real_review_required(  # noqa: SLF001
+        {**metadata, "vision_inspection_mode": "metadata_only"},
+        quality_mode="standard",
+    ) is False
 
 
 def test_doc93_channel_issue_codes_flow_through_review_and_retry() -> None:

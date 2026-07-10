@@ -1187,7 +1187,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 "lift dull or dark facial lighting with real bounce light and healthier color balance while retaining visible skin texture and natural skin tone"
             )
             identity_reinforcement.append(
-                "keep broad face shape, age direction, body type, hair direction, and recognizable identity cues while avoiding a copied template face"
+                "keep broad face shape, age direction, body type, and recognizable identity cues while following the current prompt for hair unless that channel is explicitly locked"
             )
             negative_additions.extend(
                 [

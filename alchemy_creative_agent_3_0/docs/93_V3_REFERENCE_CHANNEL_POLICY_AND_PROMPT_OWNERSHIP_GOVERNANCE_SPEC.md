@@ -800,7 +800,7 @@ For an ordinary portrait identity reference:
 
 ```text
 deduplicate byte-identical references that have the same role and locks
-create a provider-only portrait identity crop
+create a tight provider-only head-and-face identity crop
 neutralize most color in that identity crop
 send the focused identity crop instead of the full old frame
 record suppressed full-frame identity source ids in provider metadata
@@ -814,6 +814,12 @@ their appropriate full or focused evidence.
 
 This rule prevents duplicate visual weighting and prevents full-frame pixels
 from silently defeating a correct textual channel policy.
+
+For real reference-conditioned jobs in `standard` or `strict` quality mode,
+post-generation inspection defaults to the configured multimodal reviewer when
+real images are required. A detected prompt-owned channel leak enters the
+existing bounded retry loop. Standard mode retries at most once; strict mode
+retries at most twice. Explicit disable or inspection-mode metadata still wins.
 
 ## 14. Review Contract
 
@@ -1301,7 +1307,7 @@ Local verification on 2026-07-10:
 
 ```text
 Doc93 focused tests: passed
-V3 full suite: 369 passed
+V3 full suite: 370 passed
 frontend/API shell: 89 passed
 root suite: 138 passed
 desktop/mobile JavaScript syntax: passed

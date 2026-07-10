@@ -130,7 +130,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-identity-neutral-v1:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-face-only-neutral-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -166,16 +166,21 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
     if width <= 0 or height <= 0:
         return (0, 0, max(1, width), max(1, height))
     if kind == "portrait_identity_crop":
-        if height >= width:
-            crop_w = int(width * 0.74)
-            crop_h = int(height * 0.56)
+        if height > width * 1.15:
+            crop_w = int(width * 0.68)
+            crop_h = int(height * 0.43)
             center_x = width * 0.5
-            center_y = height * 0.31
-        else:
-            crop_w = int(width * 0.50)
-            crop_h = int(height * 0.72)
+            center_y = height * 0.28
+        elif width > height * 1.15:
+            crop_w = int(width * 0.34)
+            crop_h = int(height * 0.68)
             center_x = width * 0.5
             center_y = height * 0.42
+        else:
+            crop_w = int(width * 0.52)
+            crop_h = int(height * 0.52)
+            center_x = width * 0.5
+            center_y = height * 0.30
     elif kind == "appearance_truth_crop":
         crop_w = int(width * 0.88)
         crop_h = int(height * 0.92)

@@ -701,6 +701,19 @@ class V3ProductApiService:
             "scenario_id": generation_result.metadata.get("scenario_id"),
             "template_id": record.request.metadata.get("template_id") or generation_result.metadata.get("scenario_id"),
         }
+        result_cluster = generation_result.metadata.get("visual_cluster")
+        if not isinstance(result_cluster, dict):
+            shared = generation_result.metadata.get("shared_capabilities")
+            result_cluster = shared.get("visual_cluster") if isinstance(shared, dict) else {}
+        if isinstance(result_cluster, dict):
+            reference_policy = result_cluster.get("resolved_reference_policy_package")
+            if isinstance(reference_policy, dict) and reference_policy:
+                review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
+        if self._reference_conditioned_real_review_required(
+            review_metadata,
+            quality_mode=generate_request.quality_mode,
+        ):
+            review_metadata["enable_real_vision_inspection"] = True
         resolutions = self.output_resolver.resolve_result(generation_result, project_id=project_id)
         inspections = [
             self.vision_inspector.inspect(resolution, metadata=review_metadata)
@@ -770,6 +783,34 @@ class V3ProductApiService:
             }
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _reference_conditioned_real_review_required(
+        self,
+        metadata: dict[str, Any],
+        *,
+        quality_mode: str,
+    ) -> bool:
+        if bool(metadata.get("disable_real_vision_inspection")):
+            return False
+        if metadata.get("vision_inspection_mode") or metadata.get("post_generation_inspection_mode"):
+            return False
+        if str(quality_mode or "standard") not in {"standard", "strict"}:
+            return False
+        if not bool(metadata.get("require_real_images")):
+            return False
+        for key in ("uploaded_assets", "reference_assets"):
+            if isinstance(metadata.get(key), list) and metadata[key]:
+                return True
+        context = metadata.get("project_context_snapshot")
+        if isinstance(context, dict):
+            for key in ("uploaded_reference_assets", "selected_visual_references", "strong_reference_bindings"):
+                if isinstance(context.get(key), list) and context[key]:
+                    return True
+            package = context.get("resolved_reference_policy_package")
+            if isinstance(package, dict) and bool(package.get("applies")):
+                return True
+        package = metadata.get("resolved_reference_policy_package")
+        return isinstance(package, dict) and bool(package.get("applies"))
 
     def _mode_differentiation_review_for_result(
         self,
