@@ -269,3 +269,32 @@ def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None
     assert "real child or teen photography" in patch_text
     assert "doll-like child face" in patch_text
     assert "pageant" in patch_text
+
+
+def test_doc92_child_model_retry_patch_does_not_depend_on_moody_traditional_style() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc92_kidswear",
+        job_id="job_doc92_kidswear",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input="Create a kidswear ecommerce catalog photo with a real child model wearing a blue dress in clean studio light",
+        subject_type="product",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+        metadata={"product_profile": {"category": "kidswear dress"}},
+    )
+    retry_text = " ".join(
+        [
+            *guidance.retry_patch_templates["prompt_additions"],
+            *guidance.retry_patch_templates["negative_additions"],
+            *guidance.retry_patch_templates["artifact_repair"],
+        ]
+    ).lower()
+
+    assert guidance.metadata["human_realism_plugin"]["human_subject_kind"] == "child_or_teen_model"
+    assert guidance.metadata["human_realism_plugin"]["style_profile"] != "moody_cinematic_traditional"
+    assert "repair child or teen model faces" in retry_text
+    assert "doll-like child face" in retry_text
+    assert "pageant" in retry_text

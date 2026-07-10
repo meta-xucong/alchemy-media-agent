@@ -618,6 +618,25 @@ class HumanPhotorealismLayer:
                     "real child or teen photography with age-appropriate facial proportions, natural skin, believable eyes, and relaxed expression",
                 ]
             )
+            retry_patch_templates["artifact_repair"] = _dedupe(
+                [
+                    *retry_patch_templates["artifact_repair"],
+                    "repair child or teen model faces toward age-appropriate real-camera photography: natural cheeks, eyes, teeth, skin texture, and relaxed expression without doll, toy, or pageant polish",
+                ]
+            )
+            retry_patch_templates["negative_additions"] = _dedupe(
+                [
+                    *retry_patch_templates["negative_additions"],
+                    "doll-like child face",
+                    "adultified child model",
+                    "synthetic child skin",
+                    "pageant-polished child face",
+                    "frozen child smile",
+                    "unreal child eyes",
+                    "unreal child teeth",
+                    "AI child model face",
+                ]
+            )
         if is_moody_traditional:
             retry_patch_templates["prompt_additions"] = _style_aware_positive_fragments(
                 [
@@ -644,25 +663,6 @@ class HumanPhotorealismLayer:
                     "over-bright fresh commercial beauty lighting",
                     "high-key summer daylight look",
                     "porcelain fantasy doll face",
-                ]
-            )
-            retry_patch_templates["artifact_repair"] = _dedupe(
-                [
-                    *retry_patch_templates["artifact_repair"],
-                    "repair child or teen model faces toward age-appropriate real-camera photography: natural cheeks, eyes, teeth, skin texture, and relaxed expression without doll, toy, or pageant polish",
-                ]
-            )
-            retry_patch_templates["negative_additions"] = _dedupe(
-                [
-                    *retry_patch_templates["negative_additions"],
-                    "doll-like child face",
-                    "adultified child model",
-                    "synthetic child skin",
-                    "pageant-polished child face",
-                    "frozen child smile",
-                    "unreal child eyes",
-                    "unreal child teeth",
-                    "AI child model face",
                 ]
             )
         return HumanPhotorealismGuidance(
