@@ -801,8 +801,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             *(raw_project_refs if isinstance(raw_project_refs, list) else []),
         ]
         assets: list[dict[str, Any]] = []
-        seen_paths: set[str] = set()
-        seen_evidence: set[tuple[str, str, str, tuple[str, ...]]] = set()
+        seen_evidence: dict[tuple[str, str], int] = {}
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             path = data.get("file_path")
@@ -815,20 +814,35 @@ class ProductionImageGenerationProvider(GenerationProvider):
             if not file_path.exists() or not file_path.is_file():
                 continue
             resolved_path = str(file_path.resolve())
-            if resolved_path in seen_paths:
-                continue
             role = str(data.get("role") or data.get("use_policy") or "unknown_reference")
             use_policy = str(data.get("use_policy") or "")
             lock_targets = tuple(
                 sorted(str(value).strip() for value in data.get("lock_targets", []) if str(value).strip())
             )
             content_fingerprint = self._reference_content_fingerprint(file_path)
-            evidence_key = (content_fingerprint, role, use_policy, lock_targets)
-            if content_fingerprint and evidence_key in seen_evidence:
+            canonical_role = self._reference_evidence_role(role, use_policy)
+            evidence_key = (content_fingerprint or f"path:{resolved_path}", canonical_role)
+            if evidence_key in seen_evidence:
+                existing = assets[seen_evidence[evidence_key]]
+                existing["lock_targets"] = sorted(set(existing.get("lock_targets", [])) | set(lock_targets))
+                if not existing.get("use_policy") and use_policy:
+                    existing["use_policy"] = use_policy
+                source_type = str(data.get("source_type") or (data.get("metadata") or {}).get("source_type") or "")
+                if not existing.get("source_type") and source_type:
+                    existing["source_type"] = source_type
+                existing["provider_input_required"] = bool(
+                    existing.get("provider_input_required") or data.get("provider_input_required")
+                )
+                metadata = dict(existing.get("metadata") or {})
+                duplicate_ids = self._string_list(metadata.get("deduplicated_source_asset_ids"))
+                duplicate_ids.append(
+                    str(data.get("asset_id") or data.get("source_id") or data.get("output_id") or file_path.stem)
+                )
+                metadata["deduplicated_source_asset_ids"] = _dedupe(duplicate_ids)
+                metadata["doc93_content_role_deduplicated"] = True
+                existing["metadata"] = metadata
                 continue
-            seen_paths.add(resolved_path)
-            if content_fingerprint:
-                seen_evidence.add(evidence_key)
+            seen_evidence[evidence_key] = len(assets)
             assets.append(
                 {
                     "asset_id": str(data.get("asset_id") or data.get("source_id") or data.get("output_id") or file_path.stem),
@@ -849,6 +863,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 }
             )
         return assets[:6]
+
+    def _reference_evidence_role(self, role: str, use_policy: str) -> str:
+        value = f"{role} {use_policy}".lower()
+        if any(term in value for term in ("face", "portrait", "identity", "person", "character")):
+            return "portrait_identity"
+        if any(term in value for term in ("product", "packaging", "sku")):
+            return "product_identity"
+        if any(term in value for term in ("appearance", "wardrobe", "garment", "outfit", "clothing")):
+            return "structured_appearance"
+        if any(term in value for term in ("scene", "background")):
+            return "scene"
+        if any(term in value for term in ("style", "mood", "lighting", "color", "composition")):
+            return "visual_direction"
+        return value.strip() or "generic_reference"
 
     def _reference_content_fingerprint(self, file_path: Path) -> str:
         try:
@@ -963,6 +991,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "derivative_kind": derivative.get("derivative_kind"),
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
+                        "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                     }
                 )
             if self._should_include_original_reference(
@@ -1329,6 +1358,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "derivative_kind": item.get("derivative_kind"),
                     "fallback_to_original": bool(item.get("fallback_to_original")),
                     "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
+                    "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "filename": item.get("filename"),
                 }
             )

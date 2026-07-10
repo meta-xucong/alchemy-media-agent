@@ -799,9 +799,10 @@ hairstyle, wardrobe, palette, lighting setup, or background.
 For an ordinary portrait identity reference:
 
 ```text
-deduplicate byte-identical references that have the same role and locks
+deduplicate byte-identical references after normalizing identity-role aliases
 create a tight provider-only head-and-face identity crop
 neutralize most color in that identity crop
+place the focused face evidence on a neutral feathered background
 send the focused identity crop instead of the full old frame
 record suppressed full-frame identity source ids in provider metadata
 ```

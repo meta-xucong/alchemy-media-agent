@@ -295,7 +295,7 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
             "asset_id": "uploaded_face_duplicate",
             "file_path": str(second_path),
             "source_type": "uploaded",
-            "role": "face_reference",
+            "role": "identity",
             "use_policy": "identity",
             "strength": "hard",
         }
@@ -307,15 +307,21 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     input_plan = asset_plan["provider_input_plan"]
 
     assert len(references) == 1
+    assert references[0]["metadata"]["doc93_content_role_deduplicated"] is True
+    assert references[0]["metadata"]["deduplicated_source_asset_ids"] == ["uploaded_face_duplicate"]
     assert input_plan["reference_image_count"] == 1
     assert input_plan["suppressed_full_frame_identity_asset_ids"] == ["uploaded_face_truth"]
     assert len(provider_assets) == 1
     assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
     assert provider_assets[0]["identity_color_neutralized"] is True
+    assert provider_assets[0]["identity_background_neutralized"] is True
     with Image.open(provider_assets[0]["storage_path"]).convert("RGB") as focused:
-        assert focused.width <= 140
-        assert focused.height <= 140
+        assert focused.width <= 120
+        assert focused.height <= 120
+        corner = focused.getpixel((0, 0))
         red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
+    assert max(corner) - min(corner) <= 3
+    assert max(abs(channel - 128) for channel in corner) <= 8
     assert max(red, green, blue) - min(red, green, blue) <= 20
 
 

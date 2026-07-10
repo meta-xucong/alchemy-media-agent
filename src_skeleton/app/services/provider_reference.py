@@ -115,6 +115,7 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "path_name": Path(str(target)).name,
         "fallback_to_original": bool(fallback),
         "identity_color_neutralized": kind == "portrait_identity_crop" and not fallback,
+        "identity_background_neutralized": kind == "portrait_identity_crop" and not fallback,
         "provider_only": True,
     }
 
@@ -130,7 +131,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-face-only-neutral-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc93-neutral-face-card-v3:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -144,9 +145,24 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
         box = _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
         if kind == "portrait_identity_crop":
-            from PIL import ImageEnhance
+            from PIL import ImageDraw, ImageEnhance, ImageFilter
 
             cropped = ImageEnhance.Color(cropped).enhance(0.08)
+            width, height = cropped.size
+            mask = Image.new("L", cropped.size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse(
+                (
+                    int(width * 0.06),
+                    int(height * 0.01),
+                    int(width * 0.94),
+                    int(height * 0.99),
+                ),
+                fill=255,
+            )
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=max(2, int(min(width, height) * 0.035))))
+            neutral = Image.new("RGB", cropped.size, (128, 128, 128))
+            cropped = Image.composite(cropped, neutral, mask)
         if max(cropped.size) > max_edge:
             cropped.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
         for current_quality in dict.fromkeys([quality, 88, 84, 80, 76, 72, 68]):
@@ -167,20 +183,20 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
         return (0, 0, max(1, width), max(1, height))
     if kind == "portrait_identity_crop":
         if height > width * 1.15:
-            crop_w = int(width * 0.68)
-            crop_h = int(height * 0.43)
+            crop_w = int(width * 0.62)
+            crop_h = int(height * 0.39)
             center_x = width * 0.5
             center_y = height * 0.28
         elif width > height * 1.15:
-            crop_w = int(width * 0.34)
-            crop_h = int(height * 0.68)
+            crop_w = int(width * 0.32)
+            crop_h = int(height * 0.64)
             center_x = width * 0.5
             center_y = height * 0.42
         else:
-            crop_w = int(width * 0.52)
-            crop_h = int(height * 0.52)
+            crop_w = int(width * 0.46)
+            crop_h = int(height * 0.46)
             center_x = width * 0.5
-            center_y = height * 0.30
+            center_y = height * 0.31
     elif kind == "appearance_truth_crop":
         crop_w = int(width * 0.88)
         crop_h = int(height * 0.92)
