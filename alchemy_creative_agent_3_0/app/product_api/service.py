@@ -1732,15 +1732,22 @@ class V3ProductApiService:
         records: list[dict[str, Any]],
         max_attempts: int,
     ) -> PlanningResult:
+        review_updates = self._merge_post_generation_review_chain(
+            base_result,
+            retry_result,
+            max_attempts=max_attempts,
+        )
         asset_pack = base_result.asset_pack.model_copy(
             update={
                 "assets": [*base_result.asset_pack.assets, *retry_result.asset_pack.assets],
                 "manifest": {
                     **dict(base_result.asset_pack.manifest),
+                    **dict(review_updates.get("asset_pack_manifest") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
                 },
                 "metadata": {
                     **dict(base_result.asset_pack.metadata),
+                    **dict(review_updates.get("asset_pack_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
                 },
             }
@@ -1755,6 +1762,7 @@ class V3ProductApiService:
                 "asset_pack": asset_pack,
                 "metadata": {
                     **dict(base_result.metadata),
+                    **dict(review_updates.get("result_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
                     "retry_generation_result_ids": self._dedupe_strings(
                         [
@@ -1765,6 +1773,170 @@ class V3ProductApiService:
                 },
             }
         )
+
+    def _merge_post_generation_review_chain(
+        self,
+        base_result: PlanningResult,
+        retry_result: PlanningResult,
+        *,
+        max_attempts: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Keep the retry output's review authoritative without losing the first review."""
+
+        base_metadata = dict(base_result.metadata or {})
+        retry_metadata = dict(retry_result.metadata or {})
+        base_package = base_metadata.get("post_generation_review_package")
+        retry_package = retry_metadata.get("post_generation_review_package")
+        if not isinstance(retry_package, dict):
+            return {}
+
+        attempt_index = self._safe_int(retry_metadata.get("visual_auto_retry_attempt"), default=1) or 1
+        history: list[dict[str, Any]] = []
+        if isinstance(base_package, dict):
+            previous = base_package.get("review_attempts")
+            if isinstance(previous, list):
+                history.extend(dict(item) for item in previous if isinstance(item, dict))
+            else:
+                history.append(self._post_generation_review_attempt(base_package, stage="initial", attempt_index=0))
+        history.append(
+            self._post_generation_review_attempt(
+                retry_package,
+                stage="final_retry" if attempt_index >= max_attempts else "retry",
+                attempt_index=attempt_index,
+            )
+        )
+
+        final_review = self._post_generation_final_review(
+            retry_package,
+            attempt_index=attempt_index,
+            max_attempts=max_attempts,
+        )
+        final_package = dict(retry_package)
+        final_package["review_attempts"] = history
+        final_package["final_review"] = final_review
+        final_package["metadata"] = {
+            **dict(final_package.get("metadata") or {}),
+            "review_stage": final_review["stage"],
+            "review_attempt_count": len(history),
+            "final_review_status": final_review["status"],
+            "retry_budget_exhausted": not final_review["additional_retry_allowed"],
+        }
+
+        base_shared = dict(base_metadata.get("shared_capabilities") or {})
+        retry_shared = dict(retry_metadata.get("shared_capabilities") or {})
+        base_cluster = dict(base_shared.get("visual_cluster") or base_metadata.get("visual_cluster") or {})
+        retry_cluster = dict(retry_shared.get("visual_cluster") or retry_metadata.get("visual_cluster") or {})
+        merged_cluster = dict(base_cluster)
+        for key in (
+            "auto_retry_decisions",
+            "real_review_signal_package",
+            "mode_differentiation_review",
+            "has_post_generation_review",
+        ):
+            if key in retry_cluster:
+                merged_cluster[key] = retry_cluster[key]
+        merged_cluster["quality_review_reports"] = self._merge_post_generation_quality_reports(
+            base_cluster.get("quality_review_reports"),
+            retry_cluster.get("quality_review_reports"),
+        )
+        merged_cluster["post_generation_review_package"] = final_package
+        merged_cluster["post_generation_review_history"] = history
+        base_shared["visual_cluster"] = merged_cluster
+
+        result_metadata = {
+            "shared_capabilities": base_shared,
+            "visual_cluster": merged_cluster,
+            "post_generation_review_package": final_package,
+            "post_generation_review_history": history,
+            "post_generation_review_summary": list(final_package.get("user_visible_summary") or []),
+            "final_post_generation_review": final_review,
+        }
+        pack_review = {
+            "post_generation_review_package": final_package,
+            "post_generation_review_history": history,
+            "final_post_generation_review": final_review,
+        }
+        return {
+            "result_metadata": result_metadata,
+            "asset_pack_manifest": pack_review,
+            "asset_pack_metadata": pack_review,
+        }
+
+    def _post_generation_review_attempt(
+        self,
+        package: dict[str, Any],
+        *,
+        stage: str,
+        attempt_index: int,
+    ) -> dict[str, Any]:
+        inspections = [dict(item) for item in package.get("inspections", []) if isinstance(item, dict)]
+        issue_codes = self._dedupe_strings(
+            issue.get("code")
+            for inspection in inspections
+            for issue in inspection.get("detected_issues", [])
+            if isinstance(issue, dict) and issue.get("code")
+        )
+        return {
+            "stage": stage,
+            "attempt_index": attempt_index,
+            "package_id": package.get("package_id"),
+            "output_ids": self._dedupe_strings(inspection.get("output_id") for inspection in inspections),
+            "inspection_ids": self._dedupe_strings(inspection.get("inspection_id") for inspection in inspections),
+            "statuses": self._dedupe_strings(inspection.get("status") for inspection in inspections),
+            "issue_codes": issue_codes,
+            "inspections": inspections,
+        }
+
+    def _post_generation_final_review(
+        self,
+        package: dict[str, Any],
+        *,
+        attempt_index: int,
+        max_attempts: int,
+    ) -> dict[str, Any]:
+        attempt = self._post_generation_review_attempt(
+            package,
+            stage="final_retry" if attempt_index >= max_attempts else "retry",
+            attempt_index=attempt_index,
+        )
+        statuses = set(attempt["statuses"])
+        if "fail_final" in statuses:
+            status = "failed_final"
+        elif "fail_retryable" in statuses:
+            status = "failed_after_retry" if attempt_index >= max_attempts else "retry_recommended"
+        elif "manual_review" in statuses:
+            status = "manual_review"
+        elif "warning" in statuses:
+            status = "warning"
+        elif statuses and statuses <= {"pass"}:
+            status = "pass"
+        else:
+            status = "not_evaluated"
+        return {
+            "stage": attempt["stage"],
+            "attempt_index": attempt_index,
+            "status": status,
+            "output_ids": attempt["output_ids"],
+            "inspection_ids": attempt["inspection_ids"],
+            "issue_codes": attempt["issue_codes"],
+            "additional_retry_allowed": bool(status == "retry_recommended" and attempt_index < max_attempts),
+        }
+
+    def _merge_post_generation_quality_reports(self, *report_sets: Any) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for report_set in report_sets:
+            if not isinstance(report_set, list):
+                continue
+            for value in report_set:
+                if not isinstance(value, dict):
+                    continue
+                key = str(value.get("review_id") or value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                reports.append(dict(value))
+        return reports
 
     def _with_visual_retry_metadata(
         self,

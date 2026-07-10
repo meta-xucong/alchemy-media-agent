@@ -118,6 +118,17 @@ class _StaticVisionProvider:
         return dict(self.payload)
 
 
+class _SequencedVisionProvider(_StaticVisionProvider):
+    def __init__(self, payloads: list[dict]) -> None:
+        super().__init__({})
+        self.payloads = list(payloads)
+
+    def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
+        self.calls.append(resolution)
+        index = min(len(self.calls) - 1, len(self.payloads) - 1)
+        return dict(self.payloads[index])
+
+
 class _StaticReadyResolver:
     def __init__(self, resolution: GeneratedOutputResolution) -> None:
         self.resolution = resolution
@@ -481,6 +492,63 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
     assert review["inspections"][0]["status"] == "fail_retryable"
     assert retry_summary["executed_count"] == 1
     assert len(provider.calls) >= 2
+    assert review["final_review"]["status"] == "failed_after_retry"
+    assert review["final_review"]["additional_retry_allowed"] is False
+    assert [attempt["stage"] for attempt in review["review_attempts"]] == ["initial", "final_retry"]
+
+
+def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_failure(tmp_path) -> None:
+    provider = _SequencedVisionProvider(
+        [
+            {
+                "status": "fail_retryable",
+                "confidence": 0.91,
+                "issue_codes": ["visible_text_artifact"],
+                "summary": ["V3 found extra text in the first output."],
+            },
+            {
+                "status": "pass",
+                "confidence": 0.93,
+                "issue_codes": [],
+                "summary": ["The retry output passed the visual review."],
+            },
+        ]
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "vision_inspection_mode": "vision_model",
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+
+    review = generated.metadata["post_generation_review"]
+    history = review["review_attempts"]
+    final_review = review["final_review"]
+
+    assert len(provider.calls) == 2
+    assert [attempt["stage"] for attempt in history] == ["initial", "final_retry"]
+    assert history[0]["statuses"] == ["fail_retryable"]
+    assert history[0]["issue_codes"] == ["visible_text_artifact"]
+    assert history[1]["statuses"] == ["pass"]
+    assert review["inspections"][0]["status"] == "pass"
+    assert final_review["status"] == "pass"
+    assert final_review["additional_retry_allowed"] is False
+    assert generated.metadata["visual_auto_retry"]["executed_count"] == 1
+    cluster_review = generated.metadata["shared_capabilities"]["visual_cluster"][
+        "post_generation_review_package"
+    ]
+    assert cluster_review["final_review"]["status"] == "pass"
 
 
 def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:

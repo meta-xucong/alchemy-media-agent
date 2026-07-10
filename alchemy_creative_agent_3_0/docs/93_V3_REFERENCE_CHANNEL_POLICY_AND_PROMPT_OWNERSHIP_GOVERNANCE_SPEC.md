@@ -987,6 +987,27 @@ surface only final-delivery outputs to beginner UI
 record the conflict for advanced workflow review
 ```
 
+### 15.6 Final Review Evidence
+
+Every retry output must be inspected before it becomes the authoritative final
+delivery. The retry review is the current review package; the first failed
+review remains in an append-only `review_attempts` trail.
+
+The final package records:
+
+```text
+initial and retry inspection ids, output ids, statuses, and issue codes
+final review stage and attempt index
+pass / warning / manual_review / failed_after_retry / failed_final status
+whether another bounded retry is allowed
+```
+
+At the retry limit, a remaining issue is recorded as `failed_after_retry` and
+must not start another generation loop. A passed retry must not continue to
+expose the first output's `fail_retryable` status as if it described the final
+image. This evidence merge belongs to Product API result assembly; it does not
+add another Brain, provider, or visual-capability module.
+
 ## 16. Implementation Placement
 
 ### 16.1 New File
