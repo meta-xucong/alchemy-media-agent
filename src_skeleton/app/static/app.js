@@ -8161,7 +8161,7 @@ async function initV2({ silent = true, force = false } = {}) {
       orchestratorStatus,
       modelSettings,
     ] = await Promise.all([
-      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs }),
+      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs, optional: true }),
       loadV2OptionalResource("/health", { agents_sdk_available: false }),
       loadV2OptionalResource("/resource-providers", { providers: [] }),
       loadV2OptionalResource("/provider-capabilities", { providers: [] }),
@@ -8192,7 +8192,9 @@ async function initV2({ silent = true, force = false } = {}) {
     renderV2ProviderInheritance();
     renderV2Brain(null, orchestratorStatus);
     renderV2AssetPanel();
-    const readyMessage = v2State.history.length
+    const readyMessage = historyResponse.unavailable
+      ? "V2.0 Agent 中枢已连接，历史记录暂时没加载出来。"
+      : v2State.history.length
       ? silent
         ? "V2.0 历史已加载，中枢状态同步完成。"
         : "V2.0 Agent 中枢已就绪，历史已加载。"
@@ -10644,7 +10646,7 @@ async function openBillingAdmin(event) {
   }
 }
 
-const v2AccountHistoryTimeoutMs = 3500;
+const v2AccountHistoryTimeoutMs = 8000;
 const v2OptionalResourceTimeoutMs = 3500;
 
 function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
@@ -10717,6 +10719,14 @@ async function loadV2HistoryResponse(options = {}) {
   } catch (error) {
     const fallback = await loadV2ImageHistoryFallback(v2HistoryLoadErrorMessage(error), options);
     if (fallback) return fallback;
+    if (options.optional) {
+      return {
+        items: [],
+        total: 0,
+        unavailable: true,
+        error: v2HistoryLoadErrorMessage(error),
+      };
+    }
     throw error;
   }
 }
@@ -11198,7 +11208,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
     const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
       refreshVeyraAccount(),
       request(`/v1/image/history?limit=${historyFetchPageSize}&offset=0`),
-      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs }),
+      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs, optional: true }),
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
@@ -11260,12 +11270,7 @@ async function v2Request(path, options = {}) {
     };
     try {
       const payload = JSON.parse(detail);
-      const payloadMessage =
-        typeof payload.detail === "string"
-          ? payload.detail
-          : typeof payload.message === "string"
-            ? payload.message
-            : detail;
+      const payloadMessage = v2ErrorMessageFromPayload(payload, detail);
       throw buildError(payloadMessage);
     } catch (error) {
       if (error instanceof SyntaxError) throw buildError(detail);
@@ -11273,6 +11278,19 @@ async function v2Request(path, options = {}) {
     }
   }
   return response.json();
+}
+
+function v2ErrorMessageFromPayload(payload, fallbackText = "") {
+  if (!payload || typeof payload !== "object") return fallbackText;
+  if (typeof payload.detail === "string") return payload.detail;
+  if (payload.detail && typeof payload.detail === "object") {
+    if (typeof payload.detail.message === "string") return payload.detail.message;
+    if (typeof payload.detail.error_code === "string") return payload.detail.error_code;
+    if (typeof payload.detail.code === "string") return payload.detail.code;
+  }
+  if (typeof payload.message === "string") return payload.message;
+  if (typeof payload.error === "string") return payload.error;
+  return fallbackText;
 }
 
 async function handleV2Asset() {

@@ -143,9 +143,65 @@ def test_doc91_ecommerce_kidswear_model_activates_human_realism_for_product_subj
     assert plugin["subject_type"] == "product"
     assert plugin["human_subject_kind"] == "child_or_teen_model"
     assert plugin["strictness"] == "child_strict"
+    assert plugin["style_profile"] == "child_catalog_natural"
     assert plugin["disabled_by_style"] is False
     assert "ecommerce_human_model_detected" in plugin["reason_codes"]
     assert "doll-like child face" in guidance.negative_prompt_fragments
+
+
+def test_doc92_moody_traditional_portrait_suppresses_bright_fresh_skin_pressure() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc92_gufeng",
+        job_id="job_doc92_gufeng",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input=(
+            "国风写实人像摄影，古典柔焦电影美学，清冷忧郁暗调，冷青银白色调，"
+            "局部聚光，年轻女性，冷白肤色，柔和高光，古装，梨花背景"
+        ),
+        subject_type="character",
+        variation_mode="delivery_suite",
+        has_identity_reference=True,
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+    positives = " ".join(guidance.positive_prompt_fragments).lower()
+    negatives = " ".join(guidance.negative_prompt_fragments).lower()
+
+    assert guidance.applies is True
+    assert plugin["style_profile"] == "moody_cinematic_traditional"
+    assert "natural human skin texture" in positives
+    assert "clean high-key summer daylight" not in positives
+    assert "soft natural bounce light" not in positives
+    assert "clean fair luminous complexion" not in positives
+    assert "moody cinematic human realism" in positives
+    assert "oily face" in negatives
+    assert "plastic nose bridge" in negatives
+    assert "over-bright fresh commercial beauty lighting" in negatives
+
+
+def test_doc92_bright_summer_portrait_keeps_fresh_commercial_profile() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc92_summer",
+        job_id="job_doc92_summer",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input="Create a clean bright summer East Asian portrait photo with fresh daylight and healthy clear complexion",
+        subject_type="character",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+    positives = " ".join(guidance.positive_prompt_fragments).lower()
+
+    assert plugin["style_profile"] == "bright_fresh_commercial"
+    assert "clean high-key summer daylight" in positives
+    assert "soft natural bounce light" in positives
 
 
 def test_doc91_visual_cluster_exports_plugin_metadata_for_product_on_model() -> None:

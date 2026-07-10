@@ -217,6 +217,83 @@ _CHINESE_HAND_OR_SKIN_TERMS = {
     "\u76ae\u80a4",
 }
 
+_MOODY_TRADITIONAL_TERMS = {
+    "ancient",
+    "traditional",
+    "gufeng",
+    "hanfu",
+    "cinematic",
+    "moody",
+    "low-key",
+    "low key",
+    "dark",
+    "night",
+    "melancholic",
+    "cold blue",
+    "silver",
+    "soft-focus film",
+    "film noir",
+    "spotlight",
+    "shadow-rich",
+}
+
+_CHINESE_MOODY_TRADITIONAL_TERMS = {
+    "\u53e4\u98ce",
+    "\u56fd\u98ce",
+    "\u6c49\u670d",
+    "\u53e4\u88c5",
+    "\u53e4\u5178",
+    "\u7535\u5f71",
+    "\u6697\u8c03",
+    "\u6e05\u51b7",
+    "\u5fe7\u90c1",
+    "\u51b7\u9752",
+    "\u94f6\u767d",
+    "\u4f4e\u8c03",
+    "\u67d4\u7126",
+    "\u5c40\u90e8\u805a\u5149",
+    "\u591c",
+    "\u9634\u5f71",
+}
+
+_BRIGHT_FRESH_TERMS = {
+    "summer",
+    "daylight",
+    "fresh",
+    "clean bright",
+    "high-key",
+    "high key",
+    "bright social",
+    "sunny",
+    "healthy clear complexion",
+}
+
+_CHINESE_BRIGHT_FRESH_TERMS = {
+    "\u590f\u65e5",
+    "\u590f\u5929",
+    "\u660e\u4eae",
+    "\u6e05\u723d",
+    "\u6e05\u65b0",
+    "\u65e5\u5149",
+    "\u9ad8\u8c03",
+    "\u5e72\u51c0\u900f\u4eae",
+}
+
+_MOODY_SUPPRESSED_POSITIVE_TERMS = {
+    "healthy clear complexion",
+    "clean high-key",
+    "summer daylight",
+    "fresh bright skin",
+    "fresh bright",
+    "soft natural bounce light",
+    "bounce light",
+    "for east asian fresh",
+    "do not darken or tan east asian skin",
+    "clean fair luminous complexion",
+    "gentle cheek warmth",
+    "beauty portrait briefs",
+}
+
 _ANTI_AI_FACE_ISSUES = {
     "ai_face_render",
     "plastic_skin",
@@ -323,7 +400,9 @@ class HumanPhotorealismLayer:
 
         realism_level = self._realism_level(user_input, metadata)
         human_subject_kind = str(activation.get("human_subject_kind") or "adult_portrait")
+        style_profile = str(activation.get("style_profile") or "neutral_real_camera")
         is_child_model = human_subject_kind == "child_or_teen_model"
+        is_moody_traditional = style_profile == "moody_cinematic_traditional"
         positives = [
             "real camera photograph, not a rendered or AI-beauty face",
             "natural human skin texture with subtle pores, fine detail, and small tonal variation",
@@ -354,6 +433,15 @@ class HumanPhotorealismLayer:
                     "real child or teen photography with age-appropriate facial proportions, relaxed expression, and believable real-camera skin texture",
                     "commercial catalog polish must still feel like a real child model, not a doll, toy, mannequin, or pageant retouch",
                     "keep natural child eyes, cheeks, hairline, teeth, neck, and shoulder proportions with gentle real daylight or studio light",
+                ]
+            )
+        if is_moody_traditional:
+            positives.extend(
+                [
+                    "moody cinematic human realism: keep soft-matte photographed skin texture under low-key cold light, not glossy beauty-filter skin",
+                    "preserve the requested dark, cold, traditional, filmic mood; do not brighten the face into a fresh commercial daylight portrait",
+                    "forehead, nose bridge, cheeks, and lips should have controlled photographic highlight roll-off with visible fine texture, never oily or waxy shine",
+                    "ancient or traditional styling stays elegant and beautiful through bone structure, expression, fabric detail, and lens depth rather than plastic polish",
                 ]
             )
         if has_identity_reference:
@@ -433,6 +521,21 @@ class HumanPhotorealismLayer:
             "skin whitening filter",
             "beauty-app glow",
         ]
+        if is_moody_traditional:
+            negatives.extend(
+                [
+                    "oily face",
+                    "greasy forehead",
+                    "plastic nose bridge",
+                    "waxy cheek highlight",
+                    "wet glossy makeup skin",
+                    "dewy beauty-filter skin",
+                    "over-bright fresh commercial beauty lighting",
+                    "high-key summer daylight look",
+                    "bright bounce-light portrait look",
+                    "porcelain fantasy doll face",
+                ]
+            )
         if is_child_model:
             negatives.extend(
                 [
@@ -449,6 +552,7 @@ class HumanPhotorealismLayer:
                 ]
             )
         negatives.extend(_string_list(casebook.get("negative_prompt_fragments")))
+        positives = _style_aware_positive_fragments(positives, style_profile)
         preserve = [
             "keep the same broad face shape, age direction, body type, and recognizable identity cues",
             "allow expression, pose, head angle, camera angle, crop, and small hair styling changes so the set feels photographed",
@@ -482,6 +586,13 @@ class HumanPhotorealismLayer:
                     "child skin, eyes, teeth, cheeks, and expression avoid synthetic catalog-model polish",
                 ]
             )
+        if is_moody_traditional:
+            review_targets.extend(
+                [
+                    "moody traditional portrait keeps real skin texture without oily forehead, waxy cheeks, or plastic nose highlight",
+                    "face realism preserves the requested cold dark film atmosphere instead of becoming bright commercial beauty lighting",
+                ]
+            )
         review_targets.extend(_string_list(casebook.get("review_targets")))
         casebook_retry = casebook.get("retry_patch_templates") if isinstance(casebook.get("retry_patch_templates"), dict) else {}
         retry_patch_templates = {
@@ -505,6 +616,34 @@ class HumanPhotorealismLayer:
                 [
                     *retry_patch_templates["prompt_additions"],
                     "real child or teen photography with age-appropriate facial proportions, natural skin, believable eyes, and relaxed expression",
+                ]
+            )
+        if is_moody_traditional:
+            retry_patch_templates["prompt_additions"] = _style_aware_positive_fragments(
+                [
+                    *retry_patch_templates["prompt_additions"],
+                    "repair moody traditional portraits toward soft-matte photographed skin, restrained highlight roll-off, real pores, and cold cinematic atmosphere",
+                ],
+                style_profile,
+            )
+            retry_patch_templates["artifact_repair"] = _dedupe(
+                [
+                    *retry_patch_templates["artifact_repair"],
+                    "reduce oily forehead, waxy nose bridge, glossy cheeks, and plastic beauty-filter shine while preserving elegant ancient-style beauty and cold film lighting",
+                ]
+            )
+            retry_patch_templates["negative_additions"] = _dedupe(
+                [
+                    *retry_patch_templates["negative_additions"],
+                    "oily face",
+                    "greasy forehead",
+                    "plastic nose bridge",
+                    "waxy cheek highlight",
+                    "wet glossy makeup skin",
+                    "dewy beauty-filter skin",
+                    "over-bright fresh commercial beauty lighting",
+                    "high-key summer daylight look",
+                    "porcelain fantasy doll face",
                 ]
             )
             retry_patch_templates["artifact_repair"] = _dedupe(
@@ -550,6 +689,7 @@ class HumanPhotorealismLayer:
                 "module_id": self.module_id,
                 "enable_reason": reason,
                 "doc91_human_realism_plugin": True,
+                "doc92_style_aware_ai_feel_suppression": True,
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "has_identity_reference": has_identity_reference,
                 "doc68_casebook_recipe": True,
@@ -665,13 +805,15 @@ class HumanPhotorealismLayer:
                 subject_type=subject_type,
             )
         if _truthy(metadata.get("force_human_realism_plugin")):
+            forced_kind = str(metadata.get("human_subject_kind") or "adult_portrait")
             return _activation_payload(
                 applies=True,
                 primary_reason="forced_by_metadata",
                 reason_codes=["forced_by_metadata"],
                 subject_type=subject_type,
-                human_subject_kind=str(metadata.get("human_subject_kind") or "adult_portrait"),
+                human_subject_kind=forced_kind,
                 strictness=str(metadata.get("human_realism_strictness") or "commercial_strict"),
+                style_profile=str(metadata.get("human_realism_style_profile") or _style_profile_for_text("", forced_kind)),
                 evidence={"metadata": ["force_human_realism_plugin"]},
             )
 
@@ -737,6 +879,7 @@ class HumanPhotorealismLayer:
             )
 
         evidence["text_signals"] = reason_codes
+        style_profile = _style_profile_for_text(text, human_subject_kind)
         return _activation_payload(
             applies=True,
             primary_reason=reason_codes[0],
@@ -744,6 +887,7 @@ class HumanPhotorealismLayer:
             subject_type=subject_type,
             human_subject_kind=human_subject_kind,
             strictness=strictness,
+            style_profile=style_profile,
             evidence=evidence,
         )
 
@@ -832,6 +976,32 @@ def _stylized_requested(text: str) -> bool:
     return False
 
 
+def _style_profile_for_text(text: str, human_subject_kind: str) -> str:
+    if human_subject_kind == "child_or_teen_model":
+        return "child_catalog_natural"
+    if human_subject_kind == "hand_or_skin_detail":
+        return "hand_or_skin_detail"
+    moody = _contains_any(text, _MOODY_TRADITIONAL_TERMS) or _contains_any(text, _CHINESE_MOODY_TRADITIONAL_TERMS)
+    bright = _contains_any(text, _BRIGHT_FRESH_TERMS) or _contains_any(text, _CHINESE_BRIGHT_FRESH_TERMS)
+    if moody:
+        return "moody_cinematic_traditional"
+    if bright:
+        return "bright_fresh_commercial"
+    return "neutral_real_camera"
+
+
+def _style_aware_positive_fragments(fragments: list[str], style_profile: str) -> list[str]:
+    if style_profile != "moody_cinematic_traditional":
+        return _dedupe(fragments)
+    filtered: list[str] = []
+    for fragment in fragments:
+        lowered = fragment.lower()
+        if any(term in lowered for term in _MOODY_SUPPRESSED_POSITIVE_TERMS):
+            continue
+        filtered.append(fragment)
+    return _dedupe(filtered)
+
+
 def _activation_payload(
     *,
     applies: bool,
@@ -842,6 +1012,7 @@ def _activation_payload(
     disabled_by_style: bool = False,
     human_subject_kind: str = "none",
     strictness: str = "off",
+    style_profile: str = "neutral_real_camera",
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if applies and human_subject_kind == "none":
@@ -858,9 +1029,11 @@ def _activation_payload(
         "subject_type": subject_type,
         "human_subject_kind": human_subject_kind,
         "strictness": strictness,
+        "style_profile": style_profile if applies else "stylized_disabled" if disabled_by_style else "off",
         "review_issue_codes": review_codes,
         "evidence": evidence or {},
         "doc": "91",
+        "doc92": True,
     }
 
 

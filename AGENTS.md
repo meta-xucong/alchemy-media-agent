@@ -33,6 +33,7 @@ Hard rules:
 11. When an uploaded portrait is used as a same-person reference, identity-critical traits from the image override conflicting prompt aesthetics unless the user explicitly asks to redesign or change the person.
 12. Doc91 Human Realism Plugin is a shared Visual Capability Cluster plugin. Any V3 path that generates real people, models, visible faces, hands, skin, product-on-person, fashion, kidswear, or lifestyle scenes with people must route anti-AI-face and real-camera human guidance through that plugin, even when the template subject is product. Do not duplicate this logic inside General, E-Commerce, Photography, or Central Brain code.
 13. Child, teen, or kidswear realism rules are only auxiliary branches inside the general Human Realism Plugin. They may strengthen age-appropriate realism when detected, but they must never turn the shared module into a child-specific or kidswear-specific solution.
+14. Doc92 Human Realism must be style-aware. Do not push bright/fresh/luminous/high-key/bounce-light commercial skin language into moody, dark, ancient/traditional, cinematic, low-key, or melancholic portraits. In those cases, reduce AI-feel through real texture, controlled highlights, soft-matte skin, lens realism, and anti-plastic negatives while preserving the requested mood.
 
 Short form:
 
