@@ -342,6 +342,7 @@ def test_production_provider_retries_generic_reference_upstream_400_once(tmp_pat
     assert summary["executed_count"] == 1
     assert summary["fresh_upstream_requests"] == 2
     assert summary["attempts"][0]["classification"] == "retryable_provider_failure"
+    assert summary["provider_prompt_chars"] > 0
 
 
 def test_production_provider_does_not_retry_non_retryable_configuration_failure(tmp_path, monkeypatch) -> None:

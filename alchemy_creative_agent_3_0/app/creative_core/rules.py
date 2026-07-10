@@ -73,16 +73,42 @@ LOCAL_SERVICE_CONTEXT_TERMS: tuple[str, ...] = (
     "\u9884\u7ea6",
     "\u5f00\u4e1a\u4f18\u60e0",
 )
+LOCAL_SERVICE_INTENT_TERMS: tuple[str, ...] = (
+    "salon",
+    "spa",
+    "service",
+    "booking",
+    "appointment",
+    "store opening",
+    "opening campaign",
+    "nail salon",
+    "beauty salon",
+    "\u7f8e\u7532\u5e97",
+    "\u7f8e\u5bb9\u9662",
+    "\u7f8e\u53d1\u5e97",
+    "\u5230\u5e97",
+    "\u9884\u7ea6",
+    "\u5f00\u4e1a",
+    "\u4f18\u60e0",
+    "\u56e2\u8d2d",
+    "\u5957\u9910",
+    "\u4ef7\u683c",
+    "\u670d\u52a1\u9879\u76ee",
+    "\u62a4\u7406\u9879\u76ee",
+)
 
 
 def _is_portrait_beauty_context(normalized_input: str) -> bool:
-    has_beauty_word = "beauty" in normalized_input or "\u7f8e\u5973" in normalized_input
-    if not has_beauty_word:
-        return False
-    return _contains_any(normalized_input, PORTRAIT_BEAUTY_CONTEXT_TERMS) and not _contains_any(
+    has_beauty_term = _contains_any(
         normalized_input,
-        LOCAL_SERVICE_CONTEXT_TERMS,
+        ("beauty", "nail", "\u7f8e\u5973", "\u7f8e\u7532", "\u7f8e\u5bb9", "\u7f8e\u53d1"),
     )
+    if not has_beauty_term:
+        return False
+    has_portrait_subject = looks_like_human_subject_context(normalized_input) or _contains_any(
+        normalized_input, PORTRAIT_BEAUTY_CONTEXT_TERMS
+    )
+    return has_portrait_subject and not _contains_any(normalized_input, LOCAL_SERVICE_INTENT_TERMS)
 
 
 INDUSTRY_KEYWORDS: tuple[tuple[IndustryCategory, tuple[str, ...]], ...] = (

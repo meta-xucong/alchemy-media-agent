@@ -535,6 +535,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         max_attempts = 2
         attempts: list[dict[str, Any]] = []
         last_error: BaseException | None = None
+        provider_prompt_chars = self._app_request_prompt_chars(app_request)
         self._last_provider_failure_retry_summary = {
             "executed_count": 0,
             "max_attempts": max_attempts,
@@ -542,6 +543,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "final_status": "skipped",
             "attempts": attempts,
             "reference_asset_count": len(reference_assets),
+            "provider_prompt_chars": provider_prompt_chars,
         }
         for attempt in range(1, max_attempts + 1):
             retry_metadata = self._provider_failure_retry_metadata(
@@ -563,6 +565,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "final_status": "succeeded",
                     "attempts": attempts,
                     "reference_asset_count": len(reference_assets),
+                    "provider_prompt_chars": provider_prompt_chars,
                 }
                 return result
             except BaseException as exc:
@@ -587,6 +590,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "final_status": "failed",
                         "attempts": attempts,
                         "reference_asset_count": len(reference_assets),
+                        "provider_prompt_chars": provider_prompt_chars,
                         "final_classification": classification,
                     }
                     try:
@@ -598,6 +602,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if last_error is not None:
             raise last_error
         raise TimeoutError("V3 production provider timed out.")
+
+    def _app_request_prompt_chars(self, app_request) -> int:
+        prompt_plan = getattr(app_request, "prompt_plan", None)
+        variables = getattr(prompt_plan, "variables", None)
+        if isinstance(variables, dict):
+            return len(str(variables.get("generation_prompt") or ""))
+        return 0
 
     def _provider_failure_retry_metadata(self, *, attempt: int, max_attempts: int, previous_error: BaseException | None) -> dict[str, Any]:
         metadata = {

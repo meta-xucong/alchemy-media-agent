@@ -23,6 +23,33 @@ def test_beauty_portrait_does_not_become_local_service() -> None:
         == IndustryCategory.UNKNOWN
     )
     assert detect_industry(normalize_input("beauty salon opening campaign")) == IndustryCategory.LOCAL_SERVICE_BEAUTY
+    assert (
+        detect_industry(
+            normalize_input(
+                "国风写实人像摄影，一位年轻女性单手轻抚下巴，淡雅修长美甲，银白色古装，梨花背景"
+            )
+        )
+        == IndustryCategory.UNKNOWN
+    )
+
+
+def test_portrait_manicure_detail_does_not_inject_local_service_defaults() -> None:
+    result = run_creative_planning(
+        "国风写实人像摄影，一位年轻女性单手轻抚下巴，淡雅修长美甲，银白色古装，梨花背景"
+    )
+    prompt_text = " ".join(
+        [
+            result.prompt_compilations[0].visual_prompt,
+            result.prompt_compilations[0].negative_prompt,
+            " ".join(result.prompt_compilations[0].style_notes),
+            " ".join(result.prompt_compilations[0].layout_notes),
+        ]
+    ).lower()
+
+    assert result.commercial_brief.industry == IndustryCategory.UNKNOWN
+    assert "beauty service image" not in prompt_text
+    assert "medical fear style" not in prompt_text
+    assert "salon background" not in prompt_text
 
 
 def test_beauty_portrait_planning_does_not_use_local_service_pack() -> None:

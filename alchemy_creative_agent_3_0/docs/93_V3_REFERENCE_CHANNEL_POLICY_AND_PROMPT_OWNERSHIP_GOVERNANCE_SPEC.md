@@ -819,6 +819,14 @@ before encoding. Do not widen the crop or restore old-scene pixels. This keeps
 identity evidence narrow while satisfying gateways that reject smaller edit
 inputs with only a generic `400 / openai_error` wrapper.
 
+Semantic routing must also remain subject-aware. A portrait detail such as
+manicure, makeup, hair, or skin must not activate a local beauty-service lane
+unless the request also carries explicit service intent such as a salon,
+booking, store opening, offer, package, price, or treatment. Provider failure
+metadata records the exact final provider-prompt character count so gateway
+rejections can be distinguished from image-input failures without logging the
+private prompt itself.
+
 If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
 `400 / bad_response_status_code / openai_error`, classify only that generic
 wrapper as transient and allow one fresh provider request. Explicit malformed
