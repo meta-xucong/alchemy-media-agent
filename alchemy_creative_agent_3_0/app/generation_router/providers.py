@@ -1847,6 +1847,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not package:
             return ""
         prompt_rules = self._string_list(package.get("provider_prompt_rules"))
+        selected_rules: list[str] = []
+        for marker in (
+            "current prompt owns",
+            "same-person identity truth",
+            "preserve underlying face geometry",
+            "follow the current prompt",
+            "do not copy the reference image's original lighting",
+            "doc88 balance contract",
+            "selected generated outputs",
+            "compact identity guidance",
+        ):
+            match = next((rule for rule in prompt_rules if marker in rule.lower()), None)
+            if match and match not in selected_rules:
+                selected_rules.append(match)
         effective_owners = package.get("effective_channel_owners")
         owner_lines = []
         if isinstance(effective_owners, dict):
@@ -1857,7 +1871,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]
         lines = [
             "Doc93 reference-channel contract: reference images may influence only their assigned channels.",
-            *prompt_rules[:10],
+            *selected_rules[:8],
             "Effective reference-owned channels: " + "; ".join(owner_lines[:10]) if owner_lines else "",
         ]
         return "Reference channel policy:\n" + "\n".join(line for line in lines if line)
@@ -1954,7 +1968,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             f"Mode: {policy.get('mode') or recipe.get('metadata', {}).get('mode') or 'delivery_suite'}",
             f"This image role: {recipe.get('label') or recipe.get('role_key')}",
             f"Purpose: {recipe.get('purpose')}" if recipe.get("purpose") else "",
-            f"Required shot: {recipe.get('prompt_pressure')}" if recipe.get("prompt_pressure") else "",
+            (
+                f"Required shot: {self._role_prompt_pressure_for_provider(str(recipe.get('prompt_pressure') or ''))}"
+                if recipe.get("prompt_pressure")
+                else ""
+            ),
             f"Shot family: {recipe.get('shot_family')}" if recipe.get("shot_family") else "",
             f"Camera distance: {recipe.get('camera_distance')}" if recipe.get("camera_distance") else "",
             f"Angle: {recipe.get('angle_rule')}" if recipe.get("angle_rule") else "",
@@ -1984,7 +2002,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         role_plan = self._role_specific_generation_plan(request)
         plan_prompt_additions = self._string_list(role_plan.get("prompt_additions"))
         if plan_prompt_additions:
-            lines.append("Suite director rules: " + "; ".join(plan_prompt_additions[:8]))
+            concise_additions = [
+                self._role_prompt_pressure_for_provider(value)
+                for value in plan_prompt_additions[:8]
+                if self._role_prompt_pressure_for_provider(value)
+            ]
+            if concise_additions:
+                lines.append("Suite director rules: " + "; ".join(concise_additions))
         plan_metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
         identity_plan = plan_metadata.get("identity_hero_selection_plan") if isinstance(plan_metadata, dict) else {}
         if isinstance(identity_plan, dict) and identity_plan.get("applies"):
@@ -2000,43 +2024,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
         portrait_balance_policy = (
             plan_metadata.get("portrait_reference_balance_policy") if isinstance(plan_metadata, dict) else {}
         )
-        if isinstance(portrait_balance_policy, dict) and portrait_balance_policy.get("applies"):
-            prompt_truth = self._string_list(portrait_balance_policy.get("current_prompt_truth_rules"))
-            approved_anchor = self._string_list(portrait_balance_policy.get("approved_visual_anchor_rules"))
-            ordering = self._string_list(portrait_balance_policy.get("prompt_ordering_rules"))
-            if prompt_truth:
-                lines.append("Doc88 prompt mood protection: " + "; ".join(prompt_truth[:3]))
-            if approved_anchor:
-                lines.append("Doc88 approved visual anchor: " + "; ".join(approved_anchor[:3]))
-            if ordering:
-                lines.append("Doc88 prompt order: " + "; ".join(ordering[:3]))
-        if isinstance(portrait_reference_policy, dict) and portrait_reference_policy.get("applies"):
-            policy_rules = self._string_list(portrait_reference_policy.get("prompt_rules"))
-            prompt_owned = self._string_list(portrait_reference_policy.get("prompt_owned_channels"))
-            blocked = self._string_list(portrait_reference_policy.get("blocked_reference_channels"))
-            lines.append("Reference inheritance boundary: " + "; ".join(policy_rules[:4]))
-            if prompt_owned:
-                lines.append("Prompt-owned style channels: " + "; ".join(prompt_owned[:8]))
-            if blocked:
-                lines.append("Do not inherit source reference channels: " + "; ".join(blocked[:8]))
-        if isinstance(portrait_bone_lock, dict) and portrait_bone_lock.get("applies"):
-            prompt_rules = self._string_list(portrait_bone_lock.get("prompt_rules"))
-            bone_traits = self._string_list(portrait_bone_lock.get("stable_bone_traits"))
-            feature_traits = self._string_list(portrait_bone_lock.get("stable_feature_relationships"))
-            allowed_surface = self._string_list(portrait_bone_lock.get("allowed_surface_changes"))
-            forbidden = self._string_list(portrait_bone_lock.get("forbidden_geometry_drift"))
-            lines.append("Portrait bone-structure identity lock: " + "; ".join([*prompt_rules[:3], *bone_traits[:3], *feature_traits[:3]]))
-            if allowed_surface:
-                lines.append("Allowed styling changes: " + "; ".join(allowed_surface[:6]))
-            if forbidden:
-                lines.append("Forbidden face-geometry drift: " + "; ".join(forbidden[:8]))
-        if isinstance(styling_delta_policy, dict) and styling_delta_policy.get("applies"):
-            policy_rules = self._string_list(styling_delta_policy.get("prompt_rules"))
-            disallowed = self._string_list(styling_delta_policy.get("disallowed_identity_changes"))
-            if policy_rules:
-                lines.append("Styling delta policy: " + "; ".join(policy_rules[:3]))
-            if disallowed:
-                lines.append("Styling must not change: " + "; ".join(disallowed[:8]))
         if isinstance(subject_identity_card, dict) and subject_identity_card.get("applies"):
             keep_rules = self._string_list(subject_identity_card.get("identity_keep_rules"))
             feature_rules = self._string_list(subject_identity_card.get("facial_feature_integrity_rules"))
@@ -2045,23 +2032,29 @@ class ProductionImageGenerationProvider(GenerationProvider):
             allowed_variations = self._string_list(subject_identity_card.get("allowed_variations"))
             forbidden_drift = self._string_list(subject_identity_card.get("forbidden_drift"))
             if keep_rules or feature_rules:
-                lines.append("Subject identity card: " + "; ".join([*keep_rules[:4], *feature_rules[:4]]))
+                lines.append("Subject identity card: " + "; ".join([*keep_rules[:2], *feature_rules[:2]]))
             if realism_rules:
-                lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:4]))
+                lines.append("Beautiful realism balance: " + "; ".join(realism_rules[:2]))
             if appearance_rules:
-                lines.append("Structured appearance lock: " + "; ".join(appearance_rules[:4]))
+                lines.append("Structured appearance lock: " + "; ".join(appearance_rules[:2]))
             if allowed_variations:
-                lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:6]))
+                lines.append("Allowed identity-safe variation: " + "; ".join(allowed_variations[:3]))
             if forbidden_drift:
-                lines.append("Identity drift to avoid: " + "; ".join(forbidden_drift[:8]))
+                lines.append("Identity drift to avoid: " + "; ".join(forbidden_drift[:4]))
         strict_policy = plan_metadata.get("strict_visual_review_policy") if isinstance(plan_metadata, dict) else {}
         if isinstance(strict_policy, dict) and strict_policy.get("applies"):
             strict_rules = self._string_list(strict_policy.get("prompt_additions"))
             if strict_rules:
-                lines.append("Strict visual review rules: " + "; ".join(strict_rules[:8]))
+                selected_strict = [
+                    strict_rules[index]
+                    for index in (0, 2, 3, 5)
+                    if index < len(strict_rules)
+                ]
+                lines.append("Strict visual review rules: " + "; ".join(selected_strict))
             pass_conditions = self._string_list(strict_policy.get("pass_conditions"))
             if pass_conditions:
-                lines.append("Strict visual pass conditions: " + "; ".join(pass_conditions[:5]))
+                selected_pass = _dedupe([pass_conditions[0], pass_conditions[-1]])
+                lines.append("Strict visual pass conditions: " + "; ".join(selected_pass))
             negative_rules = self._string_list(strict_policy.get("negative_additions"))
             if negative_rules:
                 priority_negative_rules = [
@@ -2078,18 +2071,35 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "same type but different person",
                         "style changed face geometry",
                         "3D render",
+                        "generic stock photo finish",
+                        "overprocessed HDR finish",
                     }
                 ]
-                lines.append("Strict visual avoid: " + "; ".join(_dedupe([*priority_negative_rules, *negative_rules[:16]])[:24]))
-            strict_avoid = self._string_list(strict_policy.get("negative_additions"))
-            if strict_avoid:
-                lines.append("Strict visual avoid: " + "; ".join(strict_avoid[:16]))
-        lines.extend(provider_casebook_prompt_lines(recipe))
+                lines.append("Strict visual avoid: " + "; ".join(_dedupe(priority_negative_rules)))
+        lines.extend(self._concise_module_prompt_line(line) for line in provider_casebook_prompt_lines(recipe))
         if keep:
             lines.append("Keep: " + "; ".join(keep[:5]))
         if avoid:
             lines.append("Do not: " + "; ".join(avoid[:5]))
         return [line for line in lines if str(line or "").strip()]
+
+    def _role_prompt_pressure_for_provider(self, value: str) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        for marker in (
+            "Use a real-photo portrait atom stack:",
+            "Real-camera imperfection should win over beauty-app polish",
+        ):
+            if marker in text:
+                text = text.split(marker, 1)[0].rstrip(" ;.")
+        return text
+
+    def _concise_module_prompt_line(self, value: str, *, max_items: int = 4) -> str:
+        line = " ".join(str(value or "").split()).strip()
+        heading, separator, body = line.partition(":")
+        if not separator:
+            return line
+        items = [item.strip() for item in body.split(";") if item.strip()]
+        return f"{heading}: {'; '.join(items[:max_items])}" if items else line
 
     def _negative_constraints(self, request: GenerationRequest) -> list[str]:
         allow_product_language = self._product_language_allowed(request, [])
