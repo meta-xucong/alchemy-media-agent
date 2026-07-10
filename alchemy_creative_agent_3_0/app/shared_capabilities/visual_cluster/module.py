@@ -1693,13 +1693,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_keep_rules.append("preserve the explicitly assigned hair direction")
         appearance_structure_rules = _structured_appearance_rules() if structured_appearance else []
         facial_feature_integrity_rules = [
-            "keep facial features attractive and harmonious; realism must not make the face less beautiful",
-            "keep clean attractive eyebrow design, clear awake eyes, natural flattering eyelid detail, and pleasant lip shape",
+            "preserve the reference person's existing facial proportions, individual feature design, and own attractiveness; realism or styling must not redesign the face",
+            "present the reference eyebrow, eye, eyelid, nose-mouth, and lip relationships attractively through prompt-owned makeup, expression, camera, and light rather than replacing their base geometry",
             "keep soft facial contour without face-slimming distortion, enlarged beauty-filter eyes, or a perfect V-shaped chin",
             "protect the selected person's beautiful feature relationships instead of replacing them with a generic AI face",
         ]
         beautiful_realism_rules = [
-            "beauty is the visual goal and realism is the rendering method",
+            "the reference person's own attractiveness is identity-owned; realism is the rendering method and must not optimize facial geometry",
             "use skin texture, natural light/shadow, real hair strands, fabric folds, and camera texture as realism evidence",
             "preserve reference or explicitly requested complexion through prompt-consistent light and color without demographic defaults",
             "avoid ugly realism: dark muddy skin, tired expression, harsh unflattering shadow, or degraded facial proportions",
@@ -1739,8 +1739,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             )
         prompt_additions = [
             "Subject identity card: preserve identity-critical traits while allowing new expression, pose, camera angle, crop, scene, and hair movement.",
-            "Facial-feature aesthetic integrity: preserve attractive eye shape/spacing, eyebrow design, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, and neck/shoulder balance.",
-            "Beautiful realism balance: keep the face beautiful; make it realistic through skin texture, light/shadow, hair, fabric, camera detail, and natural asymmetry, not by degrading facial proportions.",
+            "Facial-feature aesthetic integrity: preserve the reference person's eye shape/spacing, eyebrow base design, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, and own attractiveness; improve presentation without redesigning geometry.",
+            "Beautiful realism balance: keep the reference person's own facial design; create beauty through prompt-owned makeup, expression, camera, light, skin texture, hair, fabric, and natural asymmetry, never facial remodeling.",
         ]
         if structured_appearance:
             prompt_additions.append(
@@ -2104,7 +2104,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "Strict visual review closure: do not accept outputs that look like generic AI beauty, repeated clones, role-collapsed frames, or weak direct-use photography.",
             "Every output must pass three checks: identity continuity, role usefulness, and real-camera direct-use finish.",
             "Foundation aesthetic stability: keep one clear subject, intentional framing, balanced exposure, stable color grade, natural contrast, believable depth, and direct-use polish.",
-            "Beautiful realism rule: beauty is the visual goal and realism is the rendering method; do not make the face less beautiful merely to make it realistic.",
+            "Beautiful realism rule: the reference person's own attractiveness is identity-owned; render it through real texture, prompt-owned styling, camera, and light without facial optimization or degradation.",
             "Facial-feature integrity: preserve attractive eyes, eyebrow shape/arc, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance.",
             "Reject technically valid but weak images when they look generic, flat, washed out, muddy, overprocessed, or visually accidental.",
             "If a result has AI face, watermarks, bad anatomy, identity drift, or duplicated role duty, prepare a bounded retry instead of treating it as final.",

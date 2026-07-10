@@ -1547,7 +1547,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
             lines = [
                 "Polish interpretation: camera-ready real-person photography, never beauty-app face reshaping, face slimming, enlarged eyes, V-shaped chin, or skin-blur retouch.",
-                "Attractive realism balance: preserve the reference or explicitly requested complexion direction and an attractive natural face with believable texture, prompt-consistent light, awake eyes, natural lips, and no plastic, waxy, whitening, tanning, or beauty-filter retouch.",
+                "Attractive realism balance: the reference person's own feature geometry and individual attractiveness are identity-owned; present them through prompt-consistent makeup, expression, camera, light, complexion, and believable texture without facial optimization, whitening, tanning, or beauty-filter remodeling.",
                 "Identity continuity: Human Realism improves rendering only; it never expands reference ownership into hair, wardrobe, lighting, scene, camera, or style.",
                 "Universal complexion and proportion guard: preserve reference or explicit prompt complexion, age direction, and natural head-to-body, neck, shoulder, and upper-body proportions; do not impose demographic lightness, tanning, or beauty-template geometry.",
                 "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",

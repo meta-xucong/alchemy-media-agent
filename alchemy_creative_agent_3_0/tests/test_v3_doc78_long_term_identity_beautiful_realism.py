@@ -131,7 +131,7 @@ def test_doc78_selected_output_becomes_subject_identity_card_truth_source() -> N
     assert "selected_identity_output" in card["source_output_ids"]
     assert "selected_identity_asset" in card["source_asset_ids"]
     assert any("eyebrow" in rule for rule in card["facial_feature_integrity_rules"])
-    assert any("beauty is the visual goal" in rule for rule in card["beautiful_realism_rules"])
+    assert any("own attractiveness is identity-owned" in rule for rule in card["beautiful_realism_rules"])
     assert role_plan["metadata"]["doc78_subject_identity_card"] is True
     assert "subject_identity_card" in cluster["child_module_ids"]
     assert "beautiful_realism_balance_review" in cluster["child_module_ids"]
@@ -185,7 +185,7 @@ def test_doc78_provider_prompt_consumes_subject_card_and_beautiful_realism_rules
     assert "Beautiful realism balance:" in final_prompt
     assert "Allowed identity-safe variation:" in final_prompt
     assert "eyebrow" in final_prompt
-    assert "beauty is the visual goal" in final_prompt
+    assert "own attractiveness is identity-owned" in final_prompt
 
 
 def test_doc84_structured_appearance_rules_enter_subject_card_and_provider_prompt() -> None:
@@ -306,7 +306,7 @@ def test_doc78_visual_inspector_retry_patch_for_beautiful_realism_issue_codes() 
     assert report.status == "fail_retryable"
     assert report.retryable is True
     assert "realism_made_subject_less_attractive" in [issue["code"] for issue in report.detected_issues]
-    assert "beautiful realism" in patch_text
+    assert "identity-owned attractiveness" in patch_text
     assert "eyebrow" in patch_text
     assert "poreless AI filter" in patch_text
 

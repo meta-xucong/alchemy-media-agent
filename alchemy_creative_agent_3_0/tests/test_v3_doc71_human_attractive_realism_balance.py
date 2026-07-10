@@ -123,9 +123,9 @@ def test_doc71_provider_prompt_renders_attractive_realism_balance() -> None:
     lowered = final_prompt.lower()
 
     assert "Attractive realism balance:" in final_prompt
-    assert "explicitly requested complexion direction" in final_prompt
-    assert "prompt-consistent light" in final_prompt
-    assert "natural face with believable texture" in final_prompt
+    assert "individual attractiveness are identity-owned" in final_prompt
+    assert "prompt-consistent makeup" in final_prompt
+    assert "without facial optimization" in final_prompt
     assert "whitening" in final_prompt
     assert "beauty-filter retouch" in final_prompt
     assert "commercial product image asset" not in lowered

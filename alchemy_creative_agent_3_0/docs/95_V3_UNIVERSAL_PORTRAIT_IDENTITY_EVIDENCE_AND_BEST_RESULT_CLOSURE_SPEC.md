@@ -163,6 +163,12 @@ natural age and body-identity direction
 Generic beauty terms may affect presentation, makeup, expression, lighting,
 and styling. They may not replace these dimensions.
 
+When portrait identity truth exists, attractiveness is identity-owned. The
+system may improve presentation through prompt-owned makeup, expression,
+camera, light, color, and realistic rendering, but it must not optimize,
+harmonize, slim, sharpen, enlarge, or otherwise redesign the reference person's
+base feature geometry in pursuit of a generic beauty target.
+
 The block must remain concise and must not restore duplicated framework prose.
 
 ## 7. Identity Review Contract

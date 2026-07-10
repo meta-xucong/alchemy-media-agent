@@ -1094,8 +1094,8 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
         elif code in _BEAUTIFUL_REALISM_ISSUES:
             prompt_additions.extend(
                 [
-                    "repair the image with Doc78 beautiful realism: beauty is the visual goal, realism is the rendering method",
-                    "preserve same-person facial feature relationships: attractive eyebrow shape and arc, awake eye shape and spacing, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance",
+                    "repair with identity-owned attractiveness: preserve the reference person's own facial design while realism remains the rendering method",
+                    "preserve same-person facial feature relationships: reference eyebrow base shape and arc, eye shape and spacing, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance",
                     "make realism come from photographed skin texture, soft natural light, hair strands, fabric detail, lens depth, natural facial tension, and small asymmetries",
                     "preserve the reference or explicitly requested complexion direction; do not force demographic lightness, tanning, muddy color, harsh unflattering shadow, or tired documentary ugliness",
                 ]
@@ -1105,7 +1105,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             )
             artifact_repair.extend(
                 [
-                    "repair facial features before style: eyebrows, eyes, nose-mouth spacing, jaw/chin, cheek volume, and face ratio must remain beautiful and recognizable",
+                    "repair facial features before style: eyebrows, eyes, nose-mouth spacing, jaw/chin, cheek volume, and face ratio must remain reference-consistent and recognizable",
                     "if the face is pretty but too filtered, restore subtle pores, eyelid detail, hair flyaways, fabric texture, and real shadow transitions without reshaping the face",
                     "if the face is real but unflattering, recover soft flattering light, relaxed facial muscles, graceful eyebrow design, and a better camera angle while preserving identity",
                 ]
