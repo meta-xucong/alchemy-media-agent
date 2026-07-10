@@ -807,6 +807,12 @@ send the focused identity crop instead of the full old frame
 record suppressed full-frame identity source ids in provider metadata
 ```
 
+If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
+`400 / bad_response_status_code / openai_error`, classify only that generic
+wrapper as transient and allow one fresh provider request. Explicit malformed
+input, unsupported media, authentication, policy, and configuration failures
+remain non-retryable. The retry budget stays bounded and never becomes a loop.
+
 The full original remains available in project history and is never modified.
 It returns to provider input when the resolved policy explicitly assigns hair,
 wardrobe, appearance, lighting, scene, camera, mood, or style channels to that

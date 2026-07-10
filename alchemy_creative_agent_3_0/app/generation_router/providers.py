@@ -625,6 +625,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if isinstance(detail, dict):
             detail_text = " ".join(str(value) for value in detail.values() if value is not None).lower()
         message = f"{exc.__class__.__name__} {code} {str(exc)} {detail_text}".lower()
+        wrapped_reference_upstream_failure = (
+            "image reference generation failed" in message
+            and "bad_response_status_code" in message
+            and "openai_error" in message
+        )
+        if wrapped_reference_upstream_failure:
+            # Some OpenAI-compatible gateways wrap a transient upstream rejection
+            # in HTTP 400. Permit the existing single fresh-request retry without
+            # making explicit client-side 400 errors retryable.
+            return "retryable_provider_failure"
         non_retryable_markers = [
             "provider_not_configured",
             "not configured",
