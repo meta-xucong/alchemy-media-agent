@@ -827,6 +827,14 @@ metadata records the exact final provider-prompt character count so gateway
 rejections can be distinguished from image-input failures without logging the
 private prompt itself.
 
+Provider prompt normalization is not user-prompt compression. Preserve the
+complete user/LLM visual direction and every unique user constraint. Remove
+only framework-generated copies already owned by the role director, Doc93
+reference policy, identity contract, or negative section. Review priorities
+and pass conditions stay in the post-generation reviewer; only generation
+guidance enters the image provider. Exact duplicate lines are normalized once,
+and no default character cap or arbitrary truncation is introduced.
+
 If an OpenAI-compatible gateway wraps a reference-image upstream rejection as
 `400 / bad_response_status_code / openai_error`, classify only that generic
 wrapper as transient and allow one fresh provider request. Explicit malformed

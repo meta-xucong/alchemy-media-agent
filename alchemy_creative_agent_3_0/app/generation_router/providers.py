@@ -1402,6 +1402,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
+        role_guidance = self._mode_role_prompt_guidance(request)
+        resolved_reference_policy = self._resolved_reference_policy_package(request)
+        provider_hard_constraints = self._provider_hard_constraints(
+            request,
+            has_role_guidance=bool(role_guidance),
+            has_reference_policy=bool(resolved_reference_policy),
+        )
         parts = [
             (
                 "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
@@ -1438,17 +1445,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ),
             f"Style notes: {', '.join(prompt.style_notes)}" if prompt.style_notes else "",
             f"Layout notes: {', '.join(prompt.layout_notes)}" if prompt.layout_notes else "",
-            f"Hard constraints: {'; '.join(prompt.hard_constraints)}" if prompt.hard_constraints else "",
+            f"Hard constraints: {'; '.join(provider_hard_constraints)}" if provider_hard_constraints else "",
         ]
-        role_guidance = self._mode_role_prompt_guidance(request)
         if role_guidance:
             parts.append("Role-specific generation contract:\n" + "\n".join(role_guidance))
         mode_quality = self._mode_quality_profile(request)
         if mode_quality:
             mode_lines = [
                 f"Mode quality: {mode_quality.get('user_visible_label') or mode_quality.get('mode')}",
-                "Review priorities: " + "; ".join(self._string_list(mode_quality.get("review_priorities"))[:5]),
-                "Pass conditions: " + "; ".join(self._string_list(mode_quality.get("pass_conditions"))[:4]),
                 "Mode guidance: " + "; ".join(self._string_list(mode_quality.get("prompt_guidance"))[:4]),
             ]
             parts.append("Mode quality contract:\n" + "\n".join(line for line in mode_lines if not line.endswith(": ")))
@@ -1482,8 +1486,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "Keep: " + "; ".join(self._string_list(closure.get("identity_keep_rules"))[:5]),
                 "Allow variation: " + "; ".join(self._string_list(closure.get("allowed_variations"))[:5]),
                 "Do not drift: " + "; ".join(self._string_list(closure.get("forbidden_drift"))[:5]),
-                "Provider rules: " + "; ".join(self._string_list(closure.get("provider_prompt_rules"))[:5]),
             ]
+            role_guidance_text = "\n".join(role_guidance).lower()
+            unique_provider_rules = [
+                value
+                for value in self._string_list(closure.get("provider_prompt_rules"))[:5]
+                if value.lower() not in role_guidance_text
+            ]
+            if unique_provider_rules:
+                closure_lines.append(
+                    "Provider rules: " + "; ".join(unique_provider_rules)
+                )
             parts.append("Selected reference closure:\n" + "\n".join(line for line in closure_lines if not line.endswith(": ")))
         if reference_assets:
             reference_lines = [
@@ -1494,7 +1507,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 for index, asset in enumerate(reference_assets)
             ]
             parts.append("Uploaded reference images must guide the result:\n" + "\n".join(reference_lines))
-            conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
+            conflict_rules = (
+                []
+                if resolved_reference_policy
+                else self._reference_identity_conflict_rules(request, reference_assets)
+            )
             if conflict_rules:
                 parts.append("Uploaded portrait reference priority:\n" + "\n".join(conflict_rules[:6]))
             if not self._resolved_reference_policy_package(request):
@@ -1580,10 +1597,67 @@ class ProductionImageGenerationProvider(GenerationProvider):
         raw_prompt = str(raw_prompt or "").strip()
         if not raw_prompt:
             return ""
+        normalized_prompt = "\n".join(self._normalised_unique_prompt_lines(raw_prompt)).strip()
         max_chars = self.max_provider_prompt_chars
         if max_chars is None or max_chars <= 0:
-            return raw_prompt
-        return self._compact_provider_prompt(raw_prompt, max_chars=max_chars)
+            return normalized_prompt
+        return self._compact_provider_prompt(normalized_prompt, max_chars=max_chars)
+
+    def _provider_hard_constraints(
+        self,
+        request: GenerationRequest,
+        *,
+        has_role_guidance: bool,
+        has_reference_policy: bool,
+    ) -> list[str]:
+        values = self._string_list(request.prompt_compilation.hard_constraints)
+        retained: list[str] = []
+        generic_prefixes = (
+            "use the v3-owned generation strategy",
+            "generated subject, scene, style, and mood must match the user request",
+            "preserve the user's detailed scene literally",
+        )
+        role_prefixes = (
+            "follow the role-specific output direction",
+            "do not repeat another planned role",
+            "role difference requirement",
+            "same recognizable person direction",
+            "same body identity direction",
+            "prompt-directed hair, wardrobe, and lighting",
+            "preserve broad face shape",
+            "allow expression, gaze, pose, crop",
+            "identity consistency must come from stable traits",
+        )
+        reference_prefixes = (
+            "current prompt owns its explicit visual channels",
+            "reference v3_asset",
+            "preserve underlying face geometry",
+            "follow the current prompt for hair styling",
+            "do not copy the reference image's original lighting",
+            "uploaded person identity has highest priority",
+            "prompt person descriptors guide styling",
+            "preserve same-person bone structure",
+            "keep facial features attractive",
+            "realism must not make the face less beautiful",
+            "keep clean attractive eyebrow design",
+            "\u4fdd\u6301\u540c\u4e00\u4eba\u7269\u53ef\u8bc6\u522b\u8138\u90e8\u7ed3\u6784",
+            "\u4e0d\u5f97\u6539\u53d8\u4e94\u5b98\u6bd4\u4f8b",
+            "\u4e0d\u5f97\u590d\u5236\u53c2\u8003\u56fe\u539f\u59cb\u6574\u4f53\u98ce\u683c",
+        )
+        for value in values:
+            lowered = value.lower().strip()
+            if lowered.startswith("avoid:"):
+                continue
+            if lowered.startswith(generic_prefixes):
+                continue
+            if has_role_guidance and lowered.startswith(role_prefixes):
+                continue
+            if has_reference_policy and lowered.startswith(reference_prefixes):
+                continue
+            if lowered.startswith("\u4e0d\u5f97\u751f\u6210\u6587\u5b57"):
+                continue
+            retained.append(value)
+        return _dedupe(retained)
 
     def _reference_identity_conflict_rules(
         self,

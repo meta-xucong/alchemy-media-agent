@@ -533,6 +533,28 @@ def test_production_provider_keeps_full_provider_prompt_by_default() -> None:
     assert "watermark" in final_prompt
 
 
+def test_provider_prompt_removes_framework_duplicates_without_truncating_user_direction() -> None:
+    request = _human_generation_request()
+    user_direction = "A complete exact user visual direction with silver costume, pear blossoms, and cool cinematic light."
+    request.prompt_compilation.visual_prompt = user_direction
+    request.prompt_compilation.hard_constraints = [
+        "Use the V3-owned generation strategy selected by the runtime.",
+        "Do not render any final text, captions, or UI copy inside the image model output.",
+        "A unique user constraint: keep the red forehead ornament visible.",
+        "Avoid: beauty-app face",
+    ]
+
+    final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
+
+    assert user_direction in final_prompt
+    assert "A unique user constraint: keep the red forehead ornament visible." in final_prompt
+    assert "Use the V3-owned generation strategy" not in final_prompt
+    assert "Hard constraints: Avoid:" not in final_prompt
+    assert "Mode quality contract" in final_prompt
+    assert "Review priorities:" not in final_prompt
+    assert "Pass conditions:" not in final_prompt
+
+
 def test_production_provider_can_apply_explicit_emergency_prompt_cap() -> None:
     request = _human_generation_request()
     request.prompt_compilation.visual_prompt = " ".join(
