@@ -112,7 +112,12 @@ class CommerceBriefBuilder:
         keywords: list[str],
     ) -> list[str]:
         explicit = as_list(profile.get("selling_points") or profile.get("benefits") or profile.get("features"))
-        facts = [item for item in truth.visible_attributes if ":" in item or len(item.split()) <= 8]
+        facts = [
+            item
+            for item in truth.visible_attributes
+            if (":" in item or len(item.split()) <= 8)
+            and "uploaded product/reference image" not in item.lower()
+        ]
         keyword_points = [f"Matches shopper intent: {keyword}" for keyword in keywords[:4]]
         defaults = [
             "Clear product identity",

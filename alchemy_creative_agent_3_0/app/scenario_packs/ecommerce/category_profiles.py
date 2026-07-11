@@ -74,6 +74,44 @@ _ALIASES = {
 }
 
 
+_SLOT_EVIDENCE = {
+    "apparel": {
+        "main_image": ("fit and silhouette",),
+        "feature_image_1": ("front/back/side visibility",),
+        "detail_image": ("material or texture",),
+        "scenario_image": ("wear context",),
+        "size_spec_image": ("size guidance",),
+    },
+    "beauty": {
+        "main_image": ("package identity",),
+        "feature_image_1": ("texture or application",),
+        "detail_image": ("package identity",),
+        "scenario_image": ("usage context",),
+    },
+    "electronics": {
+        "main_image": ("product silhouette",),
+        "feature_image_1": ("ports or functional structure",),
+        "detail_image": ("ports or functional structure",),
+        "size_spec_image": ("scale",),
+        "scenario_image": ("real-use context",),
+    },
+    "home_kitchen": {
+        "main_image": ("material",),
+        "feature_image_1": ("function",),
+        "detail_image": ("material",),
+        "size_spec_image": ("size and space fit",),
+        "scenario_image": ("function",),
+    },
+    "food_beverage": {
+        "main_image": ("package identity",),
+        "feature_image_1": ("serving or contents",),
+        "detail_image": ("serving or contents",),
+        "size_spec_image": ("portion or scale",),
+        "scenario_image": ("consumption context",),
+    },
+}
+
+
 def resolve_category(product_category: str | None, *, user_input: str = "") -> CategoryProfile | None:
     raw = " ".join([str(product_category or ""), str(user_input or "")]).strip().lower()
     normalized = raw.replace("-", "_").replace("/", " ")
@@ -89,3 +127,8 @@ def resolve_category(product_category: str | None, *, user_input: str = "") -> C
 def list_category_profiles() -> tuple[CategoryProfile, ...]:
     return tuple(_PROFILES.values())
 
+
+def evidence_for_slot(profile: CategoryProfile | None, slot: str) -> tuple[str, ...]:
+    if profile is None:
+        return ()
+    return _SLOT_EVIDENCE.get(profile.category_id, {}).get(slot, ())

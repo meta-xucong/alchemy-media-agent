@@ -74,3 +74,25 @@ full V3 tests: 405 passed
 ```
 
 Integration dependency: none beyond normal rebase before integration.
+
+## E3 — category evidence coverage and suite differentiation
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Category profiles now map commerce slots to buyer evidence such as product
+  silhouette, material, application, use context, portion, size, and ports.
+- Each recipe carries category evidence targets for audit and future UI display.
+- Commerce Critic flags missing evidence caused by a constrained requested count.
+- Commerce Critic flags two roles with the same business goal and selling point.
+- Uploaded-image bookkeeping is excluded from seller-facing selling points.
+
+Verification:
+
+```text
+focused E-Commerce tests: 23 passed
+full V3 tests: 409 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
-from .category_profiles import CategoryProfile
+from .category_profiles import CategoryProfile, evidence_for_slot
 from .copy_bridge import EcommerceCopyBridge
 from .localization import resolve_localization
 
@@ -95,6 +95,7 @@ class SellingPointToImagePlanner:
                         "platform": marketplace_profile.platform,
                         "market": marketplace_profile.market,
                         **(category_profile.metadata() if category_profile else {}),
+                        "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
                         "copy_plan": copy_plan,
                         **lifestyle_metadata,
                     },
