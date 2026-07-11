@@ -588,6 +588,7 @@ const els = {
   v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput"),
   v3EcommerceMarketInput: document.querySelector("#v3EcommerceMarketInput"),
   v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput"),
+  v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
   v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
@@ -1090,6 +1091,9 @@ function bindControls() {
   document.querySelectorAll("[data-v3-preset]").forEach((button) => {
     button.addEventListener("click", () => setV3Preset(button.dataset.v3Preset || "campaign_poster"));
   });
+  if (els.v3EcommerceSuiteScopeInput) {
+    els.v3EcommerceSuiteScopeInput.addEventListener("change", renderV3EcommerceSuiteScopeHint);
+  }
   document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
@@ -2076,6 +2080,7 @@ function setV3Preset(presetId) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  renderV3EcommerceSuiteScopeHint();
 }
 
 function setV3VariationMode(mode) {
@@ -4846,6 +4851,28 @@ function v3SuiteSlotRequestForPreset(presetId, scopeId = v3EcommerceSuiteScopeVa
     return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "trust_comparison_image"];
   }
   return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "social_cover"];
+}
+
+function v3EcommerceSuiteSlotLabel(slotId) {
+  const labels = {
+    main_image: "商品主图",
+    feature_image_1: "核心卖点图",
+    feature_image_2: "补充卖点图",
+    scenario_image: "使用场景图",
+    detail_image: "细节证明图",
+    trust_comparison_image: "信任说明图",
+    social_cover: "内容封面图",
+  };
+  return labels[slotId] || "商品展示图";
+}
+
+function renderV3EcommerceSuiteScopeHint() {
+  if (!els.v3EcommerceSuiteScopeHint) return;
+  const scopeId = v3EcommerceSuiteScopeValue();
+  const slots = v3SuiteSlotRequestForPreset(v3State.selectedPreset, scopeId);
+  const slotLabels = uniqueNonEmpty(slots.map(v3EcommerceSuiteSlotLabel));
+  const scopeLabel = v3EcommerceSuiteScopeLabel(scopeId);
+  els.v3EcommerceSuiteScopeHint.textContent = `${scopeLabel}会优先准备：${slotLabels.join("、")}。`;
 }
 
 function v3EcommerceProfilePatch() {

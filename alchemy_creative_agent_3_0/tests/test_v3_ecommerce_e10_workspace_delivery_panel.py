@@ -68,12 +68,18 @@ def test_ecommerce_workspace_exposes_suite_scope_without_a_new_project_contract(
     html = INDEX_HTML.read_text(encoding="utf-8")
 
     assert 'id="v3EcommerceSuiteScopeInput"' in html
+    assert 'id="v3EcommerceSuiteScopeHint"' in html
+    assert 'aria-live="polite"' in html
     assert 'option value="listing_core"' in html
     assert 'option value="listing_full"' in html
     assert 'option value="detail_supplement"' in html
     assert 'v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput")' in script
     assert 'function v3EcommerceSuiteScopeValue()' in script
     assert 'function v3EcommerceSuiteScopeLabel(scopeId' in script
+    assert 'function v3EcommerceSuiteSlotLabel(slotId)' in script
+    assert 'function renderV3EcommerceSuiteScopeHint()' in script
+    assert 'els.v3EcommerceSuiteScopeInput.addEventListener("change", renderV3EcommerceSuiteScopeHint)' in script
+    assert 'renderV3EcommerceSuiteScopeHint();' in script
     assert 'if (scopeId === "listing_core")' in script
     assert 'if (scopeId === "listing_full")' in script
     assert 'if (scopeId === "detail_supplement")' in script

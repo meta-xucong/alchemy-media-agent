@@ -239,6 +239,31 @@ JavaScript syntax: passed
 Integration dependency: none. The existing namespaced request and metadata
 surfaces are used without expanding the public contract.
 
+## E15 — generation-ready suite preview
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added an immediate, accessible preview below the E-Commerce suite-scope
+  selector. It tells the user which role labels will be prioritized before
+  they start generation.
+- The preview updates when either the suite scope or the existing quick goal
+  changes, and it reuses the exact slot mapping sent to the existing request.
+- No planning behavior, public contract, provider route, or General Template
+  control changed.
+
+Verification:
+
+```text
+Project Mode E-Commerce focused tests: 15 passed
+full V3 tests: 511 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: none.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
