@@ -1189,6 +1189,11 @@ class V3ProductApiService:
                 return True
         return False
 
+    def _identity_repair_strategy_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        cluster = self._visual_cluster_metadata_from_result(result)
+        plan = cluster.get("identity_repair_strategy_plan") if isinstance(cluster, dict) else None
+        return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
+
     def _identity_local_repair_metadata(
         self,
         result: PlanningResult,
@@ -1213,6 +1218,9 @@ class V3ProductApiService:
             "identity_metric_below_commercial_target",
         }
         if not identity_codes.intersection(reason_codes):
+            return {}
+        repair_strategy = self._identity_repair_strategy_from_result(result)
+        if repair_strategy and not bool(repair_strategy.get("allow_face_local_repair")):
             return {}
         package = result.metadata.get("post_generation_review_package")
         inspections = package.get("inspections") if isinstance(package, dict) else []

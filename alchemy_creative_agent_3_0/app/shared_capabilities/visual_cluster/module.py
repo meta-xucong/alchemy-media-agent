@@ -16,6 +16,7 @@ from ..contracts import (
     CapabilityTargetStage,
 )
 from .contracts import (
+    AdaptiveReferenceSelectionPlan,
     AntiAIFaceReviewResult,
     AutoRetryDecision,
     BatchIdentityDiversityReview,
@@ -28,6 +29,8 @@ from .contracts import (
     HumanNaturalVariationPlan,
     HumanPhotorealismGuidance,
     IdentityHeroSelectionPlan,
+    IdentityDriftGuardPlan,
+    IdentityRepairStrategyPlan,
     ModeQualityProfile,
     ModeDifferentiationReview,
     PortraitBoneStructureLock,
@@ -48,6 +51,7 @@ from .contracts import (
     StrongReferenceContinuationPlan,
     StrongReferenceBinding,
     SubjectIdentityCard,
+    SubjectContinuityAssetPackage,
     VisualCapabilityClusterResult,
     VisualConsistencyGuardResult,
     VisualGrammarProfile,
@@ -57,6 +61,7 @@ from .contracts import (
     VisualQualityReviewResult,
     VisualReferenceBindingProfile,
 )
+from .adaptive_reference import ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID, AdaptiveReferenceRetriever
 from .batch_identity_review import BatchIdentityDiversityReviewer
 from .commercial_quality import CommercialQualityClosureReviewer
 from .casebook_recipes import VISUAL_CASEBOOK_RECIPE_LIBRARY_ID
@@ -70,6 +75,8 @@ from .general_suite_director import GeneralSuiteDirector
 from .human_photorealism import HumanPhotorealismLayer
 from .human_variation import HumanNaturalVariationPolicy
 from .identity_anchor import ProjectIdentityAnchorBuilder
+from .identity_drift_guard import IDENTITY_DRIFT_GUARD_MODULE_ID, IdentityDriftGuard
+from .identity_repair_strategy import IDENTITY_REPAIR_STRATEGY_MODULE_ID, IdentityRepairStrategyRouter
 from .mode_role_director import ModeAwareRoleDirector
 from .portrait_identity import (
     DOC86_IDENTITY_ISSUE_CODES,
@@ -83,6 +90,7 @@ from .reference_channel_policy import (
     ReferenceChannelPolicyModule,
 )
 from .strong_reference_loop import StrongReferenceLoopPlanner
+from .subject_asset_memory import SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID, SubjectContinuityAssetPackBuilder
 
 
 VISUAL_CAPABILITY_CLUSTER_ID = "visual_capability_cluster"
@@ -116,6 +124,10 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     "portrait_reference_identity_style_separator",
     "portrait_reference_balance_policy",
     REFERENCE_CHANNEL_POLICY_MODULE_ID,
+    SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID,
+    ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID,
+    IDENTITY_DRIFT_GUARD_MODULE_ID,
+    IDENTITY_REPAIR_STRATEGY_MODULE_ID,
     ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID,
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
@@ -206,7 +218,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     """Collect visual child modules into one V3-owned reusable capability result."""
 
     module_id = VISUAL_CAPABILITY_CLUSTER_ID
-    version = "v3_visual_capability_cluster_001"
+    version = "v3_visual_capability_cluster_002_doc97"
     order = 990
 
     def __init__(
@@ -223,6 +235,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         mode_quality_profile_builder: ModeQualityProfileBuilder | None = None,
         portrait_identity_layer: PortraitBoneStructureIdentityLayer | None = None,
         reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
+        identity_drift_guard: IdentityDriftGuard | None = None,
+        subject_asset_pack_builder: SubjectContinuityAssetPackBuilder | None = None,
+        adaptive_reference_retriever: AdaptiveReferenceRetriever | None = None,
+        identity_repair_strategy_router: IdentityRepairStrategyRouter | None = None,
     ) -> None:
         self.human_variation_policy = human_variation_policy or HumanNaturalVariationPolicy()
         self.identity_anchor_builder = identity_anchor_builder or ProjectIdentityAnchorBuilder()
@@ -236,6 +252,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         self.mode_quality_profile_builder = mode_quality_profile_builder or ModeQualityProfileBuilder()
         self.portrait_identity_layer = portrait_identity_layer or PortraitBoneStructureIdentityLayer()
         self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
+        self.identity_drift_guard = identity_drift_guard or IdentityDriftGuard()
+        self.subject_asset_pack_builder = subject_asset_pack_builder or SubjectContinuityAssetPackBuilder()
+        self.adaptive_reference_retriever = adaptive_reference_retriever or AdaptiveReferenceRetriever()
+        self.identity_repair_strategy_router = identity_repair_strategy_router or IdentityRepairStrategyRouter()
 
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
         cluster = self._build_cluster(capability_input)
@@ -314,6 +334,26 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "resolved_reference_policy_package": (
                     cluster.resolved_reference_policy_package.model_dump(mode="json")
                     if cluster.resolved_reference_policy_package is not None
+                    else {}
+                ),
+                "subject_continuity_asset_package": (
+                    cluster.subject_continuity_asset_package.model_dump(mode="json")
+                    if cluster.subject_continuity_asset_package is not None
+                    else {}
+                ),
+                "adaptive_reference_selection_plan": (
+                    cluster.adaptive_reference_selection_plan.model_dump(mode="json")
+                    if cluster.adaptive_reference_selection_plan is not None
+                    else {}
+                ),
+                "identity_drift_guard_plan": (
+                    cluster.identity_drift_guard_plan.model_dump(mode="json")
+                    if cluster.identity_drift_guard_plan is not None
+                    else {}
+                ),
+                "identity_repair_strategy_plan": (
+                    cluster.identity_repair_strategy_plan.model_dump(mode="json")
+                    if cluster.identity_repair_strategy_plan is not None
                     else {}
                 ),
                 "mode_quality_profile": (
@@ -432,6 +472,41 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             allow_product_language=allow_product_language,
         )
         subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
+        project_id = str(project_context.get("project_id") or "") or None
+        identity_drift_guard = self.identity_drift_guard.build(
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            subject_type=subject_type,
+            strong_bindings=strong_bindings,
+            selected_outputs=selected_outputs,
+        )
+        subject_asset_package = self.subject_asset_pack_builder.build(
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            subject_type=subject_type,
+            strong_bindings=strong_bindings,
+            drift_guard=identity_drift_guard,
+        )
+        adaptive_reference_plan = self.adaptive_reference_retriever.build(
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            user_input=capability_input.user_input,
+            package=subject_asset_package,
+        )
+        strong_bindings = self.adaptive_reference_retriever.order_bindings(
+            strong_bindings,
+            adaptive_reference_plan,
+        )
+        repair_strategy_metadata = {
+            **_as_dict(project_context.get("metadata")),
+            **dict(capability_input.metadata or {}),
+        }
+        identity_repair_strategy = self.identity_repair_strategy_router.build(
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            package=subject_asset_package,
+            metadata=repair_strategy_metadata,
+        )
         advanced_reference_controls = self._advanced_reference_controls(
             capability_input=capability_input,
             project_context=project_context,
@@ -873,6 +948,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 if advanced_reference_controls.get("applies")
                 else "",
                 REFERENCE_CHANNEL_POLICY_MODULE_ID if reference_policy_package.applies else "",
+                SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID if subject_asset_package.applies else "",
+                ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID if adaptive_reference_plan.applies else "",
+                IDENTITY_DRIFT_GUARD_MODULE_ID if identity_drift_guard.applies else "",
+                IDENTITY_REPAIR_STRATEGY_MODULE_ID if identity_repair_strategy.applies else "",
                 "anti_ai_face_review" if anti_ai_face_review and anti_ai_face_review.applies else "",
                 "commercial_quality_review",
             ]
@@ -928,6 +1007,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             reference_overinheritance_retry_patch=reference_retry_patch,
             portrait_reference_balance_retry_patch=balance_retry_patch,
             resolved_reference_policy_package=reference_policy_package,
+            subject_continuity_asset_package=subject_asset_package,
+            adaptive_reference_selection_plan=adaptive_reference_plan,
+            identity_drift_guard_plan=identity_drift_guard,
+            identity_repair_strategy_plan=identity_repair_strategy,
             negative_visual_memory=negative_memory,
             template_consistency_policy=template_policy,
             has_visual_evidence=has_evidence,
@@ -974,6 +1057,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
                 "doc93_reference_channel_policy": bool(reference_policy_package.applies),
                 "reference_policy_package_id": reference_policy_package.package_id,
+                "subject_continuity_asset_package_id": subject_asset_package.package_id,
+                "adaptive_reference_selection_plan_id": adaptive_reference_plan.plan_id,
+                "identity_drift_guard_status": identity_drift_guard.status,
+                "identity_repair_strategy": identity_repair_strategy.strategy,
                 "doc67_default_role_count_aligned": True,
             },
         )
@@ -3944,6 +4031,26 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "resolved_reference_policy_package": (
                         cluster.resolved_reference_policy_package.model_dump(mode="json")
                         if cluster.resolved_reference_policy_package is not None
+                        else {}
+                    ),
+                    "subject_continuity_asset_package": (
+                        cluster.subject_continuity_asset_package.model_dump(mode="json")
+                        if cluster.subject_continuity_asset_package is not None
+                        else {}
+                    ),
+                    "adaptive_reference_selection_plan": (
+                        cluster.adaptive_reference_selection_plan.model_dump(mode="json")
+                        if cluster.adaptive_reference_selection_plan is not None
+                        else {}
+                    ),
+                    "identity_drift_guard_plan": (
+                        cluster.identity_drift_guard_plan.model_dump(mode="json")
+                        if cluster.identity_drift_guard_plan is not None
+                        else {}
+                    ),
+                    "identity_repair_strategy_plan": (
+                        cluster.identity_repair_strategy_plan.model_dump(mode="json")
+                        if cluster.identity_repair_strategy_plan is not None
                         else {}
                     ),
                     "mode_differentiation_review": (

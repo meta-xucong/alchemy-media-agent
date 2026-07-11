@@ -21,6 +21,7 @@ from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.casebook_recipes import provider_casebook_prompt_lines
+from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 
 
 class GenerationRequest(BaseModel):
@@ -134,6 +135,16 @@ class GenerationProvider:
             metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
             package = metadata.get("resolved_reference_policy_package") if isinstance(metadata, dict) else None
         return dict(package) if isinstance(package, dict) and package.get("applies") else {}
+
+    def _adaptive_reference_selection_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        plan = cluster.get("adaptive_reference_selection_plan") if isinstance(cluster, dict) else None
+        return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
+
+    def _identity_repair_strategy_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        plan = cluster.get("identity_repair_strategy_plan") if isinstance(cluster, dict) else None
+        return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
 
     def _reference_channel_policy_for_asset(
         self,
@@ -289,7 +300,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
     """V3-owned adapter that reuses configured V1/V2 image provider credentials."""
 
     provider_name = "production_image_generation_provider"
-    provider_version = "v3.8b-provider-output-production"
+    provider_version = "v3.8c-doc97-adaptive-reference-routing"
     # Live GPT Image 2 reference runs showed that framework-expanded prompts
     # above roughly 16k characters can be rejected by an otherwise valid image
     # edit gateway. Keep the user's positive request lossless, but materialize
@@ -881,6 +892,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             *(raw_assets if isinstance(raw_assets, list) else []),
             *(raw_project_refs if isinstance(raw_project_refs, list) else []),
         ]
+        combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
         assets: list[dict[str, Any]] = []
         seen_evidence: dict[tuple[str, str], int] = {}
         for item in combined_assets:
@@ -945,6 +957,140 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         return assets[:6]
 
+    def _apply_adaptive_reference_selection(
+        self,
+        request: GenerationRequest,
+        combined_assets: list[Any],
+    ) -> list[dict[str, Any]]:
+        cluster = self._visual_cluster(request)
+        plan = cluster.get("adaptive_reference_selection_plan") if isinstance(cluster, dict) else None
+        package = cluster.get("subject_continuity_asset_package") if isinstance(cluster, dict) else None
+        if not isinstance(plan, dict) or not plan.get("applies") or not isinstance(package, dict):
+            return [item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {}) for item in combined_assets]
+
+        evidence_items = package.get("evidence") if isinstance(package.get("evidence"), list) else []
+        evidence_by_alias: dict[str, dict[str, Any]] = {}
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict):
+                continue
+            for value in (evidence.get("source_id"), evidence.get("asset_id"), evidence.get("output_id")):
+                if value:
+                    evidence_by_alias[str(value)] = evidence
+
+        role_recipe = self._mode_role_recipe(request)
+        runtime_direction = " ".join(
+            value
+            for value in (
+                self._provider_user_direction(request),
+                str(role_recipe.get("angle_rule") or ""),
+                str(role_recipe.get("camera_distance") or ""),
+                str(role_recipe.get("crop_rule") or ""),
+                str(role_recipe.get("shot_family") or ""),
+            )
+            if value
+        )
+        runtime_view = infer_target_view(runtime_direction)
+        runtime_framing = infer_target_framing(runtime_direction)
+        if runtime_view == "unknown":
+            runtime_view = str(plan.get("target_view") or "unknown")
+        if runtime_framing == "unknown":
+            runtime_framing = str(plan.get("target_framing") or "unknown")
+
+        requested_order = [str(value) for value in plan.get("ordered_source_ids", []) if value]
+        requested_rank = {source_id: index for index, source_id in enumerate(requested_order)}
+        excluded = {str(value) for value in plan.get("excluded_source_ids", []) if value}
+        try:
+            max_identity_sources = max(1, min(int(plan.get("max_identity_sources") or 3), 6))
+        except (TypeError, ValueError):
+            max_identity_sources = 3
+        prepared: list[tuple[dict[str, Any], dict[str, Any] | None, str]] = []
+        for raw in combined_assets:
+            data = raw.model_dump(mode="json") if hasattr(raw, "model_dump") else dict(raw or {})
+            aliases = [
+                str(value)
+                for value in (
+                    data.get("source_id"),
+                    data.get("asset_id"),
+                    data.get("asset_ref_id"),
+                    data.get("reference_id"),
+                    data.get("output_id"),
+                    data.get("created_from_output_id"),
+                )
+                if value
+            ]
+            evidence = next((evidence_by_alias[value] for value in aliases if value in evidence_by_alias), None)
+            source_id = str(evidence.get("source_id") or aliases[0]) if evidence else (aliases[0] if aliases else "")
+            if evidence and source_id in excluded and source_id not in requested_rank:
+                continue
+            metadata = dict(data.get("metadata") or {})
+            if evidence:
+                metadata.update(
+                    {
+                        "doc97_subject_continuity": True,
+                        "subject_continuity_source_id": source_id,
+                        "subject_continuity_authority": evidence.get("authority"),
+                        "subject_continuity_view_hint": evidence.get("view_hint"),
+                        "subject_continuity_framing_hint": evidence.get("framing_hint"),
+                        "subject_continuity_trust_score": evidence.get("trust_score"),
+                    }
+                )
+            data["metadata"] = metadata
+            prepared.append((data, evidence, source_id))
+
+        identity_entries = [item for item in prepared if item[1] is not None]
+        other_entries = [item for item in prepared if item[1] is None]
+        identity_entries.sort(
+            key=lambda item: self._adaptive_reference_sort_key(
+                item[1] or {},
+                source_id=item[2],
+                requested_rank=requested_rank,
+                target_view=runtime_view,
+                target_framing=runtime_framing,
+            )
+        )
+        identity_entries = identity_entries[:max_identity_sources]
+        applied_ids = [item[2] for item in identity_entries if item[2]]
+        ordered_assets = [item[0] for item in [*identity_entries, *other_entries]]
+        for data in ordered_assets:
+            metadata = dict(data.get("metadata") or {})
+            metadata["doc97_adaptive_reference_selection"] = {
+                "requested_source_ids": requested_order,
+                "applied_source_ids": applied_ids,
+                "target_view": runtime_view,
+                "target_framing": runtime_framing,
+                "max_identity_sources": max_identity_sources,
+            }
+            data["metadata"] = metadata
+        return ordered_assets
+
+    def _adaptive_reference_sort_key(
+        self,
+        evidence: dict[str, Any],
+        *,
+        source_id: str,
+        requested_rank: dict[str, int],
+        target_view: str,
+        target_framing: str,
+    ) -> tuple[int, int, int, int, float]:
+        authority = str(evidence.get("authority") or "")
+        authority_rank = {
+            "user_selected_master": 0,
+            "uploaded_root_truth": 1,
+            "reviewed_generated_support": 2,
+            "unreviewed_generated_support": 3,
+        }.get(authority, 4)
+        view_hint = str(evidence.get("view_hint") or "unknown")
+        framing_hint = str(evidence.get("framing_hint") or "unknown")
+        view_rank = 0 if _doc97_view_matches(view_hint, target_view) else 1 if view_hint == "unknown" else 2
+        framing_rank = 0 if target_framing == "unknown" or framing_hint == target_framing else 1
+        return (
+            authority_rank,
+            view_rank,
+            framing_rank,
+            requested_rank.get(source_id, len(requested_rank) + 1),
+            -_doc97_score(evidence.get("trust_score")),
+        )
+
     def _reference_evidence_role(self, role: str, use_policy: str) -> str:
         value = f"{role} {use_policy}".lower()
         if any(term in value for term in ("face", "portrait", "identity", "person", "character")):
@@ -980,6 +1126,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             human_photo_context=human_photo_context,
         )
         closure = self._strong_reference_closure_package(request)
+        adaptive_reference_plan = self._adaptive_reference_selection_plan(request)
+        adaptive_reference_audit = next(
+            (
+                dict((asset.get("metadata") or {}).get("doc97_adaptive_reference_selection") or {})
+                for asset in reference_assets
+                if isinstance(asset.get("metadata"), dict)
+                and isinstance((asset.get("metadata") or {}).get("doc97_adaptive_reference_selection"), dict)
+            ),
+            {},
+        )
         do_not_inherit_rules = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
         reference_conflict_rules = self._reference_identity_conflict_rules(request, reference_assets)
         closure_provider_ids = set(self._string_list(closure.get("provider_reference_required_ids")))
@@ -1167,6 +1323,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ],
                 "reference_truth_package": truth_package,
                 "requires_image_reference": bool(assets),
+                "adaptive_reference_selection_plan": adaptive_reference_plan,
+                "adaptive_reference_selection_applied": bool(adaptive_reference_plan),
+                "adaptive_reference_requested_source_ids": self._string_list(
+                    adaptive_reference_audit.get("requested_source_ids")
+                ),
+                "adaptive_reference_applied_source_ids": self._string_list(
+                    adaptive_reference_audit.get("applied_source_ids")
+                ),
+                "adaptive_reference_target_view": adaptive_reference_audit.get("target_view"),
+                "adaptive_reference_target_framing": adaptive_reference_audit.get("target_framing"),
             },
         }
 
@@ -2726,6 +2892,21 @@ def _v1_reference_role(role: str | None) -> str:
         "negative_reference": "negative_reference",
     }
     return mapping.get(str(role or ""), "subject_reference")
+
+
+def _doc97_view_matches(view_hint: str, target_view: str) -> bool:
+    if target_view == "unknown":
+        return view_hint in {"front", "unknown"}
+    if target_view == "profile":
+        return view_hint in {"left_profile", "right_profile", "profile"}
+    return view_hint == target_view
+
+
+def _doc97_score(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _dedupe(values: list[str]) -> list[str]:

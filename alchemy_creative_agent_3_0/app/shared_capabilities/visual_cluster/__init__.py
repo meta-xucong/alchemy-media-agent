@@ -1,6 +1,7 @@
 """V3-native visual capability cluster."""
 
 from .contracts import (
+    AdaptiveReferenceSelectionPlan,
     AntiAIFaceReviewResult,
     AutoRetryDecision,
     BatchIdentityDiversityReview,
@@ -16,7 +17,9 @@ from .contracts import (
     HumanNaturalVariationPlan,
     HumanPhotorealismGuidance,
     IdentityHeroSelectionPlan,
+    IdentityDriftGuardPlan,
     IdentityMetricResult,
+    IdentityRepairStrategyPlan,
     IdentityReviewFusion,
     ModeQualityProfile,
     ModeDifferentiationReview,
@@ -44,6 +47,8 @@ from .contracts import (
     StrictVisualReviewPolicy,
     StylingDeltaPolicy,
     SubjectIdentityCard,
+    SubjectContinuityAssetPackage,
+    SubjectContinuityEvidence,
     VisualCapabilityClusterResult,
     VisualCommercialQualityReview,
     VisualConsistencyGuardResult,
@@ -55,6 +60,7 @@ from .contracts import (
     VisualReferenceBindingProfile,
     ProjectVisualGrammarSnapshot,
 )
+from .adaptive_reference import ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID, AdaptiveReferenceRetriever
 from .batch_identity_review import BatchIdentityDiversityReviewer
 from .casebook_recipes import (
     VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
@@ -78,7 +84,9 @@ from .doc66_closure import (
 from .general_suite_director import GeneralSuiteDirector
 from .human_photorealism import HumanPhotorealismLayer
 from .identity_anchor import ProjectIdentityAnchorBuilder
+from .identity_drift_guard import IDENTITY_DRIFT_GUARD_MODULE_ID, IdentityDriftGuard
 from .identity_metric import SFaceIdentityMetricProvider, create_default_identity_metric_provider
+from .identity_repair_strategy import IDENTITY_REPAIR_STRATEGY_MODULE_ID, IdentityRepairStrategyRouter
 from .module import VISUAL_CAPABILITY_CLUSTER_ID, VISUAL_CLUSTER_CHILD_MODULE_IDS, VisualCapabilityClusterModule
 from .human_variation import HumanNaturalVariationPolicy
 from .mode_role_director import ModeAwareRoleDirector
@@ -96,6 +104,7 @@ from .reference_channel_policy import (
 )
 from .quality_review import OutputQualityReviewMerger
 from .strong_reference_loop import StrongReferenceLoopPlanner
+from .subject_asset_memory import SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID, SubjectContinuityAssetPackBuilder
 from .vision_inspector import VisionOutputInspector
 from .vision_provider import (
     OpenAIVisionInspectionProvider,
@@ -105,6 +114,9 @@ from .vision_provider import (
 )
 
 __all__ = [
+    "ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID",
+    "AdaptiveReferenceRetriever",
+    "AdaptiveReferenceSelectionPlan",
     "AntiAIFaceReviewResult",
     "AutoRetryDecision",
     "BatchIdentityDiversityReview",
@@ -125,7 +137,13 @@ __all__ = [
     "HumanPhotorealismGuidance",
     "HumanPhotorealismLayer",
     "IdentityHeroSelectionPlan",
+    "IDENTITY_DRIFT_GUARD_MODULE_ID",
+    "IdentityDriftGuard",
+    "IdentityDriftGuardPlan",
     "IdentityMetricResult",
+    "IDENTITY_REPAIR_STRATEGY_MODULE_ID",
+    "IdentityRepairStrategyPlan",
+    "IdentityRepairStrategyRouter",
     "IdentityReviewFusion",
     "VISUAL_CASEBOOK_RECIPE_LIBRARY_ID",
     "VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID",
@@ -179,6 +197,10 @@ __all__ = [
     "StrictVisualReviewPolicy",
     "StylingDeltaPolicy",
     "SubjectIdentityCard",
+    "SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID",
+    "SubjectContinuityAssetPackBuilder",
+    "SubjectContinuityAssetPackage",
+    "SubjectContinuityEvidence",
     "DOC86_IDENTITY_ISSUE_CODES",
     "DOC87_REFERENCE_BOUNDARY_ISSUE_CODES",
     "DOC88_REFERENCE_BALANCE_ISSUE_CODES",

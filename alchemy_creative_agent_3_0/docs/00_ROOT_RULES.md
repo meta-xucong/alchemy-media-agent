@@ -496,14 +496,29 @@ Portrait identity metrics may calculate face representations ephemerally for a
 single review operation. They must never persist embeddings or biometric
 vectors in Project, Brand Memory, output metadata, logs, or APIs. When the
 scene, wardrobe, light, and composition are already correct, one bounded local
-identity repair is preferred over full-frame regeneration. The repaired result
-must beat the prior candidate and preserve prompt-owned channels before it can
-be delivered.
+identity repair may be preferred only when Doc97 confirms an identity-native
+provider capability. The repaired result must beat the prior candidate and
+preserve prompt-owned channels before it can be delivered.
 
 The user prompt remains lossless. Prompt cleanup may remove only duplicated
 framework-owned guidance.
 
-## 22. Strategic Reminder
+## 22. Subject Continuity Asset And Repair Routing
+
+Doc97 governs long-running subject reference selection. The Visual Capability
+Cluster must package uploaded truth, explicit user selections, and reviewed
+generated support as separate authority levels. Explicit selection is the next
+generation's operational master, while uploaded truth remains the immutable root
+guard whenever available. Generated support must not silently replace root truth.
+
+Reference selection must be bounded, view-aware, auditable, and reusable across
+unrelated portrait or product scenes. Face embeddings remain ephemeral and must
+not be persisted. A provider accepting masks is not automatically safe for
+identity repair; local face repair requires an explicit identity-native provider
+capability. Otherwise retain the best reviewed output and use bounded regeneration
+from the ranked subject asset pack.
+
+## 23. Strategic Reminder
 
 Do not build a Lovart clone.
 

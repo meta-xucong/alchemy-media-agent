@@ -854,6 +854,100 @@ class BoneStructureRetryPatch(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SubjectContinuityEvidence(V3BaseModel):
+    evidence_id: str
+    source_id: str
+    source_type: str
+    asset_id: str | None = None
+    output_id: str | None = None
+    file_path: str | None = None
+    subject_type: str = "generic"
+    evidence_role: str = "subject_support"
+    authority: str = "style_or_context_reference"
+    view_hint: str = "unknown"
+    framing_hint: str = "unknown"
+    face_detection_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    identity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    geometry_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    trust_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    provider_eligible: bool = False
+    quarantine_reason: str | None = None
+    user_selected: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SubjectContinuityAssetPackage(V3BaseModel):
+    package_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    subject_type: str = "generic"
+    evidence: list[SubjectContinuityEvidence] = Field(default_factory=list)
+    user_selected_master_ids: list[str] = Field(default_factory=list)
+    uploaded_root_truth_ids: list[str] = Field(default_factory=list)
+    accepted_generated_support_ids: list[str] = Field(default_factory=list)
+    quarantined_ids: list[str] = Field(default_factory=list)
+    provider_candidate_ids: list[str] = Field(default_factory=list)
+    root_truth_preserved: bool = False
+    embeddings_persisted: bool = False
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdaptiveReferenceSelectionPlan(V3BaseModel):
+    plan_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    subject_type: str = "generic"
+    target_view: str = "unknown"
+    target_framing: str = "unknown"
+    ordered_source_ids: list[str] = Field(default_factory=list)
+    required_source_ids: list[str] = Field(default_factory=list)
+    optional_source_ids: list[str] = Field(default_factory=list)
+    excluded_source_ids: list[str] = Field(default_factory=list)
+    max_identity_sources: int = Field(default=3, ge=1, le=6)
+    preserve_uploaded_root: bool = True
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IdentityDriftGuardPlan(V3BaseModel):
+    plan_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    subject_type: str = "generic"
+    status: str = "not_applicable"
+    root_truth_ids: list[str] = Field(default_factory=list)
+    accepted_generated_ids: list[str] = Field(default_factory=list)
+    warning_generated_ids: list[str] = Field(default_factory=list)
+    quarantined_generated_ids: list[str] = Field(default_factory=list)
+    user_override_ids: list[str] = Field(default_factory=list)
+    minimum_identity_score: float = Field(default=0.72, ge=0.0, le=1.0)
+    commercial_identity_target: float = Field(default=0.82, ge=0.0, le=1.0)
+    root_comparison_required: bool = False
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IdentityRepairStrategyPlan(V3BaseModel):
+    plan_id: str
+    project_id: str | None = None
+    job_id: str | None = None
+    applies: bool = False
+    subject_type: str = "generic"
+    strategy: str = "not_applicable"
+    allow_face_local_repair: bool = False
+    identity_native_provider_required: bool = True
+    provider_capability_key: str = "identity_native_local_repair"
+    fallback_strategy: str = "hold_best_reviewed_result"
+    reason_codes: list[str] = Field(default_factory=list)
+    user_visible_summary: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class VisualCapabilityClusterResult(V3BaseModel):
     cluster_id: str
     version: str
@@ -900,6 +994,10 @@ class VisualCapabilityClusterResult(V3BaseModel):
     reference_overinheritance_retry_patch: ReferenceOverinheritanceRetryPatch | None = None
     portrait_reference_balance_retry_patch: PortraitReferenceBalanceRetryPatch | None = None
     resolved_reference_policy_package: ResolvedReferencePolicyPackage | None = None
+    subject_continuity_asset_package: SubjectContinuityAssetPackage | None = None
+    adaptive_reference_selection_plan: AdaptiveReferenceSelectionPlan | None = None
+    identity_drift_guard_plan: IdentityDriftGuardPlan | None = None
+    identity_repair_strategy_plan: IdentityRepairStrategyPlan | None = None
     negative_visual_memory: list[dict[str, Any]] = Field(default_factory=list)
     template_consistency_policy: dict[str, Any] = Field(default_factory=dict)
     has_visual_evidence: bool = False

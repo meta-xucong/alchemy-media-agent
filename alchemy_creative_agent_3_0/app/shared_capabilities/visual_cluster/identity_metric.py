@@ -116,6 +116,46 @@ class SFaceIdentityMetricProvider:
                 },
             )
 
+    def profile_reference(self, reference_path: str | Path) -> dict[str, Any]:
+        """Return non-biometric view metadata for Doc97 reference retrieval."""
+        if not self.available():
+            return {
+                "status": "unavailable",
+                "view_hint": "unknown",
+                "framing_hint": "unknown",
+                "embedding_persisted": False,
+            }
+        try:
+            image = self._read_image(Path(reference_path))
+            faces = self._detect(image)
+            if not faces:
+                return {
+                    "status": "face_not_detected",
+                    "view_hint": "unknown",
+                    "framing_hint": "unknown",
+                    "embedding_persisted": False,
+                }
+            _index, face = self._select_face_with_index(faces)
+            return {
+                "status": "ready",
+                "view_hint": _view_hint(face),
+                "framing_hint": _framing_hint(face, image.shape),
+                "face_detection_confidence": round(float(face[-1]), 4),
+                "face_box": _normalized_face_box(face, image.shape),
+                "face_count": len(faces),
+                "provider": self.provider_name,
+                "embedding_computed": False,
+                "embedding_persisted": False,
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "view_hint": "unknown",
+                "framing_hint": "unknown",
+                "error": str(exc)[:180],
+                "embedding_persisted": False,
+            }
+
     def _unavailable(self, code: str, reference_face_count: int, output_face_count: int) -> IdentityMetricResult:
         return IdentityMetricResult(
             status="unavailable",
@@ -232,6 +272,34 @@ def _normalized_face_box(face: Any, shape: Any) -> list[float]:
         round(max(0.0, min(1.0, float(face[2]) / max(1, width))), 6),
         round(max(0.0, min(1.0, float(face[3]) / max(1, height))), 6),
     ]
+
+
+def _view_hint(face: Any) -> str:
+    right_eye = (float(face[4]), float(face[5]))
+    left_eye = (float(face[6]), float(face[7]))
+    nose = (float(face[8]), float(face[9]))
+    eye_mid = _midpoint(right_eye, left_eye)
+    eye_distance = max(1e-6, _distance(right_eye, left_eye))
+    offset = (nose[0] - eye_mid[0]) / eye_distance
+    magnitude = abs(offset)
+    if magnitude <= 0.12:
+        return "front"
+    side = "right" if offset > 0 else "left"
+    return f"{side}_three_quarter" if magnitude <= 0.32 else f"{side}_profile"
+
+
+def _framing_hint(face: Any, shape: Any) -> str:
+    height, width = max(1, int(shape[0])), max(1, int(shape[1]))
+    face_ratio = (float(face[2]) * float(face[3])) / float(width * height)
+    if face_ratio >= 0.24:
+        return "face_closeup"
+    if face_ratio >= 0.10:
+        return "head_shoulders"
+    if face_ratio >= 0.035:
+        return "half_body"
+    if face_ratio >= 0.012:
+        return "full_body"
+    return "environmental"
 
 
 def _configured_model_dir() -> Path:

@@ -66,6 +66,13 @@ Doc96 does not change Project Mode, ScenarioRuntime, Scenario Packs, template
 activation, account isolation, output count, or the user's existing Advanced
 controls.
 
+> Doc97 compatibility note: Doc97 governs long-term subject asset packaging,
+> adaptive reference ordering, generated-reference drift control, and repair
+> capability routing. A provider accepting a mask is no longer sufficient to
+> enable local face repair; the provider must explicitly declare identity-native
+> local repair capability. Otherwise V3 performs bounded regeneration from the
+> ranked identity pack and retains the best reviewed result.
+
 ## 3. Measured Current Gap
 
 The accepted same-project regression produced:
