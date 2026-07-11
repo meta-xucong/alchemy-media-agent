@@ -668,28 +668,3 @@ unbounded candidate generation
 
 The capability remains a universal, consent-aware quality layer for preserving
 the user's supplied person across prompt-owned visual transformations.
-
-## 18. Live Acceptance Correction: Face-Aware Identity Evidence
-
-The first production acceptance proved that `input_fidelity=high` was supported,
-but also exposed a universal evidence-preparation defect: proportional static
-crops retained too much prompt-owned hair color and background context. High
-fidelity then preserved those unwanted channels more strongly.
-
-The corrective rule is:
-
-1. identity feature evidence uses a detected-face crop containing facial
-   features, outline, ears, and minimal hairline context;
-2. head-geometry evidence uses a wider detected-face crop containing the whole
-   head and jaw/neck relationship;
-3. if no face can be detected, the existing deterministic proportional crop is
-   retained as the compatibility fallback;
-4. feature evidence retains only 35% chroma and geometry evidence retains 10%
-   chroma, while luminance, texture, and geometry remain available;
-5. prompt-owned hair color, makeup, wardrobe, light, scene, camera, and finish
-   must not be reconstructed from identity-only evidence;
-6. crop cache keys are versioned so stale Doc95 evidence cannot survive the
-   upgrade.
-
-This extends the existing identity-evidence child responsibility. It does not
-create a scene profile, a second identity module, or a new Central Brain branch.
