@@ -66,6 +66,7 @@ class MarketplaceRuleEngine:
         canvas_rules = self._canvas_rules(platform)
         content_rules = self._content_rules(platform)
         export_rules = self._export_rules(platform)
+        text_policy = self._text_policy(platform, image_slots)
         localization = resolve_localization(
             platform=platform,
             market=market,
@@ -91,6 +92,7 @@ class MarketplaceRuleEngine:
                 "profile_source_notes": PROFILE_SOURCE_NOTES.get(platform, PROFILE_SOURCE_NOTES["generic"]),
                 "raw_platform_profile": raw_platform,
                 "live_policy_lookup": False,
+                "text_policy": text_policy,
                 **localization.metadata(),
             },
         )
@@ -178,3 +180,11 @@ class MarketplaceRuleEngine:
         if platform == "shopify":
             return {"format": "png", "naming": "{slot}_{index}_shopify.png", "dimension_hint": "1600x2000"}
         return {"format": "png", "naming": "{slot}_{index}_{platform}.png", "dimension_hint": "1200x1200"}
+
+    def _text_policy(self, platform: str, image_slots: list[str]) -> dict[str, list[str]]:
+        forbidden = [slot for slot in image_slots if slot in {"main_image", "hero_image"}]
+        return {
+            "text_forbidden_slots": forbidden,
+            "text_enabled_slots": [slot for slot in image_slots if slot not in forbidden],
+            "policy_owner": f"ecommerce_{platform}_profile",
+        }

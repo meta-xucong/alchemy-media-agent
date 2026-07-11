@@ -39,14 +39,15 @@ class EcommerceCopyBridge:
         localization: LocalizationProfile,
         parameters: dict,
         unsupported_claims: list[str] | None = None,
+        text_forbidden_slots: set[str] | None = None,
     ) -> dict[str, object]:
         """Return a reviewable copy plan without pretending to translate text."""
 
-        if slot in {"main_image", "hero_image"}:
+        if slot in (text_forbidden_slots or set()):
             return {
                 "text": None,
                 "policy": "text_forbidden",
-                "source": "slot_policy",
+                "source": "marketplace_profile",
                 "needs_localization_review": False,
                 "claim_review_required": False,
                 **localization.metadata(),

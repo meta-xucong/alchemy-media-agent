@@ -165,7 +165,12 @@ def _selected_slots(
         return [slot for slot in explicit if slot in default_order] or default_order
     priority = _slot_priority(default_order, user_input=user_input, scenario_parameters=scenario_parameters)
     if category_priority:
-        priority = [slot for slot in category_priority if slot in default_order] + [slot for slot in priority if slot not in category_priority]
+        primary_slot = default_order[:1]
+        priority = (
+            primary_slot
+            + [slot for slot in category_priority if slot in default_order and slot not in primary_slot]
+            + [slot for slot in priority if slot not in category_priority and slot not in primary_slot]
+        )
     selected: list[str] = []
     for slot in explicit:
         if slot in default_order and slot not in selected:

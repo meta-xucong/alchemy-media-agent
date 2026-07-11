@@ -75,6 +75,27 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E7 — profile-driven text policy and primary-slot protection
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Text-forbidden and text-enabled roles are now declared by the selected
+  marketplace profile rather than globally by the copy bridge.
+- Copy plans record the profile as the policy owner.
+- Requested-count selection keeps the platform's first/hero role before adding
+  category-specific evidence roles.
+
+Verification:
+
+```text
+focused E-Commerce tests: 32 passed
+full V3 tests: 418 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.
+
 ## E6 — publish-check and export summary closure
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

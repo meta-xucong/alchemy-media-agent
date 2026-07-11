@@ -48,6 +48,9 @@ class SellingPointToImagePlanner:
             market=marketplace_profile.market,
             requested_locale=scenario_parameters.get("copy_locale") or scenario_parameters.get("locale"),
         )
+        text_forbidden_slots = set(
+            (marketplace_profile.metadata.get("text_policy") or {}).get("text_forbidden_slots") or []
+        )
         selling_points = brief.differentiated_selling_points or ["Clear product identity"]
         recipes: list[EcommerceAssetRecipe] = []
         for index, slot in enumerate(marketplace_profile.image_slots):
@@ -65,6 +68,7 @@ class SellingPointToImagePlanner:
                 localization=localization,
                 parameters=scenario_parameters,
                 unsupported_claims=list(truth.metadata.get("unsupported_claims") or []),
+                text_forbidden_slots=text_forbidden_slots,
             )
             overlay_text = copy_plan["text"]
             visual_scene, lifestyle_metadata = self._visual_scene(

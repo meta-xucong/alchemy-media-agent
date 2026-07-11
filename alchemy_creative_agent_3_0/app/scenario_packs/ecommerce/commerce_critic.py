@@ -52,7 +52,11 @@ class CommerceCritic:
                 "Every selected slot has a distinct buyer-facing job and selling-point direction.",
             )
         )
-        main_image_copy = [recipe for recipe in recipes if recipe.slot in {"main_image", "hero_image"} and recipe.overlay_text]
+        main_image_copy = [
+            recipe
+            for recipe in recipes
+            if (recipe.metadata.get("copy_plan") or {}).get("policy") == "text_forbidden" and recipe.overlay_text
+        ]
         checks.append(
             self._check(
                 "main_image_text_policy",
