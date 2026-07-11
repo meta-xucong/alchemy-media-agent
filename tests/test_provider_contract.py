@@ -216,6 +216,16 @@ def test_openai_image_provider_retries_gateway_wrapped_openai_error():
     assert provider._is_transient_image_edit_error(exc) is True
 
 
+def test_openai_image_provider_retries_upstream_text_reply():
+    provider = registry.image("openai_gpt_image")
+    exc = Exception(
+        "OpenAI image generation failed. Error code: 400 - "
+        "{'error': {'code': 'upstream_text_reply', 'message': 'upstream_text_reply'}}"
+    )
+
+    assert provider._is_retryable_error(exc) is True
+
+
 def test_openai_image_provider_retries_html_gateway_timeout():
     provider = registry.image("openai_gpt_image")
     exc = Exception(

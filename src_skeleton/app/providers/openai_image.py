@@ -800,6 +800,7 @@ class OpenAIGPTImageProvider:
             "bad_response_status_code",
             "openai_error",
             "upstream_error",
+            "upstream_text_reply",
             "temporarily unavailable",
             "concurrency limit exceeded",
             "rate_limit_error",
