@@ -704,6 +704,10 @@ no prior local identity repair exists in the job
 ```
 
 The closeout edits only the feathered face mask on the current generated canvas.
+Its canvas is selected from the complete append-only review history, not merely
+the latest retry. The highest-scoring eligible reviewed output wins, so a worse
+whole-image retry cannot prevent a stronger initial image from receiving the
+bounded local closeout.
 It is one additional provider call, not another generic retry loop. Delivery
 accepts it only when identity crosses 0.82 or improves by at least 0.06 and no
 prompt, realism, or commercial score drops by more than 0.03. Otherwise the

@@ -1216,6 +1216,27 @@ class V3ProductApiService:
             return {}
         package = result.metadata.get("post_generation_review_package")
         inspections = package.get("inspections") if isinstance(package, dict) else []
+        if post_retry_closeout and isinstance(package, dict):
+            candidates = [item for item in inspections if isinstance(item, dict)] if isinstance(inspections, list) else []
+            for attempt in package.get("review_attempts", []) if isinstance(package.get("review_attempts"), list) else []:
+                if not isinstance(attempt, dict):
+                    continue
+                candidates.extend(item for item in attempt.get("inspections", []) if isinstance(item, dict))
+            deduplicated: dict[str, dict[str, Any]] = {}
+            for item in candidates:
+                output_id = str(item.get("output_id") or "").strip()
+                if output_id and output_id not in deduplicated:
+                    deduplicated[output_id] = item
+            inspections = sorted(
+                deduplicated.values(),
+                key=lambda item: self._safe_score(
+                    ((item.get("evidence") or {}).get("identity_review_fusion") or {}).get("fused_identity_score")
+                    if isinstance(item.get("evidence"), dict)
+                    else None
+                )
+                or -1.0,
+                reverse=True,
+            )
         for inspection in inspections if isinstance(inspections, list) else []:
             if not isinstance(inspection, dict):
                 continue

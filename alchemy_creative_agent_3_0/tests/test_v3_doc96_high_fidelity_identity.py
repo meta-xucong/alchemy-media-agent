@@ -357,6 +357,72 @@ def test_doc96_post_retry_closeout_requires_strong_objective_mid_band(tmp_path) 
     assert rejected == {}
 
 
+def test_doc96_post_retry_closeout_uses_best_reviewed_history_output(tmp_path) -> None:
+    buffer = BytesIO()
+    Image.new("RGB", (512, 512), (218, 208, 202)).save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    initial = store.save_base64_output(
+        job_id="job_doc96_history",
+        candidate_id="candidate_initial",
+        asset_id="asset_doc96_history",
+        provider="openai_gpt_image",
+        model="gpt-image-2",
+        encoded_image=encoded,
+    )
+    retry = store.save_base64_output(
+        job_id="job_doc96_history",
+        candidate_id="candidate_retry",
+        asset_id="asset_doc96_history",
+        provider="openai_gpt_image",
+        model="gpt-image-2",
+        encoded_image=encoded,
+    )
+    service = object.__new__(V3ProductApiService)
+    service.output_store = store
+
+    def inspection(output_id: str, fused: float, objective: float, geometry: float) -> dict:
+        return {
+            "output_id": output_id,
+            "score_card": {
+                "prompt_owned_channel_obedience": 0.76,
+                "commercial_finish": 0.83,
+                "human_realism": 0.72,
+            },
+            "evidence": {
+                "identity_review_fusion": {"fused_identity_score": fused},
+                "identity_metric": {
+                    "calibrated_score": objective,
+                    "geometry_score": geometry,
+                    "output_face_box": [0.25, 0.18, 0.5, 0.58],
+                },
+            },
+        }
+
+    initial_inspection = inspection(initial.output_id, 0.7908, 0.8542, 0.8678)
+    retry_inspection = inspection(retry.output_id, 0.58, 0.48, 0.83)
+    result = SimpleNamespace(
+        metadata={
+            "post_generation_review_package": {
+                "inspections": [retry_inspection],
+                "review_attempts": [
+                    {"attempt_index": 0, "inspections": [initial_inspection]},
+                    {"attempt_index": 1, "inspections": [retry_inspection]},
+                ],
+            }
+        }
+    )
+
+    metadata = service._identity_local_repair_metadata(  # noqa: SLF001
+        result,
+        attempt_index=2,
+        reason_codes=["identity_metric_below_commercial_target"],
+        post_retry_closeout=True,
+    )
+
+    assert metadata["identity_local_repair_source_output_id"] == initial.output_id
+
+
 def test_doc96_sface_calibration_is_monotonic_and_not_threshold_gamed() -> None:
     values = [_calibrate_sface_cosine(value) for value in (0.2, 0.363, 0.48, 0.59, 0.65, 0.8)]
     assert values == sorted(values)
