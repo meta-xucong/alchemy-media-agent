@@ -50,9 +50,9 @@ _PROFILES = {
     ),
     "home_kitchen": CategoryProfile(
         "home_kitchen", "Home and kitchen",
-        ("size and space fit", "material", "function", "capacity or quantity when confirmed"),
-        ("cleaning or storage", "before/after only when truthful"),
-        ("main_image", "scenario_image", "feature_image_1", "detail_image", "size_spec_image", "trust_image"),
+        ("size and space fit", "material", "function"),
+        ("capacity or quantity when confirmed", "cleaning or storage", "before/after only when truthful"),
+        ("main_image", "feature_image_1", "scenario_image", "detail_image", "size_spec_image", "trust_image"),
         ("preserve material and structure", "do not invent capacity", "keep use scene practical and believable"),
     ),
     "food_beverage": CategoryProfile(
@@ -66,10 +66,12 @@ _PROFILES = {
 
 
 _ALIASES = {
-    "clothing": "apparel", "fashion": "apparel", "shoes": "apparel", "bags": "apparel",
-    "skincare": "beauty", "cosmetics": "beauty", "makeup": "beauty",
+    "clothing": "apparel", "fashion": "apparel", "shoes": "apparel", "bag": "apparel", "bags": "apparel", "shirt": "apparel",
+    "skincare": "beauty", "cosmetics": "beauty", "makeup": "beauty", "serum": "beauty", "cream": "beauty",
     "3c": "electronics", "electronic": "electronics", "headphones": "electronics", "earbuds": "electronics",
-    "home": "home_kitchen", "kitchen": "home_kitchen", "furniture": "home_kitchen",
+    "keyboard": "electronics", "phone": "electronics", "tablet": "electronics", "computer": "electronics",
+    "home": "home_kitchen", "kitchen": "home_kitchen", "furniture": "home_kitchen", "lamp": "home_kitchen",
+    "lighting": "home_kitchen", "organizer": "home_kitchen", "storage": "home_kitchen",
     "drink": "food_beverage", "beverage": "food_beverage", "food": "food_beverage",
 }
 

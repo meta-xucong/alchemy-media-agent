@@ -75,6 +75,29 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E8 — category normalization and conditional evidence
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added common-category aliases for bags, beauty products, keyboards/phones,
+  lighting, organizers, and storage.
+- Recognizes desk lamps as home/kitchen for suite planning.
+- Distinguishes conditional evidence such as capacity/quantity from required
+  home-product evidence, preventing false missing-evidence warnings.
+- Maintains platform-first conversion ordering: primary image, core benefit,
+  then category scene/detail extensions.
+
+Verification:
+
+```text
+focused E-Commerce tests: 34 passed
+full V3 tests: 420 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.
+
 ## E7 — profile-driven text policy and primary-slot protection
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
