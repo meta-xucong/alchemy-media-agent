@@ -585,6 +585,7 @@ const els = {
   v3EcommerceFields: document.querySelector("#v3EcommerceFields"),
   v3EcommerceAdvanced: document.querySelector("#v3EcommerceAdvanced"),
   v3EcommercePlatformInput: document.querySelector("#v3EcommercePlatformInput"),
+  v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput"),
   v3EcommerceMarketInput: document.querySelector("#v3EcommerceMarketInput"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
@@ -4822,7 +4823,7 @@ function v3EcommerceProfilePatch() {
   const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
-    product_category: null,
+    product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
     target_platform: (els.v3EcommercePlatformInput?.value || "generic").trim(),
     target_market: (els.v3EcommerceMarketInput?.value || "").trim() || null,
     core_selling_points: sellingPoint ? [sellingPoint] : [],
@@ -5265,6 +5266,7 @@ function resetV3Workspace() {
   if (els.v3BrandNameInput) els.v3BrandNameInput.value = "";
   if (els.v3BrandToneInput) els.v3BrandToneInput.value = "";
   if (els.v3EcommercePlatformInput) els.v3EcommercePlatformInput.value = "generic";
+  if (els.v3EcommerceCategoryInput) els.v3EcommerceCategoryInput.value = "";
   if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";

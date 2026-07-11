@@ -156,6 +156,34 @@ Integration dependency: none. This is a Project Mode presentation correction;
 it does not alter generation routing, provider behavior, schemas, or General
 Template deliverables.
 
+## E12 — direct category selection for suite planning
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added a visible product-category choice to the E-Commerce workspace for the
+  five current category packs: apparel, beauty, electronics, home/kitchen, and
+  food/beverage.
+- The selection now reaches the existing `commerce_profile_patch` as
+  `product_category`, so the category planner can use the correct evidence
+  targets and slot priority without a new API field.
+- The default remains automatic detection, and reset returns the control to
+  that non-invasive default.
+
+Verification:
+
+```text
+E-Commerce workspace focused tests: 3 passed
+full V3 tests: 510 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: none. This uses the existing namespaced commerce
+profile patch and changes neither shared provider behavior nor General
+Template controls.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

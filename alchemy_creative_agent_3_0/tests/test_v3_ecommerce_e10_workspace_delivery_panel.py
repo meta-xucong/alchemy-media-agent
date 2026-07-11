@@ -45,3 +45,15 @@ def test_ecommerce_workspace_renders_export_preparation_and_supported_platforms(
     assert "category_evidence_targets" in script
     assert 'confirmed_style_chips: project.confirmed_style_summary' in script
     assert 'v3TemplatePlainLabel(project.primary_template_id || "general_template")' in script
+
+
+def test_ecommerce_workspace_exposes_category_choice_to_the_existing_profile_patch() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommerceCategoryInput"' in html
+    assert 'option value="electronics"' in html
+    assert 'option value="food_beverage"' in html
+    assert 'v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput")' in script
+    assert 'product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null' in script
+    assert 'els.v3EcommerceCategoryInput.value = ""' in script
