@@ -590,6 +590,7 @@ const els = {
   v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput"),
   v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
+  v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
   v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
   v3EcommerceClaimsInput: document.querySelector("#v3EcommerceClaimsInput"),
@@ -4884,6 +4885,7 @@ function v3EcommerceProfilePatch() {
     product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
     target_platform: (els.v3EcommercePlatformInput?.value || "generic").trim(),
     target_market: (els.v3EcommerceMarketInput?.value || "").trim() || null,
+    target_audience: (els.v3EcommerceAudienceInput?.value || "").trim() || null,
     core_selling_points: sellingPoint ? [sellingPoint] : [],
     must_keep_facts: v3TextLines(els.v3EcommerceSpecsInput?.value || ""),
     avoid_claims: v3CsvList(els.v3EcommerceClaimsInput?.value || ""),
@@ -5335,6 +5337,7 @@ function resetV3Workspace() {
   if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
   if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
+  if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
   if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
   if (els.v3EcommerceClaimsInput) els.v3EcommerceClaimsInput.value = "";
@@ -5608,12 +5611,14 @@ function renderV3EcommerceSummary(summary, metadata = null) {
     .map((recipe) => recipe?.metadata?.category_id)
     .find((category) => category && category !== "generic_product") || summary?.product_truth?.product_category;
   const categoryLabel = v3EcommerceCategoryLabel(categoryId);
+  const targetAudience = Array.isArray(summary?.target_audience) ? summary.target_audience.filter(Boolean).slice(0, 2) : [];
   const suiteScope = String(metadata?.ecommerce_suite_scope || "").trim();
   const suiteScopeLabel = suiteScope ? v3EcommerceSuiteScopeLabel(suiteScope, metadata?.selected_preset_id) : "";
   const entries = [
     "已识别商品主体和必须保留的信息",
     ...(summary?.platform ? [`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`] : []),
     ...(categoryLabel ? [`已按 ${categoryLabel} 类目安排展示证据和套图顺序`] : []),
+    ...(targetAudience.length ? [`已优先考虑：${targetAudience.join(" / ")}`] : []),
     ...(suiteScopeLabel ? [`本次选择 ${suiteScopeLabel}`] : []),
     "已把套图拆成主图、卖点图、场景图和信任图",
     "已为每张图安排不同用途",

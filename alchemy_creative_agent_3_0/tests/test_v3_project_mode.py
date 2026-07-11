@@ -544,6 +544,7 @@ def test_project_mode_creates_ecommerce_project_job_through_template_registry(tm
                 "product_category": "desk lamp",
                 "target_platform": "amazon_us",
                 "target_market": "US",
+                "target_audience": "home office users",
                 "core_selling_points": ["Adjustable angle"],
                 "must_keep_facts": ["black metal body"],
                 "keywords": ["desk lamp"],
@@ -562,9 +563,11 @@ def test_project_mode_creates_ecommerce_project_job_through_template_registry(tm
     assert job["metadata"]["project_context_snapshot"]["template_id"] == "ecommerce_template"
     assert job["metadata"]["project_context_snapshot"]["metadata"]["commerce_profile"]["product_category"] == "desk lamp"
     assert job["ecommerce"]["platform"] == "amazon"
+    assert job["ecommerce"]["target_audience"][0] == "home office users"
     assert job["ecommerce"]["image_recipes"]
     assert loaded["project"]["primary_template_id"] == "ecommerce_template"
     assert loaded["project"]["commerce_profile"]["product_category"] == "desk lamp"
+    assert loaded["project"]["commerce_profile"]["target_audience"] == "home office users"
     assert loaded["project"]["commerce_profile"]["suite_slots_requested"] == [
         "main_image",
         "feature_image_1",

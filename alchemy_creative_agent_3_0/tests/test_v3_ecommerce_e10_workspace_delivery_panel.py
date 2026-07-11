@@ -87,3 +87,16 @@ def test_ecommerce_workspace_exposes_suite_scope_without_a_new_project_contract(
     assert 'ecommerce_suite_scope: ecommerceSuiteScope || undefined' in script
     assert 'renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata)' in script
     assert 'els.v3EcommerceSuiteScopeInput.value = "recommended"' in script
+
+
+def test_ecommerce_workspace_exposes_existing_target_audience_profile_field() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommerceAudienceInput"' in html
+    assert 'v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput")' in script
+    assert 'target_audience: (els.v3EcommerceAudienceInput?.value || "").trim() || null' in script
+    assert 'els.v3EcommerceAudienceInput.value = ""' in script
+    assert "summary?.target_audience" in script
+    summary_block = script[script.index("function renderV3EcommerceSummary") : script.index("function renderV3OutcomeItems")]
+    assert summary_block.index("const targetAudience") < summary_block.index("const suiteScope")

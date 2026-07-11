@@ -264,6 +264,33 @@ JavaScript syntax: passed
 
 Integration dependency: none.
 
+## E16 — target-audience planning control
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added the existing E-Commerce profile's optional target-audience field to
+  advanced product information, with a beginner-facing example.
+- The workspace now sends that value through the already supported
+  `target_audience` profile field, and the E-Commerce summary shows the first
+  two planned audience cues returned by the existing commerce brief.
+- Added an end-to-end Project Mode regression proving the field persists on
+  the project profile and is used by the E-Commerce planner. No schema,
+  provider, or shared-routing change was required.
+
+Verification:
+
+```text
+Project Mode E-Commerce focused tests: 16 passed
+full V3 tests: 512 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: none. This exposes an established compatibility field
+rather than expanding the public contract.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
