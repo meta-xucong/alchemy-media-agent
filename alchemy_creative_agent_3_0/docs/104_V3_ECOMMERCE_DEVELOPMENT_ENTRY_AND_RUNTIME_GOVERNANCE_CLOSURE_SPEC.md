@@ -1,6 +1,8 @@
-# 103 V3 E-Commerce Development Entry And Runtime Governance Closure Spec
+# 104 V3 E-Commerce Development Entry And Runtime Governance Closure Spec
 
-Status: accepted development-entry specification.
+Status: accepted development-entry specification; foundation Gates A and B are
+implemented and regression-tested. Live-provider and browser acceptance remain
+separate recorded gates.
 
 This document defines the short foundation-closure phase that must run in
 parallel with E-Commerce Template development. It does not redesign E-Commerce
@@ -9,10 +11,11 @@ deliverables, weaken General Template boundaries, or replace Doc101/102.
 ## 1. Decision
 
 V3 is mature enough to begin E-Commerce Template design and isolated template
-implementation. It is not yet correct to call the shared runtime fully closed
-for production specialization until the Doc101/102 activation migration has
-passed enforced-runtime acceptance and the real-provider regressions in this
-document have been completed.
+implementation. New V3 jobs now use the Doc101/102 enforced runtime by
+default: a frozen plan controls selective capability execution and composed
+provider/review/retry contributions. It is not yet correct to call the shared
+runtime fully closed for production specialization until the live-provider and
+browser acceptance gates in this document have been completed.
 
 The governing decision is:
 
@@ -43,6 +46,11 @@ If a worktree does not yet contain that baseline, this document may be written,
 reviewed, and used for E-Commerce design, but its implementation gates cannot
 be marked complete there. The Doc101/102 baseline must be integrated before
 runtime-closure work is started.
+
+The foundation mainline now contains that baseline. New jobs default to
+`enforced`; an explicit `V3_CAPABILITY_ACTIVATION_MODE=legacy|shadow` remains
+the controlled rollback mechanism, while an existing frozen plan preserves its
+recorded execution mode for retries and continuation.
 
 ## 3. Authority And Scope
 
@@ -290,11 +298,22 @@ Pass only when new V3 jobs in `enforced` mode prove:
 - only an explicit bounded plan amendment may change retry capability scope;
 - General and E-Commerce policies remain isolated.
 
+Current foundation evidence: the Doc102 activation suite covers the frozen
+plan, selective execution, contribution composition, provider isolation,
+review/retry alignment, amendment safety, and cross-domain isolation. A
+default-mode regression test proves that a new job is `enforced` without an
+environment override.
+
 ### Gate B: General Light-Commerce Boundary
 
 Pass only when the tests in Section 6 pass in enforced mode, including negative
 assertions that General never constructs E-Commerce suite, marketplace, or
 export contracts.
+
+Current foundation evidence: General regression cases cover a summer
+background replacement, product atmosphere image, social cover, and tabletop
+use scene. Each remains one `generic_social` image on the General path with no
+suite-direction capability or marketplace deliverable vocabulary.
 
 ### Gate C: Live Product Provider And Review
 
@@ -334,9 +353,11 @@ governance closure and live acceptance continue in parallel.
 
 ## 12. Implementation Order And Commit Boundaries
 
-1. Integrate the Doc101/102 baseline into the foundation branch.
+1. Integrate the Doc101/102 baseline into the foundation branch. Completed.
 2. Complete and commit Doc102 phases in small independently verifiable units.
+   Completed for the default enforced-runtime closure.
 3. Add General light-commerce boundary tests without changing General UI scope.
+   Completed.
 4. Record live product/provider acceptance after upstream compatibility is
    verified.
 5. Record browser continuation acceptance.

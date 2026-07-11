@@ -282,6 +282,9 @@ def test_general_reference_asset_plan_uses_neutral_subject_language() -> None:
 
 def test_production_provider_persists_visual_cluster_metadata(tmp_path) -> None:
     class FakeProductionProvider(ProductionImageGenerationProvider):
+        def _select_provider(self, reference_assets):  # noqa: ANN001, ARG002
+            return "openai_gpt_image"
+
         async def _generate_with_app_provider(self, provider_name, app_request):  # noqa: ANN001, ARG002
             return SimpleNamespace(
                 provider="fake_image_provider",

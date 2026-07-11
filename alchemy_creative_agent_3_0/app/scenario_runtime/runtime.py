@@ -562,7 +562,11 @@ class ScenarioRuntime:
         )
 
     def _capability_activation_mode(self, request: ScenarioRuntimeRequest | None = None) -> str:
-        mode = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "shadow").strip().lower()
+        # New jobs must use the frozen, selective runtime by default.  The
+        # explicit legacy/shadow values remain available for a controlled
+        # rollback, and an existing job keeps the mode recorded in its frozen
+        # plan so that retries cannot silently change execution semantics.
+        mode = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced").strip().lower()
         mode = mode if mode in {"legacy", "shadow", "enforced"} else "legacy"
         frozen = request.metadata.get("capability_activation_plan") if request is not None else None
         if isinstance(frozen, dict):

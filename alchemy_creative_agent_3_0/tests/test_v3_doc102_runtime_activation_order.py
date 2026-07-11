@@ -19,6 +19,23 @@ def test_enforced_runtime_persists_frozen_plan(monkeypatch) -> None:
     assert result.planning_result.creative_job.metadata["capability_activation_plan_id"] == plan["plan_id"]
 
 
+def test_new_jobs_default_to_enforced_activation(monkeypatch) -> None:
+    monkeypatch.delenv("V3_CAPABILITY_ACTIVATION_MODE", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create an anime illustration",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.PLANNED
+    assert result.metadata["capability_activation_mode"] == "enforced"
+    assert result.metadata["capability_activation_plan"]["activation_mode"] == "enforced"
+
+
 def test_product_only_job_excludes_human_and_portrait(monkeypatch) -> None:
     result = _plan(monkeypatch, {"user_input": "Create a premium product hero for a desk lamp", "scenario_selection": {"scenario_id": "general_creative"}, "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}], "metadata": {"requested_image_count": 1}})
     active = set(result.metadata["capability_activation_plan"]["dependency_order"])
