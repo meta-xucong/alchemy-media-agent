@@ -75,6 +75,27 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E6 — publish-check and export summary closure
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Export metadata now exposes a concise, plain-language publish-check list.
+- The list combines product-truth confirmation, profile verification, locale
+  review, claim evidence, category evidence, and suite-differentiation signals.
+- Export status derives from the same check list; no publishing endpoint or
+  automatic marketplace action was added.
+
+Verification:
+
+```text
+focused E-Commerce tests: 30 passed
+full V3 tests: 416 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.
+
 ## E5 — claim-safe copy review
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ...creative_core.rules import stable_id
-from .contracts import EcommerceAssetRecipe, EcommerceExportPackage, MarketplaceRuleProfile
+from .contracts import CommerceCriticReport, EcommerceAssetRecipe, EcommerceExportPackage, MarketplaceRuleProfile
 
 
 class EcommerceExportPackager:
@@ -15,6 +15,7 @@ class EcommerceExportPackager:
         job_key: str,
         marketplace_profile: MarketplaceRuleProfile,
         recipes: list[EcommerceAssetRecipe],
+        critic: CommerceCriticReport | None = None,
     ) -> EcommerceExportPackage:
         export_rules = marketplace_profile.export_rules
         naming = str(export_rules.get("naming") or "{slot}_{index}_{platform}.png")
@@ -65,6 +66,12 @@ class EcommerceExportPackager:
                     "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 }
             )
+        publish_checks = self._publish_checks(
+            marketplace_profile=marketplace_profile,
+            critic=critic,
+            localization_review_required=localization_review_required,
+            claim_review_required=claim_review_required,
+        )
         return EcommerceExportPackage(
             package_id=stable_id("ecommerce_export", job_key, marketplace_profile.platform, marketplace_profile.market),
             platform=marketplace_profile.platform,
@@ -72,7 +79,7 @@ class EcommerceExportPackager:
             files=files,
             naming_pattern=naming,
             dimensions={recipe.slot: dimension_hint for recipe in recipes},
-            review_status="attention" if localization_review_required or claim_review_required else "metadata_ready",
+            review_status="attention" if any(check["status"] == "attention" for check in publish_checks) else "metadata_ready",
             metadata={
                 "source": "EcommerceExportPackager",
                 "file_count": len(files),
@@ -86,5 +93,61 @@ class EcommerceExportPackager:
                 "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
                 "category_ids": category_ids,
                 "category_profile_versions": category_profile_versions,
+                "publish_checks": publish_checks,
+                "publish_summary": self._publish_summary(files, publish_checks),
             },
         )
+
+    def _publish_checks(
+        self,
+        *,
+        marketplace_profile: MarketplaceRuleProfile,
+        critic: CommerceCriticReport | None,
+        localization_review_required: bool,
+        claim_review_required: bool,
+    ) -> list[dict[str, str]]:
+        checks = [
+            {
+                "id": "product_truth",
+                "status": "attention",
+                "message": "Before publishing, verify shape, label, material, color, quantity, and included items against the real product.",
+            },
+            {
+                "id": "platform_profile",
+                "status": "attention" if marketplace_profile.metadata.get("profile_status") != "reviewed" else "ready",
+                "message": "Confirm current platform image requirements before publishing; this profile is versioned planning guidance.",
+            },
+        ]
+        if localization_review_required:
+            checks.append(
+                {
+                    "id": "localized_copy",
+                    "status": "attention",
+                    "message": "Have a native-language reviewer confirm the overlay copy before rendering or export.",
+                }
+            )
+        if claim_review_required:
+            checks.append(
+                {
+                    "id": "claim_evidence",
+                    "status": "attention",
+                    "message": "Verify evidence and platform eligibility for overlay claims before publishing.",
+                }
+            )
+        if critic:
+            for check in critic.checks:
+                if check["status"] == "attention" and check["id"] in {"category_evidence_coverage", "suite_differentiation"}:
+                    checks.append(
+                        {
+                            "id": check["id"],
+                            "status": "attention",
+                            "message": check["detail"],
+                        }
+                    )
+        return checks
+
+    def _publish_summary(self, files: list[dict], checks: list[dict[str, str]]) -> str:
+        attention = [check["id"].replace("_", " ") for check in checks if check["status"] == "attention"]
+        if attention:
+            return f"{len(files)} planned image(s). Review before publishing: {', '.join(attention)}."
+        return f"{len(files)} planned image(s). Metadata checks are ready for final pixel review."

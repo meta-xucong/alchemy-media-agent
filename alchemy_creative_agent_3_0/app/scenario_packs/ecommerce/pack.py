@@ -113,6 +113,7 @@ class EcommerceScenarioPackPlanner:
             job_key=job_key,
             marketplace_profile=marketplace_profile,
             recipes=recipes,
+            critic=critic,
         )
         warnings = list(dict.fromkeys([*truth.warnings, *marketplace_profile.warnings, *brief.claim_risk_warnings, *critic.warnings]))
         return EcommercePackOutput(
