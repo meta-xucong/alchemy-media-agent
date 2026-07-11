@@ -260,6 +260,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
         cluster = self._build_cluster(capability_input)
         constraints = self._constraints(cluster)
+        activation_plan = self._activation_plan(capability_input)
         status = CapabilityStatus.SUCCESS if cluster.has_visual_evidence else CapabilityStatus.SKIPPED
         return CapabilityResult(
             module_id=self.module_id,
@@ -412,6 +413,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 ),
                 "negative_visual_memory": list(cluster.negative_visual_memory),
                 "template_consistency_policy": dict(cluster.template_consistency_policy),
+                "capability_activation_plan_summary": (
+                    {
+                        "plan_id": activation_plan.get("plan_id"),
+                        "active_capability_ids": list(activation_plan.get("dependency_order") or []),
+                        "activation_mode": activation_plan.get("activation_mode"),
+                    }
+                    if activation_plan
+                    else {}
+                ),
             },
             constraints=constraints,
             audit_trail=[
@@ -426,10 +436,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "v3_native_visual_capability_cluster": True,
                 "advanced_reference_controls": dict(cluster.metadata.get("advanced_reference_controls") or {}),
                 "reference_policy_package_id": cluster.metadata.get("reference_policy_package_id"),
+                "capability_activation_plan_id": activation_plan.get("plan_id") if activation_plan else None,
+                "active_capability_ids": list(activation_plan.get("dependency_order") or []) if activation_plan else [],
             },
         )
 
     def _build_cluster(self, capability_input: CapabilityInput) -> VisualCapabilityClusterResult:
+        human_realism_active = self._capability_active(capability_input, "human_realism")
+        portrait_identity_active = self._capability_active(capability_input, "portrait_identity")
+        product_identity_active = self._capability_active(capability_input, "product_identity")
+        reference_policy_active = self._capability_active(capability_input, "reference_channel_policy")
+        suite_direction_active = self._capability_active(capability_input, "suite_direction")
+        subject_continuity_active = portrait_identity_active or product_identity_active
         result_map = {result.module_id: result for result in capability_input.prior_results}
         child_ids = [module_id for module_id in result_map if module_id in VISUAL_CLUSTER_CHILD_MODULE_IDS]
         project_context = _as_dict(capability_input.metadata.get("project_context_snapshot"))
@@ -473,39 +491,68 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         )
         subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
         project_id = str(project_context.get("project_id") or "") or None
-        identity_drift_guard = self.identity_drift_guard.build(
-            project_id=project_id,
-            job_id=capability_input.job_id,
-            subject_type=subject_type,
-            strong_bindings=strong_bindings,
-            selected_outputs=selected_outputs,
-        )
-        subject_asset_package = self.subject_asset_pack_builder.build(
-            project_id=project_id,
-            job_id=capability_input.job_id,
-            subject_type=subject_type,
-            strong_bindings=strong_bindings,
-            drift_guard=identity_drift_guard,
-        )
-        adaptive_reference_plan = self.adaptive_reference_retriever.build(
-            project_id=project_id,
-            job_id=capability_input.job_id,
-            user_input=capability_input.user_input,
-            package=subject_asset_package,
-        )
-        strong_bindings = self.adaptive_reference_retriever.order_bindings(
-            strong_bindings,
-            adaptive_reference_plan,
-        )
+        if subject_continuity_active:
+            identity_drift_guard = self.identity_drift_guard.build(
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                subject_type=subject_type,
+                strong_bindings=strong_bindings,
+                selected_outputs=selected_outputs,
+            )
+            subject_asset_package = self.subject_asset_pack_builder.build(
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                subject_type=subject_type,
+                strong_bindings=strong_bindings,
+                drift_guard=identity_drift_guard,
+            )
+            adaptive_reference_plan = self.adaptive_reference_retriever.build(
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                user_input=capability_input.user_input,
+                package=subject_asset_package,
+            )
+            strong_bindings = self.adaptive_reference_retriever.order_bindings(
+                strong_bindings,
+                adaptive_reference_plan,
+            )
+        else:
+            identity_drift_guard = IdentityDriftGuardPlan(
+                plan_id=stable_id("inactive_identity_drift_guard", capability_input.job_id),
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                metadata={"inactive_reason": "subject_identity_capability_not_active"},
+            )
+            subject_asset_package = SubjectContinuityAssetPackage(
+                package_id=stable_id("inactive_subject_asset_package", capability_input.job_id),
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                metadata={"inactive_reason": "subject_identity_capability_not_active"},
+            )
+            adaptive_reference_plan = AdaptiveReferenceSelectionPlan(
+                plan_id=stable_id("inactive_adaptive_reference", capability_input.job_id),
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                metadata={"inactive_reason": "subject_identity_capability_not_active"},
+            )
         repair_strategy_metadata = {
             **_as_dict(project_context.get("metadata")),
             **dict(capability_input.metadata or {}),
         }
-        identity_repair_strategy = self.identity_repair_strategy_router.build(
-            project_id=project_id,
-            job_id=capability_input.job_id,
-            package=subject_asset_package,
-            metadata=repair_strategy_metadata,
+        identity_repair_strategy = (
+            self.identity_repair_strategy_router.build(
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                package=subject_asset_package,
+                metadata=repair_strategy_metadata,
+            )
+            if portrait_identity_active
+            else IdentityRepairStrategyPlan(
+                plan_id=stable_id("inactive_identity_repair", capability_input.job_id),
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                metadata={"inactive_reason": "portrait_identity_not_active"},
+            )
         )
         advanced_reference_controls = self._advanced_reference_controls(
             capability_input=capability_input,
@@ -513,16 +560,25 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             strong_bindings=strong_bindings,
             subject_type=subject_type,
         )
-        reference_policy_package = self.reference_channel_policy_module.resolve(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            user_input=capability_input.user_input,
-            subject_type=subject_type,
-            template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
-            strong_bindings=strong_bindings,
-            selected_outputs=selected_outputs,
-            advanced_reference_controls=advanced_reference_controls,
-            metadata=capability_input.metadata,
+        reference_policy_package = (
+            self.reference_channel_policy_module.resolve(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                user_input=capability_input.user_input,
+                subject_type=subject_type,
+                template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+                strong_bindings=strong_bindings,
+                selected_outputs=selected_outputs,
+                advanced_reference_controls=advanced_reference_controls,
+                metadata=capability_input.metadata,
+            )
+            if reference_policy_active
+            else ResolvedReferencePolicyPackage(
+                package_id=stable_id("inactive_reference_policy", capability_input.job_id),
+                project_id=project_id,
+                job_id=capability_input.job_id,
+                metadata={"inactive_reason": "reference_channel_policy_not_active"},
+            )
         )
         effective_asset_analyses = self._asset_analyses_for_reference_policy(
             asset_analyses,
@@ -615,7 +671,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             template_policy=template_policy,
             allow_product_language=allow_product_language,
             reference_policy_package=reference_policy_package,
-        )
+        ) if subject_continuity_active else []
         human_anchor, human_variation = self._human_variation_profiles(
             capability_input=capability_input,
             project_context=project_context,
@@ -624,7 +680,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             uploaded_references=uploaded_references,
             identity_locks=identity_locks,
             reference_policy_package=reference_policy_package,
-        )
+        ) if (human_realism_active or portrait_identity_active) else (None, None)
         project_identity_anchors = self.identity_anchor_builder.build(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -633,31 +689,35 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_locks=identity_locks,
             template_policy=template_policy,
             reference_policy_package=reference_policy_package,
-        )
+        ) if subject_continuity_active else []
         strong_reference_plan = self.strong_reference_planner.build(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
             anchors=project_identity_anchors,
             strong_bindings=strong_bindings,
-        )
+        ) if subject_continuity_active else None
         requested_count = self._requested_image_count(capability_input, project_context)
         variation_mode = self._effective_variation_mode(capability_input, project_context)
-        human_photorealism = self.human_photorealism_layer.build(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            scenario_id=capability_input.scenario_id,
-            template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
-            user_input=capability_input.user_input,
-            subject_type=subject_type,
-            variation_mode=variation_mode,
-            has_identity_reference=bool(project_identity_anchors or strong_bindings),
-            metadata=self._human_realism_plugin_metadata(
-                capability_input=capability_input,
-                project_context=project_context,
-                template_policy=template_policy,
+        human_photorealism = (
+            self.human_photorealism_layer.build(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                scenario_id=capability_input.scenario_id,
+                template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+                user_input=capability_input.user_input,
                 subject_type=subject_type,
                 variation_mode=variation_mode,
-            ),
+                has_identity_reference=bool(project_identity_anchors or strong_bindings),
+                metadata=self._human_realism_plugin_metadata(
+                    capability_input=capability_input,
+                    project_context=project_context,
+                    template_policy=template_policy,
+                    subject_type=subject_type,
+                    variation_mode=variation_mode,
+                ),
+            )
+            if human_realism_active
+            else None
         )
         strong_reference_plan = self._apply_human_photorealism_to_reference_plan(
             strong_reference_plan,
@@ -672,6 +732,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_locks=identity_locks,
             human_photorealism=human_photorealism,
             reference_policy_package=reference_policy_package,
+        ) if subject_continuity_active else StrongReferenceClosurePackage(
+            closure_id=stable_id("inactive_strong_reference_closure", capability_input.job_id),
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            metadata={"inactive_reason": "subject_identity_capability_not_active"},
         )
         strong_reference_closure = self._apply_advanced_reference_controls_to_closure(
             strong_reference_closure,
@@ -683,16 +748,20 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             mode=variation_mode,
             subject_type=subject_type,
         )
-        suite_role_plan = self.suite_director.build(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            user_input=capability_input.user_input,
-            variation_mode=variation_mode,
-            requested_image_count=requested_count,
-            has_identity_anchor=bool(project_identity_anchors),
-            subject_type=subject_type,
-            scenario_id=capability_input.scenario_id,
-            template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+        suite_role_plan = (
+            self.suite_director.build(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                user_input=capability_input.user_input,
+                variation_mode=variation_mode,
+                requested_image_count=requested_count,
+                has_identity_anchor=bool(project_identity_anchors),
+                subject_type=subject_type,
+                scenario_id=capability_input.scenario_id,
+                template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+            )
+            if suite_direction_active
+            else self._inactive_suite_role_plan(capability_input, project_id, variation_mode, requested_count)
         )
         role_specific_plan = self._role_specific_generation_plan_from_suite(suite_role_plan)
         role_specific_plan = self._apply_human_photorealism_to_role_plan(role_specific_plan, human_photorealism)
@@ -714,7 +783,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             selected_outputs=selected_outputs,
             strong_bindings=strong_bindings,
             project_identity_anchors=project_identity_anchors,
-        )
+        ) if subject_continuity_active else None
         role_specific_plan = self._apply_identity_hero_selection_to_role_plan(
             role_specific_plan,
             identity_hero_plan,
@@ -731,39 +800,45 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             identity_hero_plan=identity_hero_plan,
             human_photorealism=human_photorealism,
             reference_policy_package=reference_policy_package,
-        )
+        ) if subject_continuity_active else None
         subject_identity_card = self._apply_advanced_reference_controls_to_subject_identity_card(
             subject_identity_card,
             advanced_reference_controls,
         )
-        portrait_bone_lock = self.portrait_identity_layer.build_lock(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            subject_type=subject_type,
-            subject_identity_card=subject_identity_card,
-            strong_bindings=strong_bindings,
-        )
-        styling_delta_policy = self.portrait_identity_layer.build_styling_policy(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            user_input=capability_input.user_input,
-            lock=portrait_bone_lock,
-        )
-        portrait_reference_policy = self.portrait_identity_layer.build_reference_influence_policy(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            lock=portrait_bone_lock,
-            styling_policy=styling_delta_policy,
-            reference_policy_package=reference_policy_package,
-        )
-        portrait_balance_policy = self.portrait_identity_layer.build_reference_balance_policy(
-            project_id=str(project_context.get("project_id") or "") or None,
-            job_id=capability_input.job_id,
-            user_input=capability_input.user_input,
-            selected_outputs=selected_outputs,
-            lock=portrait_bone_lock,
-            reference_policy=portrait_reference_policy,
-        )
+        if portrait_identity_active:
+            portrait_bone_lock = self.portrait_identity_layer.build_lock(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                subject_type=subject_type,
+                subject_identity_card=subject_identity_card,
+                strong_bindings=strong_bindings,
+            )
+            styling_delta_policy = self.portrait_identity_layer.build_styling_policy(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                user_input=capability_input.user_input,
+                lock=portrait_bone_lock,
+            )
+            portrait_reference_policy = self.portrait_identity_layer.build_reference_influence_policy(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                lock=portrait_bone_lock,
+                styling_policy=styling_delta_policy,
+                reference_policy_package=reference_policy_package,
+            )
+            portrait_balance_policy = self.portrait_identity_layer.build_reference_balance_policy(
+                project_id=str(project_context.get("project_id") or "") or None,
+                job_id=capability_input.job_id,
+                user_input=capability_input.user_input,
+                selected_outputs=selected_outputs,
+                lock=portrait_bone_lock,
+                reference_policy=portrait_reference_policy,
+            )
+        else:
+            portrait_bone_lock = None
+            styling_delta_policy = None
+            portrait_reference_policy = None
+            portrait_balance_policy = None
         role_specific_plan = self._apply_subject_identity_card_to_role_plan(
             role_specific_plan,
             subject_identity_card,
@@ -786,7 +861,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             subject_type=subject_type,
             subject_identity_card=subject_identity_card,
             human_photorealism=human_photorealism,
-        )
+        ) if human_realism_active else None
         strict_review_policy = self._strict_visual_review_policy(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -812,6 +887,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             job_id=capability_input.job_id,
             role_plan=role_specific_plan,
             generated_candidates=self._candidate_payloads(capability_input),
+        ) if suite_direction_active else ModeDifferentiationReview(
+            review_id=stable_id("inactive_mode_review", capability_input.job_id),
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            status="not_applicable",
+            metadata={"inactive_reason": "suite_direction_not_active"},
         )
         batch_review = self.batch_reviewer.build(
             project_id=str(project_context.get("project_id") or "") or None,
@@ -820,6 +901,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             suite_role_plan=suite_role_plan,
             human_variation_plan=human_variation,
             generated_candidates=self._candidate_payloads(capability_input),
+        ) if (human_realism_active or portrait_identity_active) else BatchIdentityDiversityReview(
+            review_id=stable_id("inactive_batch_identity_review", capability_input.job_id),
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            status="not_applicable",
+            metadata={"inactive_reason": "human_and_portrait_capabilities_not_active"},
         )
         consistency_guard = self._consistency_guard(
             project_context=project_context,
@@ -836,7 +923,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
             issue_codes=self._anti_ai_face_issue_codes(capability_input),
-        )
+        ) if human_photorealism is not None else None
         portrait_similarity_review = self.portrait_identity_layer.build_review(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -845,7 +932,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             styling_policy=styling_delta_policy,
             issue_codes=self._doc86_identity_issue_codes(capability_input),
             confidence=self._doc86_review_confidence(capability_input),
-        )
+        ) if portrait_identity_active else None
         portrait_style_review = self.portrait_identity_layer.build_style_separation_review(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -854,7 +941,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             reference_policy=portrait_reference_policy,
             issue_codes=self._doc87_reference_boundary_issue_codes(capability_input),
             confidence=self._doc86_review_confidence(capability_input),
-        )
+        ) if portrait_identity_active else None
         portrait_balance_review = self.portrait_identity_layer.build_balance_review(
             project_id=str(project_context.get("project_id") or "") or None,
             job_id=capability_input.job_id,
@@ -862,7 +949,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             balance_policy=portrait_balance_policy,
             issue_codes=self._doc88_reference_balance_issue_codes(capability_input),
             confidence=self._doc86_review_confidence(capability_input),
-        )
+        ) if portrait_identity_active else None
         bone_retry_patch = (
             BoneStructureRetryPatch.model_validate(portrait_similarity_review.retry_patch)
             if portrait_similarity_review
@@ -1062,7 +1149,48 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "identity_drift_guard_status": identity_drift_guard.status,
                 "identity_repair_strategy": identity_repair_strategy.strategy,
                 "doc67_default_role_count_aligned": True,
+                "capability_activation_enforced": self._activation_mode(capability_input) == "enforced",
+                "active_capability_ids": self._active_capability_ids(capability_input),
             },
+        )
+
+    def _activation_plan(self, capability_input: CapabilityInput) -> dict[str, Any]:
+        value = capability_input.metadata.get("capability_activation_plan")
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _activation_mode(self, capability_input: CapabilityInput) -> str:
+        plan = self._activation_plan(capability_input)
+        return str(plan.get("activation_mode") or "legacy").lower()
+
+    def _active_capability_ids(self, capability_input: CapabilityInput) -> list[str]:
+        plan = self._activation_plan(capability_input)
+        return [str(item) for item in plan.get("dependency_order", []) if str(item).strip()]
+
+    def _capability_active(self, capability_input: CapabilityInput, capability_id: str) -> bool:
+        if self._activation_mode(capability_input) != "enforced":
+            return True
+        return capability_id in self._active_capability_ids(capability_input)
+
+    def _capability_profile(self, capability_input: CapabilityInput, capability_id: str) -> str | None:
+        for item in self._activation_plan(capability_input).get("active_capabilities", []):
+            if isinstance(item, dict) and item.get("capability_id") == capability_id:
+                return str(item.get("selected_profile") or "balanced")
+        return None
+
+    def _inactive_suite_role_plan(
+        self,
+        capability_input: CapabilityInput,
+        project_id: str | None,
+        variation_mode: str,
+        requested_count: int,
+    ) -> GeneralSuiteRolePlan:
+        return GeneralSuiteRolePlan(
+            plan_id=stable_id("inactive_suite_direction", capability_input.job_id),
+            project_id=project_id,
+            job_id=capability_input.job_id,
+            variation_mode=variation_mode,
+            requested_image_count=requested_count,
+            metadata={"applies": False, "inactive_reason": "not_in_activation_plan"},
         )
 
     def _allow_product_language(

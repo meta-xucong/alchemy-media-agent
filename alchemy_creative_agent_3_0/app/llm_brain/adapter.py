@@ -16,6 +16,7 @@ from .context_digest import (
 from .contracts import BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_skipped_result
 from .providers import BrainProviderError, BrainProviderUnavailable, V3LLMBrainProvider
+from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
 
 
 GENERAL_SCENARIO_ID = "general_creative"
@@ -31,8 +32,11 @@ class V3LLMBrainAdapter:
     def run(self, request: BrainRunRequest) -> BrainRunResult:
         if not _enabled():
             return build_skipped_result(request, "V3 LLM Brain is disabled by configuration.")
-        if not self._in_general_scope(request):
-            return build_skipped_result(request, "V3 LLM Brain currently runs only for the general template.")
+        if not self._activation_scope_enabled(request):
+            return build_skipped_result(
+                request,
+                "No trusted capability policy is active; the compatibility scope remains the general template.",
+            )
 
         fallback = build_fallback_result(request)
         if request.reasoning_depth == "off":
@@ -72,6 +76,9 @@ class V3LLMBrainAdapter:
         shared_capabilities: dict[str, Any] | None = None,
         uploaded_assets: list[dict[str, Any]] | None = None,
         product_profile: dict[str, Any] | None = None,
+        capability_catalog: dict[str, Any] | None = None,
+        pre_activation_capabilities: dict[str, Any] | None = None,
+        template_capability_policy: TemplateCapabilityPolicy | None = None,
     ) -> BrainRunRequest:
         project_context = project_context_from_metadata(metadata)
         selected_outputs = selected_outputs_from_context(project_context)
@@ -87,6 +94,10 @@ class V3LLMBrainAdapter:
             or clean_text(metadata.get("continuation_mode"), 80)
             or None
         )
+        scenario_parameters = as_dict(metadata.get("scenario_parameters"))
+        capability_hints = scenario_parameters.get("capabilities")
+        if not isinstance(capability_hints, list):
+            capability_hints = []
         return BrainRunRequest(
             user_input=user_input,
             stage=stage,
@@ -114,11 +125,19 @@ class V3LLMBrainAdapter:
                 "effective_variation_mode": variation_mode,
                 "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
                 "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
+                "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
             },
+            capability_catalog=dict(capability_catalog or {}),
+            pre_activation_capabilities=dict(pre_activation_capabilities or {}),
+            template_capability_policy=template_capability_policy or general_capability_policy(),
         )
 
-    def _in_general_scope(self, request: BrainRunRequest) -> bool:
-        return request.scenario_id == GENERAL_SCENARIO_ID or request.template_id == GENERAL_TEMPLATE_ID
+    def _activation_scope_enabled(self, request: BrainRunRequest) -> bool:
+        if not request.template_capability_policy.brain_activation_enabled:
+            return False
+        if request.scenario_id == GENERAL_SCENARIO_ID or request.template_id == GENERAL_TEMPLATE_ID:
+            return True
+        return request.template_capability_policy.policy_id != "general_template_capabilities"
 
     def _merge_remote_result(self, fallback: BrainRunResult, data: dict[str, Any]) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
@@ -129,6 +148,8 @@ class V3LLMBrainAdapter:
             "prompt_guidance",
             "prompt_review",
             "user_visible_summary",
+            "visual_task_profile",
+            "capability_activation_intent",
         ]:
             if isinstance(data.get(key), dict):
                 payload[key] = _merge_dict(payload.get(key, {}), data[key])

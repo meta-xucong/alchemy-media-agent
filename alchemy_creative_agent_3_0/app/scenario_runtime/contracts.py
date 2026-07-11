@@ -10,6 +10,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..public_api_guardrails import reject_low_level_controls
 from ..scenario_packs import ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import CapabilityRunResult, UploadedAssetInfo
+from ..shared_capabilities.activation import CapabilityActivationPlan
+from ..llm_brain import BrainRunResult
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
 
@@ -66,3 +68,14 @@ class ScenarioRuntimeResult(V3BaseModel):
     generation_result: PlanningResult | None = None
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilityPreparationResult(V3BaseModel):
+    """One immutable capability preparation result shared by plan and generate."""
+
+    pre_activation_run: CapabilityRunResult | None = None
+    brain_result: BrainRunResult
+    activation_plan: CapabilityActivationPlan | None = None
+    active_capability_run: CapabilityRunResult | None = None
+    combined_capability_run: CapabilityRunResult | None = None
+    activation_mode: str = "legacy"

@@ -16,6 +16,10 @@ For general_template/general_creative, use subject/scene/style/lighting language
 Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-copy concepts unless the user explicitly asks for a product/ecommerce image.
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
+CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
+Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
+Do not infer a real person from generic photography words alone. Distinguish real humans from illustration/CG intent.
+Do not invent a professional deliverable map beyond template_capability_policy. Unknown needs stay unresolved instead of enabling every capability."""
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -35,7 +39,57 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         "uploaded_assets": request.uploaded_assets,
         "shared_capabilities": request.shared_capabilities,
         "product_profile": request.product_profile,
+        "capability_catalog": request.capability_catalog,
+        "pre_activation_capabilities": request.pre_activation_capabilities,
+        "template_capability_policy": request.template_capability_policy.model_dump(mode="json"),
+        "capability_activation_instructions": CAPABILITY_ACTIVATION_INSTRUCTIONS,
         "return_schema": {
+            "visual_task_profile": {
+                "profile_id": "string",
+                "project_id": "string|null",
+                "job_id": "string",
+                "template_id": "string",
+                "scenario_id": "string",
+                "output_medium": "image",
+                "subject_entities": [
+                    {
+                        "entity_id": "string",
+                        "entity_type": "open string",
+                        "role": "string",
+                        "source_asset_ids": ["string"],
+                        "visible_in_target": "boolean",
+                        "preservation_level": "string",
+                        "confidence": "number 0-1",
+                        "attributes": {},
+                    }
+                ],
+                "preservation_targets": [],
+                "allowed_changes": ["string"],
+                "visual_intent_tags": ["string"],
+                "commercial_goal_tags": ["string"],
+                "requested_deliverable_roles": ["string"],
+                "explicit_user_controls": {},
+                "unknown_requirements": ["string"],
+                "confidence": "number 0-1",
+                "evidence": [],
+            },
+            "capability_activation_intent": {
+                "intent_id": "string",
+                "task_profile_id": "string",
+                "requested_capabilities": [
+                    {
+                        "capability_id": "catalog ID only",
+                        "activation_mode": "required|recommended|optional|forbidden",
+                        "reason_codes": ["string"],
+                        "evidence_ids": ["string"],
+                        "requested_profile": "string|null",
+                        "confidence": "number 0-1",
+                    }
+                ],
+                "rejected_capabilities": [],
+                "unresolved_signals": ["string"],
+                "confidence": "number 0-1",
+            },
             "intent_summary": {
                 "user_goal": "string",
                 "scene": "string",
@@ -84,7 +138,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             },
             "checkpoints": [
                 {
-                    "checkpoint_id": "intent|context|visual_strategy|prompt_guidance|pre_generation_review|post_generation_review",
+                    "checkpoint_id": "task_profile_and_capability_activation|intent|context|visual_strategy|prompt_guidance|pre_generation_review|post_generation_review",
                     "stage": "string",
                     "status": "completed|warning",
                     "summary": "short user-friendly planning note",
@@ -96,4 +150,11 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ],
         },
     }
+    if not request.capability_catalog:
+        payload.pop("capability_catalog", None)
+        payload.pop("pre_activation_capabilities", None)
+        payload.pop("template_capability_policy", None)
+        payload.pop("capability_activation_instructions", None)
+        payload["return_schema"].pop("visual_task_profile", None)
+        payload["return_schema"].pop("capability_activation_intent", None)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)

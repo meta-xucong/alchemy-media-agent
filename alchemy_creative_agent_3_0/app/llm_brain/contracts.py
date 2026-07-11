@@ -7,6 +7,12 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from ..schemas.models import V3BaseModel
+from ..shared_capabilities.activation import (
+    CapabilityActivationIntent,
+    TemplateCapabilityPolicy,
+    VisualTaskProfile,
+    general_capability_policy,
+)
 
 
 class BrainIntentSummary(V3BaseModel):
@@ -88,6 +94,9 @@ class BrainRunRequest(V3BaseModel):
     requested_image_size: str | None = None
     reasoning_depth: str = "balanced"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    capability_catalog: dict[str, Any] = Field(default_factory=dict)
+    pre_activation_capabilities: dict[str, Any] = Field(default_factory=dict)
+    template_capability_policy: TemplateCapabilityPolicy = Field(default_factory=general_capability_policy)
 
     @field_validator("user_input")
     @classmethod
@@ -114,8 +123,13 @@ class BrainRunResult(V3BaseModel):
     checkpoints: list[BrainCheckpoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     audit: dict[str, Any] = Field(default_factory=dict)
+    visual_task_profile: VisualTaskProfile | None = None
+    capability_activation_intent: CapabilityActivationIntent | None = None
 
     def safe_metadata(self) -> dict[str, Any]:
+        task_profile = self.visual_task_profile.model_dump(mode="json") if self.visual_task_profile is not None else None
+        if isinstance(task_profile, dict) and self.visual_task_profile.template_id == "general_template":
+            task_profile.pop("commercial_goal_tags", None)
         return {
             "enabled": self.enabled,
             "skipped": self.skipped,
@@ -132,4 +146,10 @@ class BrainRunResult(V3BaseModel):
             "checkpoints": [checkpoint.model_dump(mode="json") for checkpoint in self.checkpoints],
             "warnings": list(self.warnings),
             "audit": dict(self.audit),
+            "visual_task_profile": task_profile,
+            "capability_activation_intent": (
+                self.capability_activation_intent.model_dump(mode="json")
+                if self.capability_activation_intent is not None
+                else None
+            ),
         }

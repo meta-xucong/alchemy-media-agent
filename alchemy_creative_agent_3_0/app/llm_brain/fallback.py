@@ -19,6 +19,8 @@ from ..creative_core.prompt_language import (
     split_positive_and_negative_prompt,
     strip_negated_product_phrases,
 )
+from ..creative_core.rules import stable_id
+from ..shared_capabilities.activation import build_task_profile_and_intent
 
 
 SINGLE_FRAME_HARD_CONSTRAINT = (
@@ -268,6 +270,33 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
         human_variation_applies=human_variation_applies,
         warning=warning,
     )
+    task_profile, activation_intent = build_task_profile_and_intent(
+        user_input=request.user_input,
+        job_id=stable_id("capability_job", request.project_id, request.user_input, request.stage),
+        project_id=request.project_id,
+        template_id=request.template_id or "general_template",
+        scenario_id=request.scenario_id or "general_creative",
+        uploaded_assets=list(request.uploaded_assets or []),
+        reference_assets=list(request.reference_assets or []),
+        product_profile=dict(request.product_profile or {}),
+        metadata={
+            **dict(request.metadata or {}),
+            "requested_image_count": request.requested_image_count,
+            "requested_image_size": request.requested_image_size,
+        },
+        template_policy=request.template_capability_policy,
+    )
+    checkpoints.insert(
+        1 if checkpoints else 0,
+        BrainCheckpoint(
+            checkpoint_id="task_profile_and_capability_activation",
+            stage="activation",
+            summary="Classified the visual task and proposed evidence-backed capabilities.",
+            inputs=["user request", "declared references", "template capability policy"],
+            outputs=[task_profile.profile_id, activation_intent.intent_id],
+            metadata={"hidden_reasoning_exposed": False},
+        ),
+    )
     return BrainRunResult(
         enabled=True,
         skipped=False,
@@ -292,6 +321,8 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
             "human_identity_anchor": human_anchor,
             "doc58": doc58,
         },
+        visual_task_profile=task_profile,
+        capability_activation_intent=activation_intent,
     )
 
 

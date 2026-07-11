@@ -91,6 +91,8 @@ class GenerationProvider:
         return {}
 
     def _role_specific_generation_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "suite_direction"):
+            return {}
         for source in (request.metadata, request.generation_plan.metadata):
             value = source.get("role_specific_generation_plan") if isinstance(source, dict) else None
             if isinstance(value, dict):
@@ -117,17 +119,59 @@ class GenerationProvider:
             return dict(shared["visual_cluster"])
         return {}
 
+    def _activation_plan_summary(self, request: GenerationRequest) -> dict[str, Any]:
+        for source in (request.metadata, request.generation_plan.metadata):
+            if not isinstance(source, dict):
+                continue
+            plan = source.get("capability_activation_plan")
+            if isinstance(plan, dict):
+                return dict(plan)
+            summary = source.get("capability_activation_plan_summary")
+            if isinstance(summary, dict):
+                return dict(summary)
+        cluster = self._visual_cluster(request)
+        summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
+        return dict(summary) if isinstance(summary, dict) else {}
+
+    def _activation_enforced(self, request: GenerationRequest) -> bool:
+        plan = self._activation_plan_summary(request)
+        return str(plan.get("activation_mode") or "").lower() == "enforced"
+
+    def _active_capability(self, request: GenerationRequest, capability_id: str) -> bool:
+        plan = self._activation_plan_summary(request)
+        if not plan:
+            return True
+        values = plan.get("dependency_order") or plan.get("active_capability_ids") or []
+        return capability_id in {str(item) for item in values}
+
+    def _composed_visual_contribution(self, request: GenerationRequest) -> dict[str, Any]:
+        cluster = self._visual_cluster(request)
+        value = cluster.get("composed_visual_contribution") if isinstance(cluster, dict) else None
+        if isinstance(value, dict):
+            return dict(value)
+        for source in (request.metadata, request.generation_plan.metadata):
+            value = source.get("composed_visual_contribution") if isinstance(source, dict) else None
+            if isinstance(value, dict):
+                return dict(value)
+        return {}
+
     def _human_photorealism_guidance(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "human_realism"):
+            return {}
         cluster = self._visual_cluster(request)
         guidance = cluster.get("human_photorealism_guidance") if isinstance(cluster, dict) else None
         return dict(guidance) if isinstance(guidance, dict) and guidance.get("applies") else {}
 
     def _strong_reference_closure_package(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "portrait_identity"):
+            return {}
         cluster = self._visual_cluster(request)
         package = cluster.get("strong_reference_closure_package") if isinstance(cluster, dict) else None
         return dict(package) if isinstance(package, dict) and package.get("active") else {}
 
     def _resolved_reference_policy_package(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "reference_channel_policy"):
+            return {}
         cluster = self._visual_cluster(request)
         package = cluster.get("resolved_reference_policy_package") if isinstance(cluster, dict) else None
         if not isinstance(package, dict):
@@ -137,11 +181,18 @@ class GenerationProvider:
         return dict(package) if isinstance(package, dict) and package.get("applies") else {}
 
     def _adaptive_reference_selection_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not any(
+            self._active_capability(request, item)
+            for item in ("portrait_identity", "product_identity", "scene_continuity")
+        ):
+            return {}
         cluster = self._visual_cluster(request)
         plan = cluster.get("adaptive_reference_selection_plan") if isinstance(cluster, dict) else None
         return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
 
     def _identity_repair_strategy_plan(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "portrait_identity"):
+            return {}
         cluster = self._visual_cluster(request)
         plan = cluster.get("identity_repair_strategy_plan") if isinstance(cluster, dict) else None
         return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
@@ -173,6 +224,8 @@ class GenerationProvider:
         return {}
 
     def _mode_quality_profile(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request) and not self._active_capability(request, "suite_direction"):
+            return {}
         cluster = self._visual_cluster(request)
         profile = cluster.get("mode_quality_profile") if isinstance(cluster, dict) else None
         return dict(profile) if isinstance(profile, dict) else {}
@@ -1663,6 +1716,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             has_role_guidance=bool(role_guidance),
             has_reference_policy=bool(resolved_reference_policy),
         )
+        composed = self._composed_visual_contribution(request) if self._activation_enforced(request) else {}
+        composed_prompt = self._string_list(composed.get("prompt_additions"))
         parts = [
             (
                 "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
@@ -1679,6 +1734,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ),
             self._identity_local_repair_prompt(request),
             f"Visual direction:\n{visual_direction}",
+            (
+                "Active capability guidance:\n" + "\n".join(f"- {item}" for item in composed_prompt[:24])
+                if composed_prompt
+                else ""
+            ),
             reference_channel_contract,
             portrait_identity_contract,
             identity_evidence_prompt,
@@ -2378,6 +2438,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return "Reference channel policy:\n" + "\n".join(line for line in lines if line)
 
     def _portrait_bone_structure_prompt_guidance(self, request: GenerationRequest) -> str:
+        if self._activation_enforced(request) and not self._active_capability(request, "portrait_identity"):
+            return ""
         role_plan = self._role_specific_generation_plan(request)
         plan_metadata = role_plan.get("metadata") if isinstance(role_plan.get("metadata"), dict) else {}
         cluster = self._visual_cluster(request)
@@ -2660,6 +2722,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         values.extend(self._string_list(closure.get("negative_prompt_rules")))
         mode_quality = self._mode_quality_profile(request)
         values.extend(self._string_list(mode_quality.get("negative_guidance")))
+        if self._activation_enforced(request):
+            values.extend(
+                self._string_list(self._composed_visual_contribution(request).get("negative_additions"))
+            )
         return list(dict.fromkeys(values))
 
     def _retry_prompt_guidance(self, request: GenerationRequest) -> list[str]:
@@ -2689,6 +2755,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return guidance
 
     def _product_language_allowed(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> bool:
+        if self._activation_enforced(request):
+            return self._active_capability(request, "product_identity")
         asset = request.asset_spec
         return product_language_allowed(
             template_id=request.metadata.get("template_id"),
@@ -2703,6 +2771,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
 
     def _looks_like_human_photo_request(self, request: GenerationRequest) -> bool:
+        if self._activation_enforced(request):
+            return self._active_capability(request, "human_realism")
         recipe = self._mode_role_recipe(request)
         metadata = recipe.get("metadata") if isinstance(recipe.get("metadata"), dict) else {}
         if str(metadata.get("subject_type") or "").strip().lower() == "character":

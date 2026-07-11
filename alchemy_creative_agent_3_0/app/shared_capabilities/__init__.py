@@ -1,6 +1,19 @@
 """V3-owned shared capability layer."""
 
 from .base import SharedCapabilityModule
+from .activation import (
+    CapabilityActivationIntent,
+    CapabilityActivationPlan,
+    CapabilityActivationPlanner,
+    CapabilityCatalogSnapshot,
+    CapabilityContribution,
+    CapabilityContributionComposer,
+    ComposedVisualContribution,
+    TemplateCapabilityPolicy,
+    VisualCapabilityManifest,
+    VisualCapabilityRegistry,
+    VisualTaskProfile,
+)
 from .asset_binding_planner import AssetBindingPlanner
 from .asset_role_analyzer import AssetRoleAnalyzer
 from .case_library import CaseLibraryRetriever
@@ -66,6 +79,13 @@ from .visual_grammar_lock import VisualGrammarLockModule
 
 __all__ = [
     "AssetRole",
+    "CapabilityActivationIntent",
+    "CapabilityActivationPlan",
+    "CapabilityActivationPlanner",
+    "CapabilityCatalogSnapshot",
+    "CapabilityContribution",
+    "CapabilityContributionComposer",
+    "ComposedVisualContribution",
     "AssetBindingPlanner",
     "AssetRoleAnalyzer",
     "CaseLibraryRetriever",
@@ -100,6 +120,7 @@ __all__ = [
     "PromptConstraintCompiler",
     "SharedCapabilityModule",
     "SharedCapabilityRegistry",
+    "TemplateCapabilityPolicy",
     "UploadedAssetInfo",
     "VISUAL_CAPABILITY_CLUSTER_ID",
     "VISUAL_CLUSTER_CHILD_MODULE_IDS",
@@ -123,5 +144,8 @@ __all__ = [
     "VisualQualityReviewResult",
     "VisualReferenceBindingProfile",
     "VisualGrammarLockModule",
+    "VisualCapabilityManifest",
+    "VisualCapabilityRegistry",
+    "VisualTaskProfile",
     "create_default_vision_provider",
 ]

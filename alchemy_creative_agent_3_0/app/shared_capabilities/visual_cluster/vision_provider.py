@@ -186,7 +186,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
         else {}
     )
     reference_count = len(_inspection_reference_paths(metadata))
-    return "\n".join(
+    prompt = "\n".join(
         [
             "You are V3's post-generation visual inspector.",
             "Inspect the attached generated image only after it exists.",
@@ -206,6 +206,89 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review","confidence":0.0,"issue_codes":[],"scores":{"artifact_safety":0.0,"composition":0.0,"commercial_finish":0.0,"identity_consistency":0.0,"same_person_readability":0.0,"face_outline_and_proportion":0.0,"brow_eye_geometry":0.0,"nose_mouth_relationship":0.0,"jaw_chin_geometry":0.0,"age_identity_direction":0.0,"prompt_owned_channel_obedience":0.0,"human_realism":0.0,"overall":0.0},"identity_deltas":[],"preserved_elements":[],"drift_warnings":[],"artifact_warnings":[],"summary":[],"retry_patch":{"identity_reinforcement":[]}}',
         ]
     )
+    return _scope_inspection_prompt(prompt, metadata)
+
+
+def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
+    cluster = metadata.get("visual_cluster") if isinstance(metadata.get("visual_cluster"), dict) else {}
+    composed = (
+        metadata.get("composed_visual_contribution")
+        if isinstance(metadata.get("composed_visual_contribution"), dict)
+        else cluster.get("composed_visual_contribution")
+        if isinstance(cluster.get("composed_visual_contribution"), dict)
+        else {}
+    )
+    plan = metadata.get("capability_activation_plan") if isinstance(metadata.get("capability_activation_plan"), dict) else {}
+    if not plan and isinstance(cluster.get("capability_activation_plan_summary"), dict):
+        plan = dict(cluster["capability_activation_plan_summary"])
+    active_ids = [
+        str(item)
+        for item in (
+            composed.get("active_capability_ids")
+            or plan.get("dependency_order")
+            or plan.get("active_capability_ids")
+            or []
+        )
+        if str(item).strip()
+    ]
+    universal_issues = [
+        "visible_text_artifact",
+        "watermark_or_signature",
+        "faint_corner_watermark",
+        "ai_generated_badge_trace",
+        "signature_like_artifact",
+        "lower_right_mark_artifact",
+        "collage_or_split_panel",
+        "lighting_mismatch",
+        "composition_mismatch",
+        "weak_aesthetic_finish",
+        "overexposed_washout",
+        "underexposed_muddy_frame",
+        "low_resolution_output",
+        "low_confidence_review",
+    ]
+    issue_codes = list(universal_issues)
+    score_dimensions = ["artifact_safety", "composition", "technical_finish", "overall"]
+    sources: list[str] = ["universal_visual_quality"]
+    for contract in composed.get("review_contracts", []) if isinstance(composed, dict) else []:
+        if not isinstance(contract, dict):
+            continue
+        capability_id = str(contract.get("capability_id") or "")
+        if capability_id and capability_id not in active_ids:
+            continue
+        sources.append(capability_id)
+        issue_codes.extend(str(item) for item in contract.get("issue_codes", []) if str(item).strip())
+        score_dimensions.extend(str(item) for item in contract.get("score_dimensions", []) if str(item).strip())
+    return {
+        "activation_plan_id": composed.get("activation_plan_id") or plan.get("plan_id"),
+        "active_capability_ids": list(dict.fromkeys(active_ids)),
+        "issue_codes": list(dict.fromkeys(issue_codes)),
+        "score_dimensions": list(dict.fromkeys(score_dimensions)),
+        "review_capability_sources": list(dict.fromkeys(item for item in sources if item)),
+        "enforced": str(plan.get("activation_mode") or "").lower() == "enforced",
+    }
+
+
+def _scope_inspection_prompt(prompt: str, metadata: dict[str, Any]) -> str:
+    contract = active_review_contract(metadata)
+    if not contract["enforced"]:
+        return prompt
+    lines = []
+    for line in prompt.splitlines():
+        if line.startswith("Allowed issue_codes:"):
+            line = "Allowed issue_codes: " + ", ".join(contract["issue_codes"]) + "."
+        elif line.startswith('Return keys: {"status"'):
+            score_shape = {item: 0.0 for item in contract["score_dimensions"]}
+            line = (
+                'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
+                '"confidence":0.0,"issue_codes":[],"scores":'
+                + json.dumps(score_shape, ensure_ascii=False, separators=(",", ":"))
+                + ',"identity_deltas":[],"preserved_elements":[],"drift_warnings":[],'
+                '"artifact_warnings":[],"summary":[],"retry_patch":{}}'
+            )
+        lines.append(line)
+    lines.append("Active review capabilities: " + ", ".join(contract["review_capability_sources"]))
+    return "\n".join(lines)
 
 
 def _image_data_url(path: Path, mime_type: str | None) -> str:

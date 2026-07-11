@@ -76,6 +76,16 @@ def _float_env(name: str, default: float) -> float:
 
 class Settings(BaseModel):
     media_agent_mode: str = os.getenv("MEDIA_AGENT_MODE", "live")
+    v3_capability_activation_mode: str = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "shadow").strip().lower()
+    v3_capability_catalog_reload_enabled: bool = os.getenv(
+        "V3_CAPABILITY_CATALOG_RELOAD_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
+    v3_capability_plan_amendment_enabled: bool = os.getenv(
+        "V3_CAPABILITY_PLAN_AMENDMENT_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
+    v3_capability_shadow_audit_enabled: bool = os.getenv(
+        "V3_CAPABILITY_SHADOW_AUDIT_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
     mock_image_provider_enabled: bool = os.getenv("MOCK_IMAGE_PROVIDER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
     openai_base_url: str | None = _normalize_openai_base_url(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))

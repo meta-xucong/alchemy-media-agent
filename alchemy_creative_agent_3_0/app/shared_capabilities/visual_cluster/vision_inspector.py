@@ -13,6 +13,7 @@ from .vision_provider import (
     VisionInspectionProviderError,
     VisionInspectionProviderUnavailable,
     create_default_vision_provider,
+    active_review_contract,
     inspection_reference_paths,
 )
 from .identity_metric import create_default_identity_metric_provider
@@ -358,13 +359,25 @@ class VisionOutputInspector:
         metadata: dict[str, Any],
     ) -> VisualInspectionReport:
         issue_codes = _provider_issue_codes(payload)
+        review_contract = active_review_contract(metadata)
+        ignored_out_of_scope_issue_codes: list[str] = []
+        if review_contract.get("enforced"):
+            allowed = set(review_contract.get("issue_codes") or [])
+            ignored_out_of_scope_issue_codes = [code for code in issue_codes if code not in allowed]
+            issue_codes = [code for code in issue_codes if code in allowed]
         confidence = _safe_float(payload.get("confidence"), default=0.5)
         score_card = _provider_score_card(payload.get("scores"), str(payload.get("status") or ""))
-        identity_metric, identity_fusion = self._identity_metric_fusion(
-            resolution,
-            metadata=metadata,
-            multimodal_score=score_card.get("same_person_readability", score_card.get("identity_consistency")),
-        )
+        if review_contract.get("enforced"):
+            allowed_dimensions = set(review_contract.get("score_dimensions") or [])
+            score_card = {key: value for key, value in score_card.items() if key in allowed_dimensions}
+        if "portrait_identity" in set(review_contract.get("active_capability_ids") or []) or not review_contract.get("enforced"):
+            identity_metric, identity_fusion = self._identity_metric_fusion(
+                resolution,
+                metadata=metadata,
+                multimodal_score=score_card.get("same_person_readability", score_card.get("identity_consistency")),
+            )
+        else:
+            identity_metric, identity_fusion = {}, {}
         if identity_fusion:
             fused_score = float(identity_fusion["fused_identity_score"])
             score_card["objective_identity_metric"] = float(identity_fusion["objective_metric_score"])
@@ -388,6 +401,9 @@ class VisionOutputInspector:
         detected_issues = [_issue_payload(code, confidence) for code in issue_codes]
         if not identity_fusion:
             score_card = _provider_score_card(payload.get("scores"), status)
+            if review_contract.get("enforced"):
+                allowed_dimensions = set(review_contract.get("score_dimensions") or [])
+                score_card = {key: value for key, value in score_card.items() if key in allowed_dimensions}
         user_summary = _string_list(payload.get("summary")) or _summary_for_status(status, issue_codes)
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, mode, ",".join(issue_codes)),
@@ -415,6 +431,10 @@ class VisionOutputInspector:
                 "identity_deltas": _string_list(payload.get("identity_deltas")),
                 "identity_metric": identity_metric,
                 "identity_review_fusion": identity_fusion,
+                "activation_plan_id": review_contract.get("activation_plan_id"),
+                "active_capability_ids": review_contract.get("active_capability_ids", []),
+                "review_capability_sources": review_contract.get("review_capability_sources", []),
+                "ignored_out_of_scope_issue_codes": ignored_out_of_scope_issue_codes,
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},

@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import Field
 
 from ...schemas.models import V3BaseModel
+from ...shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
 from ..contracts import TemplateCard, TemplateStatus
 
 
@@ -96,6 +97,7 @@ class ProjectTemplateManifest(V3BaseModel):
     test_requirements: list[str] = Field(default_factory=list)
     ui_card: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    capability_policy: TemplateCapabilityPolicy = Field(default_factory=general_capability_policy)
 
     @property
     def project_can_create_jobs(self) -> bool:
@@ -114,6 +116,11 @@ class ProjectTemplateManifest(V3BaseModel):
             "context_read_policy": self.context_read_policy.model_dump(mode="json"),
             "context_write_policy": self.context_write_policy.model_dump(mode="json"),
             "output_summary_policy": self.output_summary_policy.model_dump(mode="json"),
+            "capability_policy_summary": {
+                "policy_id": self.capability_policy.policy_id,
+                "deliverable_role_owner": self.capability_policy.deliverable_role_owner,
+                "review_threshold_profile": self.capability_policy.review_threshold_profile,
+            },
         }
         return TemplateCard(
             template_id=self.template_id,
@@ -141,4 +148,3 @@ def _ui_state_for_status(status: TemplateStatus) -> dict[str, str]:
     if status == TemplateStatus.PLACEHOLDER:
         return {"state": "placeholder", "primary_action": "show_placeholder", "action_label": "\u89c4\u5212\u4e2d"}
     return {"state": "disabled", "primary_action": "show_unavailable", "action_label": "\u6682\u4e0d\u53ef\u7528"}
-

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ..brand_memory.profile_service import BrandProfileService
@@ -16,11 +17,31 @@ from ..shared_capabilities import (
     CapabilityInput,
     CapabilityRunResult,
     CapabilityRunStatus,
+    CapabilityWarning,
     SharedCapabilityRegistry,
     UploadedAssetInfo,
 )
+from ..shared_capabilities.activation import (
+    CapabilityActivationError,
+    CapabilityActivationIntent,
+    CapabilityActivationPlan,
+    CapabilityActivationPlanner,
+    CapabilityContribution,
+    CapabilityContributionComposer,
+    TemplateCapabilityPolicy,
+    VisualCapabilityManifest,
+    VisualCapabilityRegistry,
+    VisualTaskProfile,
+    compatibility_policy,
+)
+from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
 from ..schemas import PlanningResult, ProviderStrategy
-from .contracts import ScenarioRuntimeRequest, ScenarioRuntimeResult, ScenarioRuntimeStatus
+from .contracts import (
+    CapabilityPreparationResult,
+    ScenarioRuntimeRequest,
+    ScenarioRuntimeResult,
+    ScenarioRuntimeStatus,
+)
 
 
 class ScenarioRuntime:
@@ -37,8 +58,29 @@ class ScenarioRuntime:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.scenario_registry = scenario_registry or ScenarioPackRegistry()
         self.shared_capability_registry = shared_capability_registry or SharedCapabilityRegistry.with_default_modules()
+        self.visual_capability_registry = VisualCapabilityRegistry.with_default_manifests(self.shared_capability_registry)
+        self.capability_activation_planner = CapabilityActivationPlanner(self.visual_capability_registry)
+        self.capability_contribution_composer = CapabilityContributionComposer(self.visual_capability_registry)
+        self.visual_cluster_plugin_registry = VisualClusterPluginRegistry()
         self.llm_brain_adapter = llm_brain_adapter or V3LLMBrainAdapter()
         self.generation_router = generation_router
+
+    def register_visual_capability(
+        self,
+        manifest: VisualCapabilityManifest,
+        executor_ref: str,
+        plugin: VisualCapabilityPlugin,
+    ) -> None:
+        """Hot-plug a manifest and contribution plugin without changing Brain source."""
+
+        if manifest.capability_id != plugin.capability_id:
+            raise ValueError("manifest and plugin capability IDs must match")
+        self.visual_capability_registry.register_manifest(manifest, executor_ref)
+        try:
+            self.visual_cluster_plugin_registry.register(plugin)
+        except Exception:
+            self.visual_capability_registry.unregister_manifest(manifest.capability_id)
+            raise
 
     def plan_job(self, request: ScenarioRuntimeRequest | dict[str, Any]) -> ScenarioRuntimeResult:
         runtime_request = self._coerce_request(request)
@@ -50,7 +92,11 @@ class ScenarioRuntime:
                 warnings=list(resolution.warnings),
                 metadata=self._runtime_metadata(runtime_request, "blocked"),
             )
-        capability_run = self._run_shared_capabilities(runtime_request, resolution)
+        try:
+            preparation = self._prepare_capability_execution(runtime_request, resolution, stage="plan")
+        except CapabilityActivationError as exc:
+            return self._activation_blocked_result(runtime_request, resolution, exc)
+        capability_run = preparation.combined_capability_run
         if capability_run is not None and capability_run.status == CapabilityRunStatus.FAILED:
             return ScenarioRuntimeResult(
                 status=ScenarioRuntimeStatus.BLOCKED,
@@ -63,11 +109,12 @@ class ScenarioRuntime:
                 },
             )
 
-        brain_result = self._run_llm_brain(runtime_request, resolution, capability_run, stage="plan")
+        brain_result = preparation.brain_result
         capability_metadata = self._capability_metadata(capability_run)
         planning_metadata = self._brain_runtime_metadata(runtime_request, resolution, brain_result=brain_result)
         planning_metadata["shared_capabilities"] = capability_metadata
         planning_metadata["visual_cluster"] = capability_metadata.get("visual_cluster", {})
+        planning_metadata.update(self._activation_metadata(preparation))
         planning_result = run_creative_planning(
             user_input=runtime_request.user_input,
             optional_brand_id=runtime_request.optional_brand_id,
@@ -77,6 +124,7 @@ class ScenarioRuntime:
             generation_router=self.generation_router,
         )
         planning_result = self._enrich_result(planning_result, runtime_request, resolution, capability_run)
+        planning_result = self._enrich_activation_result(planning_result, preparation)
         return ScenarioRuntimeResult(
             status=ScenarioRuntimeStatus.PLANNED,
             scenario_resolution=resolution,
@@ -87,6 +135,7 @@ class ScenarioRuntime:
                 **self._runtime_metadata(runtime_request, "planned"),
                 "shared_capabilities": self._capability_metadata(capability_run),
                 "llm_brain": brain_result.safe_metadata(),
+                **self._activation_metadata(preparation),
             },
         )
 
@@ -107,7 +156,16 @@ class ScenarioRuntime:
                 warnings=list(resolution.warnings),
                 metadata=self._runtime_metadata(runtime_request, "blocked"),
             )
-        capability_run = self._run_shared_capabilities(runtime_request, resolution)
+        try:
+            preparation = self._prepare_capability_execution(
+                runtime_request,
+                resolution,
+                stage="generate",
+                quality_mode=quality_mode,
+            )
+        except CapabilityActivationError as exc:
+            return self._activation_blocked_result(runtime_request, resolution, exc)
+        capability_run = preparation.combined_capability_run
         if capability_run is not None and capability_run.status == CapabilityRunStatus.FAILED:
             return ScenarioRuntimeResult(
                 status=ScenarioRuntimeStatus.BLOCKED,
@@ -120,13 +178,7 @@ class ScenarioRuntime:
                 },
             )
 
-        brain_result = self._run_llm_brain(
-            runtime_request,
-            resolution,
-            capability_run,
-            stage="generate",
-            quality_mode=quality_mode,
-        )
+        brain_result = preparation.brain_result
         capability_metadata = self._capability_metadata(capability_run)
         generation_metadata = self._brain_runtime_metadata(
             runtime_request,
@@ -136,6 +188,7 @@ class ScenarioRuntime:
         )
         generation_metadata["shared_capabilities"] = capability_metadata
         generation_metadata["visual_cluster"] = capability_metadata.get("visual_cluster", {})
+        generation_metadata.update(self._activation_metadata(preparation))
         generation_result = run_generation_loop(
             user_input=runtime_request.user_input,
             optional_brand_id=runtime_request.optional_brand_id,
@@ -148,6 +201,7 @@ class ScenarioRuntime:
             generation_router=self.generation_router,
         )
         generation_result = self._enrich_result(generation_result, runtime_request, resolution, capability_run)
+        generation_result = self._enrich_activation_result(generation_result, preparation)
         return ScenarioRuntimeResult(
             status=ScenarioRuntimeStatus.GENERATED,
             scenario_resolution=resolution,
@@ -158,6 +212,405 @@ class ScenarioRuntime:
                 **self._runtime_metadata(runtime_request, "generated"),
                 "shared_capabilities": self._capability_metadata(capability_run),
                 "llm_brain": brain_result.safe_metadata(),
+                **self._activation_metadata(preparation),
+            },
+        )
+
+    def _prepare_capability_execution(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        stage: str,
+        quality_mode: str | None = None,
+    ) -> CapabilityPreparationResult:
+        mode = self._capability_activation_mode(request)
+        if mode == "legacy":
+            capability_run = self._run_shared_capabilities(request, resolution)
+            brain_result = self._run_llm_brain(
+                request,
+                resolution,
+                capability_run,
+                stage=stage,
+                quality_mode=quality_mode,
+            )
+            return CapabilityPreparationResult(
+                brain_result=brain_result,
+                combined_capability_run=capability_run,
+                activation_mode=mode,
+            )
+
+        policy = self._resolve_template_capability_policy(request, resolution)
+        pre_activation_run = self._run_pre_activation_capabilities(request, resolution)
+        template_id = self._template_id(request, resolution)
+        catalog = self.visual_capability_registry.catalog_snapshot(template_id, resolution.manifest.scenario_id)
+
+        if mode == "shadow":
+            legacy_run = self._run_shared_capabilities(request, resolution)
+            brain_result = self._run_llm_brain(
+                request,
+                resolution,
+                legacy_run,
+                stage=stage,
+                quality_mode=quality_mode,
+                template_capability_policy=policy,
+            )
+            plan = self._reuse_or_build_activation_plan(
+                request,
+                resolution,
+                brain_result,
+                policy,
+                catalog.catalog_version,
+                mode,
+            )
+            return CapabilityPreparationResult(
+                pre_activation_run=pre_activation_run,
+                brain_result=brain_result,
+                activation_plan=plan,
+                combined_capability_run=legacy_run,
+                activation_mode=mode,
+            )
+
+        brain_result = self._run_llm_brain(
+            request,
+            resolution,
+            pre_activation_run,
+            stage=stage,
+            quality_mode=quality_mode,
+            capability_catalog=catalog.safe_metadata(),
+            pre_activation_capabilities=self._capability_metadata(pre_activation_run),
+            template_capability_policy=policy,
+        )
+        plan = self._reuse_or_build_activation_plan(
+            request,
+            resolution,
+            brain_result,
+            policy,
+            catalog.catalog_version,
+            mode,
+        )
+        active_run = self._run_active_capabilities(request, resolution, plan, pre_activation_run)
+        combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
+        return CapabilityPreparationResult(
+            pre_activation_run=pre_activation_run,
+            brain_result=brain_result,
+            activation_plan=plan,
+            active_capability_run=active_run,
+            combined_capability_run=combined,
+            activation_mode=mode,
+        )
+
+    def _run_pre_activation_capabilities(self, request: ScenarioRuntimeRequest, resolution) -> CapabilityRunResult | None:
+        module_ids: list[str] = []
+        if request.uploaded_assets or request.uploaded_asset_ids:
+            module_ids.extend(["asset_role_analyzer", "asset_binding_planner"])
+        if request.metadata.get("project_context_snapshot") or request.optional_brand_id:
+            module_ids.append("history_reference")
+        if not module_ids:
+            return None
+        return self.shared_capability_registry.run(
+            self._capability_input(request, resolution, metadata={"capability_phase": "pre_activation"}),
+            module_ids=self._dedupe_preserve_order(module_ids),
+        )
+
+    def _run_active_capabilities(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        plan: CapabilityActivationPlan,
+        pre_activation_run: CapabilityRunResult | None,
+    ) -> CapabilityRunResult | None:
+        executor_ids: list[str] = []
+        for capability_id in plan.dependency_order:
+            executor_ref = self.visual_capability_registry.executor_ref(capability_id)
+            if executor_ref:
+                executor_ids.append(executor_ref)
+            if capability_id == "product_identity" and request.product_profile:
+                executor_ids.append("information_integrity_lock")
+        parameters = request.scenario_selection.parameters if request.scenario_selection else {}
+        if isinstance(parameters, dict) and parameters.get("use_case_library"):
+            executor_ids.extend(["case_library_retriever", "visual_grammar_lock"])
+        if any(item in plan.dependency_order for item in ("visual_grammar", "universal_visual_quality", "human_realism", "portrait_identity", "product_identity", "scene_continuity", "typography_layout", "suite_direction")):
+            executor_ids.append("prompt_constraint_compiler")
+        already_run = {result.module_id for result in pre_activation_run.results} if pre_activation_run else set()
+        executor_ids = [item for item in self._dedupe_preserve_order(executor_ids) if item not in already_run]
+        if not executor_ids:
+            return None
+        required_executor_ids = {
+            self.visual_capability_registry.executor_ref(item.capability_id)
+            for item in plan.base_capabilities
+        }
+        run = self.shared_capability_registry.run(
+            self._capability_input(
+                request,
+                resolution,
+                prior_results=list(pre_activation_run.results) if pre_activation_run else [],
+                metadata={
+                    "capability_phase": "active",
+                    "capability_activation_plan": plan.model_dump(mode="json"),
+                    "capability_activation_plan_summary": plan.summary(),
+                },
+            ),
+            module_ids=executor_ids,
+            required_module_ids=[item for item in required_executor_ids if item],
+        )
+        return self._attach_composed_contribution(run, plan)
+
+    def _attach_composed_contribution(
+        self,
+        run: CapabilityRunResult,
+        plan: CapabilityActivationPlan,
+    ) -> CapabilityRunResult:
+        cluster_result = next((item for item in run.results if item.module_id == VISUAL_CAPABILITY_CLUSTER_ID), None)
+        cluster = (
+            dict(cluster_result.facts.get("visual_capability_cluster") or {})
+            if cluster_result is not None
+            else {}
+        )
+        contributions = self._capability_contributions(plan, cluster)
+        composed = self.capability_contribution_composer.compose(plan, contributions)
+        updated_results = []
+        for result in run.results:
+            if result.module_id != VISUAL_CAPABILITY_CLUSTER_ID:
+                updated_results.append(result)
+                continue
+            cluster_payload = dict(result.facts.get("visual_capability_cluster") or {})
+            cluster_payload.update(
+                {
+                    "capability_activation_plan_summary": plan.summary(),
+                    "capability_contributions": [item.model_dump(mode="json") for item in contributions],
+                    "composed_visual_contribution": composed.model_dump(mode="json"),
+                }
+            )
+            updated_results.append(
+                result.model_copy(
+                    update={
+                        "facts": {
+                            **dict(result.facts),
+                            "visual_capability_cluster": cluster_payload,
+                            "capability_contributions": [item.model_dump(mode="json") for item in contributions],
+                            "composed_visual_contribution": composed.model_dump(mode="json"),
+                        },
+                        "metadata": {
+                            **dict(result.metadata),
+                            "capability_activation_plan_id": plan.plan_id,
+                            "active_capability_ids": list(plan.dependency_order),
+                        },
+                    }
+                )
+            )
+        return run.model_copy(
+            update={
+                "results": updated_results,
+                "metadata": {
+                    **dict(run.metadata),
+                    "activation_plan_id": plan.plan_id,
+                    "active_capability_ids": list(plan.dependency_order),
+                    "composed_visual_contribution": composed.model_dump(mode="json"),
+                },
+            }
+        )
+
+    def _capability_contributions(
+        self,
+        plan: CapabilityActivationPlan,
+        cluster: dict[str, Any],
+    ) -> list[CapabilityContribution]:
+        return self.visual_cluster_plugin_registry.contributions(plan, cluster)
+
+    def _build_activation_plan(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        brain_result: BrainRunResult,
+        policy: TemplateCapabilityPolicy,
+        catalog_version: str,
+        mode: str,
+    ) -> CapabilityActivationPlan:
+        profile = brain_result.visual_task_profile
+        intent = brain_result.capability_activation_intent
+        if profile is None or intent is None:
+            raise CapabilityActivationError("Brain did not produce a valid capability activation profile")
+        plan = self.capability_activation_planner.plan(
+            task_profile=profile,
+            intent=intent,
+            template_policy=policy,
+            catalog_version=catalog_version,
+            activation_mode=mode,
+            fallback_used=brain_result.fallback_used,
+        )
+        explicit_required = self._required_capability_ids(request)
+        missing_required = [item for item in explicit_required if not plan.is_active(item)]
+        if missing_required:
+            raise CapabilityActivationError(
+                "required capability is unavailable or not safely activated: " + ", ".join(missing_required)
+            )
+        return plan
+
+    def _reuse_or_build_activation_plan(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        brain_result: BrainRunResult,
+        policy: TemplateCapabilityPolicy,
+        catalog_version: str,
+        mode: str,
+    ) -> CapabilityActivationPlan:
+        frozen = request.metadata.get("capability_activation_plan")
+        if isinstance(frozen, dict) and frozen.get("plan_id"):
+            plan = CapabilityActivationPlan.model_validate(frozen)
+            if plan.template_id != self._template_id(request, resolution):
+                raise CapabilityActivationError("frozen capability plan template does not match this job")
+            if plan.scenario_id != resolution.manifest.scenario_id:
+                raise CapabilityActivationError("frozen capability plan scenario does not match this job")
+            stored_profile = request.metadata.get("visual_task_profile")
+            stored_intent = request.metadata.get("capability_activation_intent")
+            if isinstance(stored_profile, dict):
+                brain_result.visual_task_profile = VisualTaskProfile.model_validate(stored_profile)
+            if isinstance(stored_intent, dict):
+                brain_result.capability_activation_intent = CapabilityActivationIntent.model_validate(stored_intent)
+            return plan
+        return self._build_activation_plan(
+            request,
+            resolution,
+            brain_result,
+            policy,
+            catalog_version,
+            mode,
+        )
+
+    def _combine_capability_runs(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        pre_activation_run: CapabilityRunResult | None,
+        active_run: CapabilityRunResult | None,
+        plan: CapabilityActivationPlan,
+    ) -> CapabilityRunResult | None:
+        runs = [run for run in (pre_activation_run, active_run) if run is not None]
+        if not runs:
+            return None
+        results = []
+        warnings = []
+        required_failures = []
+        seen: set[str] = set()
+        for run in runs:
+            for result in run.results:
+                if result.module_id not in seen:
+                    seen.add(result.module_id)
+                    results.append(result)
+            warnings.extend(run.warnings)
+            required_failures.extend(run.required_failures)
+        compatibility_ids = set(self._selected_capability_ids(request, resolution))
+        compatibility_ids.add(VISUAL_CAPABILITY_CLUSTER_ID)
+        results = [result for result in results if result.module_id in compatibility_ids]
+        if required_failures:
+            status = CapabilityRunStatus.FAILED
+        elif any(run.status != CapabilityRunStatus.COMPLETE for run in runs):
+            status = CapabilityRunStatus.DEGRADED
+        else:
+            status = CapabilityRunStatus.COMPLETE
+        return CapabilityRunResult(
+            status=status,
+            results=results,
+            warnings=warnings,
+            required_failures=sorted(set(required_failures)),
+            metadata={
+                "pre_activation_module_ids": [result.module_id for result in pre_activation_run.results] if pre_activation_run else [],
+                "activation_plan_id": plan.plan_id,
+                "activation_plan_version": plan.plan_version,
+                "active_capability_ids": list(plan.dependency_order),
+                "catalog_version": plan.catalog_version,
+                "activation_mode": plan.activation_mode,
+            },
+        )
+
+    def _capability_input(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        prior_results: list | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CapabilityInput:
+        return CapabilityInput(
+            job_id=stable_id("capability_job", request.user_input, request.optional_brand_id, resolution.manifest.scenario_id),
+            scenario_id=resolution.manifest.scenario_id,
+            user_input=request.user_input,
+            campaign=dict(request.metadata.get("campaign", {})) if isinstance(request.metadata.get("campaign"), dict) else {},
+            brand_context=self._brand_context(request.optional_brand_id),
+            uploaded_assets=self._uploaded_assets(request),
+            product_profile=dict(request.product_profile),
+            prior_results=list(prior_results or []),
+            metadata={
+                **dict(request.metadata),
+                "scenario_mode_id": resolution.selected_mode_id,
+                "scenario_preset_id": resolution.selected_preset_id,
+                **dict(metadata or {}),
+            },
+        )
+
+    def _resolve_template_capability_policy(self, request: ScenarioRuntimeRequest, resolution) -> TemplateCapabilityPolicy:
+        return compatibility_policy(self._template_id(request, resolution), resolution.manifest.scenario_id)
+
+    def _template_id(self, request: ScenarioRuntimeRequest, resolution) -> str:
+        metadata = dict(request.metadata or {})
+        return str(
+            metadata.get("template_id")
+            or metadata.get("template_manifest_id")
+            or ("ecommerce_template" if resolution.manifest.scenario_id == "ecommerce" else "general_template")
+        )
+
+    def _capability_activation_mode(self, request: ScenarioRuntimeRequest | None = None) -> str:
+        mode = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "shadow").strip().lower()
+        mode = mode if mode in {"legacy", "shadow", "enforced"} else "legacy"
+        frozen = request.metadata.get("capability_activation_plan") if request is not None else None
+        if isinstance(frozen, dict):
+            frozen_mode = str(frozen.get("activation_mode") or "").lower()
+            if frozen_mode in {"legacy", "shadow"}:
+                return frozen_mode
+        return mode
+
+    def _activation_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
+        plan = preparation.activation_plan
+        if plan is None:
+            return {"capability_activation_mode": preparation.activation_mode}
+        return {
+            "visual_task_profile": preparation.brain_result.visual_task_profile.model_dump(mode="json")
+            if preparation.brain_result.visual_task_profile
+            else None,
+            "capability_activation_intent": preparation.brain_result.capability_activation_intent.model_dump(mode="json")
+            if preparation.brain_result.capability_activation_intent
+            else None,
+            "capability_activation_plan": plan.model_dump(mode="json"),
+            "capability_activation_plan_id": plan.plan_id,
+            "capability_catalog_version": plan.catalog_version,
+            "capability_activation_mode": preparation.activation_mode,
+        }
+
+    def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:
+        required_failures = self._required_capability_ids(request)
+        capability_run = CapabilityRunResult(
+            status=CapabilityRunStatus.FAILED,
+            warnings=[
+                CapabilityWarning(
+                    code="capability_activation_failed",
+                    message=str(exc)[:240],
+                    severity="error",
+                )
+            ],
+            required_failures=required_failures,
+            metadata={"activation_mode": self._capability_activation_mode(request)},
+        )
+        return ScenarioRuntimeResult(
+            status=ScenarioRuntimeStatus.BLOCKED,
+            scenario_resolution=resolution,
+            capability_run=capability_run,
+            warnings=[*resolution.warnings, f"capability_activation_failed: {str(exc)[:240]}"],
+            metadata={
+                **self._runtime_metadata(request, "blocked"),
+                "capability_activation_mode": self._capability_activation_mode(request),
+                "capability_activation_error": type(exc).__name__,
             },
         )
 
@@ -228,27 +681,37 @@ class ScenarioRuntime:
             }
         )
 
+    def _enrich_activation_result(
+        self,
+        result: PlanningResult,
+        preparation: CapabilityPreparationResult,
+    ) -> PlanningResult:
+        activation_metadata = self._activation_metadata(preparation)
+        creative_job = result.creative_job.model_copy(
+            update={
+                "metadata": {
+                    **dict(result.creative_job.metadata),
+                    **activation_metadata,
+                }
+            }
+        )
+        return result.model_copy(
+            update={
+                "creative_job": creative_job,
+                "metadata": {
+                    **dict(result.metadata),
+                    **activation_metadata,
+                },
+            }
+        )
+
     def _run_shared_capabilities(self, request: ScenarioRuntimeRequest, resolution) -> CapabilityRunResult | None:
         module_ids = self._selected_capability_ids(request, resolution)
         if not module_ids:
             return None
         required_ids = self._required_capability_ids(request)
-        capability_input = CapabilityInput(
-            job_id=stable_id("capability_job", request.user_input, request.optional_brand_id, resolution.manifest.scenario_id),
-            scenario_id=resolution.manifest.scenario_id,
-            user_input=request.user_input,
-            campaign=dict(request.metadata.get("campaign", {})) if isinstance(request.metadata.get("campaign"), dict) else {},
-            brand_context=self._brand_context(request.optional_brand_id),
-            uploaded_assets=self._uploaded_assets(request),
-            product_profile=dict(request.product_profile),
-            metadata={
-                **dict(request.metadata),
-                "scenario_mode_id": resolution.selected_mode_id,
-                "scenario_preset_id": resolution.selected_preset_id,
-            },
-        )
         return self.shared_capability_registry.run(
-            capability_input,
+            self._capability_input(request, resolution, metadata={"capability_phase": "legacy"}),
             module_ids=module_ids,
             required_module_ids=required_ids,
         )
@@ -292,6 +755,9 @@ class ScenarioRuntime:
         *,
         stage: str,
         quality_mode: str | None = None,
+        capability_catalog: dict[str, Any] | None = None,
+        pre_activation_capabilities: dict[str, Any] | None = None,
+        template_capability_policy: TemplateCapabilityPolicy | None = None,
     ) -> BrainRunResult:
         base_metadata = self._brain_runtime_metadata(request, resolution, quality_mode=quality_mode)
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
@@ -299,11 +765,14 @@ class ScenarioRuntime:
             user_input=request.user_input,
             stage=stage,
             scenario_id=resolution.manifest.scenario_id,
-            template_id=str(base_metadata.get("template_id") or base_metadata.get("template_manifest_id") or ""),
+            template_id=self._template_id(request, resolution),
             metadata=base_metadata,
             shared_capabilities=self._capability_metadata(capability_run),
             uploaded_assets=uploaded_assets,
             product_profile=dict(request.product_profile),
+            capability_catalog=capability_catalog,
+            pre_activation_capabilities=pre_activation_capabilities,
+            template_capability_policy=template_capability_policy,
         )
         return self.llm_brain_adapter.run(brain_request)
 
@@ -486,6 +955,13 @@ class ScenarioRuntime:
             for key, item in value.items():
                 key_text = str(key)
                 lowered = key_text.lower()
+                if key_text in {
+                    "capability_version",
+                    "activation_plan_id",
+                    "capability_activation_plan_id",
+                }:
+                    clean[key_text] = item
+                    continue
                 if "commercial" in lowered or "ecommerce" in lowered:
                     continue
                 if "product" in lowered:

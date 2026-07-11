@@ -483,6 +483,20 @@ class V3ProductApiService:
                 runtime_result.scenario_resolution.manifest.scenario_id,
             )
         )
+        activation_metadata = {
+            key: runtime_result.metadata[key]
+            for key in (
+                "visual_task_profile",
+                "capability_activation_intent",
+                "capability_activation_plan",
+                "capability_activation_plan_id",
+                "capability_catalog_version",
+                "capability_activation_mode",
+            )
+            if key in runtime_result.metadata
+        }
+        if activation_metadata:
+            create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
         record = ProductJobRecord(
             request=create_request,
             status=status,
@@ -750,6 +764,10 @@ class V3ProductApiService:
             shared = generation_result.metadata.get("shared_capabilities")
             result_cluster = shared.get("visual_cluster") if isinstance(shared, dict) else {}
         if isinstance(result_cluster, dict):
+            review_metadata["visual_cluster"] = dict(result_cluster)
+            composed = result_cluster.get("composed_visual_contribution")
+            if isinstance(composed, dict):
+                review_metadata["composed_visual_contribution"] = dict(composed)
             reference_policy = result_cluster.get("resolved_reference_policy_package")
             if isinstance(reference_policy, dict) and reference_policy:
                 review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
@@ -1446,14 +1464,24 @@ class V3ProductApiService:
     ) -> tuple[list[str], dict[str, Any], str]:
         explicit_codes = self._metadata_issue_codes(request_metadata)
         if explicit_codes:
-            return explicit_codes, self._metadata_retry_patch(request_metadata), "request_metadata"
+            return self._activation_filtered_retry_signal(
+                result,
+                explicit_codes,
+                self._metadata_retry_patch(request_metadata),
+                "request_metadata",
+            )
 
         cluster = self._visual_cluster_metadata_from_result(result)
         real_signal = self._real_review_signal_package_from_cluster(cluster)
         if real_signal:
             signal_codes, signal_patch = self._visual_retry_signal_from_real_review(real_signal)
             if signal_codes:
-                return signal_codes, signal_patch, "real_review_signal_package"
+                return self._activation_filtered_retry_signal(
+                    result,
+                    signal_codes,
+                    signal_patch,
+                    "real_review_signal_package",
+                )
         if self._visual_cluster_is_preflight_only(cluster):
             return [], {}, "preflight_only"
         decisions = cluster.get("auto_retry_decisions") if isinstance(cluster, dict) else None
@@ -1462,12 +1490,116 @@ class V3ProductApiService:
         for decision in decisions:
             if not isinstance(decision, dict) or not bool(decision.get("should_retry")):
                 continue
-            return (
+            return self._activation_filtered_retry_signal(
+                result,
                 self._dedupe_strings(decision.get("reason_codes")),
                 dict(decision.get("retry_patch") or {}),
                 "visual_cluster",
             )
         return [], {}, "visual_cluster"
+
+    def _activation_plan_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        creative_job = getattr(result, "creative_job", None)
+        creative_job_metadata = getattr(creative_job, "metadata", {})
+        for source in (getattr(result, "metadata", {}), creative_job_metadata):
+            if not isinstance(source, dict):
+                continue
+            plan = source.get("capability_activation_plan")
+            if isinstance(plan, dict):
+                return dict(plan)
+        cluster = self._visual_cluster_metadata_from_result(result)
+        summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
+        return dict(summary) if isinstance(summary, dict) else {}
+
+    def _activation_filtered_retry_signal(
+        self,
+        result: PlanningResult,
+        issue_codes: list[str],
+        retry_patch: dict[str, Any],
+        source: str,
+    ) -> tuple[list[str], dict[str, Any], str]:
+        plan = self._activation_plan_from_result(result)
+        if str(plan.get("activation_mode") or "").lower() != "enforced":
+            return self._dedupe_strings(issue_codes), retry_patch, source
+        active = {
+            str(item)
+            for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])
+            if str(item).strip()
+        }
+        filtered: list[str] = []
+        ignored: list[str] = []
+        for code in self._dedupe_strings(issue_codes):
+            owner = self._review_issue_capability_owner(code)
+            if owner is None or owner in active:
+                filtered.append(code)
+            else:
+                ignored.append(code)
+        if ignored:
+            audit = result.metadata.setdefault("capability_activation_audit", {})
+            audit["ignored_out_of_scope_issue_codes"] = self._dedupe_strings(
+                [*audit.get("ignored_out_of_scope_issue_codes", []), *ignored]
+            )
+        if not filtered:
+            return [], {}, source
+        if ignored or not self._visual_retry_patch_has_content(retry_patch):
+            retry_patch = self._visual_retry_patch_from_issues(filtered)
+        return filtered, retry_patch, source
+
+    def _review_issue_capability_owner(self, issue_code: str) -> str | None:
+        code = str(issue_code or "").strip().lower()
+        if not code:
+            return None
+        if any(token in code for token in ("product", "packaging", "label", "logo_drift", "sku_")):
+            return "product_identity"
+        if any(
+            token in code
+            for token in ("scene_", "background_drift", "background_space", "landmark", "spatial_", "camera_mood")
+        ):
+            return "scene_continuity"
+        if any(token in code for token in ("typography", "text_accuracy", "layout_", "crop_safety")):
+            return "typography_layout"
+        if any(token in code for token in ("role_", "suite_", "batch_duplication", "same_pose_repetition")):
+            return "suite_direction"
+        if any(
+            token in code
+            for token in (
+                "identity_drift",
+                "bone_structure",
+                "face_shape",
+                "cheek_jaw",
+                "eye_shape_or_spacing_identity",
+                "eyebrow_eye_relationship",
+                "nose_mouth_relationship_identity",
+                "lip_contour_identity",
+                "age_impression_drift",
+                "age_identity_drift",
+                "styling_changed_face",
+                "same_person",
+            )
+        ):
+            return "portrait_identity"
+        if any(
+            token in code
+            for token in (
+                "ai_face",
+                "plastic_skin",
+                "skin_",
+                "anatomy",
+                "doll_like",
+                "beauty_filter",
+                "uncanny_eye",
+                "body_proportion",
+                "bad_hands",
+                "face_artifact",
+                "child_face",
+                "child_model",
+                "complexion",
+                "unintended_skin",
+                "realism_",
+            )
+        ):
+            return "human_realism"
+        return None
 
     def _real_review_signal_package_from_cluster(self, cluster: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(cluster, dict):
@@ -2970,7 +3102,28 @@ class V3ProductApiService:
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
         }
-        return {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        result = record.generation_result or record.planning_result
+        if result is not None:
+            plan = self._activation_plan_from_result(result)
+            active = {
+                str(item)
+                for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])
+                if str(item).strip()
+            }
+            if active:
+                friendly = []
+                for capability_id, message in (
+                    ("portrait_identity", "used the person reference"),
+                    ("product_identity", "kept the product appearance"),
+                    ("scene_continuity", "continued the scene direction"),
+                    ("typography_layout", "prepared the requested layout"),
+                    ("suite_direction", "planned this image set"),
+                ):
+                    if capability_id in active:
+                        friendly.append(message)
+                status_metadata["capability_summary"] = friendly
+        return status_metadata
 
     def _not_found_status(self, job_id: str) -> ProductJobStatus:
         nav = get_navigation_entry()

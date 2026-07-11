@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ...scenario_packs import ScenarioPackRegistry, ScenarioPackStatus
+from ...shared_capabilities.activation import (
+    TemplateCapabilityPolicy,
+    ecommerce_capability_policy,
+    general_capability_policy,
+)
 from ..contracts import (
     ECOMMERCE_TEMPLATE_ID,
     GENERAL_SCENARIO_ID,
@@ -168,6 +173,7 @@ def _general_template_manifest() -> ProjectTemplateManifest:
         ],
         ui_card={"label": "\u901a\u7528\u6a21\u677f", "icon": "sparkles"},
         metadata={"maps_to_scenario_pack": GENERAL_SCENARIO_ID, "current_phase": "project_mode_foundation"},
+        capability_policy=general_capability_policy(),
     )
 
 
@@ -257,6 +263,7 @@ def _ecommerce_template_manifest() -> ProjectTemplateManifest:
         ],
         ui_card={"label": "\u7535\u5546\u6a21\u677f", "icon": "shopping-bag"},
         metadata={"project_mode_active_document": "42", "requires_product_reference": False, "supports_text_to_image_fallback": True},
+        capability_policy=ecommerce_capability_policy(),
     )
 
 
@@ -293,4 +300,9 @@ def _future_template_manifest(
         test_requirements=["template cannot create jobs while placeholder"],
         ui_card={"label": display_name, "icon": "layout-template"},
         metadata={"future_template": True},
+        capability_policy=TemplateCapabilityPolicy(
+            policy_id=f"{template_id}_placeholder_capabilities",
+            brain_activation_enabled=False,
+            deliverable_role_owner=template_id,
+        ),
     )
