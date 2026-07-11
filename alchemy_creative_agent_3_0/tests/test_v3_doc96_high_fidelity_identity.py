@@ -227,6 +227,30 @@ def test_doc96_local_repair_metadata_uses_failed_output_and_mask(tmp_path) -> No
         assert mask_image.mode == "RGBA"
 
 
+def test_doc96_face_aware_truth_crop_precedes_proportional_fallback(tmp_path, monkeypatch) -> None:
+    from app.services import provider_reference
+
+    source = tmp_path / "portrait.png"
+    Image.new("RGB", (1000, 1000), (90, 150, 210)).save(source)
+    monkeypatch.setattr(provider_reference.settings, "media_storage_root", tmp_path / "media")
+    monkeypatch.setattr(
+        provider_reference,
+        "_detected_portrait_truth_box",
+        lambda _image, _kind: (250, 200, 750, 800),
+    )
+    monkeypatch.setattr(
+        provider_reference,
+        "_truth_crop_box",
+        lambda _size, _kind: (_ for _ in ()).throw(AssertionError("fallback crop must not run")),
+    )
+
+    target = provider_reference._cropped_reference_path(source, kind="portrait_identity_crop")  # noqa: SLF001
+
+    with Image.open(target) as cropped:
+        assert cropped.width >= 500
+        assert cropped.height > cropped.width
+
+
 def test_doc96_sface_calibration_is_monotonic_and_not_threshold_gamed() -> None:
     values = [_calibrate_sface_cosine(value) for value in (0.2, 0.363, 0.48, 0.59, 0.65, 0.8)]
     assert values == sorted(values)

@@ -165,7 +165,7 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "fallback_to_original": bool(fallback),
         "identity_color_neutralized": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
         "identity_color_retention": (
-            0.90 if kind == "portrait_identity_crop" else 0.65 if kind == "portrait_identity_geometry_crop" else None
+            0.35 if kind == "portrait_identity_crop" else 0.10 if kind == "portrait_identity_geometry_crop" else None
         ),
         "identity_background_neutralized": False,
         "identity_context_reduced_by_tight_crop": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
@@ -190,7 +190,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc96-face-aware-pyramid-v3:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -201,12 +201,12 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     with Image.open(source) as raw:
         image = ImageOps.exif_transpose(raw)
         image = _to_rgb_on_white(image, Image)
-        box = _truth_crop_box(image.size, kind)
+        box = _detected_portrait_truth_box(image, kind) or _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
         if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
             from PIL import ImageEnhance
 
-            color_retention = 0.90 if kind == "portrait_identity_crop" else 0.65
+            color_retention = 0.35 if kind == "portrait_identity_crop" else 0.10
             cropped = ImageEnhance.Color(cropped).enhance(color_retention)
             minimum_edge = min(512, max_edge)
             if min(cropped.size) < minimum_edge:
@@ -234,6 +234,40 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
             current = current.resize(next_size, Image.Resampling.LANCZOS)
             current.save(target, format="JPEG", quality=72, optimize=True)
     return target if target.exists() else source
+
+
+def _detected_portrait_truth_box(image, kind: str) -> tuple[int, int, int, int] | None:
+    if kind not in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
+        return None
+    try:
+        import cv2 as cv
+        import numpy as np
+
+        model_path = Path(settings.v3_identity_model_dir) / "face_detection_yunet_2023mar.onnx"
+        if not model_path.is_file():
+            return None
+        rgb = np.asarray(image.convert("RGB"))
+        bgr = cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
+        height, width = bgr.shape[:2]
+        detector = cv.FaceDetectorYN.create(str(model_path), "", (width, height), 0.7, 0.3, 5000)
+        _status, faces = detector.detect(bgr)
+        if faces is None or len(faces) == 0:
+            return None
+        face = max(faces, key=lambda value: float(value[2] * value[3]) * max(0.1, float(value[-1])))
+        x, y, face_width, face_height = [float(value) for value in face[:4]]
+        if kind == "portrait_identity_crop":
+            x_margin, top_margin, bottom_margin = 0.22, 0.18, 0.18
+        else:
+            x_margin, top_margin, bottom_margin = 0.35, 0.45, 0.30
+        left = max(0, int(round(x - face_width * x_margin)))
+        top = max(0, int(round(y - face_height * top_margin)))
+        right = min(width, int(round(x + face_width * (1.0 + x_margin))))
+        bottom = min(height, int(round(y + face_height * (1.0 + bottom_margin))))
+        if right - left < 64 or bottom - top < 64:
+            return None
+        return left, top, right, bottom
+    except Exception:
+        return None
 
 
 def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, int]:

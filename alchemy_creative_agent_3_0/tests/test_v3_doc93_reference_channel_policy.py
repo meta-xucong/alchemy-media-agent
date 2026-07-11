@@ -323,8 +323,8 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert provider_assets[0]["identity_gateway_min_edge_px"] == 512
     assert provider_assets[0]["identity_evidence_scope"] == "feature_detail"
     assert provider_assets[1]["identity_evidence_scope"] == "head_geometry"
-    assert provider_assets[0]["identity_color_retention"] == 0.90
-    assert provider_assets[1]["identity_color_retention"] == 0.65
+    assert provider_assets[0]["identity_color_retention"] == 0.35
+    assert provider_assets[1]["identity_color_retention"] == 0.10
     assert provider_assets[0]["identity_evidence_group_id"] == "portrait_identity::uploaded_face_truth"
     assert provider_assets[1]["identity_evidence_group_id"] == "portrait_identity::uploaded_face_truth"
     assert provider_assets[0]["priority"] > provider_assets[1]["priority"]
