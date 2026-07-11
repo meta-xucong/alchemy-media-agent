@@ -11,6 +11,18 @@ from .utils import clean_text
 
 PROFILE_VERSION = "v3_ecommerce_rules_2026_06_28"
 PROFILE_UPDATED_AT = "2026-06-28"
+PROFILE_STATUS = "internal_draft"
+
+PROFILE_SOURCE_NOTES = {
+    "amazon": "Internal strategic draft; confirm current Seller Central requirements before publishing.",
+    "ozon": "Internal strategic draft; confirm current Ozon seller requirements before publishing.",
+    "taobao": "Internal strategic draft; confirm current Taobao/Tmall requirements before publishing.",
+    "jd": "Internal strategic draft; confirm current JD requirements before publishing.",
+    "pinduoduo": "Internal strategic draft; confirm current Pinduoduo requirements before publishing.",
+    "tiktok_shop": "Internal strategic draft; confirm current TikTok Shop requirements before publishing.",
+    "shopify": "Internal store-design profile, not a third-party marketplace policy.",
+    "generic": "Internal generic commerce profile; no marketplace policy is implied.",
+}
 
 PLATFORM_ALIASES = {
     "amazon_us": ("amazon", "US"),
@@ -72,8 +84,11 @@ class MarketplaceRuleEngine:
             warnings=warnings,
             metadata={
                 "source": "MarketplaceRuleEngine",
+                "profile_id": f"ecommerce_{platform}_{market.lower()}",
                 "profile_version": PROFILE_VERSION,
                 "profile_updated_at": PROFILE_UPDATED_AT,
+                "profile_status": PROFILE_STATUS,
+                "profile_source_notes": PROFILE_SOURCE_NOTES.get(platform, PROFILE_SOURCE_NOTES["generic"]),
                 "raw_platform_profile": raw_platform,
                 "live_policy_lookup": False,
                 **localization.metadata(),

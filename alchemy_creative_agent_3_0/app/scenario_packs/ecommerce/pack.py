@@ -131,6 +131,8 @@ class EcommerceScenarioPackPlanner:
                 "requested_image_count": requested_count,
                 "selected_image_slots": selected_slots,
                 "category_id": category_profile.category_id if category_profile else "generic_product",
+                "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
+                "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 "uses_v3_core": True,
                 "imports_v1_v2_runtime": False,
             },

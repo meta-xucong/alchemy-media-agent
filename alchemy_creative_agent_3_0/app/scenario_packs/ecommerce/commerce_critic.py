@@ -27,6 +27,14 @@ class CommerceCritic:
                 "Every planned image has one primary selling point.",
             )
         )
+        profile_lineage = marketplace_profile.metadata
+        checks.append(
+            self._check(
+                "platform_profile_lineage",
+                bool(profile_lineage.get("profile_id") and profile_lineage.get("profile_version") and profile_lineage.get("profile_status")),
+                "Platform profile identifier, version, and status are frozen for the planned suite.",
+            )
+        )
         category_coverage = self._category_coverage(recipes)
         if category_coverage is not None:
             checks.append(

@@ -21,6 +21,20 @@ class EcommerceExportPackager:
         dimension_hint = str(export_rules.get("dimension_hint") or "1200x1200")
         files = []
         localization_review_required = False
+        category_ids = list(
+            dict.fromkeys(
+                str(recipe.metadata.get("category_id"))
+                for recipe in recipes
+                if recipe.metadata.get("category_id")
+            )
+        )
+        category_profile_versions = list(
+            dict.fromkeys(
+                str(recipe.metadata.get("category_profile_version"))
+                for recipe in recipes
+                if recipe.metadata.get("category_profile_version")
+            )
+        )
         for index, recipe in enumerate(recipes, start=1):
             copy_plan = recipe.metadata.get("copy_plan") or {}
             copy_review_required = bool(copy_plan.get("needs_localization_review"))
@@ -43,6 +57,8 @@ class EcommerceExportPackager:
                     "copy_locale": copy_plan.get("copy_locale"),
                     "copy_source": copy_plan.get("source"),
                     "copy_review_required": copy_review_required,
+                    "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
+                    "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 }
             )
         return EcommerceExportPackage(
@@ -59,5 +75,11 @@ class EcommerceExportPackager:
                 "pixel_assets_required_before_download": True,
                 "copy_locale": marketplace_profile.metadata.get("copy_locale"),
                 "localization_review_required": localization_review_required,
+                "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
+                "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
+                "marketplace_profile_status": marketplace_profile.metadata.get("profile_status"),
+                "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
+                "category_ids": category_ids,
+                "category_profile_versions": category_profile_versions,
             },
         )

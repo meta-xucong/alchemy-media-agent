@@ -75,6 +75,29 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E4 — platform profile governance and export lineage
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Platform profiles now carry an internal identifier, version, status, update
+  time, and source/review note.
+- Planning and export metadata freeze the platform profile lineage per suite.
+- Export records retain associated category profile versions and copy locale.
+- The public E-Commerce summary continues to reject low-level generation terms;
+  an initial internal naming collision was detected by regression tests and
+  corrected before commit.
+
+Verification:
+
+```text
+focused E-Commerce tests: 25 passed
+full V3 tests: 411 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.
+
 ## E3 — category evidence coverage and suite differentiation
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
