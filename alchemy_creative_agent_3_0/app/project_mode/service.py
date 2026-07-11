@@ -3386,7 +3386,11 @@ class V3ProjectModeService:
                 chips.append(label)
         if project.selected_output_refs and "已选风格" not in chips:
             chips.append("已选风格")
-        return chips[:5] or ["通用创意"]
+        # A project with no user-confirmed visual style still needs an honest
+        # template-level label.  In particular, an E-Commerce project must not
+        # inherit the General Template fallback in the project workspace or
+        # recent-project cards.
+        return chips[:5] or [self._template_label(project.primary_template_id)]
 
     def _template_label(self, template_id: str | None) -> str:
         if template_id == ECOMMERCE_TEMPLATE_ID:

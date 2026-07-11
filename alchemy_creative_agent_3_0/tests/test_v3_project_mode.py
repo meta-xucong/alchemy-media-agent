@@ -247,6 +247,25 @@ def test_project_mode_creates_general_project_and_job_without_rewriting_product_
     assert [item["item_type"] for item in timeline["items"]] == ["project_created", "job_created"]
 
 
+def test_ecommerce_project_memory_summary_uses_ecommerce_template_default_chip() -> None:
+    handlers = V3ProductRouteHandlers()
+    created = handlers.post_projects(
+        {
+            "user_goal": "Create an Ozon-ready wireless-earbud image suite",
+            "primary_template_id": "ecommerce_template",
+        }
+    )
+    project = created["project"]
+    recent = handlers.get_projects(limit=10)
+    summary = next(item for item in recent["projects"] if item["project_id"] == project["project_id"])
+
+    assert project["primary_template_id"] == "ecommerce_template"
+    assert project["memory_summary"]["active_template_label"] == "电商模板"
+    assert project["memory_summary"]["confirmed_style_chips"] == ["电商模板"]
+    assert summary["active_template_label"] == "电商模板"
+    assert summary["confirmed_style_chips"] == ["电商模板"]
+
+
 def test_general_project_job_preserves_variation_mode_contract() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects(

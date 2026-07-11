@@ -127,6 +127,35 @@ JavaScript syntax: passed
 Integration dependency: browser click-through and real product/provider
 acceptance remain Doc103 coordinated gates.
 
+## E11 — E-Commerce project identity integrity
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Corrected the Project Mode memory-summary default so that a new E-Commerce
+  project with no user-confirmed visual style is labeled `电商模板`, rather than
+  inheriting the General Template's former `通用创意` fallback.
+- Kept the frontend fallback template-aware for client-side project summaries
+  and for a project detail that has not yet received a memory summary.
+- Added a backend regression test covering both the newly created project and
+  its recent-project summary.
+
+Verification:
+
+```text
+Project Mode + E-Commerce focused tests: 61 passed
+full V3 tests: 509 passed
+commercial frontend shell tests: 8 passed
+browser regression: created an E-Commerce project and verified the visible
+style chip is 电商模板; console errors: none
+JavaScript syntax: passed
+```
+
+Integration dependency: none. This is a Project Mode presentation correction;
+it does not alter generation routing, provider behavior, schemas, or General
+Template deliverables.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

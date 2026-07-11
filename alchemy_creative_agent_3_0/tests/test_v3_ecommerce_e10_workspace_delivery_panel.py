@@ -43,3 +43,5 @@ def test_ecommerce_workspace_renders_export_preparation_and_supported_platforms(
     assert "导出准备" in script
     assert "发布前检查" in script
     assert "category_evidence_targets" in script
+    assert 'confirmed_style_chips: project.confirmed_style_summary' in script
+    assert 'v3TemplatePlainLabel(project.primary_template_id || "general_template")' in script

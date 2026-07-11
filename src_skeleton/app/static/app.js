@@ -2273,7 +2273,9 @@ function v3ProjectSummaryFromProject(project) {
     latest_thumbnail_urls: referenceThumbs.length
       ? referenceThumbs
       : selectedRefs.map((ref) => ref.thumbnail_url || ref.preview_url).filter(Boolean).slice(0, 3),
-    confirmed_style_chips: project.confirmed_style_summary ? [project.confirmed_style_summary] : ["通用创意"],
+    confirmed_style_chips: project.confirmed_style_summary
+      ? [project.confirmed_style_summary]
+      : [v3TemplatePlainLabel(project.primary_template_id || "general_template")],
     selected_asset_count: activeReferences.length || selectedRefs.length,
     job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
     last_action_label: "项目已创建",
@@ -2687,7 +2689,7 @@ function renderV3ProjectDetail() {
   if (els.v3ProjectStyleChips) {
     const chips = project?.memory_summary?.confirmed_style_chips || project?.latest_context?.confirmed_visual_tone || [];
     els.v3ProjectStyleChips.innerHTML = "";
-    (chips.length ? chips : project ? ["通用创意"] : []).slice(0, 5).forEach((chip) => {
+    (chips.length ? chips : project ? [v3TemplatePlainLabel(project.primary_template_id || "general_template")] : []).slice(0, 5).forEach((chip) => {
       const el = document.createElement("span");
       el.textContent = chip;
       els.v3ProjectStyleChips.appendChild(el);
