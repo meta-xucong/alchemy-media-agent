@@ -796,11 +796,16 @@ class OpenAIGPTImageProvider:
         if status_code in {408, 429, 500, 502, 503, 504}:
             return True
         message = str(exc).lower()
+        # A gateway's textual reply to an image request is a semantic/request
+        # classification failure, not evidence that the same request will work
+        # on retry. Surface it immediately so callers can inspect the gateway
+        # detail instead of multiplying a deterministic 400 into long waits.
+        if "upstream_text_reply" in message:
+            return False
         retryable_markers = [
             "bad_response_status_code",
             "openai_error",
             "upstream_error",
-            "upstream_text_reply",
             "temporarily unavailable",
             "concurrency limit exceeded",
             "rate_limit_error",
