@@ -1076,6 +1076,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
                         "identity_color_retention": derivative.get("identity_color_retention"),
+                        "identity_color_policy": derivative.get("identity_color_policy"),
+                        "identity_face_color_retention": derivative.get("identity_face_color_retention"),
+                        "identity_context_color_retention": derivative.get("identity_context_color_retention"),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                         "identity_context_reduced_by_tight_crop": bool(
                             derivative.get("identity_context_reduced_by_tight_crop")
@@ -1490,6 +1493,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback_to_original": bool(item.get("fallback_to_original")),
                     "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
                     "identity_color_retention": item.get("identity_color_retention"),
+                    "identity_color_policy": item.get("identity_color_policy"),
+                    "identity_face_color_retention": item.get("identity_face_color_retention"),
+                    "identity_context_color_retention": item.get("identity_context_color_retention"),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "identity_context_reduced_by_tight_crop": bool(
                         item.get("identity_context_reduced_by_tight_crop")

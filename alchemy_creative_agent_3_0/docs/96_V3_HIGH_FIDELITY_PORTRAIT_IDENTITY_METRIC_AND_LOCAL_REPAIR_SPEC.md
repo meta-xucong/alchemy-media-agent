@@ -669,27 +669,31 @@ unbounded candidate generation
 The capability remains a universal, consent-aware quality layer for preserving
 the user's supplied person across prompt-owned visual transformations.
 
-## 18. Live Acceptance Correction: Face-Aware Identity Evidence
+## 18. Live Acceptance Correction: Face-Preserving Context Neutralization
 
 The first production acceptance proved that `input_fidelity=high` was supported,
-but also exposed a universal evidence-preparation defect: proportional static
-crops retained too much prompt-owned hair color and background context. High
-fidelity then preserved those unwanted channels more strongly.
+but also exposed a universal evidence-preparation defect: the identity crops
+retained prompt-owned hair color and background context. A first corrective
+experiment used narrower, globally desaturated crops. Real acceptance showed
+that this removed the color leak but also damaged same-person inheritance, so
+that experiment is explicitly rejected and must not be reactivated.
 
-The corrective rule is:
+The accepted corrective rule is:
 
-1. identity feature evidence uses a detected-face crop containing facial
-   features, outline, ears, and minimal hairline context;
-2. head-geometry evidence uses a wider detected-face crop containing the whole
-   head and jaw/neck relationship;
-3. if no face can be detected, the existing deterministic proportional crop is
-   retained as the compatibility fallback;
-4. feature evidence retains only 35% chroma and geometry evidence retains 10%
-   chroma, while luminance, texture, and geometry remain available;
-5. prompt-owned hair color, makeup, wardrobe, light, scene, camera, and finish
-   must not be reconstructed from identity-only evidence;
-6. crop cache keys are versioned so stale Doc95 evidence cannot survive the
-   upgrade.
+1. retain the established wide feature and head-geometry crop boundaries that
+   already preserve face shape, ears, jaw, neck, and useful context;
+2. detect the face inside each crop;
+3. preserve full face-region color and luminance because these carry useful
+   identity evidence;
+4. neutralize chroma outside the feathered face region so source hair color,
+   wardrobe color, and background color cannot become implicit style locks;
+5. if the face detector or its model is unavailable, retain the Doc95
+   90%/65% color fallback instead of blocking generation;
+6. use a lower 0.5 detection threshold for review and evidence preparation so
+   valid side-view or partially occluded faces are not silently skipped; largest
+   confident-face selection remains mandatory;
+7. version the crop cache so neither Doc95 nor the rejected narrow-crop evidence
+   survives the upgrade.
 
 This extends the existing identity-evidence child responsibility. It does not
 create a scene profile, a second identity module, or a new Central Brain branch.
