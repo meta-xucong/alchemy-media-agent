@@ -136,7 +136,7 @@ class SFaceIdentityMetricProvider:
 
         self._cv = cv
         self._detector = cv.FaceDetectorYN.create(
-            str(self._model_path(YUNET_FILENAME)), "", (320, 320), 0.5, 0.3, 5000
+            str(self._model_path(YUNET_FILENAME)), "", (320, 320), 0.7, 0.3, 5000
         )
         self._recognizer = cv.FaceRecognizerSF.create(str(self._model_path(SFACE_FILENAME)), "")
 
