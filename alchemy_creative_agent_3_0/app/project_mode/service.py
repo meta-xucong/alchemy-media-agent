@@ -1177,6 +1177,7 @@ class V3ProjectModeService:
             profile = commerce_profile or request.commerce_profile_patch
             platform = profile.target_platform if profile else None
             market = profile.target_market if profile else None
+            commerce_metadata = dict(profile.metadata or {}) if profile else {}
             parameters: dict[str, Any] = {
                 "project_context_version": context.context_version,
                 "use_project_context": request.use_project_context,
@@ -1195,6 +1196,22 @@ class V3ProjectModeService:
                 parameters["market"] = market
             if profile and profile.product_category:
                 parameters["product_category"] = profile.product_category
+            copy_locale = str(commerce_metadata.get("copy_locale") or "").strip()
+            if copy_locale:
+                parameters["copy_locale"] = copy_locale
+            raw_overlay_copy = commerce_metadata.get("overlay_copy")
+            if isinstance(raw_overlay_copy, dict):
+                overlay_copy = {
+                    str(slot).strip(): str(copy).strip()
+                    for slot, copy in raw_overlay_copy.items()
+                    if str(slot).strip() and str(copy).strip()
+                }
+            elif isinstance(raw_overlay_copy, str) and raw_overlay_copy.strip():
+                overlay_copy = raw_overlay_copy.strip()
+            else:
+                overlay_copy = None
+            if overlay_copy:
+                parameters["overlay_copy"] = overlay_copy
             return {
                 "scenario_id": manifest.scenario_pack_id,
                 "mode_id": mode_id,

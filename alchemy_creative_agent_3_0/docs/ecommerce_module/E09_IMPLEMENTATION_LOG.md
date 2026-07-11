@@ -291,6 +291,43 @@ JavaScript syntax: passed
 Integration dependency: none. This exposes an established compatibility field
 rather than expanding the public contract.
 
+## E17 — language and approved-copy planning controls
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added optional English (US), Simplified Chinese, and Russian planning
+  controls, plus a short user-supplied copy field, to the E-Commerce advanced
+  workspace.
+- Routed only the existing E-Commerce profile metadata keys
+  `copy_locale` and `overlay_copy` into the existing E-Commerce scenario
+  parameters. Older projects retain platform/market locale inference.
+- The existing copy bridge remains the policy owner: the regression proves an
+  Amazon main image rejects the supplied overlay while the requested benefit
+  image accepts it. Existing claim review still applies.
+- Updated the architecture document to point to current Doc104 governance.
+
+Boundary:
+
+- This is copy planning and review metadata, not a promise of final pixel
+  typography. Deterministic text rendering, OCR, provider acceptance, and live
+  browser validation remain Doc104 coordinated gates.
+- No activation, provider, shared review/retry, General Template interface, or
+  public schema changed.
+
+Verification:
+
+```text
+Project Mode E-Commerce focused tests: 18 passed
+full V3 tests: 516 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: no new dependency for this compatible planning path;
+the final typography/visual-acceptance path remains coordinated.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

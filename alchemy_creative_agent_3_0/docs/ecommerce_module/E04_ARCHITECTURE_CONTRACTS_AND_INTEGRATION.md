@@ -17,7 +17,7 @@ Project
 The E-Commerce module is a specialized policy and deliverable layer. It does
 not call providers directly and does not fork the central runtime.
 
-Doc103 is the integration gate authority after this package is rebased onto the
+Doc104 is the integration gate authority after this package is rebased onto the
 current foundation: every production E-Commerce job must retain the frozen
 capability activation plan supplied by the shared runtime. This module may
 configure E-Commerce-owned profiles and recipes, but may not alter activation,
@@ -65,6 +65,12 @@ user request + uploaded refs
 5. Historical records without newer fields remain readable.
 6. Every job requires a project ID and product reference or an explicitly
    confirmed text-only product brief.
+7. Optional `commerce_profile.metadata.copy_locale` and
+   `commerce_profile.metadata.overlay_copy` are E-Commerce-only planning
+   signals. When absent, locale continues to resolve from platform/market;
+   supplied copy remains subject to the existing slot text policy and claim
+   review. They do not change provider, activation, review, retry, or General
+   Template contracts.
 
 ## Compatibility rule
 

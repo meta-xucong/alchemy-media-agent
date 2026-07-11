@@ -99,4 +99,25 @@ def test_ecommerce_workspace_exposes_existing_target_audience_profile_field() ->
     assert 'els.v3EcommerceAudienceInput.value = ""' in script
     assert "summary?.target_audience" in script
     summary_block = script[script.index("function renderV3EcommerceSummary") : script.index("function renderV3OutcomeItems")]
-    assert summary_block.index("const targetAudience") < summary_block.index("const suiteScope")
+    assert summary_block.index("...(suiteScopeLabel") < summary_block.index("...(targetAudience.length")
+
+
+def test_ecommerce_workspace_exposes_copy_locale_and_slot_safe_overlay_copy_controls() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommerceCopyLocaleInput"' in html
+    assert 'id="v3EcommerceOverlayCopyInput"' in html
+    assert 'option value="ru-RU"' in html
+    assert "主图默认不加文字" in html
+    assert 'v3EcommerceCopyLocaleInput: document.querySelector("#v3EcommerceCopyLocaleInput")' in script
+    assert 'v3EcommerceOverlayCopyInput: document.querySelector("#v3EcommerceOverlayCopyInput")' in script
+    assert "function v3EcommerceCopyLocaleValue()" in script
+    assert "function v3EcommerceCopyLocaleLabel(locale)" in script
+    assert "copy_locale: copyLocale || null" in script
+    assert "overlay_copy: overlayCopy || null" in script
+    assert "ecommerce_copy_locale: ecommerceCopyLocale || undefined" in script
+    assert "ecommerce_overlay_copy: ecommerceOverlayCopy || undefined" in script
+    assert 'els.v3EcommerceCopyLocaleInput.value = ""' in script
+    assert 'els.v3EcommerceOverlayCopyInput.value = ""' in script
+    assert "已按 ${copyPlanningLabel} 规划允许加字的图片；主图保持无文字" in script

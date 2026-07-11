@@ -591,6 +591,8 @@ const els = {
   v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
+  v3EcommerceCopyLocaleInput: document.querySelector("#v3EcommerceCopyLocaleInput"),
+  v3EcommerceOverlayCopyInput: document.querySelector("#v3EcommerceOverlayCopyInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
   v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
   v3EcommerceClaimsInput: document.querySelector("#v3EcommerceClaimsInput"),
@@ -4820,6 +4822,20 @@ function v3EcommerceSuiteScopeValue() {
   return ["recommended", "listing_core", "listing_full", "detail_supplement"].includes(value) ? value : "recommended";
 }
 
+function v3EcommerceCopyLocaleValue() {
+  const value = (els.v3EcommerceCopyLocaleInput?.value || "").trim();
+  return ["", "en-US", "zh-CN", "ru-RU"].includes(value) ? value : "";
+}
+
+function v3EcommerceCopyLocaleLabel(locale) {
+  const labels = {
+    "en-US": "英文（美国）",
+    "zh-CN": "简体中文",
+    "ru-RU": "俄语",
+  };
+  return labels[locale] || locale || "按平台和市场自动判断";
+}
+
 function v3EcommerceSuiteScopeLabel(scopeId, presetId = v3State.selectedPreset) {
   const labels = {
     listing_core: "基础上架图",
@@ -4880,6 +4896,8 @@ function v3EcommerceProfilePatch() {
   const keywordItems = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
   const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
   const suiteScope = v3EcommerceSuiteScopeValue();
+  const copyLocale = v3EcommerceCopyLocaleValue();
+  const overlayCopy = (els.v3EcommerceOverlayCopyInput?.value || "").trim();
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
     product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
@@ -4896,6 +4914,8 @@ function v3EcommerceProfilePatch() {
     metadata: {
       suite_scope: suiteScope,
       suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
+      copy_locale: copyLocale || null,
+      overlay_copy: overlayCopy || null,
     },
   };
 }
@@ -5019,6 +5039,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
   const advancedReferenceControls = v3AdvancedReferenceControlsPayloadForScenario(scenarioId);
   const ecommerceSuiteScope = scenarioId === "ecommerce" ? v3EcommerceSuiteScopeValue() : "";
+  const ecommerceCopyLocale = scenarioId === "ecommerce" ? v3EcommerceCopyLocaleValue() : "";
+  const ecommerceOverlayCopy = scenarioId === "ecommerce" ? (els.v3EcommerceOverlayCopyInput?.value || "").trim() : "";
   const payload = {
     user_input: userInput,
     template_id: templateId,
@@ -5046,6 +5068,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
       ecommerce_suite_scope: ecommerceSuiteScope || undefined,
       ecommerce_suite_scope_label: ecommerceSuiteScope ? v3EcommerceSuiteScopeLabel(ecommerceSuiteScope) : undefined,
+      ecommerce_copy_locale: ecommerceCopyLocale || undefined,
+      ecommerce_overlay_copy: ecommerceOverlayCopy || undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -5338,6 +5362,8 @@ function resetV3Workspace() {
   if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
+  if (els.v3EcommerceCopyLocaleInput) els.v3EcommerceCopyLocaleInput.value = "";
+  if (els.v3EcommerceOverlayCopyInput) els.v3EcommerceOverlayCopyInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
   if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
   if (els.v3EcommerceClaimsInput) els.v3EcommerceClaimsInput.value = "";
@@ -5614,12 +5640,16 @@ function renderV3EcommerceSummary(summary, metadata = null) {
   const targetAudience = Array.isArray(summary?.target_audience) ? summary.target_audience.filter(Boolean).slice(0, 2) : [];
   const suiteScope = String(metadata?.ecommerce_suite_scope || "").trim();
   const suiteScopeLabel = suiteScope ? v3EcommerceSuiteScopeLabel(suiteScope, metadata?.selected_preset_id) : "";
+  const copyLocale = String(metadata?.ecommerce_copy_locale || "").trim();
+  const overlayCopy = String(metadata?.ecommerce_overlay_copy || "").trim();
+  const copyPlanningLabel = copyLocale || overlayCopy ? v3EcommerceCopyLocaleLabel(copyLocale || summary?.export_package?.metadata?.copy_locale) : "";
   const entries = [
     "已识别商品主体和必须保留的信息",
     ...(summary?.platform ? [`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`] : []),
     ...(categoryLabel ? [`已按 ${categoryLabel} 类目安排展示证据和套图顺序`] : []),
-    ...(targetAudience.length ? [`已优先考虑：${targetAudience.join(" / ")}`] : []),
     ...(suiteScopeLabel ? [`本次选择 ${suiteScopeLabel}`] : []),
+    ...(copyPlanningLabel ? [`已按 ${copyPlanningLabel} 规划允许加字的图片；主图保持无文字`] : []),
+    ...(targetAudience.length ? [`已优先考虑：${targetAudience.join(" / ")}`] : []),
     "已把套图拆成主图、卖点图、场景图和信任图",
     "已为每张图安排不同用途",
     "已避免乱加文字、徽章和未经确认的宣传说法",

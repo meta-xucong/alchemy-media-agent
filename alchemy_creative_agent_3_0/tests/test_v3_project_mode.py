@@ -602,6 +602,36 @@ def test_project_mode_passes_ecommerce_requested_count_to_pack(tmp_path) -> None
     assert job["ecommerce"]["image_recipes"][1]["metadata"]["lifestyle_realism_required"] is True
 
 
+def test_project_mode_forwards_ecommerce_copy_metadata_to_existing_slot_safe_planner(tmp_path) -> None:
+    handlers = V3ProductRouteHandlers()
+    product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp-copy.png")
+    project = handlers.post_projects({"user_goal": "Create listing images with approved product copy"})["project"]
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create an Amazon listing set for this adjustable desk lamp",
+            "uploaded_asset_ids": [product_asset_id],
+            "commerce_profile_patch": {
+                "product_category": "desk lamp",
+                "target_platform": "amazon_us",
+                "metadata": {
+                    "copy_locale": "en-US",
+                    "overlay_copy": {"feature_image_1": "Adjustable angle"},
+                },
+            },
+            "suite_slot_request": ["main_image", "feature_image_1"],
+        },
+    )
+
+    assert job["metadata"]["scenario_parameters"]["copy_locale"] == "en-US"
+    assert job["metadata"]["scenario_parameters"]["overlay_copy"] == {"feature_image_1": "Adjustable angle"}
+    recipes = {recipe["slot"]: recipe for recipe in job["ecommerce"]["image_recipes"]}
+    assert recipes["main_image"]["overlay_text"] is None
+    assert recipes["feature_image_1"]["overlay_text"] == "Adjustable angle"
+
+
 def test_selected_ecommerce_output_enters_project_context_without_brand_memory_auto_write(tmp_path) -> None:
     handlers = V3ProductRouteHandlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
