@@ -60,7 +60,7 @@ class SFaceIdentityMetricProvider:
             if not reference_candidates:
                 return self._unavailable("reference_face_not_detected", 0, len(output_faces))
 
-            output_face = self._select_face(output_faces)
+            output_face_index, output_face = self._select_face_with_index(output_faces)
             output_feature = self._feature(output_image, output_face)
             scored: list[tuple[float, float, Any, int]] = []
             for reference_image, reference_face, reference_index in reference_candidates:
@@ -94,7 +94,7 @@ class SFaceIdentityMetricProvider:
                 reference_face_count=total_reference_faces,
                 output_face_count=len(output_faces),
                 selected_reference_index=reference_index,
-                selected_output_index=output_faces.index(output_face),
+                selected_output_index=output_face_index,
                 output_face_box=_normalized_face_box(output_face, output_image.shape),
                 reason_codes=reason_codes,
                 metadata={
@@ -155,7 +155,13 @@ class SFaceIdentityMetricProvider:
         return [] if faces is None else [face for face in faces]
 
     def _select_face(self, faces: list[Any]):
-        return max(faces, key=lambda face: float(face[2] * face[3]) * max(0.1, float(face[-1])))
+        return self._select_face_with_index(faces)[1]
+
+    def _select_face_with_index(self, faces: list[Any]) -> tuple[int, Any]:
+        return max(
+            enumerate(faces),
+            key=lambda item: float(item[1][2] * item[1][3]) * max(0.1, float(item[1][-1])),
+        )
 
     def _feature(self, image, face):
         return self._recognizer.feature(self._recognizer.alignCrop(image, face))

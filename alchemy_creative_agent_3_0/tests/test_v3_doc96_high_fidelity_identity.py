@@ -16,6 +16,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     VisionOutputInspector,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import _calibrate_sface_cosine
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import SFaceIdentityMetricProvider
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import VisionInspectionProviderError
 
 
@@ -361,6 +362,22 @@ def test_doc96_sface_calibration_is_monotonic_and_not_threshold_gamed() -> None:
     assert values == sorted(values)
     assert values[1] == 0.5
     assert values[-1] == 0.97
+
+
+def test_doc96_multiple_numpy_faces_selects_index_without_array_truth_error() -> None:
+    import numpy as np
+
+    provider = SFaceIdentityMetricProvider(model_dir="unused")
+    faces = [
+        np.array([0, 0, 80, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.8], dtype=float),
+        np.array([0, 0, 220, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.75], dtype=float),
+        np.array([0, 0, 120, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9], dtype=float),
+    ]
+
+    index, selected = provider._select_face_with_index(faces)  # noqa: SLF001
+
+    assert index == 1
+    assert selected is faces[1]
 
 
 def test_doc96_local_repair_must_improve_identity_without_quality_regression() -> None:
