@@ -18,6 +18,7 @@ from .vision_provider import (
     inspection_reference_paths,
 )
 from .identity_metric import create_default_identity_metric_provider
+from .reference_channel_policy import reference_channel_retry_patch
 
 
 _WATERMARK_OR_TEXT_ISSUES = {
@@ -1001,28 +1002,11 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 ]
             )
         elif code in _DOC93_REFERENCE_CHANNEL_ISSUES:
-            prompt_additions.extend(
-                [
-                    "Doc93 channel repair: keep valid identity or product truth, but restore every current prompt-owned channel that the reference overrode",
-                    "follow the current request for hair, makeup, wardrobe, accessories, lighting, color, scene, camera, mood, and style unless that exact channel was explicitly locked",
-                    "do not increase whole-image reference strength and do not let a selected generated anchor override the current prompt",
-                ]
-            )
-            identity_reinforcement.append(
-                "preserve same-person face geometry while repairing only leaked styling channels; do not copy source wardrobe, light, scene, or whole-image style"
-            )
-            negative_additions.extend(
-                [
-                    "source hairstyle leakage",
-                    "source makeup leakage",
-                    "source wardrobe leakage",
-                    "source lighting or color-grade leakage",
-                    "source scene or camera leakage",
-                    "source whole-image style leakage",
-                    "selected anchor overrode current prompt",
-                    "identity-only reference used as a style template",
-                ]
-            )
+            channel_patch = reference_channel_retry_patch([code])
+            prompt_additions.extend(channel_patch["prompt_additions"])
+            negative_additions.extend(channel_patch["negative_additions"])
+            identity_reinforcement.extend(channel_patch["identity_reinforcement"])
+            composition_repair.extend(channel_patch["composition_repair"])
         elif code in _DOC87_REFERENCE_BOUNDARY_ISSUES:
             prompt_additions.extend(
                 [

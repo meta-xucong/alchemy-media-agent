@@ -4,6 +4,8 @@ Alchemy Creative Agent 3.0 is a new, independent product direction for `alchemy-
 
 Its goal is to benchmark the output quality and product completeness of Lovart-like AI design agents while keeping the user experience radically simpler: users should only need to describe what they want in natural language, and the system should automatically expand that intent into a commercially usable, brand-consistent visual asset series.
 
+Current foundation-quality authority: `docs/103_V3_PROMPT_OWNED_CHANNEL_EVIDENCE_ISOLATION_AND_PORTRAIT_STABILITY_SPEC.md`. It extends Doc93 inside the Doc101/Doc102 hot-plug architecture so identity references preserve same-person facial truth without silently taking ownership of prompt-directed hair, makeup, wardrobe, light, scene, camera, mood, or finish.
+
 ## Product Positioning
 
 Alchemy Creative Agent 3.0 is not a canvas tool, node workflow tool, or professional design workstation.

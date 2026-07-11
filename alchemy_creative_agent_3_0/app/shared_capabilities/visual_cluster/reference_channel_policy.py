@@ -47,6 +47,44 @@ REFERENCE_CHANNEL_ISSUE_CODES = {
     "structured_appearance_lock_misapplied",
 }
 
+_EXPLICIT_PROMPT_CHANNEL_RULES = {
+    "hair_direction": (
+        "Hair is current-prompt-owned: follow the exact requested hair color, length, parting, texture, and styling; "
+        "conflicting hair pixels, streaks, highlights, or styling in an identity-only reference are non-authoritative."
+    ),
+    "makeup_style": (
+        "Makeup is current-prompt-owned: follow the requested makeup and facial styling without copying source makeup "
+        "or changing the reference person's facial geometry."
+    ),
+    "wardrobe_structure": (
+        "Wardrobe is current-prompt-owned unless explicitly locked: follow the requested garment structure and do not "
+        "copy clothing visible in an identity-only reference."
+    ),
+    "accessory_system": (
+        "Accessories are current-prompt-owned unless explicitly locked; source accessories in an identity-only reference "
+        "are non-authoritative."
+    ),
+    "lighting_color": (
+        "Lighting and color are current-prompt-owned: use the requested light direction, exposure, color temperature, "
+        "and grade instead of the identity reference's capture conditions."
+    ),
+    "scene_background": (
+        "Scene and background are current-prompt-owned: build the requested environment and do not reconstruct the "
+        "identity reference's location."
+    ),
+    "camera_composition": (
+        "Camera and composition are current-prompt-owned: use the requested viewpoint, distance, crop, and lens language "
+        "instead of cloning the identity reference frame."
+    ),
+    "mood_art_direction": (
+        "Mood and art direction are current-prompt-owned; the identity reference must not act as a whole-image mood anchor."
+    ),
+    "style_finish": (
+        "Finish is current-prompt-owned; preserve the same person without copying the identity reference's retouching, "
+        "rendering style, or whole-frame finish."
+    ),
+}
+
 _STRENGTH_RANK = {"off": 0, "prompt_owned": 1, "soft": 2, "medium": 3, "hard": 4}
 
 _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
@@ -83,6 +121,15 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
         "clothing",
         "garment",
         "dress",
+        "shirt",
+        "suit",
+        "jacket",
+        "coat",
+        "robe",
+        "skirt",
+        "top",
+        "pants",
+        "trousers",
         "costume",
         "appearance asset",
         "silhouette",
@@ -101,6 +148,12 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
         "\u6c49\u670d",
         "\u4e1d\u7ef8",
         "\u8863\u6599",
+        "\u886c\u886b",
+        "\u897f\u88c5",
+        "\u5916\u5957",
+        "\u4e0a\u8863",
+        "\u534a\u8eab\u88d9",
+        "\u88e4\u5b50",
     ),
     "accessory_system": (
         "accessory",
@@ -129,6 +182,14 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
     "lighting_color": (
         "lighting",
         "light setup",
+        "window light",
+        "studio light",
+        "natural light",
+        "natural-light",
+        "daylight",
+        "sunlight",
+        "open shade",
+        "afternoon light",
         "color grade",
         "color temperature",
         "palette",
@@ -143,6 +204,9 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
         "\u6696\u9ec4",
         "\u9634\u5f71",
         "\u805a\u5149",
+        "\u81ea\u7136\u5149",
+        "\u7a97\u5149",
+        "\u65e5\u5149",
     ),
     "scene_background": (
         "scene",
@@ -152,6 +216,11 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
         "garden",
         "fountain",
         "beach",
+        "office",
+        "studio",
+        "indoor",
+        "outdoor",
+        "room",
         "\u573a\u666f",
         "\u80cc\u666f",
         "\u73af\u5883",
@@ -160,6 +229,10 @@ _CHANNEL_TERMS: dict[str, tuple[str, ...]] = {
         "\u6d77\u8fb9",
         "\u68a8\u82b1",
         "\u57ce\u5e02",
+        "\u529e\u516c\u5ba4",
+        "\u5f71\u68da",
+        "\u5ba4\u5185",
+        "\u6237\u5916",
     ),
     "camera_composition": (
         "camera",
@@ -518,6 +591,12 @@ class ReferenceChannelPolicyModule:
                 0,
                 "Current prompt owns its explicit visual channels: " + ", ".join(ownership.explicit_channels[:10]) + ".",
             )
+            if any(policy.source_role == "portrait_identity_reference" for policy in policies):
+                rules[1:1] = [
+                    _EXPLICIT_PROMPT_CHANNEL_RULES[channel]
+                    for channel in ownership.explicit_channels
+                    if channel in _EXPLICIT_PROMPT_CHANNEL_RULES
+                ]
         if any(policy.metadata.get("selected_output_anchor") for policy in policies):
             rules.append(
                 "Selected generated outputs provide approved medium-strength direction only; they must yield to uploaded truth and any new explicit prompt instruction."
@@ -557,6 +636,70 @@ class ReferenceChannelPolicyModule:
         if ownership.explicit_channels:
             summary.append("Styling, light, scene, and camera follow this request where specified.")
         return summary or ["Reference roles were resolved for this generation."]
+
+
+def reference_channel_retry_patch(issue_codes: list[str] | tuple[str, ...] | set[str]) -> dict[str, list[str]]:
+    """Return one module-owned, channel-specific repair patch for Doc93/Doc103 issues."""
+
+    codes = {str(item).strip() for item in issue_codes if str(item).strip()}
+    prompt_additions = [
+        "Doc93 channel repair with Doc103 evidence isolation: preserve valid identity or product truth while repairing only the reference channel that crossed its assigned boundary.",
+        "do not increase whole-image reference strength and do not let a selected generated output override uploaded truth or the current prompt.",
+    ]
+    negative_additions: list[str] = []
+    identity_reinforcement = [
+        "Keep the same person's face geometry and feature relationships while changing prompt-owned surface styling or environmental channels."
+    ]
+    composition_repair: list[str] = []
+
+    if "source_hair_overinherited" in codes:
+        prompt_additions.append(
+            "Replace only inherited source hair color, streaks, highlights, length, parting, texture, and styling with the exact current prompt hair direction."
+        )
+        negative_additions.extend(["source hair color leakage", "source hair streaks or highlights", "source hairstyle copied"])
+    if "source_makeup_overinherited" in codes:
+        prompt_additions.append(
+            "Replace only inherited source makeup with the exact current prompt makeup while preserving underlying facial geometry."
+        )
+        negative_additions.extend(["source makeup copied", "source cosmetic color leakage"])
+    if "source_wardrobe_overinherited" in codes or "structured_appearance_lock_misapplied" in codes:
+        prompt_additions.append(
+            "Use the current prompt wardrobe and accessories unless that exact appearance channel is explicitly locked to a reference."
+        )
+        negative_additions.extend(["source wardrobe leakage", "source accessory leakage", "misapplied outfit lock"])
+    if "source_lighting_overinherited" in codes or "source_color_grade_overinherited" in codes:
+        prompt_additions.append(
+            "Restore the current prompt light direction, exposure, color temperature, and color grade without altering identity geometry."
+        )
+        negative_additions.extend(["source lighting copied", "source color grade copied"])
+    if "source_scene_overinherited" in codes:
+        prompt_additions.append("Replace the source location with the exact current prompt scene and background.")
+        prompt_additions.append(
+            "Keep the scene boundary strict: do not copy source lighting, source color temperature, source scene, source camera mood, or whole-image style; actively rebuild only the reported environment channel."
+        )
+        negative_additions.append("source scene or background copied")
+        composition_repair.append("Rebuild only the requested environment while retaining the same person or product truth.")
+    if "source_camera_overinherited" in codes:
+        prompt_additions.append("Restore the current prompt viewpoint, camera distance, crop, and lens language.")
+        negative_additions.append("source camera frame copied")
+        composition_repair.append("Use the requested camera composition instead of cloning the reference frame.")
+    if codes & {"source_whole_style_overinherited", "reference_used_as_style_when_identity_only"}:
+        prompt_additions.append(
+            "Use the identity-only reference for identity channels only and restore the current prompt mood, art direction, and finish."
+        )
+        negative_additions.extend(["identity reference used as a style template", "source whole-image finish copied"])
+    if codes & {"prompt_owned_channel_ignored", "selected_anchor_overrode_current_prompt"}:
+        prompt_additions.append(
+            "Re-read every explicit current-prompt channel and make each requested change visibly dominant over conflicting reference pixels."
+        )
+        negative_additions.append("current prompt overridden by reference pixels")
+
+    return {
+        "prompt_additions": _dedupe(prompt_additions),
+        "negative_additions": _dedupe(negative_additions),
+        "identity_reinforcement": _dedupe(identity_reinforcement),
+        "composition_repair": _dedupe(composition_repair),
+    }
 
 
 def _default_profile(
@@ -784,13 +927,34 @@ def _intent_near_channel(
     clause: str,
     channel_terms: tuple[str, ...],
     intent_terms: tuple[str, ...],
-    max_distance: int = 22,
+    max_distance: int = 32,
 ) -> bool:
-    channel_positions = [clause.find(term.lower()) for term in channel_terms if term.lower() in clause]
-    intent_positions = [clause.find(term.lower()) for term in intent_terms if term.lower() in clause]
+    def positions(term: str) -> list[int]:
+        needle = term.lower()
+        values: list[int] = []
+        start = 0
+        while needle:
+            index = clause.find(needle, start)
+            if index < 0:
+                break
+            values.append(index)
+            start = index + max(1, len(needle))
+        return values
+
+    channel_positions = [position for term in channel_terms for position in positions(term)]
+    intent_positions = [
+        (position, term.lower())
+        for term in intent_terms
+        for position in positions(term)
+    ]
     if not channel_positions or not intent_positions:
         return False
-    return any(abs(channel_pos - intent_pos) <= max_distance for channel_pos in channel_positions for intent_pos in intent_positions)
+    short_scope_terms = {term.lower() for term in _PRESERVE_TERMS}
+    return any(
+        abs(channel_pos - intent_pos) <= (18 if intent_term in short_scope_terms else max_distance)
+        for channel_pos in channel_positions
+        for intent_pos, intent_term in intent_positions
+    )
 
 
 def _string_list(value: Any) -> list[str]:

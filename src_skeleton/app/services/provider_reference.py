@@ -80,6 +80,7 @@ def prepare_reference_truth_derivatives(
     *,
     asset_id: str = "",
     truth_layers: list[str] | tuple[str, ...] | None = None,
+    reference_policy: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Create provider-only focused references without changing the user's upload."""
     try:
@@ -91,8 +92,22 @@ def prepare_reference_truth_derivatives(
             return []
         derivatives: list[dict[str, Any]] = []
         if "portrait_identity_truth" in layers:
-            derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="portrait_identity_crop"))
-            derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="portrait_identity_geometry_crop"))
+            derivatives.append(
+                _truth_derivative(
+                    source,
+                    asset_id=asset_id,
+                    kind="portrait_identity_crop",
+                    reference_policy=reference_policy,
+                )
+            )
+            derivatives.append(
+                _truth_derivative(
+                    source,
+                    asset_id=asset_id,
+                    kind="portrait_identity_geometry_crop",
+                    reference_policy=reference_policy,
+                )
+            )
         if "product_identity_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="product_truth_crop"))
         if "structured_appearance_truth" in layers:
@@ -140,9 +155,16 @@ def _compressed_reference_path(source: Path, *, max_bytes: int) -> Path:
     return target if target.exists() else source
 
 
-def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, Any]:
+def _truth_derivative(
+    source: Path,
+    *,
+    asset_id: str,
+    kind: str,
+    reference_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    isolation = _identity_channel_isolation_profile(reference_policy, kind=kind)
     try:
-        target = _cropped_reference_path(source, kind=kind)
+        target = _cropped_reference_path(source, kind=kind, identity_isolation=isolation)
         fallback = target.resolve() == source.resolve()
     except Exception:
         target = prepare_provider_reference_image(source)
@@ -167,6 +189,11 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
         "identity_color_retention": (
             0.90 if kind == "portrait_identity_crop" else 0.65 if kind == "portrait_identity_geometry_crop" else None
         ),
+        "identity_outer_color_retention": isolation.get("outer_color_retention") if not fallback else None,
+        "identity_channel_isolation_applied": bool(isolation.get("applies")) and not fallback,
+        "identity_channel_isolation_profile": isolation.get("profile_id") if not fallback else None,
+        "identity_prompt_owned_channels": list(isolation.get("prompt_owned_channels") or []) if not fallback else [],
+        "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
         "identity_background_neutralized": False,
         "identity_context_reduced_by_tight_crop": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
         "identity_evidence_scope": (
@@ -177,7 +204,12 @@ def _truth_derivative(source: Path, *, asset_id: str, kind: str) -> dict[str, An
     }
 
 
-def _cropped_reference_path(source: Path, *, kind: str) -> Path:
+def _cropped_reference_path(
+    source: Path,
+    *,
+    kind: str,
+    identity_isolation: dict[str, Any] | None = None,
+) -> Path:
     try:
         from PIL import Image, ImageOps
     except ModuleNotFoundError:
@@ -189,8 +221,10 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     max_edge = max(512, int(settings.openai_image_reference_max_edge))
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
+    isolation = dict(identity_isolation or {})
+    isolation_key = str(isolation.get("cache_key") or "legacy")
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc103-identity-evidence-v1:{isolation_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +241,15 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
             from PIL import ImageEnhance
 
             color_retention = 0.90 if kind == "portrait_identity_crop" else 0.65
-            cropped = ImageEnhance.Color(cropped).enhance(color_retention)
+            if isolation.get("applies"):
+                cropped = _isolate_prompt_owned_identity_channels(
+                    cropped,
+                    kind=kind,
+                    face_color_retention=color_retention,
+                    outer_color_retention=float(isolation.get("outer_color_retention") or 0.0),
+                )
+            else:
+                cropped = ImageEnhance.Color(cropped).enhance(color_retention)
             minimum_edge = min(512, max_edge)
             if min(cropped.size) < minimum_edge:
                 scale = minimum_edge / max(1, min(cropped.size))
@@ -234,6 +276,93 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
             current = current.resize(next_size, Image.Resampling.LANCZOS)
             current.save(target, format="JPEG", quality=72, optimize=True)
     return target if target.exists() else source
+
+
+def _identity_channel_isolation_profile(
+    reference_policy: dict[str, Any] | None,
+    *,
+    kind: str,
+) -> dict[str, Any]:
+    policy = dict(reference_policy or {})
+    if kind not in {"portrait_identity_crop", "portrait_identity_geometry_crop"} or not policy:
+        return {"applies": False, "profile_id": "legacy_identity_evidence", "cache_key": "legacy"}
+    prompt_owned = {
+        str(item)
+        for item in policy.get("prompt_owned_channels", [])
+        if str(item).strip()
+    }
+    for channel in (
+        "hair_direction",
+        "makeup_style",
+        "wardrobe_structure",
+        "accessory_system",
+        "lighting_color",
+        "scene_background",
+        "camera_composition",
+        "mood_art_direction",
+        "style_finish",
+    ):
+        if str(policy.get(channel) or "") in {"prompt_owned", "off"}:
+            prompt_owned.add(channel)
+    isolation_channels = sorted(
+        prompt_owned
+        & {
+            "hair_direction",
+            "makeup_style",
+            "wardrobe_structure",
+            "accessory_system",
+            "lighting_color",
+            "scene_background",
+            "camera_composition",
+            "mood_art_direction",
+            "style_finish",
+        }
+    )
+    hair_is_assigned = str(policy.get("hair_direction") or "") in {"hard", "medium", "soft"}
+    applies = (
+        bool(isolation_channels)
+        and str(policy.get("source_role") or "") == "portrait_identity_reference"
+        and not hair_is_assigned
+    )
+    outer_retention = 0.12 if kind == "portrait_identity_crop" else 0.06
+    return {
+        "applies": applies,
+        "profile_id": "prompt_owned_channel_isolation_v1" if applies else "assigned_channel_preservation_v1",
+        "cache_key": (
+            "prompt-owned-v1:" + ",".join(isolation_channels)
+            if applies
+            else "assigned-v1"
+        ),
+        "prompt_owned_channels": isolation_channels,
+        "outer_color_retention": outer_retention if applies else None,
+        "soften_outer_context": applies,
+    }
+
+
+def _isolate_prompt_owned_identity_channels(
+    image,
+    *,
+    kind: str,
+    face_color_retention: float,
+    outer_color_retention: float,
+):
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+
+    face = ImageEnhance.Color(image).enhance(face_color_retention)
+    outer = ImageEnhance.Color(image).enhance(outer_color_retention)
+    blur_radius = max(1.0, min(image.size) * (0.009 if kind == "portrait_identity_crop" else 0.013))
+    outer = outer.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    mask = Image.new("L", image.size, color=0)
+    draw = ImageDraw.Draw(mask)
+    width, height = image.size
+    if kind == "portrait_identity_crop":
+        box = (width * 0.23, height * 0.19, width * 0.77, height * 0.98)
+    else:
+        box = (width * 0.20, height * 0.16, width * 0.80, height * 0.95)
+    draw.ellipse(tuple(int(round(value)) for value in box), fill=255)
+    feather = max(4.0, min(image.size) * 0.045)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))
+    return Image.composite(face, outer, mask)
 
 
 def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, int]:

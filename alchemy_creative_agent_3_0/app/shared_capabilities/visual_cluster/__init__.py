@@ -101,6 +101,7 @@ from .reference_channel_policy import (
     REFERENCE_CHANNEL_POLICY_MODULE_ID,
     PromptOwnershipResolver,
     ReferenceChannelPolicyModule,
+    reference_channel_retry_patch,
 )
 from .quality_review import OutputQualityReviewMerger
 from .strong_reference_loop import StrongReferenceLoopPlanner
@@ -178,6 +179,7 @@ __all__ = [
     "REFERENCE_CHANNEL_POLICY_MODULE_ID",
     "ReferenceChannelPolicy",
     "ReferenceChannelPolicyModule",
+    "reference_channel_retry_patch",
     "ReferenceOverinheritanceRetryPatch",
     "apply_role_recipe_casebook_overlay",
     "human_photorealism_casebook",

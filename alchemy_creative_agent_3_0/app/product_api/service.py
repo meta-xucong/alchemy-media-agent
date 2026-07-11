@@ -27,6 +27,7 @@ from ..shared_capabilities.visual_cluster import (
     ModeAwareRoleDirector,
     OutputQualityReviewMerger,
     VisionOutputInspector,
+    reference_channel_retry_patch,
 )
 from ..schemas import (
     AssetType,
@@ -1811,39 +1812,25 @@ class V3ProductApiService:
             elif code in {
                 "source_hair_overinherited",
                 "source_makeup_overinherited",
+                "source_wardrobe_overinherited",
+                "source_lighting_overinherited",
                 "source_color_grade_overinherited",
+                "source_scene_overinherited",
                 "source_camera_overinherited",
                 "source_whole_style_overinherited",
+                "reference_used_as_style_when_identity_only",
                 "prompt_owned_channel_ignored",
                 "selected_anchor_overrode_current_prompt",
                 "structured_appearance_lock_misapplied",
             }:
-                prompt_additions.extend(
-                    [
-                        "Doc93 channel repair: preserve valid identity or product truth while restoring current prompt-owned styling channels",
-                        "follow the current request for hair, makeup, wardrobe, accessories, lighting, color, scene, camera, mood, and style unless that exact channel was explicitly locked",
-                        "do not increase whole-image reference strength and do not let a selected generated output override the current prompt",
-                    ]
-                )
-                identity_reinforcement.append(
-                    "keep the same person's face geometry while repairing only leaked source styling; do not copy source wardrobe, light, scene, camera, or whole-image style"
-                )
-                negative_additions.extend(
-                    [
-                        "source hairstyle or makeup leakage",
-                        "source wardrobe leakage",
-                        "source lighting, color, scene, or camera leakage",
-                        "source whole-image style leakage",
-                        "selected anchor overrode current prompt",
-                    ]
-                )
+                channel_patch = reference_channel_retry_patch([code])
+                prompt_additions.extend(channel_patch["prompt_additions"])
+                negative_additions.extend(channel_patch["negative_additions"])
+                identity_reinforcement.extend(channel_patch["identity_reinforcement"])
+                composition_repair.extend(channel_patch["composition_repair"])
             elif code in {
-                "source_lighting_overinherited",
                 "source_color_temperature_overinherited",
-                "source_scene_overinherited",
-                "source_wardrobe_overinherited",
                 "source_camera_mood_overinherited",
-                "reference_used_as_style_when_identity_only",
                 "prompt_style_underweighted",
                 "makeup_changed_face_geometry",
                 "hair_change_replaced_identity",

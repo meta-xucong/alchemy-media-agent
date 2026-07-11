@@ -1227,7 +1227,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
                 reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
-            derivatives = self._reference_truth_derivatives(asset, truth_layers)
+            derivatives = self._reference_truth_derivatives(
+                asset,
+                truth_layers,
+                reference_policy=reference_policy,
+            )
             for derivative in derivatives:
                 assets.append(
                     {
@@ -1253,6 +1257,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
                         "identity_color_retention": derivative.get("identity_color_retention"),
+                        "identity_outer_color_retention": derivative.get("identity_outer_color_retention"),
+                        "identity_channel_isolation_applied": bool(
+                            derivative.get("identity_channel_isolation_applied")
+                        ),
+                        "identity_channel_isolation_profile": derivative.get(
+                            "identity_channel_isolation_profile"
+                        ),
+                        "identity_prompt_owned_channels": derivative.get("identity_prompt_owned_channels") or [],
+                        "identity_outer_context_softened": bool(
+                            derivative.get("identity_outer_context_softened")
+                        ),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                         "identity_context_reduced_by_tight_crop": bool(
                             derivative.get("identity_context_reduced_by_tight_crop")
@@ -1502,7 +1517,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "structured_appearance_context": structured_context,
         }
 
-    def _reference_truth_derivatives(self, asset: dict[str, Any], truth_layers: list[str]) -> list[dict[str, Any]]:
+    def _reference_truth_derivatives(
+        self,
+        asset: dict[str, Any],
+        truth_layers: list[str],
+        *,
+        reference_policy: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         provider_layers = [layer for layer in truth_layers if layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"}]
         if not provider_layers:
             return []
@@ -1513,6 +1534,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 asset.get("file_path"),
                 asset_id=str(asset.get("asset_id") or ""),
                 truth_layers=provider_layers,
+                reference_policy=reference_policy,
             )
         except Exception:
             return []
@@ -1677,6 +1699,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback_to_original": bool(item.get("fallback_to_original")),
                     "identity_color_neutralized": bool(item.get("identity_color_neutralized")),
                     "identity_color_retention": item.get("identity_color_retention"),
+                    "identity_outer_color_retention": item.get("identity_outer_color_retention"),
+                    "identity_channel_isolation_applied": bool(
+                        item.get("identity_channel_isolation_applied")
+                    ),
+                    "identity_channel_isolation_profile": item.get("identity_channel_isolation_profile"),
+                    "identity_prompt_owned_channels": item.get("identity_prompt_owned_channels") or [],
+                    "identity_outer_context_softened": bool(item.get("identity_outer_context_softened")),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "identity_context_reduced_by_tight_crop": bool(
                         item.get("identity_context_reduced_by_tight_crop")
@@ -2227,6 +2256,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Primary operation: identity-preserving portrait edit",
             "Identity-local repair operation:",
             "Reference channel policy:",
+            "Doc93 channel rule:",
             "Current prompt owns",
             "Do not copy the reference image's original lighting",
             "Portrait identity contract:",
@@ -2416,9 +2446,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         for marker in (
             "current prompt owns",
             "preserve underlying face geometry",
-            "follow the current prompt",
-            "do not copy the reference image's original lighting",
         ):
+            match = next((rule for rule in prompt_rules if marker in rule.lower()), None)
+            if match and match not in selected_rules:
+                selected_rules.append(match)
+        channel_rules = [
+            rule
+            for rule in prompt_rules
+            if "current-prompt-owned" in rule.lower()
+        ]
+        for rule in channel_rules:
+            if rule not in selected_rules:
+                selected_rules.append(rule)
+        fallback_markers = (
+            ("do not copy the reference image's original lighting",)
+            if channel_rules
+            else (
+                "follow the current prompt",
+                "do not copy the reference image's original lighting",
+            )
+        )
+        for marker in fallback_markers:
             match = next((rule for rule in prompt_rules if marker in rule.lower()), None)
             if match and match not in selected_rules:
                 selected_rules.append(match)
@@ -2432,7 +2480,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]
         lines = [
             "Doc93 reference-channel contract: reference images may influence only their assigned channels.",
-            *selected_rules[:4],
+            *(f"Doc93 channel rule: {rule}" for rule in selected_rules[:10]),
             "Effective reference-owned channels: " + "; ".join(owner_lines[:10]) if owner_lines else "",
         ]
         return "Reference channel policy:\n" + "\n".join(line for line in lines if line)
