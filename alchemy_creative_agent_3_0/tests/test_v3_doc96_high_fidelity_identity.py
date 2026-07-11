@@ -108,6 +108,13 @@ class _StaticIdentityMetric:
         )
 
 
+class _UnavailableVisionProvider:
+    provider_name = "doc96_unavailable_vision"
+
+    def available(self, *, force: bool = False) -> bool:
+        return False
+
+
 def _identity_review_metadata(reference_path: Path) -> dict:
     return {
         "enable_real_vision_inspection": True,
@@ -174,6 +181,24 @@ def test_doc96_mid_band_metric_emits_local_repair_signal(tmp_path) -> None:
         str(issue.get("code") if isinstance(issue, dict) else issue.code) for issue in report.detected_issues
     }
     assert report.evidence["identity_metric"]["output_face_box"] == [0.25, 0.2, 0.5, 0.55]
+
+
+def test_doc96_objective_identity_survives_multimodal_reviewer_outage(tmp_path) -> None:
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    inspector = VisionOutputInspector(
+        vision_provider=_UnavailableVisionProvider(),
+        identity_metric_provider=_StaticIdentityMetric(0.88, 0.86),
+    )
+
+    report = inspector.inspect(_resolution(output), metadata=_identity_review_metadata(reference))
+
+    assert report.status == "manual_review"
+    assert report.score_card["objective_identity_metric"] == 0.88
+    assert report.score_card["same_person_readability"] >= 0.86
+    assert report.evidence["identity_review_fusion"]["hard_gate_passed"] is True
 
 
 def test_doc96_local_repair_metadata_uses_failed_output_and_mask(tmp_path) -> None:

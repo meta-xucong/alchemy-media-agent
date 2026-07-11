@@ -190,7 +190,7 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
     stat = source.stat()
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc95-identity-pyramid-v2:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc96-full-color-face-core-v6:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +201,8 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
     with Image.open(source) as raw:
         image = ImageOps.exif_transpose(raw)
         image = _to_rgb_on_white(image, Image)
-        box = _truth_crop_box(image.size, kind)
+        box = _detected_feature_crop_box(image) if kind == "portrait_identity_crop" else None
+        box = box or _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
         if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
             from PIL import ImageEnhance
@@ -234,6 +235,34 @@ def _cropped_reference_path(source: Path, *, kind: str) -> Path:
             current = current.resize(next_size, Image.Resampling.LANCZOS)
             current.save(target, format="JPEG", quality=72, optimize=True)
     return target if target.exists() else source
+
+
+def _detected_feature_crop_box(image) -> tuple[int, int, int, int] | None:
+    try:
+        import cv2 as cv
+        import numpy as np
+
+        model_path = Path(settings.v3_identity_model_dir) / "face_detection_yunet_2023mar.onnx"
+        if not model_path.is_file():
+            return None
+        rgb = np.asarray(image.convert("RGB"))
+        bgr = cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
+        height, width = bgr.shape[:2]
+        detector = cv.FaceDetectorYN.create(str(model_path), "", (width, height), 0.5, 0.3, 5000)
+        _status, faces = detector.detect(bgr)
+        if faces is None or len(faces) == 0:
+            return None
+        face = max(faces, key=lambda value: float(value[2] * value[3]) * max(0.1, float(value[-1])))
+        x, y, face_width, face_height = [float(value) for value in face[:4]]
+        left = max(0, int(round(x - face_width * 0.05)))
+        top = max(0, int(round(y - face_height * 0.02)))
+        right = min(width, int(round(x + face_width * 1.05)))
+        bottom = min(height, int(round(y + face_height * 1.10)))
+        if right - left < 64 or bottom - top < 64:
+            return None
+        return left, top, right, bottom
+    except Exception:
+        return None
 
 
 def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, int]:

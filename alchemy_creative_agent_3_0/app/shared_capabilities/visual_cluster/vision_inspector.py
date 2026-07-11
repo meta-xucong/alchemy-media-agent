@@ -671,7 +671,25 @@ class VisionOutputInspector:
         mode: str = "metadata_only",
         evidence_extra: dict[str, Any] | None = None,
     ) -> VisualInspectionReport:
-        issue = _issue_payload(reason_code if reason_code in MANUAL_REVIEW_ISSUE_CODES else "file_missing", 0.4, retryable=False)
+        issue_code = reason_code if reason_code in MANUAL_REVIEW_ISSUE_CODES else "file_missing"
+        issue_codes = [issue_code]
+        score_card = _score_card("manual_review")
+        identity_metric, identity_fusion = self._identity_metric_fusion(
+            resolution,
+            metadata=metadata,
+            multimodal_score=None,
+        )
+        if identity_fusion:
+            fused_score = float(identity_fusion["fused_identity_score"])
+            score_card["objective_identity_metric"] = float(identity_fusion["objective_metric_score"])
+            score_card["identity_metric_geometry"] = float(identity_fusion["geometry_relationship_score"])
+            score_card["same_person_readability"] = fused_score
+            score_card["identity_consistency"] = fused_score
+            if fused_score < 0.72:
+                issue_codes.append("identity_metric_low")
+            elif fused_score < 0.82:
+                issue_codes.append("identity_metric_below_commercial_target")
+        detected_issues = [_issue_payload(code, 0.4, retryable=False) for code in _dedupe(issue_codes)]
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, reason_code),
             project_id=resolution.project_id,
@@ -682,10 +700,16 @@ class VisionOutputInspector:
             mode=mode,
             status="manual_review",
             confidence=0.35,
-            score_card=_score_card("manual_review"),
-            detected_issues=[issue],
+            score_card=score_card,
+            detected_issues=detected_issues,
             retryable=False,
-            evidence={"resolution_status": resolution.status, "warnings": list(resolution.warnings), **dict(evidence_extra or {})},
+            evidence={
+                "resolution_status": resolution.status,
+                "warnings": list(resolution.warnings),
+                "identity_metric": identity_metric,
+                "identity_review_fusion": identity_fusion,
+                **dict(evidence_extra or {}),
+            },
             user_visible_summary=["This image needs manual confirmation before automatic retry."],
             metadata={"doc": "55", **_public_metadata(metadata)},
         )

@@ -2165,10 +2165,12 @@ class V3ProductApiService:
                 hard_gate_failures: list[str] = []
                 asset_id = ""
                 score_card: dict[str, Any] = {}
+                review_unavailable = False
                 if inspection is not None:
                     score, hard_gate_passed, hard_gate_failures = self._review_inspection_delivery_score(inspection)
                     asset_id = str(inspection.get("asset_id") or "").strip()
                     score_card = dict(inspection.get("score_card") or {})
+                    review_unavailable = "review_unavailable" in hard_gate_failures
                 output_record = self.output_store.get_output(output_id)
                 output_metadata = dict(output_record.metadata or {}) if output_record is not None else {}
                 ranked_outputs.append(
@@ -2194,6 +2196,7 @@ class V3ProductApiService:
                             score_card.get("commercial_finish", score_card.get("overall"))
                         ),
                         "identity_local_repair": bool(output_metadata.get("identity_local_repair")),
+                        "review_unavailable": review_unavailable,
                     }
                 )
 
@@ -2218,6 +2221,9 @@ class V3ProductApiService:
                     for item in group
                     if not item["identity_local_repair"] or item["identity_local_repair_acceptance_passed"]
                 ] or [item for item in group if not item["identity_local_repair"]] or group
+                reviewed_group = [item for item in accepted_group if not item.get("review_unavailable")]
+                if reviewed_group:
+                    accepted_group = reviewed_group
                 eligible = [item for item in accepted_group if item["hard_gate_passed"]] or accepted_group
                 winners.append(max(eligible, key=lambda item: (item["score"], -item["attempt_index"])))
         else:
@@ -2376,6 +2382,10 @@ class V3ProductApiService:
             hard_gate_failures.append("identity_truth_not_respected")
         if issue_codes.intersection(DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES):
             hard_gate_failures.append("prompt_owned_channel_not_respected")
+        if status == "manual_review" and issue_codes.intersection(
+            {"provider_error", "vision_provider_unavailable", "vision_provider_not_configured"}
+        ):
+            hard_gate_failures.append("review_unavailable")
 
         status_score = {
             "pass": 1.0,

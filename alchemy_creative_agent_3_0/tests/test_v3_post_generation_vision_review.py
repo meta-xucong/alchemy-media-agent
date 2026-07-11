@@ -661,6 +661,67 @@ def test_doc95_delivery_selection_compares_each_suite_role_independently(tmp_pat
     assert retry_a["hard_gate_failures"] == ["identity_truth_not_respected"]
 
 
+def test_doc96_unreviewed_retry_cannot_replace_reviewed_initial_output(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+
+    package = {
+        "review_attempts": [
+            {
+                "stage": "initial",
+                "attempt_index": 0,
+                "output_ids": ["reviewed_initial"],
+                "statuses": ["fail_retryable"],
+                "issue_codes": ["identity_drift"],
+                "inspections": [
+                    {
+                        "output_id": "reviewed_initial",
+                        "asset_id": "same_role",
+                        "status": "fail_retryable",
+                        "detected_issues": [{"code": "identity_drift"}],
+                        "score_card": {
+                            "same_person_readability": 0.76,
+                            "prompt_owned_channel_obedience": 0.86,
+                            "human_realism": 0.78,
+                            "commercial_finish": 0.82,
+                        },
+                    }
+                ],
+            },
+            {
+                "stage": "final_retry",
+                "attempt_index": 1,
+                "output_ids": ["unreviewed_retry"],
+                "statuses": ["manual_review"],
+                "issue_codes": ["provider_error"],
+                "inspections": [
+                    {
+                        "output_id": "unreviewed_retry",
+                        "asset_id": "same_role",
+                        "status": "manual_review",
+                        "detected_issues": [{"code": "provider_error"}],
+                        "score_card": {"overall": 0.90},
+                    }
+                ],
+            },
+        ]
+    }
+    candidate = record.generation_result.model_copy(
+        update={"metadata": {**dict(record.generation_result.metadata), "post_generation_review_package": package}}
+    )
+
+    preferred = service._apply_reviewed_delivery_preference(candidate)  # noqa: SLF001
+    preference = preferred.metadata["reviewed_delivery_preference"]
+
+    assert preference["preferred_output_ids"] == ["reviewed_initial"]
+    retry = next(item for item in preference["ranked_outputs"] if item["output_id"] == "unreviewed_retry")
+    assert retry["review_unavailable"] is True
+    assert "review_unavailable" in retry["hard_gate_failures"]
+
+
 def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:
     service = _service(
         tmp_path,
