@@ -27,6 +27,26 @@ class CommerceCritic:
                 "Every planned image has one primary selling point.",
             )
         )
+        main_image_copy = [recipe for recipe in recipes if recipe.slot in {"main_image", "hero_image"} and recipe.overlay_text]
+        checks.append(
+            self._check(
+                "main_image_text_policy",
+                not main_image_copy,
+                "Main-image slots do not carry overlay copy.",
+            )
+        )
+        localization_review_slots = [
+            recipe.slot
+            for recipe in recipes
+            if bool((recipe.metadata.get("copy_plan") or {}).get("needs_localization_review"))
+        ]
+        checks.append(
+            self._check(
+                "localization_review",
+                not localization_review_slots,
+                "Localized overlay copy is user-supplied or has passed the current metadata review gate.",
+            )
+        )
         checks.append(
             self._check(
                 "platform_profile",
@@ -47,6 +67,10 @@ class CommerceCritic:
             warnings.extend(marketplace_profile.warnings)
         if brief.claim_risk_warnings:
             warnings.extend(brief.claim_risk_warnings)
+        if localization_review_slots:
+            warnings.append(
+                "Derived overlay copy requires native-language review before export: " + ", ".join(localization_review_slots)
+            )
 
         status = "attention" if any(check["status"] == "attention" for check in checks) else "ready"
         return CommerceCriticReport(
@@ -57,6 +81,7 @@ class CommerceCritic:
                 "source": "CommerceCritic",
                 "metadata_only_review": True,
                 "recipe_count": len(recipes),
+                "localization_review_slots": localization_review_slots,
             },
         )
 

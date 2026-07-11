@@ -20,7 +20,11 @@ class EcommerceExportPackager:
         naming = str(export_rules.get("naming") or "{slot}_{index}_{platform}.png")
         dimension_hint = str(export_rules.get("dimension_hint") or "1200x1200")
         files = []
+        localization_review_required = False
         for index, recipe in enumerate(recipes, start=1):
+            copy_plan = recipe.metadata.get("copy_plan") or {}
+            copy_review_required = bool(copy_plan.get("needs_localization_review"))
+            localization_review_required = localization_review_required or copy_review_required
             filename = naming.format(
                 slot=recipe.slot,
                 index=f"{index:02d}",
@@ -35,6 +39,10 @@ class EcommerceExportPackager:
                     "format": export_rules.get("format", "png"),
                     "business_goal": recipe.business_goal,
                     "review_status": "needs_pixel_review",
+                    "overlay_text": recipe.overlay_text,
+                    "copy_locale": copy_plan.get("copy_locale"),
+                    "copy_source": copy_plan.get("source"),
+                    "copy_review_required": copy_review_required,
                 }
             )
         return EcommerceExportPackage(
@@ -44,10 +52,12 @@ class EcommerceExportPackager:
             files=files,
             naming_pattern=naming,
             dimensions={recipe.slot: dimension_hint for recipe in recipes},
-            review_status="metadata_ready",
+            review_status="attention" if localization_review_required else "metadata_ready",
             metadata={
                 "source": "EcommerceExportPackager",
                 "file_count": len(files),
                 "pixel_assets_required_before_download": True,
+                "copy_locale": marketplace_profile.metadata.get("copy_locale"),
+                "localization_review_required": localization_review_required,
             },
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief
+from .localization import LocalizationProfile
 from .utils import clean_text
 
 
@@ -27,3 +28,55 @@ class EcommerceCopyBridge:
         if slot in {"ad_cover", "benefit_hook", "store_banner", "collection_cover"}:
             return point[:38]
         return point[:44]
+
+    def plan_for_slot(
+        self,
+        *,
+        slot: str,
+        selling_point: str,
+        brief: CommerceIntelligenceBrief,
+        localization: LocalizationProfile,
+        parameters: dict,
+    ) -> dict[str, object]:
+        """Return a reviewable copy plan without pretending to translate text."""
+
+        if slot in {"main_image", "hero_image"}:
+            return {
+                "text": None,
+                "policy": "text_forbidden",
+                "source": "slot_policy",
+                "needs_localization_review": False,
+                **localization.metadata(),
+            }
+
+        supplied = self._supplied_copy(slot, parameters)
+        if supplied:
+            text = self._truncate(supplied, localization.character_limit(slot))
+            return {
+                "text": text,
+                "policy": "text_allowed",
+                "source": "user_supplied",
+                "needs_localization_review": False,
+                "truncated": text != supplied,
+                **localization.metadata(),
+            }
+
+        derived = self.overlay_for_slot(slot=slot, selling_point=selling_point, brief=brief)
+        text = self._truncate(derived or "", localization.character_limit(slot)) or None
+        return {
+            "text": text,
+            "policy": "text_allowed",
+            "source": "derived",
+            "needs_localization_review": bool(text and localization.language != "en"),
+            "truncated": bool(derived and text != derived),
+            **localization.metadata(),
+        }
+
+    def _supplied_copy(self, slot: str, parameters: dict) -> str:
+        values = parameters.get("overlay_copy") or parameters.get("localized_copy") or parameters.get("copy")
+        if isinstance(values, dict):
+            return clean_text(values.get(slot) or values.get("default"))
+        return clean_text(values)
+
+    def _truncate(self, text: str, limit: int) -> str:
+        return clean_text(text)[:limit]

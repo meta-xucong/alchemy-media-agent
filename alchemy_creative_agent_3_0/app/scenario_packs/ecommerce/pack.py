@@ -101,6 +101,7 @@ class EcommerceScenarioPackPlanner:
             marketplace_profile=marketplace_profile,
             uploaded_asset_ids=uploaded_asset_ids,
             category_profile=category_profile,
+            scenario_parameters=scenario_parameters,
         )
         critic = self.critic.review(
             truth=truth,

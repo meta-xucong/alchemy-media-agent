@@ -5,6 +5,7 @@ from __future__ import annotations
 from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
 from .category_profiles import CategoryProfile
 from .copy_bridge import EcommerceCopyBridge
+from .localization import resolve_localization
 
 
 SLOT_GOALS = {
@@ -39,7 +40,14 @@ class SellingPointToImagePlanner:
         marketplace_profile: MarketplaceRuleProfile,
         uploaded_asset_ids: list[str],
         category_profile: CategoryProfile | None = None,
+        scenario_parameters: dict | None = None,
     ) -> list[EcommerceAssetRecipe]:
+        scenario_parameters = scenario_parameters or {}
+        localization = resolve_localization(
+            platform=marketplace_profile.platform,
+            market=marketplace_profile.market,
+            requested_locale=scenario_parameters.get("copy_locale") or scenario_parameters.get("locale"),
+        )
         selling_points = brief.differentiated_selling_points or ["Clear product identity"]
         recipes: list[EcommerceAssetRecipe] = []
         for index, slot in enumerate(marketplace_profile.image_slots):
@@ -50,7 +58,14 @@ class SellingPointToImagePlanner:
                 else selling_points[min(max(index - 1, 0), len(selling_points) - 1)]
             )
             buyer_intent = self._buyer_intent(index, brief)
-            overlay_text = self.copy_bridge.overlay_for_slot(slot=slot, selling_point=selling_point, brief=brief)
+            copy_plan = self.copy_bridge.plan_for_slot(
+                slot=slot,
+                selling_point=selling_point,
+                brief=brief,
+                localization=localization,
+                parameters=scenario_parameters,
+            )
+            overlay_text = copy_plan["text"]
             visual_scene, lifestyle_metadata = self._visual_scene(
                 slot=slot,
                 default_scene=scene,
@@ -80,6 +95,7 @@ class SellingPointToImagePlanner:
                         "platform": marketplace_profile.platform,
                         "market": marketplace_profile.market,
                         **(category_profile.metadata() if category_profile else {}),
+                        "copy_plan": copy_plan,
                         **lifestyle_metadata,
                     },
                 )

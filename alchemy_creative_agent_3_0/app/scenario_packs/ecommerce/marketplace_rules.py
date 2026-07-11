@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import MarketplaceRuleProfile
+from .localization import resolve_localization
 from .utils import clean_text
 
 
@@ -53,6 +54,11 @@ class MarketplaceRuleEngine:
         canvas_rules = self._canvas_rules(platform)
         content_rules = self._content_rules(platform)
         export_rules = self._export_rules(platform)
+        localization = resolve_localization(
+            platform=platform,
+            market=market,
+            requested_locale=parameters.get("copy_locale") or parameters.get("locale"),
+        )
         warnings = [
             "Marketplace policy guidance is versioned first-pass metadata, not live legal or platform-policy advice."
         ]
@@ -70,6 +76,7 @@ class MarketplaceRuleEngine:
                 "profile_updated_at": PROFILE_UPDATED_AT,
                 "raw_platform_profile": raw_platform,
                 "live_policy_lookup": False,
+                **localization.metadata(),
             },
         )
 
