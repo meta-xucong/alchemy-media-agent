@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from ...creative_core.rules import stable_id
@@ -315,17 +316,29 @@ class VisionOutputInspector:
         provider = self._provider()
         if provider is None or not provider.available(force=True):
             return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
-        try:
-            payload = provider.inspect(resolution, metadata=metadata)
-        except VisionInspectionProviderUnavailable:
-            return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
-        except VisionInspectionProviderError as exc:
+        max_attempts = 3 if _portrait_identity_metric_requested(metadata) and _truthy(metadata.get("require_real_images")) else 1
+        payload: dict[str, Any] | None = None
+        provider_error: VisionInspectionProviderError | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                payload = provider.inspect(resolution, metadata=metadata)
+                break
+            except VisionInspectionProviderUnavailable:
+                return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
+            except VisionInspectionProviderError as exc:
+                provider_error = exc
+                if attempt < max_attempts:
+                    time.sleep(float(attempt * 2))
+        if payload is None:
             return self._manual_report(
                 resolution,
                 "provider_error",
                 metadata,
                 mode=mode,
-                evidence_extra={"provider_error": str(exc)[:240]},
+                evidence_extra={
+                    "provider_error": str(provider_error)[:240] if provider_error is not None else "unknown",
+                    "provider_review_attempts": max_attempts,
+                },
             )
         return self._from_provider_payload(
             resolution,

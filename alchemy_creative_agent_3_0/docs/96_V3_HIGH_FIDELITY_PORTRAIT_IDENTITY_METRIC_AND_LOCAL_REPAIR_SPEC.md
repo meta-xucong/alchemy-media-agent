@@ -693,10 +693,10 @@ One exception is a strictly bounded identity closeout after an already executed
 whole-image retry. It is allowed only when all conditions are true:
 
 ```text
-fused identity is >= 0.76 and < 0.82
+fused identity is >= 0.72 and < 0.82
 objective identity is >= 0.82
 geometry relationship is >= 0.80
-prompt-owned channel score is >= 0.65
+prompt-owned channel score is >= 0.60
 human realism is >= 0.65
 commercial finish is >= 0.70
 no text, watermark, body, policy, scene, wardrobe, camera, or whole-style blocker exists
@@ -708,6 +708,13 @@ It is one additional provider call, not another generic retry loop. Delivery
 accepts it only when identity crosses 0.82 or improves by at least 0.06 and no
 prompt, realism, or commercial score drops by more than 0.03. Otherwise the
 previous reviewed output remains final.
+
+For real reference-conditioned portrait work, multimodal visual review itself
+may retry up to three times after transient provider errors, with short bounded
+backoff. This is review-only: it does not create image outputs or consume the
+image retry budget. Configuration/unavailable states do not retry. If all three
+review attempts fail, objective identity evidence is still recorded and the
+candidate remains manual-review-only.
 
 These corrections stay inside the existing evidence, review, and reviewed
 delivery children of the Visual Capability Cluster. No template-specific or

@@ -16,6 +16,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     VisionOutputInspector,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import _calibrate_sface_cosine
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import VisionInspectionProviderError
 
 
 def test_doc96_identity_truth_requests_high_input_fidelity() -> None:
@@ -115,6 +116,27 @@ class _UnavailableVisionProvider:
         return False
 
 
+class _FlakyVisionProvider(_StaticVisionProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def inspect(self, resolution, *, metadata=None):
+        self.calls += 1
+        if self.calls < 3:
+            raise VisionInspectionProviderError("temporary reviewer failure")
+        return {
+            "status": "pass",
+            "confidence": 0.90,
+            "issue_codes": [],
+            "scores": {
+                "same_person_readability": 0.84,
+                "prompt_owned_channel_obedience": 0.88,
+                "human_realism": 0.82,
+                "commercial_finish": 0.86,
+            },
+        }
+
+
 def _identity_review_metadata(reference_path: Path) -> dict:
     return {
         "enable_real_vision_inspection": True,
@@ -199,6 +221,28 @@ def test_doc96_objective_identity_survives_multimodal_reviewer_outage(tmp_path) 
     assert report.score_card["objective_identity_metric"] == 0.88
     assert report.score_card["same_person_readability"] >= 0.86
     assert report.evidence["identity_review_fusion"]["hard_gate_passed"] is True
+
+
+def test_doc96_reference_conditioned_review_retries_transient_provider_error(tmp_path, monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import vision_inspector as inspector_module
+
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    provider = _FlakyVisionProvider()
+    inspector = VisionOutputInspector(
+        vision_provider=provider,
+        identity_metric_provider=_StaticIdentityMetric(0.88, 0.86),
+    )
+    metadata = {**_identity_review_metadata(reference), "require_real_images": True}
+    monkeypatch.setattr(inspector_module.time, "sleep", lambda _seconds: None)
+
+    report = inspector.inspect(_resolution(output), metadata=metadata)
+
+    assert provider.calls == 3
+    assert report.status == "pass"
+    assert report.score_card["same_person_readability"] >= 0.82
 
 
 def test_doc96_local_repair_metadata_uses_failed_output_and_mask(tmp_path) -> None:

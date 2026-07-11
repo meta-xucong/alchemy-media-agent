@@ -1223,7 +1223,7 @@ class V3ProductApiService:
             fusion = evidence.get("identity_review_fusion") if isinstance(evidence.get("identity_review_fusion"), dict) else {}
             metric = evidence.get("identity_metric") if isinstance(evidence.get("identity_metric"), dict) else {}
             fused_score = self._safe_score(fusion.get("fused_identity_score"))
-            lower_bound = 0.76 if post_retry_closeout else 0.72
+            lower_bound = 0.72
             if fused_score is None or not lower_bound <= fused_score < 0.82:
                 continue
             score_card = inspection.get("score_card") if isinstance(inspection.get("score_card"), dict) else {}
@@ -1255,7 +1255,7 @@ class V3ProductApiService:
                 local_repair_blockers.discard("source_makeup_overinherited")
             if detected_codes.intersection(local_repair_blockers):
                 continue
-            prompt_floor = 0.65 if post_retry_closeout else 0.75
+            prompt_floor = 0.60 if post_retry_closeout else 0.75
             if (self._safe_score(score_card.get("prompt_owned_channel_obedience")) or 0.0) < prompt_floor:
                 continue
             if (self._safe_score(score_card.get("commercial_finish")) or 0.0) < 0.70:
