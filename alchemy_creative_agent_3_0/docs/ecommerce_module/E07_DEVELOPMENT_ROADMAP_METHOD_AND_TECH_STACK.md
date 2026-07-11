@@ -57,6 +57,10 @@ Implement the beginner-facing E-Commerce workspace and per-slot continuation.
 Run a fixture matrix with real product images, inspect final files, verify
 provider behavior, and pass the template activation gate.
 
+E7 is a coordinated integration phase. It requires the Doc103 foundation gates
+for enforced activation runtime, real provider/review, and General project
+continuation; it is not part of this branch's isolated implementation scope.
+
 ## Recommended technology stack
 
 | Concern | Existing/recommended choice |

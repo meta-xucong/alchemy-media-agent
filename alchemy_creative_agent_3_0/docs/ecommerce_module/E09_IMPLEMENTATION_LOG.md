@@ -75,6 +75,32 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E9 — safe parallel-work boundary audit
+
+Status: complete after rebase onto `origin/main` at Doc103.
+
+Independent work completed on this branch:
+
+- platform/category planning profiles and recipe metadata;
+- locale/copy/claim review metadata;
+- category evidence and suite-differentiation review;
+- export lineage and publish-check summaries;
+- E-Commerce-only focused tests and documentation.
+
+Work intentionally deferred to coordinated integration:
+
+- frozen activation-plan enforcement, provider contribution consumption, and
+  shared visual review/retry behavior;
+- OCR or final typography renderer integration;
+- Project Mode/public API schema changes and E-Commerce workspace UI;
+- real-provider product fixtures, visual manual review, and browser continuity;
+- production template activation.
+
+The current upstream authority is
+`docs/103_V3_ECOMMERCE_DEVELOPMENT_ENTRY_AND_RUNTIME_GOVERNANCE_CLOSURE_SPEC.md`.
+It confirms that the deferred items require the shared foundation gates rather
+than additional isolated template-local code.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

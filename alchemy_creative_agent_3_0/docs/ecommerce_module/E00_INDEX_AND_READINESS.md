@@ -49,6 +49,11 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
 
+Current upstream coordination authority: V3 Doc103. It permits this isolated
+module work, while reserving frozen capability-plan runtime closure, live
+provider acceptance, General browser continuation, and production template
+activation for the shared foundation integration gates.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:

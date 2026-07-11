@@ -17,6 +17,12 @@ Project
 The E-Commerce module is a specialized policy and deliverable layer. It does
 not call providers directly and does not fork the central runtime.
 
+Doc103 is the integration gate authority after this package is rebased onto the
+current foundation: every production E-Commerce job must retain the frozen
+capability activation plan supplied by the shared runtime. This module may
+configure E-Commerce-owned profiles and recipes, but may not alter activation,
+provider, shared review, or retry semantics.
+
 ## Existing code ownership
 
 | Existing location | E-Commerce responsibility |
