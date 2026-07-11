@@ -390,3 +390,7 @@ Doc98 visual validation is complete only after a real external identity backend
 is configured and passes the A/B quality gate. With no GPU sidecar endpoint,
 V3 remains on its current provider and this document makes no image-quality gain
 claim.
+
+Doc99 now defines the independently deployable ComfyUI gateway, workflow and
+license capability gates, request isolation, and fixed acceptance matrix. Doc98
+remains authoritative for V3-side routing and fallback.
