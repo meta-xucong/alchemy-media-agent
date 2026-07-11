@@ -550,6 +550,10 @@ General Template remains broad and scenario-neutral. Specialized templates own
 professional deliverable maps, capability profiles, and domain acceptance
 criteria.
 
+Doc102 is the implementation companion. Its shadow-plan, frozen-plan,
+contribution-composer, review isolation, compatibility, and rollout gates must
+be completed before Doc101 may be marked implemented.
+
 ## 23. Strategic Reminder
 
 Do not build a Lovart clone.

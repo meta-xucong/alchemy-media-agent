@@ -1079,6 +1079,10 @@ document 101 capability activation governance is implemented before adding more
 shared visual plugins: Central Brain emits task/activation intent, the planner
 validates a frozen plan, inactive modules cannot leak, and specialized templates
 configure reusable capability profiles instead of duplicating modules
+document 102 runtime migration is completed phase by phase: shadow planning,
+manifest catalog, template policy, Brain activation checkpoint, frozen runtime
+plan, selective Visual Cluster execution, contribution composition, provider
+isolation, review/retry alignment, compatibility, and enforced rollout
 ```
 
 ## 17. Strategic Reminder

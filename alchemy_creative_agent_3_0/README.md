@@ -264,6 +264,10 @@ Visual Capability Cluster validates one frozen activation plan, and only active
 plugins may contribute to generation, review, retry, or memory. General Template
 stays broad while specialized templates configure deeper reusable profiles and
 own professional deliverable maps.
+Document 102 is the implementation companion: it maps the current ScenarioRuntime,
+Brain, registry, Visual Cluster, template manifest, provider, review, retry, and
+Project persistence code into a staged shadow-to-enforced migration with exact
+tests, rollback gates, and reversible commit boundaries.
 E-Commerce is now unfrozen only
 inside Project Mode through document 42; future templates still require their
 own accepted specs, registry activation, and document 43 quality gate checks.
@@ -460,6 +464,7 @@ Document 97: current subject-continuity asset-pack and adaptive-reference author
 Documents 98-99: isolated research records only. The identity sidecar and ComfyUI gateway are not production V3 providers and cannot create or modify user-delivered final images.
 Document 100: current production rendering authority. GPT Image 2 API is the sole final-pixel renderer; V3 improves quality through structured reasoning, ranked references, real review, bounded issue-specific whole-image rerender, and best-reviewed-result retention.
 Document 101: current planned capability activation and visual-plugin extensibility authority. Registered does not mean enabled; Central Brain proposes capabilities, the shared planner validates manifests/evidence/dependencies/conflicts, and inactive plugins contribute nothing. Runtime migration remains pending until its acceptance tests pass.
+Document 102: current file-level implementation and rollout authority for Doc101. It requires contracts first, shadow activation before prompt changes, frozen per-job plans, selective plugin execution, composed provider input, review/retry isolation, historical compatibility, and phased enforcement.
 V3.8 Project Mode: current accepted architecture.
 General Template: first active project template.
 E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.

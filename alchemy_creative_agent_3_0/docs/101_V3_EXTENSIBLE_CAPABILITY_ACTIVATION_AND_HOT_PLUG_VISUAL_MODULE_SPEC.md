@@ -5,6 +5,11 @@ governance and implementation instructions only; selective runtime execution is
 not considered complete until the migration and acceptance tests in this
 document are implemented.
 
+Implementation companion: Doc102 is authoritative for file-level migration
+order, feature flags, compatibility handling, test files, rollout gates, and
+commit boundaries. Doc101 remains authoritative for the target contracts and
+governance outcome.
+
 ## 1. Purpose
 
 Doc101 is the current authority for deciding which reusable visual capabilities
@@ -633,6 +638,10 @@ Do not show capability IDs, manifests, dependency graphs, confidence scores,
 provider internals, or engineering issue codes to beginner users.
 
 ## 18. Migration From Current Visual Cluster
+
+Doc102 expands this section into the executable code plan. If implementation
+ordering or file placement here is less specific, follow Doc102 without changing
+the Doc101 target architecture.
 
 This is an incremental refactor, not a rewrite.
 
