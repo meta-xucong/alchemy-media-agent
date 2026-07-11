@@ -36,3 +36,40 @@ def test_enforced_vision_prompt_uses_active_review_vocabulary(monkeypatch) -> No
     assert "product_identity_drift" in prompt
     assert "ai_face_render" not in prompt
     assert "identity_consistency" not in prompt
+
+
+def test_reference_policy_registers_prompt_ownership_review_and_retry_codes(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create a real portrait of the same woman with black hair in a new cool studio scene",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [{"asset_id": "face", "role": "face_reference"}],
+            "metadata": {
+                "requested_image_count": 1,
+                "project_context_snapshot": {
+                    "project_id": "project_reference_review",
+                    "template_id": "general_template",
+                    "selected_reference_assets": [
+                        {
+                            "asset_ref_id": "face",
+                            "asset_id": "face",
+                            "source_type": "uploaded",
+                            "role": "face_reference",
+                            "use_policy": "identity",
+                        }
+                    ],
+                },
+            },
+        }
+    ).planning_result
+
+    contract = active_review_contract(dict(result.metadata))
+    prompt = _inspection_prompt(dict(result.metadata))
+
+    assert contract["enforced"] is True
+    assert "reference_channel_policy" in contract["review_capability_sources"]
+    assert "source_hair_overinherited" in contract["issue_codes"]
+    assert "prompt_owned_channel_ignored" in contract["issue_codes"]
+    assert "source_hair_overinherited" in prompt

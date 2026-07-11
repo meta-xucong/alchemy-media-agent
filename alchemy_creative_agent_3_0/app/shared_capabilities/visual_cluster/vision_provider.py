@@ -111,8 +111,12 @@ class OpenAIVisionInspectionProvider:
             text = getattr(response, "output_text", None) or _response_text_from_openai(response)
             if text:
                 return text
-        except Exception:
-            pass
+        except Exception as exc:
+            # A protocol fallback is useful for gateways that reject Responses,
+            # but retrying the same timed-out request through Chat doubles the
+            # blocking window without adding a new upstream route.
+            if _is_timeout_error(exc):
+                raise
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -167,6 +171,12 @@ class OpenAIVisionInspectionProvider:
             return float(os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90"))
         except ValueError:
             return 90.0
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).strip().lower()
+    return "timeout" in name or "timed out" in text or "time-out" in text
 
 
 def create_default_vision_provider() -> VisionInspectionProvider:

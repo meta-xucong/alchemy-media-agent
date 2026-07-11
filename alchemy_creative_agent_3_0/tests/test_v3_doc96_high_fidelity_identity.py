@@ -236,7 +236,11 @@ def test_doc96_reference_conditioned_review_retries_transient_provider_error(tmp
         vision_provider=provider,
         identity_metric_provider=_StaticIdentityMetric(0.88, 0.86),
     )
-    metadata = {**_identity_review_metadata(reference), "require_real_images": True}
+    metadata = {
+        **_identity_review_metadata(reference),
+        "require_real_images": True,
+        "vision_inspection_max_attempts": 3,
+    }
     monkeypatch.setattr(inspector_module.time, "sleep", lambda _seconds: None)
 
     report = inspector.inspect(_resolution(output), metadata=metadata)

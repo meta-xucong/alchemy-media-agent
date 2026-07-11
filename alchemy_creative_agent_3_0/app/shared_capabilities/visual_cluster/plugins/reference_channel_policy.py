@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .base import BaseVisualCapabilityPlugin, VisualPluginContext, as_dict, string_list
+from ..reference_channel_policy import REFERENCE_CHANNEL_ISSUE_CODES
 
 
 class ReferenceChannelPolicyPlugin(BaseVisualCapabilityPlugin):
@@ -10,10 +11,23 @@ class ReferenceChannelPolicyPlugin(BaseVisualCapabilityPlugin):
         package = as_dict(context.cluster.get("resolved_reference_policy_package"))
         if not package.get("applies"):
             return self.contribution(context)
+        issues = sorted(REFERENCE_CHANNEL_ISSUE_CODES)
         return self.contribution(
             context,
             prompt=string_list(package.get("provider_prompt_rules")),
             negative=string_list(package.get("provider_negative_rules")),
             provider_requirements=[{"type": "resolved_reference_policy", "package_id": package.get("package_id")}],
-            stages=["reference_policy", "generation_prompt", "negative_prompt", "provider_input_plan"],
+            review={
+                "issue_codes": issues,
+                "score_dimensions": ["reference_channel_fidelity", "prompt_ownership"],
+            },
+            retry={"issue_codes": issues, "require_reference_image": True},
+            stages=[
+                "reference_policy",
+                "generation_prompt",
+                "negative_prompt",
+                "provider_input_plan",
+                "post_generation_review",
+                "retry_patch",
+            ],
         )

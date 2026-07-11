@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -317,7 +318,7 @@ class VisionOutputInspector:
         provider = self._provider()
         if provider is None or not provider.available(force=True):
             return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
-        max_attempts = 3 if _portrait_identity_metric_requested(metadata) and _truthy(metadata.get("require_real_images")) else 1
+        max_attempts = _vision_provider_attempt_limit(metadata)
         payload: dict[str, Any] | None = None
         provider_error: VisionInspectionProviderError | None = None
         for attempt in range(1, max_attempts + 1):
@@ -1476,6 +1477,18 @@ def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:
             if any(term in text for term in ("portrait", "identity", "face", "person")):
                 return True
     return False
+
+
+def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
+    identity_critical = _portrait_identity_metric_requested(metadata) and _truthy(metadata.get("require_real_images"))
+    default = 2 if identity_critical else 1
+    raw = metadata.get("vision_inspection_max_attempts") or os.getenv("V3_VISION_INSPECTION_MAX_ATTEMPTS")
+    if raw is None:
+        return default
+    try:
+        return max(1, min(3, int(raw)))
+    except (TypeError, ValueError):
+        return default
 
 
 def _string_list(value: Any) -> list[str]:

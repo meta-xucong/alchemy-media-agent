@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from pydantic import ValidationError
+
 from .context_digest import (
     as_dict,
     clean_text,
@@ -60,7 +62,7 @@ class V3LLMBrainAdapter:
                 "remote_provider_available": True,
             }
             return result
-        except (BrainProviderError, BrainProviderUnavailable) as exc:
+        except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
             fallback.warnings.append(str(exc))
             fallback.audit = {**fallback.audit, "remote_provider_error": str(exc)[:260]}
             return fallback
@@ -141,6 +143,7 @@ class V3LLMBrainAdapter:
 
     def _merge_remote_result(self, fallback: BrainRunResult, data: dict[str, Any]) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
+        rejected_sections: list[str] = []
         for key in [
             "intent_summary",
             "project_memory_digest",
@@ -152,11 +155,27 @@ class V3LLMBrainAdapter:
             "capability_activation_intent",
         ]:
             if isinstance(data.get(key), dict):
-                payload[key] = _merge_dict(payload.get(key, {}), data[key])
+                candidate = _merge_dict(payload.get(key, {}), data[key])
+                payload, accepted = _merge_validated_section(payload, key, candidate)
+                if not accepted:
+                    rejected_sections.append(key)
         if isinstance(data.get("checkpoints"), list):
-            payload["checkpoints"] = _merge_checkpoints(payload.get("checkpoints", []), data["checkpoints"])
+            candidate = _merge_checkpoints(payload.get("checkpoints", []), data["checkpoints"])
+            payload, accepted = _merge_validated_section(payload, "checkpoints", candidate)
+            if not accepted:
+                rejected_sections.append("checkpoints")
         if isinstance(data.get("warnings"), list):
             payload["warnings"] = [str(item) for item in data["warnings"] if str(item).strip()]
+        if rejected_sections:
+            payload["warnings"] = [
+                *list(payload.get("warnings") or []),
+                "Remote Brain returned incompatible structured fields; V3 kept deterministic safe values for those sections.",
+            ]
+            payload["audit"] = {
+                **dict(payload.get("audit") or {}),
+                "remote_contract_partial_fallback": True,
+                "remote_contract_rejected_sections": rejected_sections,
+            }
         return BrainRunResult.model_validate(payload)
 
 
@@ -193,6 +212,23 @@ def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
         if value is not None and value != "" and value != [] and value != {}:
             merged[key] = value
     return merged
+
+
+def _merge_validated_section(
+    payload: dict[str, Any],
+    key: str,
+    candidate: Any,
+) -> tuple[dict[str, Any], bool]:
+    """Accept one remote section only when the complete Brain contract remains valid."""
+
+    probe = dict(payload)
+    probe[key] = candidate
+    try:
+        validated = BrainRunResult.model_validate(probe).model_dump(mode="json")
+    except ValidationError:
+        return payload, False
+    payload[key] = validated[key]
+    return payload, True
 
 
 def _merge_checkpoints(base: list[Any], patch: list[Any]) -> list[dict[str, Any]]:

@@ -8,6 +8,10 @@ from alchemy_creative_agent_3_0.app.product_api.output_resolver import Generated
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    VisionInspectionProviderError,
+    _is_timeout_error,
+)
 
 
 def _png_base64(width: int = 96, height: int = 72) -> str:
@@ -353,6 +357,48 @@ def test_vision_inspector_provider_unavailable_becomes_manual_review(tmp_path) -
     assert report.status == "manual_review"
     assert report.retryable is False
     assert report.detected_issues[0]["code"] == "vision_provider_unavailable"
+
+
+def test_identity_vision_provider_failures_use_bounded_default_attempts(tmp_path, monkeypatch) -> None:
+    class FailingVisionProvider:
+        provider_name = "failing_vision"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            self.calls += 1
+            raise VisionInspectionProviderError("Request timed out.")
+
+    monkeypatch.delenv("V3_VISION_INSPECTION_MAX_ATTEMPTS", raising=False)
+    monkeypatch.setattr(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
+        lambda _seconds: None,
+    )
+    provider = FailingVisionProvider()
+    inspector = VisionOutputInspector(vision_provider=provider)
+
+    report = inspector.inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "vision_inspection_mode": "hybrid",
+            "require_real_images": True,
+            "uploaded_assets": [{"asset_id": "face", "role": "face_reference"}],
+        },
+    )
+
+    assert provider.calls == 2
+    assert report.status == "manual_review"
+    assert report.evidence["provider_review_attempts"] == 2
+
+
+def test_vision_timeout_detection_covers_sdk_and_gateway_messages() -> None:
+    assert _is_timeout_error(TimeoutError("request stalled")) is True
+    assert _is_timeout_error(RuntimeError("Request timed out.")) is True
+    assert _is_timeout_error(RuntimeError("unsupported endpoint")) is False
 
 
 def test_vision_inspector_real_provider_low_confidence_does_not_retry(tmp_path) -> None:

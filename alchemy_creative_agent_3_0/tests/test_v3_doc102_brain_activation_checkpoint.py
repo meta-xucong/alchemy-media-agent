@@ -20,6 +20,60 @@ def test_fallback_brain_always_emits_task_profile_and_intent(monkeypatch) -> Non
     assert any(item.checkpoint_id == "task_profile_and_capability_activation" for item in result.checkpoints)
 
 
+def test_remote_brain_keeps_safe_activation_contract_when_structured_sections_are_malformed(monkeypatch) -> None:
+    class MalformedStructuredProvider:
+        provider = "openai"
+        model = "remote-structured-test"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            return {
+                "prompt_guidance": {
+                    "optimized_direction": "remote refined ancient portrait direction",
+                },
+                "visual_task_profile": {
+                    "preservation_targets": ["same-person facial geometry"],
+                    "evidence": ["E_USER_PROMPT", "E_UPLOADED_REFERENCE"],
+                },
+                "capability_activation_intent": {
+                    "rejected_capabilities": [
+                        {
+                            "capability_id": "product_identity",
+                            "evidence_ids": ["E_USER_PROMPT"],
+                        }
+                    ]
+                },
+            }
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(provider=MalformedStructuredProvider())
+    request = adapter.build_request(
+        user_input="Create a realistic woman portrait from the supplied face reference",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={"requested_image_count": 1, "require_real_images": True},
+        uploaded_assets=[{"asset_id": "face", "role": "face_reference"}],
+    )
+
+    result = adapter.run(request)
+
+    assert result.llm_used is True
+    assert result.prompt_guidance.optimized_direction == "remote refined ancient portrait direction"
+    assert result.visual_task_profile.preservation_targets
+    assert all(target.target_id for target in result.visual_task_profile.preservation_targets)
+    requested = {item.capability_id for item in result.capability_activation_intent.requested_capabilities}
+    assert {"human_realism", "portrait_identity"} <= requested
+    assert result.audit["remote_contract_partial_fallback"] is True
+    assert result.audit["remote_contract_rejected_sections"] == [
+        "visual_task_profile",
+        "capability_activation_intent",
+    ]
+
+
 def test_ecommerce_brain_runs_only_with_trusted_policy(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     adapter = V3LLMBrainAdapter()
