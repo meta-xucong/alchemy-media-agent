@@ -211,6 +211,34 @@ JavaScript syntax: passed
 Integration dependency: none. This is a display-only confirmation of existing
 planner output and introduces no shared contract or routing change.
 
+## E14 — visible suite-scope choice and confirmation
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added an E-Commerce-only suite-scope choice for the existing slot request:
+  recommended-by-preset, core listing, complete listing, or detail/scene
+  supplementation.
+- The choice maps only to the existing `suite_slot_request` and commerce
+  profile metadata. It does not add a Project Mode schema field, alter
+  provider behavior, or expose controls in the General Template.
+- The selected scope is retained in the existing job metadata and shown in the
+  compact E-Commerce run summary, so a user can confirm the requested package
+  before interpreting planned slots or export checks.
+
+Verification:
+
+```text
+Project Mode E-Commerce focused tests: 15 passed
+full V3 tests: 511 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: none. The existing namespaced request and metadata
+surfaces are used without expanding the public contract.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

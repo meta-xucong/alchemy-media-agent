@@ -587,6 +587,7 @@ const els = {
   v3EcommercePlatformInput: document.querySelector("#v3EcommercePlatformInput"),
   v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput"),
   v3EcommerceMarketInput: document.querySelector("#v3EcommerceMarketInput"),
+  v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
   v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
@@ -4808,7 +4809,36 @@ function v3ProjectHasProductReference(project) {
   return hasProductReference || uploadedRefs.some((item) => item?.asset_id);
 }
 
-function v3SuiteSlotRequestForPreset(presetId) {
+function v3EcommerceSuiteScopeValue() {
+  const value = (els.v3EcommerceSuiteScopeInput?.value || "recommended").trim();
+  return ["recommended", "listing_core", "listing_full", "detail_supplement"].includes(value) ? value : "recommended";
+}
+
+function v3EcommerceSuiteScopeLabel(scopeId, presetId = v3State.selectedPreset) {
+  const labels = {
+    listing_core: "基础上架图",
+    listing_full: "完整上架套图",
+    detail_supplement: "补齐详情和场景图",
+  };
+  if (scopeId !== "recommended") return labels[scopeId] || "已选套图范围";
+  const presetLabels = {
+    one_click_product_set: "一键电商套图",
+    marketplace_listing_set: "平台上架套图",
+    style_recreation_set: "参考风格复用套图",
+  };
+  return presetLabels[presetId] || "当前快速目标推荐的套图";
+}
+
+function v3SuiteSlotRequestForPreset(presetId, scopeId = v3EcommerceSuiteScopeValue()) {
+  if (scopeId === "listing_core") {
+    return ["main_image", "feature_image_1", "scenario_image", "detail_image"];
+  }
+  if (scopeId === "listing_full") {
+    return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "trust_comparison_image"];
+  }
+  if (scopeId === "detail_supplement") {
+    return ["feature_image_2", "scenario_image", "detail_image"];
+  }
   if (presetId === "style_recreation_set") {
     return ["main_image", "feature_image_1", "scenario_image", "detail_image"];
   }
@@ -4821,6 +4851,7 @@ function v3SuiteSlotRequestForPreset(presetId) {
 function v3EcommerceProfilePatch() {
   const keywordItems = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
   const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
+  const suiteScope = v3EcommerceSuiteScopeValue();
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
     product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
@@ -4832,7 +4863,11 @@ function v3EcommerceProfilePatch() {
     keyword_roots: keywordItems,
     keywords: keywordItems,
     competitor_notes: v3CsvList(els.v3EcommerceCompetitorInput?.value || ""),
-    suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset),
+    suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset, suiteScope),
+    metadata: {
+      suite_scope: suiteScope,
+      suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
+    },
   };
 }
 
@@ -4954,6 +4989,7 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
   const advancedReferenceControls = v3AdvancedReferenceControlsPayloadForScenario(scenarioId);
+  const ecommerceSuiteScope = scenarioId === "ecommerce" ? v3EcommerceSuiteScopeValue() : "";
   const payload = {
     user_input: userInput,
     template_id: templateId,
@@ -4979,6 +5015,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       requested_aspect_label: generationSettings.sizeLabel,
       has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,
       ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
+      ecommerce_suite_scope: ecommerceSuiteScope || undefined,
+      ecommerce_suite_scope_label: ecommerceSuiteScope ? v3EcommerceSuiteScopeLabel(ecommerceSuiteScope) : undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -5268,6 +5306,7 @@ function resetV3Workspace() {
   if (els.v3EcommercePlatformInput) els.v3EcommercePlatformInput.value = "generic";
   if (els.v3EcommerceCategoryInput) els.v3EcommerceCategoryInput.value = "";
   if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
+  if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
   if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
@@ -5495,7 +5534,7 @@ function renderV3Job(job) {
   renderV3ProjectNextActions();
   const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
   if (job?.ecommerce || scenarioId === "ecommerce") {
-    renderV3EcommerceSummary(job?.ecommerce || null);
+    renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata);
   } else {
     renderV3GeneralSummary(job?.general_creative || null);
   }
@@ -5537,15 +5576,18 @@ function v3EcommerceCategoryLabel(categoryId) {
   return labels[category] || category;
 }
 
-function renderV3EcommerceSummary(summary) {
+function renderV3EcommerceSummary(summary, metadata = null) {
   const categoryId = (Array.isArray(summary?.image_recipes) ? summary.image_recipes : [])
     .map((recipe) => recipe?.metadata?.category_id)
     .find((category) => category && category !== "generic_product") || summary?.product_truth?.product_category;
   const categoryLabel = v3EcommerceCategoryLabel(categoryId);
+  const suiteScope = String(metadata?.ecommerce_suite_scope || "").trim();
+  const suiteScopeLabel = suiteScope ? v3EcommerceSuiteScopeLabel(suiteScope, metadata?.selected_preset_id) : "";
   const entries = [
     "已识别商品主体和必须保留的信息",
     ...(summary?.platform ? [`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`] : []),
     ...(categoryLabel ? [`已按 ${categoryLabel} 类目安排展示证据和套图顺序`] : []),
+    ...(suiteScopeLabel ? [`本次选择 ${suiteScopeLabel}`] : []),
     "已把套图拆成主图、卖点图、场景图和信任图",
     "已为每张图安排不同用途",
     "已避免乱加文字、徽章和未经确认的宣传说法",

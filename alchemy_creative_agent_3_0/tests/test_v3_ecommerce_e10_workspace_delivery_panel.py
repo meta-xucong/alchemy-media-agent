@@ -61,3 +61,23 @@ def test_ecommerce_workspace_exposes_category_choice_to_the_existing_profile_pat
     assert "recipe?.metadata?.category_id" in script
     assert "v3EcommerceCategoryLabel(categoryId)" in script
     assert script.index("...(summary?.platform") < script.index("const sellingPoints")
+
+
+def test_ecommerce_workspace_exposes_suite_scope_without_a_new_project_contract() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommerceSuiteScopeInput"' in html
+    assert 'option value="listing_core"' in html
+    assert 'option value="listing_full"' in html
+    assert 'option value="detail_supplement"' in html
+    assert 'v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput")' in script
+    assert 'function v3EcommerceSuiteScopeValue()' in script
+    assert 'function v3EcommerceSuiteScopeLabel(scopeId' in script
+    assert 'if (scopeId === "listing_core")' in script
+    assert 'if (scopeId === "listing_full")' in script
+    assert 'if (scopeId === "detail_supplement")' in script
+    assert 'suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset, suiteScope)' in script
+    assert 'ecommerce_suite_scope: ecommerceSuiteScope || undefined' in script
+    assert 'renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata)' in script
+    assert 'els.v3EcommerceSuiteScopeInput.value = "recommended"' in script
