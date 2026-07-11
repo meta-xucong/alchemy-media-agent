@@ -540,4 +540,12 @@ Build a simpler, vertical, agentic commercial image production system that absor
 - reusable brand memory
 - future vertical industry agent packs
 
+## Specialized module documentation
+
+The E-Commerce module preparation documents live under
+`docs/ecommerce_module/` and are indexed by
+`E00_INDEX_AND_READINESS.md`. Professional modules use independent document
+number families, isolated worktrees/branches, and their own activation gates;
+they do not replace or renumber the shared V3 foundation documents.
+
 The product should be easier than Lovart for non-design users because the user does not need to operate a design workflow. The AI agents should operate the workflow internally.

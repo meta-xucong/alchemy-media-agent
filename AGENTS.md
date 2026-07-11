@@ -52,6 +52,38 @@ Professional deliverables are template-specific.
 General Template is not the place for every vertical's suite director.
 ```
 
+## Specialized Module Documentation Isolation Rule
+
+When preparing or implementing a V3 professional module such as E-Commerce,
+Photography, Brand, or New Media:
+
+1. Use a dedicated feature branch and isolated worktree based on the latest
+   `origin/main`.
+2. Store the module's planning, contracts, roadmap, UI, test, and acceptance
+   documents under a module-specific directory with an independent document
+   number family, such as `docs/ecommerce_module/E00...`.
+3. Treat the module document index as the preparation authority for that module;
+   it must identify upstream foundation authorities and explicit conflicts.
+4. Do not modify General Template, Central Brain, shared capability behavior,
+   provider behavior, or public contracts from a module document-only milestone.
+5. If a shared contract or public interface must change, record the compatibility
+   impact, migration path, and isolation tests before implementation.
+6. A professional module may become active only after its own document family,
+   focused tests, UI acceptance, real-output review, and template activation
+   gate pass.
+7. Platform and category policies must be versioned data/configuration with
+   source and review metadata; they must not be treated as permanent universal
+   visual rules.
+8. General Template may support light product-related imagery, but must not load
+   the specialized module's suite roles, platform rules, or export package.
+
+Short form:
+
+```text
+One professional module, one isolated branch/worktree, one document family,
+one activation gate; shared quality stays shared and General stays neutral.
+```
+
 ## V2 Template Lock Principle
 
 When developing Custom Media Agent 2.0, preserve this rule:
