@@ -326,6 +326,14 @@ left unexplained.
 Pass only when the Section 8 path is recorded against a live General project
 and its restored state is correct.
 
+Current preflight evidence: a browser-driven General project can be created in
+isolated local storage, opened into its compose workspace, returned to its
+project detail, reopened from the project list, and navigated back to the V3
+home. The home control is an explicit route link so it remains reliable even
+when transient workspace state is being cleared. The final select, reject,
+upload, and continuation-after-real-render steps remain pending Gate C because
+they require a real provider output rather than a fabricated browser fixture.
+
 ### Gate E: E-Commerce Template Activation
 
 The E-Commerce Template may be presented as production-ready only when Gates A

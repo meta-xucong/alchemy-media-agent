@@ -90,6 +90,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "返回项目主页" in index.text
     assert "上传商品图，一键生成套图" not in index.text
     assert "返回 V3 首页" in index.text
+    assert 'id="v3BackHomeBtn" class="button compact ghost" href="/creative-agent-v3" data-v3-route-link' in index.text
     assert "生成一组图片" in index.text
     assert 'id="v3CountInput"' in index.text
     assert 'id="v3CountValue"' in index.text
