@@ -5531,6 +5531,9 @@ function renderV3EcommerceSummary(summary) {
   if (sellingPoints.length) entries.push(`重点卖点：${sellingPoints.join(" / ")}`);
   const trustDrivers = Array.isArray(summary?.trust_drivers) ? summary.trust_drivers.filter(Boolean).slice(0, 2) : [];
   if (trustDrivers.length) entries.push(`已考虑信任背书：${trustDrivers.join(" / ")}`);
+  if (summary?.platform) {
+    entries.push(`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`);
+  }
   renderV3OutcomeItems(entries);
   renderV3ClosureChecks([]);
   renderV3Warnings(summary?.warnings || []);
@@ -5602,9 +5605,13 @@ function renderV3EcommercePlanList(summary) {
     row.className = "v3-commerce-plan-row";
     const slotLabel = v3EcommerceSlotLabel(recipe.slot || "") || `套图 ${index + 1}`;
     const purpose = recipe.selling_point || v3CommercePurposeLabel(recipe.business_goal) || recipe.visual_scene || "用于展示商品卖点";
+    const evidence = Array.isArray(recipe?.metadata?.category_evidence_targets)
+      ? recipe.metadata.category_evidence_targets.filter(Boolean).join(" / ")
+      : "";
     row.innerHTML = `
       <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
+      ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
     `;
     els.v3EcommercePlanList.appendChild(row);
   });
@@ -5613,7 +5620,47 @@ function renderV3EcommercePlanList(summary) {
 function renderV3EcommerceExportList(summary) {
   if (!els.v3EcommerceExportList) return;
   els.v3EcommerceExportList.innerHTML = "";
-  els.v3EcommerceExportList.hidden = true;
+  const exportPackage = summary?.export_package || {};
+  const files = Array.isArray(exportPackage.files) ? exportPackage.files : [];
+  const metadata = exportPackage.metadata || {};
+  const checks = Array.isArray(metadata.publish_checks) ? metadata.publish_checks : [];
+  if (!files.length && !checks.length) {
+    els.v3EcommerceExportList.hidden = true;
+    return;
+  }
+  els.v3EcommerceExportList.hidden = false;
+  const platform = summary?.platform || exportPackage.platform || "当前平台";
+  const market = summary?.market || exportPackage.market || "";
+  const profile = metadata.marketplace_profile_version ? `规则版本 ${metadata.marketplace_profile_version}` : "规则版本待确认";
+  const attention = checks.filter((check) => check?.status === "attention");
+  const fileRows = files.slice(0, 6).map((file, index) => {
+    const slotLabel = v3EcommerceSlotLabel(file.slot || "") || `套图 ${index + 1}`;
+    const copyState = file.claim_review_required
+      ? "文案需核验"
+      : file.copy_review_required
+        ? "语言需复核"
+        : "文案已规划";
+    return `
+      <div class="v3-commerce-export-row">
+        <strong>${escapeHtml(slotLabel)}</strong>
+        <span>${escapeHtml(file.dimension_hint || "尺寸待确认")} · ${escapeHtml(copyState)}</span>
+      </div>
+    `;
+  });
+  const checkRows = attention.slice(0, 4).map((check) => `
+    <div class="v3-commerce-export-row">
+      <strong>发布前检查</strong>
+      <span>${escapeHtml(check.message || "请检查商品细节和平台适配")}</span>
+    </div>
+  `);
+  els.v3EcommerceExportList.innerHTML = `
+    <div class="v3-commerce-export-row">
+      <strong>导出准备 · ${escapeHtml(platform)}${market ? ` / ${escapeHtml(market)}` : ""}</strong>
+      <span>${escapeHtml(metadata.publish_summary || `${files.length} 张套图已规划`)} · ${escapeHtml(profile)}</span>
+    </div>
+    ${fileRows.join("")}
+    ${checkRows.join("")}
+  `;
 }
 
 function renderV3ClosureChecks(checks) {

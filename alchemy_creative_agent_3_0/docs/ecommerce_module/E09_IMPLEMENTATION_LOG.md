@@ -101,6 +101,32 @@ The current upstream authority is
 It confirms that the deferred items require the shared foundation gates rather
 than additional isolated template-local code.
 
+## E10 — E-Commerce workspace delivery panel
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added Ozon and Pinduoduo to the E-Commerce platform selector.
+- The E-Commerce workspace now renders planned slot purpose and category
+  evidence, rather than only the generic suite label.
+- It renders export preparation, profile version, per-slot copy review state,
+  and the concise publish-check list already returned by the E-Commerce API.
+- The UI remains E-Commerce-only: General Template does not render platform,
+  export, or professional commerce suite data.
+
+Verification:
+
+```text
+Project Mode E-Commerce focused tests: 12 passed
+full V3 tests: 508 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: browser click-through and real product/provider
+acceptance remain Doc103 coordinated gates.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
