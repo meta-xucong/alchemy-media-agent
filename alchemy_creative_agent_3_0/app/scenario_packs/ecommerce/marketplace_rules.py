@@ -14,6 +14,7 @@ PROFILE_UPDATED_AT = "2026-06-28"
 PLATFORM_ALIASES = {
     "amazon_us": ("amazon", "US"),
     "amazon": ("amazon", "US"),
+    "ozon": ("ozon", "RU"),
     "shopify": ("shopify", "global"),
     "tiktok_shop": ("tiktok_shop", "global"),
     "tiktok": ("tiktok_shop", "global"),
@@ -83,6 +84,15 @@ class MarketplaceRuleEngine:
                 "trust_comparison_image",
                 "ad_cover",
             ]
+        if platform == "ozon":
+            return [
+                "main_image",
+                "scenario_image",
+                "benefit_image",
+                "detail_image",
+                "size_spec_image",
+                "trust_image",
+            ]
         if platform in {"taobao", "jd", "pinduoduo"}:
             return [
                 "main_image",
@@ -108,6 +118,8 @@ class MarketplaceRuleEngine:
         ]
 
     def _canvas_rules(self, platform: str) -> dict[str, Any]:
+        if platform == "ozon":
+            return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "3:4", "safe_area": "center 84%"}
         if platform == "tiktok_shop":
             return {"primary_aspect_ratio": "4:5", "secondary_aspect_ratio": "1:1", "safe_area": "center 82%"}
         if platform in {"taobao", "jd", "pinduoduo"}:
@@ -125,6 +137,9 @@ class MarketplaceRuleEngine:
         ]
         if platform == "amazon":
             rules.insert(0, "Main image should stay product-first with minimal distractions.")
+        if platform == "ozon":
+            rules.insert(0, "Main image should make the product immediately understandable on a mobile listing.")
+            rules.append("Russian overlay copy must remain short and readable when a text-enabled slot is selected.")
         if platform in {"taobao", "jd", "pinduoduo"}:
             rules.append("Detail and trust images may use denser feature callouts when readable.")
         if platform == "tiktok_shop":
@@ -132,6 +147,8 @@ class MarketplaceRuleEngine:
         return rules
 
     def _export_rules(self, platform: str) -> dict[str, Any]:
+        if platform == "ozon":
+            return {"format": "png", "naming": "{slot}_{index}_ozon.png", "dimension_hint": "1200x1200"}
         if platform == "tiktok_shop":
             return {"format": "png", "naming": "{slot}_{index}_tiktok_shop.png", "dimension_hint": "1080x1350"}
         if platform in {"taobao", "jd", "pinduoduo"}:

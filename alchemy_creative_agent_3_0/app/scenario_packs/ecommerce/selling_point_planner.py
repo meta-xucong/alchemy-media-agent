@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
+from .category_profiles import CategoryProfile
 from .copy_bridge import EcommerceCopyBridge
 
 
@@ -37,6 +38,7 @@ class SellingPointToImagePlanner:
         brief: CommerceIntelligenceBrief,
         marketplace_profile: MarketplaceRuleProfile,
         uploaded_asset_ids: list[str],
+        category_profile: CategoryProfile | None = None,
     ) -> list[EcommerceAssetRecipe]:
         selling_points = brief.differentiated_selling_points or ["Clear product identity"]
         recipes: list[EcommerceAssetRecipe] = []
@@ -77,6 +79,7 @@ class SellingPointToImagePlanner:
                         "sequence_index": index + 1,
                         "platform": marketplace_profile.platform,
                         "market": marketplace_profile.market,
+                        **(category_profile.metadata() if category_profile else {}),
                         **lifestyle_metadata,
                     },
                 )

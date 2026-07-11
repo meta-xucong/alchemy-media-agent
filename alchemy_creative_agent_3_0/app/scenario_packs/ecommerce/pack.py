@@ -7,6 +7,7 @@ from typing import Any
 from ..base import ScenarioPack
 from .commerce_brief import CommerceBriefBuilder
 from .commerce_critic import CommerceCritic
+from .category_profiles import resolve_category
 from .contracts import EcommercePackOutput
 from .export_packager import EcommerceExportPackager
 from .manifest import ECOMMERCE_MANIFEST
@@ -59,12 +60,14 @@ class EcommerceScenarioPackPlanner:
             parameters=scenario_parameters,
             product_profile=product_profile,
         )
+        category_profile = resolve_category(product_profile.get("product_category"), user_input=user_input)
         requested_count = _bounded_requested_count(scenario_parameters.get("requested_image_count"))
         selected_slots = _selected_slots(
             marketplace_profile.image_slots,
             scenario_parameters=scenario_parameters,
             user_input=user_input,
             requested_count=requested_count,
+            category_priority=category_profile.default_slot_priority if category_profile else (),
         )
         marketplace_profile = marketplace_profile.model_copy(
             update={
@@ -75,6 +78,7 @@ class EcommerceScenarioPackPlanner:
                     "slot_count_unified_with_requested_count": bool(requested_count),
                     "default_image_slot_count": len(marketplace_profile.image_slots),
                     "selected_image_slots": selected_slots,
+                    **(category_profile.metadata() if category_profile else {"category_id": "generic_product"}),
                 },
             }
         )
@@ -96,6 +100,7 @@ class EcommerceScenarioPackPlanner:
             brief=brief,
             marketplace_profile=marketplace_profile,
             uploaded_asset_ids=uploaded_asset_ids,
+            category_profile=category_profile,
         )
         critic = self.critic.review(
             truth=truth,
@@ -124,6 +129,7 @@ class EcommerceScenarioPackPlanner:
                 "recipe_count": len(recipes),
                 "requested_image_count": requested_count,
                 "selected_image_slots": selected_slots,
+                "category_id": category_profile.category_id if category_profile else "generic_product",
                 "uses_v3_core": True,
                 "imports_v1_v2_runtime": False,
             },
@@ -145,6 +151,7 @@ def _selected_slots(
     scenario_parameters: dict[str, Any],
     user_input: str,
     requested_count: int | None,
+    category_priority: tuple[str, ...] = (),
 ) -> list[str]:
     explicit = _clean_slot_list(scenario_parameters.get("suite_slot_request"))
     default_order = [slot for slot in default_slots if slot]
@@ -153,6 +160,8 @@ def _selected_slots(
     if requested_count is None and explicit:
         return [slot for slot in explicit if slot in default_order] or default_order
     priority = _slot_priority(default_order, user_input=user_input, scenario_parameters=scenario_parameters)
+    if category_priority:
+        priority = [slot for slot in category_priority if slot in default_order] + [slot for slot in priority if slot not in category_priority]
     selected: list[str] = []
     for slot in explicit:
         if slot in default_order and slot not in selected:
