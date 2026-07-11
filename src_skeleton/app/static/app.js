@@ -5524,9 +5524,28 @@ function renderV3GeneralSummary(summary) {
   renderV3EcommerceExportList(null);
 }
 
+function v3EcommerceCategoryLabel(categoryId) {
+  const labels = {
+    apparel: "服饰 / 鞋包",
+    beauty: "美妆 / 护肤",
+    electronics: "数码 / 3C",
+    home_kitchen: "家居 / 厨房",
+    food_beverage: "食品 / 饮品",
+  };
+  const category = String(categoryId || "").trim();
+  if (!category || category === "generic_product") return "";
+  return labels[category] || category;
+}
+
 function renderV3EcommerceSummary(summary) {
+  const categoryId = (Array.isArray(summary?.image_recipes) ? summary.image_recipes : [])
+    .map((recipe) => recipe?.metadata?.category_id)
+    .find((category) => category && category !== "generic_product") || summary?.product_truth?.product_category;
+  const categoryLabel = v3EcommerceCategoryLabel(categoryId);
   const entries = [
     "已识别商品主体和必须保留的信息",
+    ...(summary?.platform ? [`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`] : []),
+    ...(categoryLabel ? [`已按 ${categoryLabel} 类目安排展示证据和套图顺序`] : []),
     "已把套图拆成主图、卖点图、场景图和信任图",
     "已为每张图安排不同用途",
     "已避免乱加文字、徽章和未经确认的宣传说法",
@@ -5535,9 +5554,6 @@ function renderV3EcommerceSummary(summary) {
   if (sellingPoints.length) entries.push(`重点卖点：${sellingPoints.join(" / ")}`);
   const trustDrivers = Array.isArray(summary?.trust_drivers) ? summary.trust_drivers.filter(Boolean).slice(0, 2) : [];
   if (trustDrivers.length) entries.push(`已考虑信任背书：${trustDrivers.join(" / ")}`);
-  if (summary?.platform) {
-    entries.push(`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`);
-  }
   renderV3OutcomeItems(entries);
   renderV3ClosureChecks([]);
   renderV3Warnings(summary?.warnings || []);

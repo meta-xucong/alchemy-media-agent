@@ -57,3 +57,7 @@ def test_ecommerce_workspace_exposes_category_choice_to_the_existing_profile_pat
     assert 'v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput")' in script
     assert 'product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null' in script
     assert 'els.v3EcommerceCategoryInput.value = ""' in script
+    assert "function v3EcommerceCategoryLabel(categoryId)" in script
+    assert "recipe?.metadata?.category_id" in script
+    assert "v3EcommerceCategoryLabel(categoryId)" in script
+    assert script.index("...(summary?.platform") < script.index("const sellingPoints")

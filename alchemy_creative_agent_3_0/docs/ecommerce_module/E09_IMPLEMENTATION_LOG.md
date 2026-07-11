@@ -184,6 +184,33 @@ Integration dependency: none. This uses the existing namespaced commerce
 profile patch and changes neither shared provider behavior nor General
 Template controls.
 
+## E13 — visible platform and category confirmation
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- The E-Commerce run summary now derives the resolved category from the
+  planner's recipe lineage (with product-truth fallback).
+- Platform/market and resolved category are placed ahead of optional selling
+  point details, ensuring they remain visible within the compact progress
+  summary.
+- Category labels are translated into the five workspace-facing pack names;
+  an unknown but explicit category remains visible rather than silently
+  becoming generic.
+
+Verification:
+
+```text
+E-Commerce workspace focused tests: 3 passed
+full V3 tests: 510 passed
+commercial frontend shell tests: 8 passed
+JavaScript syntax: passed
+```
+
+Integration dependency: none. This is a display-only confirmation of existing
+planner output and introduces no shared contract or routing change.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
