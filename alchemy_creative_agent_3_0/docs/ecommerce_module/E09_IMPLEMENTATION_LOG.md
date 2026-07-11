@@ -328,6 +328,43 @@ JavaScript syntax: passed
 Integration dependency: no new dependency for this compatible planning path;
 the final typography/visual-acceptance path remains coordinated.
 
+## E18 — per-slot continuation interface audit
+
+Status: coordination handoff prepared; no interface implementation was added.
+
+Evidence:
+
+- The current workspace has whole-job creation/generation and per-result
+  select/delete actions, but no user-facing `regenerate slot` action.
+- Product API retries are internal bounded quality recovery. They are not a
+  user-directed replacement of one E-Commerce suite role.
+- There is no Project Mode public route that accepts a parent job plus an
+  E-Commerce slot identity for a new, append-only continuation attempt.
+
+Required coordinated contract:
+
+```text
+parent E-Commerce job + slot ID + optional correction note
+→ child continuation job (never mutates parent history)
+→ inherit the parent's frozen capability plan by default
+→ allow only a recorded bounded plan amendment when new evidence requires it
+→ generate/review/retry through the shared runtime
+→ fold superseded candidates and preserve final delivery count
+```
+
+Compatibility proposal:
+
+- Add a namespaced Project Mode action only after foundation-owner agreement;
+  do not overload select/delete or internal retry endpoints.
+- Keep all existing jobs and exports readable. A legacy job without a parent
+  continuation link simply remains non-regenerable at the slot level.
+- Do not expose a disabled or cosmetic "redo this image" button before that
+  action and its frozen-plan semantics exist.
+
+Integration dependency: this is a Doc104 Section 9 public interface and
+shared retry/append-only-history coordination item. It requires the mainline
+foundation owner before implementation or production activation.
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
