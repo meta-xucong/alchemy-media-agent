@@ -1,4 +1,4 @@
-"""Doc97 provider-capability routing for identity repair."""
+"""Doc100 whole-image GPT Image 2 rerender routing for identity repair."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ IDENTITY_REPAIR_STRATEGY_MODULE_ID = "identity_repair_strategy_router"
 
 
 class IdentityRepairStrategyRouter:
-    capability_key = "identity_native_local_repair"
+    capability_key = "gpt_image_2_rerender"
 
     def build(
         self,
@@ -29,48 +29,29 @@ class IdentityRepairStrategyRouter:
                 job_id=job_id,
                 subject_type=package.subject_type,
             )
-        native_capability = _capability_enabled(metadata, self.capability_key)
-        experimental_generic = bool(metadata.get("allow_generic_face_local_repair"))
-        allow_local = native_capability or experimental_generic
         return IdentityRepairStrategyPlan(
             plan_id=stable_id(
                 IDENTITY_REPAIR_STRATEGY_MODULE_ID,
                 project_id,
                 job_id,
                 package.package_id,
-                str(native_capability),
+                "gpt_image_2_only",
             ),
             project_id=project_id,
             job_id=job_id,
             applies=True,
             subject_type=package.subject_type,
-            strategy="identity_native_local_repair" if allow_local else "regenerate_from_ranked_identity_pack",
-            allow_face_local_repair=allow_local,
-            identity_native_provider_required=not experimental_generic,
+            strategy="regenerate_from_ranked_identity_pack",
+            allow_face_local_repair=False,
+            identity_native_provider_required=False,
             provider_capability_key=self.capability_key,
             fallback_strategy="hold_best_reviewed_result",
-            reason_codes=(
-                ["identity_native_provider_available"]
-                if native_capability
-                else ["experimental_generic_repair_override"]
-                if experimental_generic
-                else ["generic_mask_edit_not_identity_native"]
-            ),
+            reason_codes=["gpt_image_2_whole_image_rerender_only"],
             user_visible_summary=["系统会优先保留人物一致性更好的结果。"],
             metadata={
-                "doc": "97",
-                "identity_native_capability": native_capability,
-                "experimental_generic_override": experimental_generic,
-                "generic_mask_support_is_not_identity_native": True,
+                "doc": "100",
+                "sole_renderer": "gpt-image-2",
+                "non_gpt_local_pixel_repair_forbidden": True,
+                "stale_provider_capabilities_ignored": True,
             },
         )
-
-
-def _capability_enabled(metadata: dict[str, Any], key: str) -> bool:
-    if bool(metadata.get(key)):
-        return True
-    for container_key in ("provider_capabilities", "image_edit_capabilities", "visual_provider_capabilities"):
-        container = metadata.get(container_key)
-        if isinstance(container, dict) and bool(container.get(key)):
-            return True
-    return False

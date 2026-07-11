@@ -940,8 +940,8 @@ class IdentityRepairStrategyPlan(V3BaseModel):
     subject_type: str = "generic"
     strategy: str = "not_applicable"
     allow_face_local_repair: bool = False
-    identity_native_provider_required: bool = True
-    provider_capability_key: str = "identity_native_local_repair"
+    identity_native_provider_required: bool = False
+    provider_capability_key: str = "gpt_image_2_rerender"
     fallback_strategy: str = "hold_best_reviewed_result"
     reason_codes: list[str] = Field(default_factory=list)
     user_visible_summary: list[str] = Field(default_factory=list)

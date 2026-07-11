@@ -494,11 +494,12 @@ errors.
 
 Portrait identity metrics may calculate face representations ephemerally for a
 single review operation. They must never persist embeddings or biometric
-vectors in Project, Brand Memory, output metadata, logs, or APIs. When the
-scene, wardrobe, light, and composition are already correct, one bounded local
-identity repair may be preferred only when Doc97 confirms an identity-native
-provider capability. The repaired result must beat the prior candidate and
-preserve prompt-owned channels before it can be delivered.
+vectors in Project, Brand Memory, output metadata, logs, or APIs. When identity
+review fails, Doc100 requires a bounded whole-image GPT Image 2 rerender with a
+stronger ranked reference pack. No local generative model, sidecar, face swap,
+or regional pixel replacement may create the production deliverable. The
+rerender must beat the prior candidate and preserve prompt-owned channels before
+it can be delivered.
 
 The user prompt remains lossless. Prompt cleanup may remove only duplicated
 framework-owned guidance.
@@ -513,10 +514,17 @@ guard whenever available. Generated support must not silently replace root truth
 
 Reference selection must be bounded, view-aware, auditable, and reusable across
 unrelated portrait or product scenes. Face embeddings remain ephemeral and must
-not be persisted. A provider accepting masks is not automatically safe for
-identity repair; local face repair requires an explicit identity-native provider
-capability. Otherwise retain the best reviewed output and use bounded regeneration
-from the ranked subject asset pack.
+not be persisted. Retain the best reviewed output and use bounded GPT Image 2
+regeneration from the ranked subject asset pack. Stale sidecar capability flags
+must never unlock another final-pixel renderer.
+
+## 22.1 Production Renderer Boundary
+
+Doc100 is the current production rendering authority. GPT Image 2 API is the
+sole final-pixel renderer for V3. Local CPU/GPU tools may contribute analysis
+metadata only; they may not repaint, composite, patch, or replace delivered
+pixels. Doc98 and Doc99 are isolated research records and are not production
+provider contracts.
 
 ## 23. Strategic Reminder
 

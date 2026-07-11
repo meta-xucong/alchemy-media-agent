@@ -176,29 +176,6 @@ class Settings(BaseModel):
     v3_identity_model_dir: Path = Field(
         default_factory=lambda: Path(os.getenv("V3_IDENTITY_MODEL_DIR", "/app/models/v3_identity"))
     )
-    v3_identity_sidecar_enabled: bool = os.getenv("V3_IDENTITY_SIDECAR_ENABLED", "false").lower() in {
-        "1", "true", "yes", "on"
-    }
-    v3_identity_sidecar_base_url: str | None = (
-        os.getenv("V3_IDENTITY_SIDECAR_BASE_URL", "").strip().rstrip("/") or None
-    )
-    v3_identity_sidecar_api_key: str | None = os.getenv("V3_IDENTITY_SIDECAR_API_KEY") or None
-    v3_identity_sidecar_provider: str = os.getenv("V3_IDENTITY_SIDECAR_PROVIDER", "custom").strip().lower()
-    v3_identity_sidecar_model: str = os.getenv("V3_IDENTITY_SIDECAR_MODEL", "identity-native").strip()
-    v3_identity_sidecar_capabilities_path: str = os.getenv(
-        "V3_IDENTITY_SIDECAR_CAPABILITIES_PATH", "/v1/capabilities"
-    ).strip()
-    v3_identity_sidecar_generate_path: str = os.getenv(
-        "V3_IDENTITY_SIDECAR_GENERATE_PATH", "/v1/identity/generate"
-    ).strip()
-    v3_identity_sidecar_timeout_seconds: float = _float_env("V3_IDENTITY_SIDECAR_TIMEOUT_SECONDS", 420.0)
-    v3_identity_sidecar_health_timeout_seconds: float = _float_env(
-        "V3_IDENTITY_SIDECAR_HEALTH_TIMEOUT_SECONDS", 10.0
-    )
-    v3_identity_sidecar_health_ttl_seconds: float = _float_env(
-        "V3_IDENTITY_SIDECAR_HEALTH_TTL_SECONDS", 30.0
-    )
-    v3_identity_sidecar_max_references: int = _int_env("V3_IDENTITY_SIDECAR_MAX_REFERENCES", 3)
     gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3-pro-image-preview"))
     image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
     default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")

@@ -1,7 +1,7 @@
 [project]
 name = "alchemy-v3-identity-sidecar"
 version = "0.1.0"
-description = "Standalone Doc99 gateway for identity-native ComfyUI workflows"
+description = "Research-only Doc99 gateway for isolated identity workflow evaluation"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",

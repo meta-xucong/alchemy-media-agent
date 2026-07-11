@@ -212,7 +212,7 @@ class IdentityRepairStrategyPlan:
     applies: bool
     strategy: str
     allow_face_local_repair: bool
-    identity_native_provider_required: bool
+    identity_native_provider_required: bool  # legacy field, always false in production
     provider_capability_key: str
     fallback_strategy: str
 ```
@@ -220,15 +220,15 @@ class IdentityRepairStrategyPlan:
 Strategies:
 
 ```text
-identity_native_local_repair
 regenerate_from_ranked_identity_pack
 hold_best_reviewed_result
 not_applicable
 ```
 
-Accepting a mask is not proof of identity-native repair. The provider must
-explicitly expose `identity_native_local_repair=true`. Otherwise V3 uses the
-ranked identity pack for a bounded full retry and keeps the best reviewed result.
+Production always uses the ranked identity pack for a bounded GPT Image 2 full
+rerender and keeps the best reviewed result. Stale sidecar capability metadata,
+generic mask support, and experimental local-repair flags cannot unlock another
+final-pixel renderer. Doc100 is authoritative for this corrected boundary.
 
 ## 5. Evidence Authority And Promotion
 
@@ -478,7 +478,7 @@ generic image provider has become an identity-specialized generator. A future
 identity-native provider may plug into the repair/provider capability contract
 without changing Project Mode or Central Brain.
 
-Doc98 now defines that live provider contract. Doc97 remains authoritative for
-subject evidence, ordering, root-truth retention, and drift quarantine; Doc98 is
-authoritative for identity-sidecar capability proof, execution, fallback, and
-actual-provider repair eligibility.
+Doc100 supersedes the former production sidecar extension. Doc97 remains
+authoritative for subject evidence, ordering, root-truth retention, and drift
+quarantine. Final correction is performed only by GPT Image 2 through bounded
+rerender; Doc98/99 are isolated research references.

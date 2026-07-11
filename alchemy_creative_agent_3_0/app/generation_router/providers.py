@@ -300,7 +300,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
     """V3-owned adapter that reuses configured V1/V2 image provider credentials."""
 
     provider_name = "production_image_generation_provider"
-    provider_version = "v3.8d-doc98-identity-native-sidecar"
+    provider_version = "v3.8e-doc100-gpt-image-2-sole-renderer"
     # Live GPT Image 2 reference runs showed that framework-expanded prompts
     # above roughly 16k characters can be rejected by an otherwise valid image
     # edit gateway. Keep the user's positive request lossless, but materialize
@@ -352,11 +352,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
         auto_identity_anchor_applied = bool(request.metadata.get("auto_batch_identity_anchor_applied"))
         result = self._run_app_provider_with_timeout_retry(provider_name, app_request, reference_assets)
         provider_failure_retry = dict(self._last_provider_failure_retry_summary or {})
-        identity_native_routing = self._identity_native_routing_audit(
-            requested_provider=provider_name,
-            result=result,
-            provider_failure_retry=provider_failure_retry,
-        )
         candidates: list[CandidateResult] = []
         warnings: list[str] = []
         outputs = list(getattr(result, "outputs", []) or [])
@@ -422,12 +417,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
                     "provider_failure_retry": provider_failure_retry,
-                    "identity_native_routing": identity_native_routing,
-                    "identity_native_provider": bool(output.get("identity_native_provider")),
-                    "identity_conditioning": bool(output.get("identity_conditioning")),
-                    "identity_native_local_repair_capable": bool(
-                        output.get("identity_native_local_repair_capable")
-                    ),
                     "api_operation": output.get("api_operation"),
                     "input_fidelity_requested": output.get("input_fidelity_requested"),
                     "input_fidelity_applied": output.get("input_fidelity_applied"),
@@ -503,12 +492,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                         "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                         "provider_failure_retry": provider_failure_retry,
-                        "identity_native_routing": identity_native_routing,
-                        "identity_native_provider": bool(output.get("identity_native_provider")),
-                        "identity_conditioning": bool(output.get("identity_conditioning")),
-                        "identity_native_local_repair_capable": bool(
-                            output.get("identity_native_local_repair_capable")
-                        ),
                         "api_operation": output.get("api_operation"),
                         "input_fidelity_requested": output.get("input_fidelity_requested"),
                         "input_fidelity_applied": output.get("input_fidelity_applied"),
@@ -577,7 +560,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "strong_reference_closure_package": strong_reference_closure,
                 "mode_quality_profile": mode_quality_profile,
                 "provider_failure_retry": provider_failure_retry,
-                "identity_native_routing": identity_native_routing,
                 "api_operations": [output.get("api_operation") for output in outputs if output.get("api_operation")],
                 "input_fidelity_requested": next(
                     (output.get("input_fidelity_requested") for output in outputs if output.get("input_fidelity_requested")),
@@ -599,9 +581,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return await provider.generate(app_request)
 
     def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
-        if provider_name == "identity_native_sidecar":
-            return self._run_identity_sidecar_with_fallback(app_request, reference_assets)
-        timeout_seconds = self._app_provider_timeout_seconds(reference_assets, provider_name=provider_name)
+        timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
         max_attempts = 2
         attempts: list[dict[str, Any]] = []
         last_error: BaseException | None = None
@@ -672,133 +652,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if last_error is not None:
             raise last_error
         raise TimeoutError("V3 production provider timed out.")
-
-    def _run_identity_sidecar_with_fallback(self, app_request, reference_assets: list[dict[str, Any]]):
-        provider_name = "identity_native_sidecar"
-        timeout_seconds = self._app_provider_timeout_seconds(reference_assets, provider_name=provider_name)
-        provider_prompt_chars = self._app_request_prompt_chars(app_request)
-        sidecar_attempt: dict[str, Any] = {"attempt": 1, "provider": provider_name}
-        self._apply_provider_retry_metadata(
-            app_request,
-            {
-                "provider_failure_retry_attempt": 1,
-                "provider_failure_retry_max_attempts": 1,
-                "fresh_upstream_request": True,
-                "identity_sidecar_attempt": True,
-            },
-        )
-        try:
-            result = _run_async_blocking(
-                self._generate_with_app_provider(provider_name, app_request),
-                timeout_seconds=timeout_seconds,
-            )
-            sidecar_attempt["status"] = "succeeded"
-            self._last_provider_failure_retry_summary = {
-                "executed_count": 0,
-                "max_attempts": 1,
-                "fresh_upstream_requests": 1,
-                "final_status": "succeeded",
-                "final_provider": provider_name,
-                "identity_sidecar_attempted": True,
-                "identity_sidecar_fallback": False,
-                "attempts": [sidecar_attempt],
-                "reference_asset_count": len(reference_assets),
-                "provider_prompt_chars": provider_prompt_chars,
-            }
-            return result
-        except BaseException as exc:
-            classification = self._classify_provider_failure(exc)
-            sidecar_attempt.update(
-                {
-                    "status": "failed",
-                    "classification": classification,
-                    "error_type": exc.__class__.__name__,
-                    "message": self._provider_failure_message(exc),
-                }
-            )
-            try:
-                fallback_provider = self._select_standard_provider(reference_assets)
-            except Exception as fallback_selection_error:
-                self._last_provider_failure_retry_summary = {
-                    "executed_count": 0,
-                    "max_attempts": 1,
-                    "fresh_upstream_requests": 1,
-                    "final_status": "failed",
-                    "final_provider": provider_name,
-                    "identity_sidecar_attempted": True,
-                    "identity_sidecar_fallback": False,
-                    "fallback_unavailable": True,
-                    "fallback_error": self._provider_failure_message(fallback_selection_error),
-                    "attempts": [sidecar_attempt],
-                    "reference_asset_count": len(reference_assets),
-                    "provider_prompt_chars": provider_prompt_chars,
-                }
-                try:
-                    setattr(exc, "provider_failure_retry", dict(self._last_provider_failure_retry_summary))
-                except Exception:
-                    pass
-                raise
-
-            try:
-                result = self._run_app_provider_with_timeout_retry(
-                    fallback_provider,
-                    app_request,
-                    reference_assets,
-                )
-            except BaseException as fallback_error:
-                fallback_summary = dict(self._last_provider_failure_retry_summary or {})
-                fallback_attempts = [
-                    {**dict(item), "provider": fallback_provider}
-                    for item in fallback_summary.get("attempts", [])
-                    if isinstance(item, dict)
-                ]
-                self._last_provider_failure_retry_summary = {
-                    "executed_count": 1 + int(fallback_summary.get("executed_count") or 0),
-                    "max_attempts": 1 + int(fallback_summary.get("max_attempts") or 0),
-                    "fresh_upstream_requests": 1 + int(fallback_summary.get("fresh_upstream_requests") or 0),
-                    "final_status": "failed",
-                    "final_provider": fallback_provider,
-                    "identity_sidecar_attempted": True,
-                    "identity_sidecar_fallback": True,
-                    "identity_sidecar_failure_classification": classification,
-                    "identity_sidecar_failure": self._provider_failure_message(exc),
-                    "fallback_failure": self._provider_failure_message(fallback_error),
-                    "attempts": [sidecar_attempt, *fallback_attempts],
-                    "reference_asset_count": len(reference_assets),
-                    "provider_prompt_chars": provider_prompt_chars,
-                    "fallback_summary": fallback_summary,
-                }
-                try:
-                    setattr(
-                        fallback_error,
-                        "provider_failure_retry",
-                        dict(self._last_provider_failure_retry_summary),
-                    )
-                except Exception:
-                    pass
-                raise
-            fallback_summary = dict(self._last_provider_failure_retry_summary or {})
-            fallback_attempts = [
-                {**dict(item), "provider": fallback_provider}
-                for item in fallback_summary.get("attempts", [])
-                if isinstance(item, dict)
-            ]
-            self._last_provider_failure_retry_summary = {
-                "executed_count": 1 + int(fallback_summary.get("executed_count") or 0),
-                "max_attempts": 1 + int(fallback_summary.get("max_attempts") or 0),
-                "fresh_upstream_requests": 1 + int(fallback_summary.get("fresh_upstream_requests") or 0),
-                "final_status": fallback_summary.get("final_status") or "succeeded",
-                "final_provider": fallback_provider,
-                "identity_sidecar_attempted": True,
-                "identity_sidecar_fallback": True,
-                "identity_sidecar_failure_classification": classification,
-                "identity_sidecar_failure": self._provider_failure_message(exc),
-                "attempts": [sidecar_attempt, *fallback_attempts],
-                "reference_asset_count": len(reference_assets),
-                "provider_prompt_chars": provider_prompt_chars,
-                "fallback_summary": fallback_summary,
-            }
-            return result
 
     def _app_request_prompt_chars(self, app_request) -> int:
         prompt_plan = getattr(app_request, "prompt_plan", None)
@@ -906,7 +759,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         reference_assets = self._reference_assets(request)
         asset_plan = self._asset_plan(request, reference_assets)
-        provider_name = self._select_provider(request, reference_assets, asset_plan)
+        provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         protected_user_direction = self._provider_user_direction(request)
@@ -971,68 +824,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return None
 
     def _app_provider(self, provider_name: str):
-        if provider_name == "identity_native_sidecar":
-            from app.providers.identity_sidecar import IdentityNativeSidecarProvider
-
-            return IdentityNativeSidecarProvider()
-        if provider_name == "doubao_image":
-            from app.providers.doubao_image import DoubaoImageProvider
-
-            return DoubaoImageProvider()
-        if provider_name == "gemini_image":
-            from app.providers.gemini_image import GeminiImageProvider
-
-            return GeminiImageProvider()
+        if provider_name != "openai_gpt_image":
+            raise ValueError(f"V3 production rendering requires GPT Image 2, not {provider_name}.")
         from app.providers.openai_image import OpenAIGPTImageProvider
 
-        return OpenAIGPTImageProvider()
+        return OpenAIGPTImageProvider(model="gpt-image-2")
 
-    def _select_provider(
-        self,
-        request: GenerationRequest,
-        reference_assets: list[dict[str, Any]],
-        asset_plan: dict[str, Any],
-    ) -> str:
+    def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
         from app.config import settings
 
         self._import_v1_v2_provider_config(settings)
-        if self._identity_sidecar_eligible(request, asset_plan):
-            return "identity_native_sidecar"
-        return self._select_standard_provider(reference_assets)
-
-    def _select_standard_provider(self, reference_assets: list[dict[str, Any]]) -> str:
-        from app.config import settings
-
-        self._import_v1_v2_provider_config(settings)
-        default_provider = str(settings.default_image_provider or "openai_gpt_image")
-        if reference_assets:
-            ordered = [default_provider, "openai_gpt_image", "gemini_image", "doubao_image"]
-        else:
-            ordered = [default_provider, "openai_gpt_image", "doubao_image", "gemini_image"]
-        errors: list[str] = []
-        for provider_name in _dedupe(ordered):
-            if provider_name == "mock_image":
-                continue
-            if provider_name == "openai_gpt_image":
-                if settings.openai_api_key:
-                    return provider_name
-                errors.append("OPENAI_API_KEY is not configured")
-            elif provider_name == "doubao_image":
-                if reference_assets:
-                    errors.append("DOUBAO_IMAGE_API_KEY cannot be used with uploaded reference images")
-                    continue
-                if settings.doubao_image_api_key:
-                    return provider_name
-                errors.append("DOUBAO_IMAGE_API_KEY is not configured")
-            elif provider_name == "gemini_image":
-                if settings.gemini_image_api_key and settings.gemini_image_generation_enabled:
-                    return provider_name
-                errors.append("GEMINI_IMAGE_API_KEY is not configured or Gemini image generation is disabled")
+        if settings.openai_api_key:
+            return "openai_gpt_image"
         raise ValueError(
-            "No configured real image provider is available for V3 generation. "
-            "Reuse the V1/V2 provider settings by configuring OPENAI_API_KEY/OPENAI_BASE_URL, "
-            "DOUBAO_IMAGE_API_KEY/DOUBAO_IMAGE_BASE_URL, or GEMINI_IMAGE_API_KEY. "
-            f"Checked: {'; '.join(_dedupe(errors))}."
+            "GPT Image 2 is the sole production renderer for V3 and its OpenAI-compatible "
+            "API is not configured. Configure OPENAI_API_KEY/OPENAI_BASE_URL or the shared "
+            "Lab OpenAI-compatible settings before starting real V3 generation."
         )
 
     def _import_v1_v2_provider_config(self, settings) -> None:
@@ -1040,10 +847,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
             settings.openai_api_key = settings.lab_openai_api_key
         if not settings.openai_base_url and getattr(settings, "lab_openai_base_url", None):
             settings.openai_base_url = settings.lab_openai_base_url
-        if not settings.doubao_image_api_key and getattr(settings, "lab_doubao_vision_api_key", None):
-            settings.doubao_image_api_key = settings.lab_doubao_vision_api_key
-        if not settings.doubao_image_base_url and getattr(settings, "lab_doubao_vision_base_url", None):
-            settings.doubao_image_base_url = settings.lab_doubao_vision_base_url
 
     def _reference_assets(self, request: GenerationRequest) -> list[dict[str, Any]]:
         raw_assets = request.metadata.get("uploaded_assets")
@@ -1227,56 +1030,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
             }
             data["metadata"] = metadata
         return ordered_assets
-
-    def _identity_sidecar_eligible(self, request: GenerationRequest, asset_plan: dict[str, Any]) -> bool:
-        from app.config import settings
-
-        if not bool(settings.v3_identity_sidecar_enabled and settings.v3_identity_sidecar_base_url):
-            return False
-        cluster = self._visual_cluster(request)
-        package = cluster.get("subject_continuity_asset_package") if isinstance(cluster, dict) else None
-        if not isinstance(package, dict) or not package.get("applies"):
-            return False
-        if str(package.get("subject_type") or "") != "character":
-            return False
-        input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else None
-        truth_layers = input_plan.get("reference_truth_layers") if isinstance(input_plan, dict) else None
-        return any(
-            isinstance(item, dict)
-            and (
-                str(item.get("truth_layer") or "") == "portrait_identity_truth"
-                or "portrait_identity_truth" in self._string_list(item.get("truth_layers"))
-            )
-            for item in (truth_layers if isinstance(truth_layers, list) else [])
-        )
-
-    def _identity_native_routing_audit(
-        self,
-        *,
-        requested_provider: str,
-        result: Any,
-        provider_failure_retry: dict[str, Any],
-    ) -> dict[str, Any]:
-        raw = getattr(result, "raw_response_summary", {})
-        raw = raw if isinstance(raw, dict) else {}
-        actual_provider = str(getattr(result, "provider", requested_provider) or requested_provider)
-        attempted = requested_provider == "identity_native_sidecar"
-        delivered = bool(raw.get("identity_native_provider")) or actual_provider.startswith(
-            "identity_native_sidecar:"
-        )
-        return {
-            "doc": "98",
-            "attempted": attempted,
-            "delivered": delivered,
-            "requested_provider": requested_provider,
-            "actual_provider": actual_provider,
-            "fallback_used": bool(provider_failure_retry.get("identity_sidecar_fallback")),
-            "identity_conditioning": bool(raw.get("identity_conditioning")) if delivered else False,
-            "identity_native_local_repair": bool(raw.get("identity_native_local_repair")) if delivered else False,
-            "multi_reference": bool(raw.get("multi_reference")) if delivered else False,
-            "backend_family": raw.get("backend_family") if delivered else None,
-            "capability_evidence_source": "live_sidecar_response" if delivered else "none",
-        }
 
     def _adaptive_reference_sort_key(
         self,
@@ -3043,23 +2796,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
         quality_mode = str(request.metadata.get("quality_mode") or request.generation_plan.metadata.get("quality_mode") or "standard")
         return "high" if quality_mode == "strict" else "medium"
 
-    def _app_provider_timeout_seconds(
-        self,
-        reference_assets: list[dict[str, Any]],
-        *,
-        provider_name: str | None = None,
-    ) -> float:
+    def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]]) -> float:
         try:
             from app.config import settings as app_settings
 
-            if provider_name == "identity_native_sidecar":
-                value = app_settings.v3_identity_sidecar_timeout_seconds
-            else:
-                value = (
-                    app_settings.openai_image_edit_request_timeout_seconds
-                    if reference_assets
-                    else app_settings.openai_image_request_timeout_seconds
-                )
+            value = (
+                app_settings.openai_image_edit_request_timeout_seconds
+                if reference_assets
+                else app_settings.openai_image_request_timeout_seconds
+            )
         except Exception:
             value = 240.0
         return max(30.0, float(value) + 15.0)

@@ -1,5 +1,9 @@
 # 99 V3 Deployable Identity Sidecar Gateway And Acceptance Matrix Spec
 
+> SUPERSEDED FOR PRODUCTION BY DOC100. This gateway is retained only as an
+> isolated research and benchmarking artifact. It is not a V3 provider, must not
+> receive production jobs, and must not create or modify final user deliverables.
+
 ## 1. Purpose
 
 Doc98 completed the V3-side provider contract. Doc99 supplies the independently

@@ -1,5 +1,10 @@
 # 98 V3 Identity-Native HTTP Sidecar Provider And Fallback Spec
 
+> SUPERSEDED FOR PRODUCTION BY DOC100. This document records an isolated
+> research experiment only. V3 must not register, select, configure, or call an
+> identity sidecar in the production generation path. No service described here
+> may create or modify a user-delivered final image.
+
 ## 1. Purpose
 
 Doc98 turns the identity-native extension point reserved by Doc96 and Doc97

@@ -1,5 +1,10 @@
 # Alchemy V3 Identity Sidecar
 
+> RESEARCH ONLY. Doc100 forbids this service from being registered or called by
+> the V3 production generation path. It must not process production projects or
+> create, patch, composite, or replace user-delivered final images. Retention in
+> this repository is for isolated capability research and benchmarking only.
+
 This service is the deployable reference gateway for Doc98/Doc99. It translates
 Alchemy's stable identity contract into an operator-supplied ComfyUI API-format
 workflow. The gateway itself has no CUDA, model, or face-recognition dependency.
@@ -45,15 +50,9 @@ Copy a reviewed API-format workflow to `workflows/identity.json`, then update th
 three confirmation flags in `.env`. Keep the API bound to loopback or a private
 network and place TLS/authentication at the ingress when remote.
 
-Alchemy configuration:
-
-```dotenv
-V3_IDENTITY_SIDECAR_ENABLED=true
-V3_IDENTITY_SIDECAR_BASE_URL=http://identity-sidecar:8098
-V3_IDENTITY_SIDECAR_API_KEY=<same secret>
-V3_IDENTITY_SIDECAR_PROVIDER=photomaker
-V3_IDENTITY_SIDECAR_MODEL=photomaker-v2
-```
+There is intentionally no production Alchemy configuration. Run the service
+only in an isolated research environment with synthetic or explicitly approved
+test assets.
 
 ## Storage
 

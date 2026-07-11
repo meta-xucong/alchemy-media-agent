@@ -4,7 +4,6 @@ from app.config import settings
 from app.providers.doubao_image import DoubaoImageProvider
 from app.providers.openai_image import OpenAIGPTImageProvider
 from app.providers.gemini_image import GeminiImageProvider
-from app.providers.identity_sidecar import IdentityNativeSidecarProvider
 from app.providers.mock_image import MockImageProvider
 from app.providers.seedance_video import SeedanceVideoProvider
 from app.providers.base import ProviderCapabilityMismatchError, ProviderNotConfiguredError
@@ -16,7 +15,6 @@ class ProviderRegistry:
             "openai_gpt_image": OpenAIGPTImageProvider(),
             "doubao_image": DoubaoImageProvider(),
             "gemini_image": GeminiImageProvider(),
-            "identity_native_sidecar": IdentityNativeSidecarProvider(),
         }
         if settings.mock_image_provider_enabled:
             self.image_providers["mock_image"] = MockImageProvider()

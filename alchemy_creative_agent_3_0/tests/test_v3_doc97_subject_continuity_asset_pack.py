@@ -326,7 +326,7 @@ def test_doc97_generic_provider_blocks_face_local_repair_but_legacy_result_remai
     ) == {}
 
 
-def test_doc97_identity_native_capability_enables_bounded_local_repair_strategy() -> None:
+def test_doc100_stale_identity_native_capability_cannot_enable_local_pixel_repair() -> None:
     _guard, package = _package(
         [_binding("uploaded_root", source_type="uploaded", path="D:/root_front.png")]
     )
@@ -337,6 +337,7 @@ def test_doc97_identity_native_capability_enables_bounded_local_repair_strategy(
         metadata={"provider_capabilities": {"identity_native_local_repair": True}},
     )
 
-    assert plan.allow_face_local_repair is True
-    assert plan.strategy == "identity_native_local_repair"
+    assert plan.allow_face_local_repair is False
+    assert plan.strategy == "regenerate_from_ranked_identity_pack"
     assert plan.fallback_strategy == "hold_best_reviewed_result"
+    assert plan.metadata["sole_renderer"] == "gpt-image-2"

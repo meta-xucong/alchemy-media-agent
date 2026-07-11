@@ -1,9 +1,10 @@
 # 96 V3 High-Fidelity Portrait Identity Metric And Local Repair Spec
 
-> Compatibility note: Doc97 governs subject evidence and repair strategy;
-> Doc98 governs live identity-native provider capability evidence and fallback.
-> A generic mask edit or configured provider name alone cannot enable identity
-> local repair.
+> Production compatibility correction: Doc100 supersedes every Doc96 local-
+> model or sidecar pixel-repair path. Objective identity metrics remain valid,
+> but production correction now means a bounded whole-image GPT Image 2 rerender
+> with stronger ranked references. Historical local-repair sections below are
+> retained only to explain the superseded experiment.
 
 ## 1. Purpose
 
@@ -17,7 +18,7 @@ The target is not a scene recipe. The target is:
 preserve the exact uploaded person's underlying identity
 keep makeup, hair, wardrobe, light, scene, camera, mood, and finish prompt-owned
 measure identity with more than one independent signal
-repair only the identity region when the rest of the image is already good
+rerender through GPT Image 2 with issue-specific identity corrections
 keep the best attempt and stop after a bounded budget
 ```
 
