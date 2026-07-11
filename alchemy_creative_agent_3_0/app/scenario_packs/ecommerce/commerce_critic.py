@@ -72,6 +72,18 @@ class CommerceCritic:
                 "Localized overlay copy is user-supplied or has passed the current metadata review gate.",
             )
         )
+        claim_review_slots = [
+            recipe.slot
+            for recipe in recipes
+            if bool((recipe.metadata.get("copy_plan") or {}).get("claim_review_required"))
+        ]
+        checks.append(
+            self._check(
+                "overlay_claim_review",
+                not claim_review_slots,
+                "Overlay copy does not contain a claim that needs supplied evidence or publication review.",
+            )
+        )
         checks.append(
             self._check(
                 "platform_profile",
@@ -96,6 +108,8 @@ class CommerceCritic:
             warnings.append(
                 "Derived overlay copy requires native-language review before export: " + ", ".join(localization_review_slots)
             )
+        if claim_review_slots:
+            warnings.append("Overlay copy requires claim review before export: " + ", ".join(claim_review_slots))
         if category_coverage and category_coverage["missing"]:
             warnings.append(
                 "Selected suite does not yet cover category evidence: " + ", ".join(category_coverage["missing"])
@@ -116,6 +130,7 @@ class CommerceCritic:
                 "metadata_only_review": True,
                 "recipe_count": len(recipes),
                 "localization_review_slots": localization_review_slots,
+                "claim_review_slots": claim_review_slots,
                 "category_evidence": category_coverage,
                 "duplicate_slot_pairs": duplicate_pairs,
             },

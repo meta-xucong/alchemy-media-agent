@@ -21,6 +21,7 @@ class EcommerceExportPackager:
         dimension_hint = str(export_rules.get("dimension_hint") or "1200x1200")
         files = []
         localization_review_required = False
+        claim_review_required = False
         category_ids = list(
             dict.fromkeys(
                 str(recipe.metadata.get("category_id"))
@@ -38,7 +39,9 @@ class EcommerceExportPackager:
         for index, recipe in enumerate(recipes, start=1):
             copy_plan = recipe.metadata.get("copy_plan") or {}
             copy_review_required = bool(copy_plan.get("needs_localization_review"))
+            copy_claim_review_required = bool(copy_plan.get("claim_review_required"))
             localization_review_required = localization_review_required or copy_review_required
+            claim_review_required = claim_review_required or copy_claim_review_required
             filename = naming.format(
                 slot=recipe.slot,
                 index=f"{index:02d}",
@@ -57,6 +60,7 @@ class EcommerceExportPackager:
                     "copy_locale": copy_plan.get("copy_locale"),
                     "copy_source": copy_plan.get("source"),
                     "copy_review_required": copy_review_required,
+                    "claim_review_required": copy_claim_review_required,
                     "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
                     "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 }
@@ -68,13 +72,14 @@ class EcommerceExportPackager:
             files=files,
             naming_pattern=naming,
             dimensions={recipe.slot: dimension_hint for recipe in recipes},
-            review_status="attention" if localization_review_required else "metadata_ready",
+            review_status="attention" if localization_review_required or claim_review_required else "metadata_ready",
             metadata={
                 "source": "EcommerceExportPackager",
                 "file_count": len(files),
                 "pixel_assets_required_before_download": True,
                 "copy_locale": marketplace_profile.metadata.get("copy_locale"),
                 "localization_review_required": localization_review_required,
+                "claim_review_required": claim_review_required,
                 "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
                 "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 "marketplace_profile_status": marketplace_profile.metadata.get("profile_status"),

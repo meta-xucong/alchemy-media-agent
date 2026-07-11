@@ -75,6 +75,27 @@ full V3 tests: 405 passed
 
 Integration dependency: none beyond normal rebase before integration.
 
+## E5 — claim-safe copy review
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Risk-sensitive words and supplied unsupported claims are detected in every
+  overlay-copy plan.
+- Risky copy stays visible to the user but the affected recipe, critic report,
+  export file, and export package require claim review.
+- Safe copy remains metadata-ready; no compliance or approval promise is made.
+
+Verification:
+
+```text
+focused E-Commerce tests: 28 passed
+full V3 tests: 414 passed
+```
+
+Integration dependency: none beyond normal rebase before integration.
+
 ## E4 — platform profile governance and export lineage
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

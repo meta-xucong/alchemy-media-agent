@@ -22,6 +22,13 @@ CATEGORY_HINTS = {
 CLAIM_RISK_TOKENS = ("certified", "fda", "medical", "cure", "patent", "100%", "guarantee", "guaranteed")
 
 
+def claim_review_required(text: str, unsupported_claims: list[str] | None = None) -> bool:
+    lower = text.lower()
+    if any(token in lower for token in CLAIM_RISK_TOKENS):
+        return True
+    return any(claim.lower() in lower for claim in unsupported_claims or [] if claim)
+
+
 class ProductTruthLockBuilder:
     """Build a deterministic first-pass product truth lock from supplied evidence."""
 
@@ -148,5 +155,4 @@ class ProductTruthLockBuilder:
         return sources or ["user prompt"]
 
     def _claim_requires_evidence(self, claim: str) -> bool:
-        lower = claim.lower()
-        return any(token in lower for token in CLAIM_RISK_TOKENS)
+        return claim_review_required(claim)

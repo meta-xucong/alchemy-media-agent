@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief
 from .localization import LocalizationProfile
+from .product_truth import claim_review_required
 from .utils import clean_text
 
 
@@ -37,6 +38,7 @@ class EcommerceCopyBridge:
         brief: CommerceIntelligenceBrief,
         localization: LocalizationProfile,
         parameters: dict,
+        unsupported_claims: list[str] | None = None,
     ) -> dict[str, object]:
         """Return a reviewable copy plan without pretending to translate text."""
 
@@ -46,6 +48,7 @@ class EcommerceCopyBridge:
                 "policy": "text_forbidden",
                 "source": "slot_policy",
                 "needs_localization_review": False,
+                "claim_review_required": False,
                 **localization.metadata(),
             }
 
@@ -58,6 +61,7 @@ class EcommerceCopyBridge:
                 "source": "user_supplied",
                 "needs_localization_review": False,
                 "truncated": text != supplied,
+                "claim_review_required": claim_review_required(text, unsupported_claims),
                 **localization.metadata(),
             }
 
@@ -69,6 +73,7 @@ class EcommerceCopyBridge:
             "source": "derived",
             "needs_localization_review": bool(text and localization.language != "en"),
             "truncated": bool(derived and text != derived),
+            "claim_review_required": claim_review_required(text or "", unsupported_claims),
             **localization.metadata(),
         }
 

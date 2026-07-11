@@ -64,6 +64,7 @@ class SellingPointToImagePlanner:
                 brief=brief,
                 localization=localization,
                 parameters=scenario_parameters,
+                unsupported_claims=list(truth.metadata.get("unsupported_claims") or []),
             )
             overlay_text = copy_plan["text"]
             visual_scene, lifestyle_metadata = self._visual_scene(
