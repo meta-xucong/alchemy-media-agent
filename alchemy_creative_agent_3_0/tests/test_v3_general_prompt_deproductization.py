@@ -128,6 +128,24 @@ def test_general_template_final_prompt_stays_subject_focused_not_product_ad() ->
     assert "multi-panel layout" in (prompt.negative_prompt or "").lower()
 
 
+def test_general_landscape_prompt_does_not_misclassify_surface_as_a_human_face() -> None:
+    user_input = (
+        "Create a quiet alpine lake at sunrise with mountain ridges, mist above the water, "
+        "a natural rock surface, no people, no products, and no text."
+    )
+    result = run_creative_planning(
+        user_input,
+        optional_template_id="general_template",
+        runtime_metadata={"template_id": "general_template", "scenario_id": "general_creative", "user_input": user_input},
+    )
+
+    final_provider_prompt = _provider_prompt_for_planning_result(result)
+
+    assert "Human realism contract:" not in final_provider_prompt
+    assert "creative image asset for a human photo" not in final_provider_prompt
+    assert "natural rock surface" in final_provider_prompt
+
+
 def test_structured_human_appearance_prompt_stays_on_general_path() -> None:
     result = run_creative_planning(
         STRUCTURED_APPEARANCE_PORTRAIT_PROMPT,

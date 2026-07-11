@@ -41,6 +41,27 @@ def test_human_photorealism_layer_does_not_override_stylized_requests() -> None:
     assert guidance.metadata["disabled_reason"] == "stylized_request"
 
 
+def test_human_photorealism_layer_does_not_activate_for_nonhuman_photoreal_style() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_surreal_landscape",
+        job_id="job_surreal_landscape",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input=(
+            "Create a non-photorealistic surreal floating glass garden above an ocean, "
+            "with no people and no products."
+        ),
+        subject_type="generic",
+        variation_mode="creative_exploration",
+        has_identity_reference=False,
+    )
+
+    assert guidance.applies is False
+    assert guidance.metadata["disabled_reason"] == "no_human_signal"
+
+
 def test_visual_cluster_exports_human_photorealism_and_commercial_quality_review() -> None:
     registry = SharedCapabilityRegistry.with_default_modules()
 

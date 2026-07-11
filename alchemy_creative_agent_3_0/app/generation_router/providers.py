@@ -2860,7 +2860,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "\u5973\u5b69",
             "\u8138",
         )
-        return any(term in text for term in english_terms) or any(term in text for term in chinese_terms)
+        return any(
+            re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text) for term in english_terms
+        ) or any(term in text for term in chinese_terms)
 
     def _scene_for_request(self, request: GenerationRequest) -> str | None:
         if request.layout_plan and request.layout_plan.background_strategy:

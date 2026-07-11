@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ...creative_core.rules import stable_id
@@ -22,8 +23,6 @@ HUMAN_REALISM_PLUGIN_METADATA_KEY = "human_realism_plugin"
 _HUMAN_TERMS = {
     "portrait",
     "photo portrait",
-    "photoreal",
-    "photorealistic",
     "real person",
     "realistic person",
     "model",
@@ -778,7 +777,17 @@ class HumanPhotorealismLayer:
 
 
 def _contains_any(text: str, terms: set[str]) -> bool:
-    return any(term in text for term in terms)
+    normalized = str(text or "").lower()
+    for term in terms:
+        candidate = str(term or "").lower()
+        if not candidate:
+            continue
+        if candidate.isascii():
+            if re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", normalized):
+                return True
+        elif candidate in normalized:
+            return True
+    return False
 
 
 def _combined_activation_text(
