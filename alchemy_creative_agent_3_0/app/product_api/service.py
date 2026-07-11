@@ -1066,6 +1066,16 @@ class V3ProductApiService:
             )
             seen_issue_codes.update(reason_codes)
 
+        merged_result, max_attempts = self._run_post_retry_identity_closeout(
+            record=record,
+            generate_request=generate_request,
+            provider_strategy=provider_strategy,
+            result=merged_result,
+            base_metadata=base_metadata,
+            records=records,
+            max_attempts=max_attempts,
+        )
+
         record.request.metadata = {
             **base_metadata,
             "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
@@ -1074,14 +1084,120 @@ class V3ProductApiService:
             return self._with_visual_retry_metadata(merged_result, records, max_attempts)
         return self._with_visual_retry_metadata(merged_result, records, max_attempts)
 
+    def _run_post_retry_identity_closeout(
+        self,
+        *,
+        record: ProductJobRecord,
+        generate_request: GenerateJobRequest,
+        provider_strategy: ProviderStrategy,
+        result: PlanningResult,
+        base_metadata: dict[str, Any],
+        records: list[dict[str, Any]],
+        max_attempts: int,
+    ) -> tuple[PlanningResult, int]:
+        if max_attempts <= 0 or not any(item.get("status") == "executed" for item in records):
+            return result, max_attempts
+        if self._result_has_identity_local_repair(result):
+            return result, max_attempts
+        issue_codes, retry_patch, _source = self._visual_retry_signal(result, {})
+        issue_codes = self._dedupe_strings(issue_codes)
+        attempt_index = max_attempts + 1
+        local_repair = self._identity_local_repair_metadata(
+            result,
+            attempt_index=attempt_index,
+            reason_codes=issue_codes,
+            post_retry_closeout=True,
+        )
+        if not local_repair:
+            return result, max_attempts
+        if not self._visual_retry_patch_has_content(retry_patch):
+            retry_patch = self._visual_retry_patch_from_issues(issue_codes)
+        retry_metadata = {
+            **base_metadata,
+            "visual_auto_retry_active": True,
+            "visual_auto_retry_attempt": attempt_index,
+            "retry_attempt": attempt_index,
+            "visual_retry_reason_codes": issue_codes,
+            "visual_retry_patch": retry_patch,
+            "max_visual_retry_attempts": attempt_index,
+            "identity_post_retry_closeout": True,
+            **local_repair,
+        }
+        record.request.metadata = retry_metadata
+        try:
+            runtime_result = self.scenario_runtime.generate_job(
+                self._runtime_request_payload(record.request),
+                mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
+                apply_memory_update=False,
+                provider_strategy=provider_strategy,
+                quality_mode=generate_request.quality_mode,
+            )
+            if runtime_result.generation_result is None:
+                raise RuntimeError("identity closeout returned no generation result")
+            reviewed = self._attach_post_generation_review(
+                record,
+                runtime_result.generation_result,
+                generate_request,
+            )
+            closeout_result = self._mark_retry_generation_result(
+                reviewed,
+                attempt_index=attempt_index,
+                reason_codes=issue_codes,
+                retry_patch=retry_patch,
+            )
+            records.append(
+                self._visual_retry_execution_record(
+                    record=record,
+                    status="executed",
+                    attempt_index=attempt_index,
+                    max_attempts=attempt_index,
+                    reason_codes=issue_codes,
+                    retry_patch=retry_patch,
+                    source="identity_post_retry_closeout",
+                    retry_output_ids=self._visual_result_output_ids(closeout_result),
+                    retry_candidate_ids=self._visual_result_candidate_ids(closeout_result),
+                )
+            )
+            return (
+                self._merge_retry_generation_result(
+                    result,
+                    closeout_result,
+                    records=records,
+                    max_attempts=attempt_index,
+                ),
+                attempt_index,
+            )
+        except Exception as exc:
+            records.append(
+                self._visual_retry_execution_record(
+                    record=record,
+                    status="failed",
+                    attempt_index=attempt_index,
+                    max_attempts=attempt_index,
+                    reason_codes=issue_codes,
+                    retry_patch=retry_patch,
+                    source="identity_post_retry_closeout",
+                    blocked_reason=self._generation_failure_message(exc, provider_strategy),
+                )
+            )
+            return result, attempt_index
+
+    def _result_has_identity_local_repair(self, result: PlanningResult) -> bool:
+        for output_id in self._visual_result_output_ids(result):
+            output = self.output_store.get_output(output_id)
+            if output is not None and bool((output.metadata or {}).get("identity_local_repair")):
+                return True
+        return False
+
     def _identity_local_repair_metadata(
         self,
         result: PlanningResult,
         *,
         attempt_index: int,
         reason_codes: list[str],
+        post_retry_closeout: bool = False,
     ) -> dict[str, Any]:
-        if attempt_index != 1:
+        if attempt_index != 1 and not post_retry_closeout:
             return {}
         identity_codes = {
             "identity_drift",
@@ -1107,7 +1223,8 @@ class V3ProductApiService:
             fusion = evidence.get("identity_review_fusion") if isinstance(evidence.get("identity_review_fusion"), dict) else {}
             metric = evidence.get("identity_metric") if isinstance(evidence.get("identity_metric"), dict) else {}
             fused_score = self._safe_score(fusion.get("fused_identity_score"))
-            if fused_score is None or not 0.72 <= fused_score < 0.82:
+            lower_bound = 0.76 if post_retry_closeout else 0.72
+            if fused_score is None or not lower_bound <= fused_score < 0.82:
                 continue
             score_card = inspection.get("score_card") if isinstance(inspection.get("score_card"), dict) else {}
             detected_codes = {
@@ -1133,14 +1250,23 @@ class V3ProductApiService:
                 "source_camera_overinherited",
                 "source_whole_style_overinherited",
             }
+            if post_retry_closeout:
+                local_repair_blockers.discard("source_hair_overinherited")
+                local_repair_blockers.discard("source_makeup_overinherited")
             if detected_codes.intersection(local_repair_blockers):
                 continue
-            if (self._safe_score(score_card.get("prompt_owned_channel_obedience")) or 0.0) < 0.75:
+            prompt_floor = 0.65 if post_retry_closeout else 0.75
+            if (self._safe_score(score_card.get("prompt_owned_channel_obedience")) or 0.0) < prompt_floor:
                 continue
             if (self._safe_score(score_card.get("commercial_finish")) or 0.0) < 0.70:
                 continue
             if (self._safe_score(score_card.get("human_realism")) or 0.0) < 0.65:
                 continue
+            if post_retry_closeout:
+                objective = self._safe_score(metric.get("calibrated_score"))
+                geometry = self._safe_score(metric.get("geometry_score"))
+                if objective is None or objective < 0.82 or geometry is None or geometry < 0.80:
+                    continue
             output_id = str(inspection.get("output_id") or "").strip()
             face_box = metric.get("output_face_box")
             if not output_id or not isinstance(face_box, list) or len(face_box) != 4:
@@ -1162,6 +1288,7 @@ class V3ProductApiService:
                 "identity_local_repair_face_box": list(face_box),
                 "identity_local_repair_initial_score": fused_score,
                 "identity_local_repair_max_attempts": 1,
+                "identity_local_repair_stage": "post_retry_closeout" if post_retry_closeout else "primary_retry",
                 "identity_local_repair_artifacts": {
                     "canvas_size": artifacts.get("canvas_size"),
                     "mask_box": artifacts.get("mask_box"),

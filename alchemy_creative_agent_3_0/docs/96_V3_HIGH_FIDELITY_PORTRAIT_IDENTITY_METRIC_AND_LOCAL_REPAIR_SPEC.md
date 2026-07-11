@@ -673,24 +673,41 @@ the user's supplied person across prompt-owned visual transformations.
 
 Production comparisons established two binding corrections:
 
-1. the accepted Doc95 wide head-geometry evidence remains unchanged;
-2. global desaturation, simultaneous recropping of both evidence images,
-   hair-color neutralization, and other whole-evidence pixel rewrites are
-   rejected because real outputs lost same-person fidelity even when style
-   leakage decreased;
-3. the first high-fidelity feature image may use a detected, near-full-color face-core
-   crop with modest outline/ear margins; the geometry image remains the wide
-   compatibility anchor, and a missing detector falls back to the Doc95 crop;
-4. the identity detector threshold is 0.5, with largest confident-face
+1. the accepted Doc95 wide feature and head-geometry evidence remain unchanged;
+2. global desaturation, face-only recropping, hair-color neutralization, and
+   other pixel rewrites of either identity evidence image are rejected because
+   repeated real outputs lost same-person fidelity even when style leakage
+   decreased;
+3. the identity detector threshold is 0.5, with largest confident-face
    selection, so partially occluded and angled commercial portraits are less
    likely to lose objective review coverage;
-5. objective identity review must still run when the multimodal reviewer is
+4. objective identity review must still run when the multimodal reviewer is
    unavailable or returns a provider error;
-6. a retry whose visual review is unavailable may remain in append-only project
+5. a retry whose visual review is unavailable may remain in append-only project
    history but may not replace a previously reviewed candidate for the same
    asset role;
-7. reviewer failure never becomes permission to lower the identity threshold,
+6. reviewer failure never becomes permission to lower the identity threshold,
    fabricate a pass, or start an additional retry loop.
+
+One exception is a strictly bounded identity closeout after an already executed
+whole-image retry. It is allowed only when all conditions are true:
+
+```text
+fused identity is >= 0.76 and < 0.82
+objective identity is >= 0.82
+geometry relationship is >= 0.80
+prompt-owned channel score is >= 0.65
+human realism is >= 0.65
+commercial finish is >= 0.70
+no text, watermark, body, policy, scene, wardrobe, camera, or whole-style blocker exists
+no prior local identity repair exists in the job
+```
+
+The closeout edits only the feathered face mask on the current generated canvas.
+It is one additional provider call, not another generic retry loop. Delivery
+accepts it only when identity crosses 0.82 or improves by at least 0.06 and no
+prompt, realism, or commercial score drops by more than 0.03. Otherwise the
+previous reviewed output remains final.
 
 These corrections stay inside the existing evidence, review, and reviewed
 delivery children of the Visual Capability Cluster. No template-specific or

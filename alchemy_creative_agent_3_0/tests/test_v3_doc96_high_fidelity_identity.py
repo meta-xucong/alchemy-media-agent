@@ -252,6 +252,66 @@ def test_doc96_local_repair_metadata_uses_failed_output_and_mask(tmp_path) -> No
         assert mask_image.mode == "RGBA"
 
 
+def test_doc96_post_retry_closeout_requires_strong_objective_mid_band(tmp_path) -> None:
+    buffer = BytesIO()
+    Image.new("RGB", (512, 512), (218, 208, 202)).save(buffer, format="PNG")
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_doc96_closeout",
+        candidate_id="candidate_doc96_closeout",
+        asset_id="asset_doc96_closeout",
+        provider="openai_gpt_image",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(buffer.getvalue()).decode("ascii"),
+    )
+    service = object.__new__(V3ProductApiService)
+    service.output_store = store
+
+    def result(objective: float):
+        return SimpleNamespace(
+            metadata={
+                "post_generation_review_package": {
+                    "inspections": [
+                        {
+                            "output_id": record.output_id,
+                            "score_card": {
+                                "prompt_owned_channel_obedience": 0.68,
+                                "commercial_finish": 0.83,
+                                "human_realism": 0.72,
+                            },
+                            "detected_issues": [{"code": "source_hair_overinherited"}],
+                            "evidence": {
+                                "identity_review_fusion": {"fused_identity_score": 0.7908},
+                                "identity_metric": {
+                                    "calibrated_score": objective,
+                                    "geometry_score": 0.8678,
+                                    "output_face_box": [0.25, 0.18, 0.5, 0.58],
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        )
+
+    metadata = service._identity_local_repair_metadata(  # noqa: SLF001
+        result(0.8542),
+        attempt_index=2,
+        reason_codes=["identity_metric_below_commercial_target", "source_hair_overinherited"],
+        post_retry_closeout=True,
+    )
+    rejected = service._identity_local_repair_metadata(  # noqa: SLF001
+        result(0.79),
+        attempt_index=2,
+        reason_codes=["identity_metric_below_commercial_target"],
+        post_retry_closeout=True,
+    )
+
+    assert metadata["identity_local_repair_stage"] == "post_retry_closeout"
+    assert metadata["identity_local_repair_active"] is True
+    assert rejected == {}
+
+
 def test_doc96_sface_calibration_is_monotonic_and_not_threshold_gamed() -> None:
     values = [_calibrate_sface_cosine(value) for value in (0.2, 0.363, 0.48, 0.59, 0.65, 0.8)]
     assert values == sorted(values)
