@@ -28,6 +28,53 @@ def prepare_provider_reference_images(paths: list) -> list:
     return [prepare_provider_reference_image(path) for path in paths]
 
 
+def prepare_identity_repair_artifacts(
+    output_path: str | Path,
+    normalized_face_box: list[float],
+) -> dict[str, object]:
+    """Prepare a bounded edit canvas and a same-size feathered face mask."""
+    source = Path(output_path)
+    canvas = Path(prepare_provider_reference_image(source))
+    if len(normalized_face_box) != 4:
+        raise ValueError("identity repair requires a normalized face box")
+    from PIL import Image, ImageDraw, ImageFilter
+
+    with Image.open(canvas) as raw:
+        width, height = raw.size
+    x, y, box_width, box_height = [float(value) for value in normalized_face_box]
+    left = max(0, int((x - box_width * 0.10) * width))
+    top = max(0, int((y - box_height * 0.16) * height))
+    right = min(width, int((x + box_width * 1.10) * width))
+    bottom = min(height, int((y + box_height * 1.13) * height))
+    if right - left < 32 or bottom - top < 32:
+        raise ValueError("identity repair face box is too small")
+
+    stat = canvas.stat()
+    digest = hashlib.sha256(
+        f"{canvas.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{left}:{top}:{right}:{bottom}:doc96-mask-v1".encode("utf-8")
+    ).hexdigest()[:24]
+    cache_dir = settings.media_storage_root / "provider_reference_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mask_path = cache_dir / f"{canvas.stem}-identity-repair-mask-{digest}.png"
+    if not mask_path.exists():
+        alpha = Image.new("L", (width, height), color=255)
+        draw = ImageDraw.Draw(alpha)
+        draw.ellipse((left, top, right, bottom), fill=0)
+        blur_radius = max(4, min(28, int(min(right - left, bottom - top) * 0.055)))
+        alpha = alpha.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        mask = Image.new("RGBA", (width, height), color=(255, 255, 255, 255))
+        mask.putalpha(alpha)
+        mask.save(mask_path, format="PNG", optimize=True)
+    return {
+        "canvas_path": str(canvas),
+        "mask_path": str(mask_path),
+        "canvas_size": [width, height],
+        "normalized_face_box": [round(value, 6) for value in (x, y, box_width, box_height)],
+        "mask_box": [left, top, right, bottom],
+        "ephemeral": True,
+    }
+
+
 def prepare_reference_truth_derivatives(
     path,
     *,

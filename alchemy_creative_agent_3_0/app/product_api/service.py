@@ -161,6 +161,8 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "archetype_overrode_reference_identity",
     "same_type_not_same_person",
     "identity_reference_underweighted",
+    "identity_metric_below_commercial_target",
+    "identity_metric_low",
     "beauty_archetype_overrode_reference",
     "same_type_but_different_person",
     "prompt_face_description_replaced_reference_geometry",
@@ -977,6 +979,11 @@ class V3ProductApiService:
 
             retry_patch = dict(plan["retry_patch"])
             reason_codes = list(plan["reason_codes"])
+            identity_local_repair = self._identity_local_repair_metadata(
+                merged_result,
+                attempt_index=attempt_index,
+                reason_codes=reason_codes,
+            )
             retry_metadata = {
                 **base_metadata,
                 "visual_auto_retry_active": True,
@@ -985,6 +992,7 @@ class V3ProductApiService:
                 "visual_retry_reason_codes": reason_codes,
                 "visual_retry_patch": retry_patch,
                 "max_visual_retry_attempts": max_attempts,
+                **identity_local_repair,
             }
             record.request.metadata = retry_metadata
             try:
@@ -1065,6 +1073,108 @@ class V3ProductApiService:
         if not records:
             return self._with_visual_retry_metadata(merged_result, records, max_attempts)
         return self._with_visual_retry_metadata(merged_result, records, max_attempts)
+
+    def _identity_local_repair_metadata(
+        self,
+        result: PlanningResult,
+        *,
+        attempt_index: int,
+        reason_codes: list[str],
+    ) -> dict[str, Any]:
+        if attempt_index != 1:
+            return {}
+        identity_codes = {
+            "identity_drift",
+            "bone_structure_drift",
+            "face_shape_drift",
+            "cheek_jaw_chin_drift",
+            "eye_shape_or_spacing_identity_drift",
+            "eyebrow_eye_relationship_drift",
+            "nose_mouth_relationship_identity_drift",
+            "lip_contour_identity_drift",
+            "same_type_not_same_person",
+            "identity_reference_underweighted",
+            "identity_metric_below_commercial_target",
+        }
+        if not identity_codes.intersection(reason_codes):
+            return {}
+        package = result.metadata.get("post_generation_review_package")
+        inspections = package.get("inspections") if isinstance(package, dict) else []
+        for inspection in inspections if isinstance(inspections, list) else []:
+            if not isinstance(inspection, dict):
+                continue
+            evidence = inspection.get("evidence") if isinstance(inspection.get("evidence"), dict) else {}
+            fusion = evidence.get("identity_review_fusion") if isinstance(evidence.get("identity_review_fusion"), dict) else {}
+            metric = evidence.get("identity_metric") if isinstance(evidence.get("identity_metric"), dict) else {}
+            fused_score = self._safe_score(fusion.get("fused_identity_score"))
+            if fused_score is None or not 0.72 <= fused_score < 0.82:
+                continue
+            score_card = inspection.get("score_card") if isinstance(inspection.get("score_card"), dict) else {}
+            detected_codes = {
+                str(item.get("code") or "")
+                for item in inspection.get("detected_issues", [])
+                if isinstance(item, dict) and item.get("code")
+            }
+            local_repair_blockers = {
+                "visible_text_artifact",
+                "watermark_or_signature",
+                "collage_or_split_panel",
+                "bad_hands_or_body",
+                "severe_face_artifact",
+                "severe_body_artifact",
+                "policy_or_safety_block",
+                "prompt_owned_channel_ignored",
+                "source_hair_overinherited",
+                "source_makeup_overinherited",
+                "source_wardrobe_overinherited",
+                "source_lighting_overinherited",
+                "source_color_grade_overinherited",
+                "source_scene_overinherited",
+                "source_camera_overinherited",
+                "source_whole_style_overinherited",
+            }
+            if detected_codes.intersection(local_repair_blockers):
+                continue
+            if (self._safe_score(score_card.get("prompt_owned_channel_obedience")) or 0.0) < 0.75:
+                continue
+            if (self._safe_score(score_card.get("commercial_finish")) or 0.0) < 0.70:
+                continue
+            if (self._safe_score(score_card.get("human_realism")) or 0.0) < 0.65:
+                continue
+            output_id = str(inspection.get("output_id") or "").strip()
+            face_box = metric.get("output_face_box")
+            if not output_id or not isinstance(face_box, list) or len(face_box) != 4:
+                continue
+            output = self.output_store.get_output(output_id)
+            if output is None or not output.file_path:
+                continue
+            try:
+                from app.services.provider_reference import prepare_identity_repair_artifacts
+
+                artifacts = prepare_identity_repair_artifacts(output.file_path, face_box)
+            except Exception:
+                continue
+            return {
+                "identity_local_repair_active": True,
+                "identity_local_repair_source_output_id": output_id,
+                "identity_local_repair_canvas_path": artifacts["canvas_path"],
+                "identity_local_repair_mask_path": artifacts["mask_path"],
+                "identity_local_repair_face_box": list(face_box),
+                "identity_local_repair_initial_score": fused_score,
+                "identity_local_repair_max_attempts": 1,
+                "identity_local_repair_artifacts": {
+                    "canvas_size": artifacts.get("canvas_size"),
+                    "mask_box": artifacts.get("mask_box"),
+                    "ephemeral": True,
+                },
+            }
+        return {}
+
+    def _safe_score(self, value: Any) -> float | None:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return None
 
     def _visual_auto_retry_max_attempts(self, generate_request: GenerateJobRequest) -> int:
         metadata = dict(generate_request.metadata or {})
@@ -1377,6 +1487,8 @@ class V3ProductApiService:
                 "archetype_overrode_reference_identity",
                 "same_type_not_same_person",
                 "identity_reference_underweighted",
+                "identity_metric_below_commercial_target",
+                "identity_metric_low",
                 "beauty_archetype_overrode_reference",
                 "same_type_but_different_person",
                 "prompt_face_description_replaced_reference_geometry",
@@ -2052,9 +2164,13 @@ class V3ProductApiService:
                 hard_gate_passed = attempt_summary["hard_gate_passed"]
                 hard_gate_failures: list[str] = []
                 asset_id = ""
+                score_card: dict[str, Any] = {}
                 if inspection is not None:
                     score, hard_gate_passed, hard_gate_failures = self._review_inspection_delivery_score(inspection)
                     asset_id = str(inspection.get("asset_id") or "").strip()
+                    score_card = dict(inspection.get("score_card") or {})
+                output_record = self.output_store.get_output(output_id)
+                output_metadata = dict(output_record.metadata or {}) if output_record is not None else {}
                 ranked_outputs.append(
                     {
                         "output_id": output_id,
@@ -2065,6 +2181,19 @@ class V3ProductApiService:
                         "score": score,
                         "hard_gate_passed": hard_gate_passed,
                         "hard_gate_failures": hard_gate_failures,
+                        "identity_score": self._normalized_review_score(
+                            score_card.get("same_person_readability", score_card.get("identity_consistency"))
+                        ),
+                        "prompt_score": self._normalized_review_score(
+                            score_card.get("prompt_owned_channel_obedience", score_card.get("composition"))
+                        ),
+                        "human_score": self._normalized_review_score(
+                            score_card.get("human_realism", score_card.get("artifact_safety"))
+                        ),
+                        "commercial_score": self._normalized_review_score(
+                            score_card.get("commercial_finish", score_card.get("overall"))
+                        ),
+                        "identity_local_repair": bool(output_metadata.get("identity_local_repair")),
                     }
                 )
 
@@ -2079,7 +2208,17 @@ class V3ProductApiService:
             winners: list[dict[str, Any]] = []
             for role_key in sorted(role_groups):
                 group = role_groups[role_key]
-                eligible = [item for item in group if item["hard_gate_passed"]] or group
+                for item in group:
+                    item["identity_local_repair_acceptance_passed"] = self._identity_local_repair_candidate_accepted(
+                        item,
+                        group,
+                    )
+                accepted_group = [
+                    item
+                    for item in group
+                    if not item["identity_local_repair"] or item["identity_local_repair_acceptance_passed"]
+                ] or [item for item in group if not item["identity_local_repair"]] or group
+                eligible = [item for item in accepted_group if item["hard_gate_passed"]] or accepted_group
                 winners.append(max(eligible, key=lambda item: (item["score"], -item["attempt_index"])))
         else:
             eligible = [item for item in ranked if item["hard_gate_passed"]] or ranked
@@ -2149,6 +2288,36 @@ class V3ProductApiService:
                 "metadata": {**dict(result.metadata), "reviewed_delivery_preference": preference},
             }
         )
+
+    def _identity_local_repair_candidate_accepted(
+        self,
+        candidate: dict[str, Any],
+        group: list[dict[str, Any]],
+    ) -> bool:
+        if not candidate.get("identity_local_repair"):
+            return True
+        baselines = [
+            item
+            for item in group
+            if not item.get("identity_local_repair")
+            and int(item.get("attempt_index") or 0) < int(candidate.get("attempt_index") or 0)
+        ]
+        if not baselines:
+            return False
+        baseline = max(baselines, key=lambda item: (float(item.get("identity_score") or 0.0), -int(item.get("attempt_index") or 0)))
+        identity = candidate.get("identity_score")
+        baseline_identity = baseline.get("identity_score")
+        if identity is None or baseline_identity is None:
+            return False
+        identity_improved = float(identity) >= 0.82 or float(identity) - float(baseline_identity) >= 0.06
+        if not identity_improved:
+            return False
+        for key in ("prompt_score", "human_score", "commercial_score"):
+            current = candidate.get(key)
+            previous = baseline.get(key)
+            if current is not None and previous is not None and float(current) < float(previous) - 0.03:
+                return False
+        return not candidate.get("hard_gate_failures")
 
     def _review_attempt_delivery_score(self, attempt: dict[str, Any]) -> tuple[float, bool]:
         inspections = [item for item in attempt.get("inspections", []) if isinstance(item, dict)]

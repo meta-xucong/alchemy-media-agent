@@ -19,6 +19,7 @@ alchemy_creative_agent_3_0/docs/78_V3_LONG_TERM_IDENTITY_AND_BEAUTIFUL_REALISM_F
 alchemy_creative_agent_3_0/docs/93_V3_REFERENCE_CHANNEL_POLICY_AND_PROMPT_OWNERSHIP_GOVERNANCE_SPEC.md
 alchemy_creative_agent_3_0/docs/94_V3_UNIVERSAL_VISUAL_CAPABILITY_DEOVERFITTING_AND_GOVERNANCE_SPEC.md
 alchemy_creative_agent_3_0/docs/95_V3_UNIVERSAL_PORTRAIT_IDENTITY_EVIDENCE_AND_BEST_RESULT_CLOSURE_SPEC.md
+alchemy_creative_agent_3_0/docs/96_V3_HIGH_FIDELITY_PORTRAIT_IDENTITY_METRIC_AND_LOCAL_REPAIR_SPEC.md
 ```
 
 Hard rules:
@@ -41,6 +42,7 @@ Hard rules:
 16. Doc94 is the shared-runtime anti-overfitting authority. Historical ancient-style, kidswear, East Asian summer, marketplace, costume, or other narrow cases may be regression fixtures, but must not become named branches or default prompt recipes in the shared Visual Capability Cluster, provider materializer, General Template, or Central Brain. Shared runtime rules must use orthogonal visual variables such as identity geometry, age fidelity, exposure key, skin specularity, texture, complexion preservation, and prompt-owned channels.
 17. A new shared visual rule must prove usefulness across at least three materially different scenes. Scene-specific deliverable or art-direction logic belongs in a specialized template. Compatibility aliases may read old metadata but must not continue emitting superseded narrow prompt fragments.
 18. Doc95 is the current same-person evidence authority. Identity-only portrait references use complementary feature-detail and head-geometry evidence, keep full source frames suppressed unless Doc93 assigns another source-owned channel, preserve the full identity-critical feature contract inside prompt budgets, and compare retry attempts rather than assuming the newest retry is best.
+19. Doc96 is the current high-fidelity identity execution authority. Hard portrait/product truth requests must capability-negotiate high input fidelity, portrait identity may be evaluated with ephemeral local metrics that are never persisted as biometric vectors, and identity-only failures should use one bounded face-local repair when the rest of the image is already correct. Full user prompts remain lossless; only duplicated framework guidance may be compacted.
 
 Short form:
 

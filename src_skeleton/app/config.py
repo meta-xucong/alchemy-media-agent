@@ -167,6 +167,15 @@ class Settings(BaseModel):
     openai_image_reference_max_upload_bytes: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_UPLOAD_BYTES", 1_200_000)
     openai_image_reference_max_edge: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_EDGE", 1024)
     openai_image_reference_jpeg_quality: int = _int_env("OPENAI_IMAGE_REFERENCE_JPEG_QUALITY", 88)
+    openai_image_input_fidelity_cache_ttl_seconds: float = _float_env(
+        "OPENAI_IMAGE_INPUT_FIDELITY_CACHE_TTL_SECONDS", 86400.0
+    )
+    v3_identity_metric_enabled: bool = os.getenv("V3_IDENTITY_METRIC_ENABLED", "true").lower() in {
+        "1", "true", "yes", "on"
+    }
+    v3_identity_model_dir: Path = Field(
+        default_factory=lambda: Path(os.getenv("V3_IDENTITY_MODEL_DIR", "/app/models/v3_identity"))
+    )
     gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3-pro-image-preview"))
     image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
     default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")

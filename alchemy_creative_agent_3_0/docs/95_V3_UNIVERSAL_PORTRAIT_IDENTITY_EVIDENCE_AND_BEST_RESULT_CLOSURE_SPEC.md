@@ -352,6 +352,13 @@ Historical period-style images may be one fixture, never the only fixture.
 
 ## 13. Acceptance Target
 
+Doc96 extension: these targets must be measured with the fused objective and
+multimodal identity gate when that capability is available. A subjective score
+alone is insufficient for claiming stable 0.8+ identity. Doc96 governs high
+input fidelity, ephemeral metrics, framework-prompt deduplication, and bounded
+face-local repair; Doc95 continues to govern complementary evidence and
+best-result delivery.
+
 ```text
 average same-person score >= 83/100
 minimum same-person score >= 78/100

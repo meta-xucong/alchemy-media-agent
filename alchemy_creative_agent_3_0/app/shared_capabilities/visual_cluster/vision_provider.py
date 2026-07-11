@@ -215,10 +215,10 @@ def _image_data_url(path: Path, mime_type: str | None) -> str:
 
 
 def _inspection_reference_data_urls(metadata: dict[str, Any]) -> list[str]:
-    return [_inspection_image_data_url(path) for path in _inspection_reference_paths(metadata)]
+    return [_inspection_image_data_url(path) for path in inspection_reference_paths(metadata)]
 
 
-def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:
+def inspection_reference_paths(metadata: dict[str, Any], *, identity_only: bool = False) -> list[Path]:
     context = metadata.get("project_context_snapshot")
     if not isinstance(context, dict):
         context = {}
@@ -240,6 +240,13 @@ def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:
     result: list[Path] = []
     seen: set[str] = set()
     for item in ranked:
+        if identity_only:
+            role_text = " ".join(
+                str(item.get(key) or "")
+                for key in ("role", "use_policy", "declared_role", "intended_use")
+            ).lower()
+            if not any(term in role_text for term in ("portrait", "identity", "face", "person", "character")):
+                continue
         value = item.get("file_path") or item.get("preview_path") or item.get("thumbnail_path")
         if not value:
             continue
@@ -254,6 +261,10 @@ def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:
         if len(result) >= 2:
             break
     return result
+
+
+def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:
+    return inspection_reference_paths(metadata)
 
 
 def _inspection_image_data_url(path: Path) -> str:

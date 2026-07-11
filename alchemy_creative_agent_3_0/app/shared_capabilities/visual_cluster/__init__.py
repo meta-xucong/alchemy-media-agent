@@ -16,6 +16,8 @@ from .contracts import (
     HumanNaturalVariationPlan,
     HumanPhotorealismGuidance,
     IdentityHeroSelectionPlan,
+    IdentityMetricResult,
+    IdentityReviewFusion,
     ModeQualityProfile,
     ModeDifferentiationReview,
     ModeExecutionPolicy,
@@ -76,6 +78,7 @@ from .doc66_closure import (
 from .general_suite_director import GeneralSuiteDirector
 from .human_photorealism import HumanPhotorealismLayer
 from .identity_anchor import ProjectIdentityAnchorBuilder
+from .identity_metric import SFaceIdentityMetricProvider, create_default_identity_metric_provider
 from .module import VISUAL_CAPABILITY_CLUSTER_ID, VISUAL_CLUSTER_CHILD_MODULE_IDS, VisualCapabilityClusterModule
 from .human_variation import HumanNaturalVariationPolicy
 from .mode_role_director import ModeAwareRoleDirector
@@ -122,6 +125,8 @@ __all__ = [
     "HumanPhotorealismGuidance",
     "HumanPhotorealismLayer",
     "IdentityHeroSelectionPlan",
+    "IdentityMetricResult",
+    "IdentityReviewFusion",
     "VISUAL_CASEBOOK_RECIPE_LIBRARY_ID",
     "VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID",
     "VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID",
@@ -149,6 +154,7 @@ __all__ = [
     "PromptOwnershipResolver",
     "ProjectIdentityAnchor",
     "ProjectIdentityAnchorBuilder",
+    "SFaceIdentityMetricProvider",
     "ProjectVisualGrammarSnapshot",
     "REFERENCE_CHANNEL_ISSUE_CODES",
     "REFERENCE_CHANNEL_POLICY_MODULE_ID",
@@ -192,4 +198,5 @@ __all__ = [
     "VisualQualityReviewResult",
     "VisualReferenceBindingProfile",
     "create_default_vision_provider",
+    "create_default_identity_metric_provider",
 ]

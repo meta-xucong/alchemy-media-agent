@@ -12,7 +12,9 @@ from .vision_provider import (
     VisionInspectionProviderError,
     VisionInspectionProviderUnavailable,
     create_default_vision_provider,
+    inspection_reference_paths,
 )
+from .identity_metric import create_default_identity_metric_provider
 
 
 _WATERMARK_OR_TEXT_ISSUES = {
@@ -70,6 +72,8 @@ _DOC86_PORTRAIT_IDENTITY_ISSUES = {
     "archetype_overrode_reference_identity",
     "same_type_not_same_person",
     "identity_reference_underweighted",
+    "identity_metric_below_commercial_target",
+    "identity_metric_low",
 }
 
 _DOC87_REFERENCE_BOUNDARY_ISSUES = {
@@ -107,6 +111,20 @@ _DOC90_ADVANCED_REFERENCE_PRIORITY_ISSUES = {
     "background_space_drift",
     "camera_mood_drift",
     "reference_scene_replaced",
+}
+
+_PURE_IDENTITY_DRIFT_ISSUES = {
+    *_DOC86_PORTRAIT_IDENTITY_ISSUES,
+    "identity_drift",
+    "identity_feature_drift",
+    "eyebrow_shape_drift",
+    "eye_shape_or_spacing_drift",
+    "nose_mouth_relationship_drift",
+    "jaw_chin_direction_drift",
+    "beauty_archetype_overrode_reference",
+    "same_type_but_different_person",
+    "prompt_face_description_replaced_reference_geometry",
+    "generic_sweet_model_replaced_reference",
 }
 
 _DOC93_REFERENCE_CHANNEL_ISSUES = {
@@ -214,6 +232,8 @@ RETRYABLE_ISSUE_CODES = {
     "repeated_concept_or_prop",
     "reference_guard_ignored",
     "low_commercial_finish",
+    "identity_metric_below_commercial_target",
+    "identity_metric_low",
 }
 
 FINAL_ISSUE_CODES = {
@@ -238,9 +258,11 @@ class VisionOutputInspector:
         self,
         *,
         vision_provider: VisionInspectionProvider | None = None,
+        identity_metric_provider: Any | None = None,
         min_confidence: float = 0.65,
     ) -> None:
         self.vision_provider = vision_provider
+        self.identity_metric_provider = identity_metric_provider
         self.min_confidence = max(0.0, min(1.0, min_confidence))
 
     def inspect(
@@ -324,6 +346,24 @@ class VisionOutputInspector:
     ) -> VisualInspectionReport:
         issue_codes = _provider_issue_codes(payload)
         confidence = _safe_float(payload.get("confidence"), default=0.5)
+        score_card = _provider_score_card(payload.get("scores"), str(payload.get("status") or ""))
+        identity_metric, identity_fusion = self._identity_metric_fusion(
+            resolution,
+            metadata=metadata,
+            multimodal_score=score_card.get("same_person_readability", score_card.get("identity_consistency")),
+        )
+        if identity_fusion:
+            fused_score = float(identity_fusion["fused_identity_score"])
+            score_card["objective_identity_metric"] = float(identity_fusion["objective_metric_score"])
+            score_card["identity_metric_geometry"] = float(identity_fusion["geometry_relationship_score"])
+            score_card["same_person_readability"] = fused_score
+            score_card["identity_consistency"] = fused_score
+            if fused_score >= 0.82:
+                issue_codes = [code for code in issue_codes if code not in _PURE_IDENTITY_DRIFT_ISSUES]
+            elif fused_score < 0.72:
+                issue_codes = _dedupe([*issue_codes, "identity_metric_low"])
+            elif fused_score < 0.82:
+                issue_codes = _dedupe([*issue_codes, "identity_metric_below_commercial_target"])
         if confidence < self.min_confidence:
             issue_codes = _dedupe([*issue_codes, "low_confidence_review"])
             status = "manual_review"
@@ -333,7 +373,8 @@ class VisionOutputInspector:
             retryable = status == "fail_retryable"
         retry_patch = _merge_retry_patches(_retry_patch_for_issues(issue_codes), payload.get("retry_patch") if retryable else {})
         detected_issues = [_issue_payload(code, confidence) for code in issue_codes]
-        score_card = _provider_score_card(payload.get("scores"), status)
+        if not identity_fusion:
+            score_card = _provider_score_card(payload.get("scores"), status)
         user_summary = _string_list(payload.get("summary")) or _summary_for_status(status, issue_codes)
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, mode, ",".join(issue_codes)),
@@ -359,10 +400,57 @@ class VisionOutputInspector:
                 "provider_status": payload.get("status"),
                 "provider_issue_codes": issue_codes,
                 "identity_deltas": _string_list(payload.get("identity_deltas")),
+                "identity_metric": identity_metric,
+                "identity_review_fusion": identity_fusion,
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},
         )
+
+    def _identity_metric_fusion(
+        self,
+        resolution: GeneratedOutputResolution,
+        *,
+        metadata: dict[str, Any],
+        multimodal_score: Any,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if not resolution.file_path or not _portrait_identity_metric_requested(metadata):
+            return None, None
+        references = inspection_reference_paths(metadata, identity_only=True)
+        if not references:
+            return None, None
+        if self.identity_metric_provider is None:
+            self.identity_metric_provider = create_default_identity_metric_provider()
+        result = self.identity_metric_provider.evaluate(resolution.file_path, references)
+        payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result or {})
+        objective = _safe_float(payload.get("calibrated_score"), default=None)
+        geometry = _safe_float(payload.get("geometry_score"), default=None)
+        if objective is None or geometry is None:
+            return payload, None
+        llm_score = _safe_float(multimodal_score, default=objective)
+        metric_confidence = _safe_float(payload.get("metric_confidence"), default=0.0)
+        if metric_confidence >= 0.7:
+            weights = {"objective_metric": 0.55, "geometry": 0.25, "multimodal": 0.20}
+        else:
+            weights = {"objective_metric": 0.35, "geometry": 0.20, "multimodal": 0.45}
+        fused = (
+            objective * weights["objective_metric"]
+            + geometry * weights["geometry"]
+            + llm_score * weights["multimodal"]
+        )
+        fusion = {
+            "objective_metric_score": round(objective, 4),
+            "multimodal_same_person_score": round(llm_score, 4),
+            "geometry_relationship_score": round(geometry, 4),
+            "fused_identity_score": round(fused, 4),
+            "fusion_confidence": round(max(0.0, min(1.0, (metric_confidence + 0.75) / 2.0)), 4),
+            "applied_weights": weights,
+            "hard_gate_passed": fused >= 0.82,
+            "reason_codes": [] if fused >= 0.82 else [
+                "identity_metric_low" if fused < 0.72 else "identity_metric_below_commercial_target"
+            ],
+        }
+        return payload, fusion
 
     def _metadata_report(
         self,
@@ -1307,6 +1395,30 @@ def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             "vision_model",
         }
     }
+
+
+def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:
+    package = metadata.get("resolved_reference_policy_package")
+    if not isinstance(package, dict):
+        context = metadata.get("project_context_snapshot")
+        package = context.get("resolved_reference_policy_package") if isinstance(context, dict) else {}
+    policies = package.get("policies") if isinstance(package, dict) else []
+    for policy in policies if isinstance(policies, list) else []:
+        if not isinstance(policy, dict):
+            continue
+        role = str(policy.get("source_role") or "").lower()
+        strength = str(policy.get("identity_geometry") or "").lower()
+        if strength in {"hard", "medium"} and any(term in role for term in ("portrait", "identity", "face", "person")):
+            return True
+    for key in ("uploaded_assets", "reference_assets"):
+        values = metadata.get(key)
+        for item in values if isinstance(values, list) else []:
+            if not isinstance(item, dict):
+                continue
+            text = " ".join(str(item.get(name) or "") for name in ("role", "use_policy", "declared_role")).lower()
+            if any(term in text for term in ("portrait", "identity", "face", "person")):
+                return True
+    return False
 
 
 def _string_list(value: Any) -> list[str]:

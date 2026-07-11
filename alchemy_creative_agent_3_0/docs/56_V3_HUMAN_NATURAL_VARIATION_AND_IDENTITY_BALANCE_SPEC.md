@@ -683,13 +683,18 @@ preferred_variation_axes
 negative_drift_rules
 ```
 
-Do not store:
+Do not store (Doc96 clarification: ephemeral current-request evaluation is
+allowed, persistence remains forbidden):
 
 ```text
 exact face embedding or biometric identity data in this phase
 provider-specific identity vectors
 V1/V2 runtime objects
 ```
+
+Doc96 may compute a face representation ephemerally to score the current
+generated output. The representation must be discarded after scoring and must
+never enter Project Context, Brand Memory, output metadata, logs, or APIs.
 
 ## 10. Beginner UX
 

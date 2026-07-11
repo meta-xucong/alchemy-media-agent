@@ -449,6 +449,7 @@ Document 92: style-aware Human Realism tuning. Moody, dark, ancient/traditional,
 Document 93: current reference-channel and prompt-ownership authority. Reference role and per-channel policy decide what may be inherited; ordinary portrait uploads preserve identity geometry but do not automatically preserve hair, makeup, wardrobe, lighting, scene, camera, or whole-image style. Human Realism remains independent from inheritance governance.
 Document 94: current shared-runtime anti-overfitting authority. Historical scene and demographic examples remain tests, while shared Human Realism and provider logic use universal rendering variables.
 Document 95: current portrait identity evidence and best-result authority. Identity-only references use complementary feature/head evidence, protected identity dimensions, reference-backed review, and reviewed attempt selection without restoring source-style leakage.
+Document 96: current high-fidelity portrait identity execution authority. Hard identity edits negotiate high input fidelity, use ephemeral objective identity metrics alongside multimodal review, and perform at most one face-local repair before reviewed best-result selection; no biometric vectors are persisted.
 V3.8 Project Mode: current accepted architecture.
 General Template: first active project template.
 E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.

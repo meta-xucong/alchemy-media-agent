@@ -535,6 +535,105 @@ def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path)
     assert result[0]["reference_image_count"] == 1
 
 
+def test_doc96_openai_image_provider_applies_high_input_fidelity(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    openai_image_provider._image_edit_capability_cache.reset()
+    captured = {}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(data=[SimpleNamespace(b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")])
+
+    result = asyncio.run(
+        provider._generate_one_with_references(
+            SimpleNamespace(images=CapturingImages()),
+            "identity edit",
+            ImagePromptPlan(
+                main_subject="portrait",
+                count=1,
+                variables={"input_fidelity": "high"},
+            ),
+            [reference_path],
+            index=0,
+        )
+    )
+
+    assert captured["input_fidelity"] == "high"
+    assert result[0]["input_fidelity_requested"] == "high"
+    assert result[0]["input_fidelity_applied"] == "high"
+    assert result[0]["input_fidelity_support_state"] == "supported"
+
+
+def test_doc96_input_fidelity_specific_400_falls_back_once(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    openai_image_provider._image_edit_capability_cache.reset()
+    captured = []
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+
+    class UnsupportedFidelityError(Exception):
+        status_code = 400
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.append(dict(kwargs))
+            if len(captured) == 1:
+                raise UnsupportedFidelityError("unknown parameter input_fidelity: not supported")
+            return SimpleNamespace(data=[SimpleNamespace(b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")])
+
+    result = asyncio.run(
+        provider._generate_one_with_references(
+            SimpleNamespace(images=CapturingImages()),
+            "identity edit",
+            ImagePromptPlan(main_subject="portrait", variables={"input_fidelity": "high"}),
+            [reference_path],
+            index=0,
+        )
+    )
+
+    assert len(captured) == 2
+    assert captured[0]["input_fidelity"] == "high"
+    assert "input_fidelity" not in captured[1]
+    assert result[0]["input_fidelity_applied"] is None
+    assert result[0]["input_fidelity_support_state"] == "unsupported"
+    assert "not supported" in result[0]["input_fidelity_fallback_reason"]
+
+
+def test_doc96_identity_local_repair_sends_same_size_mask(tmp_path):
+    provider = registry.image("openai_gpt_image")
+    openai_image_provider._image_edit_capability_cache.reset()
+    captured = {}
+    reference_path = tmp_path / "reference.png"
+    mask_path = tmp_path / "mask.png"
+    tiny_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+    reference_path.write_bytes(tiny_png)
+    mask_path.write_bytes(tiny_png)
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.update(kwargs)
+            captured["mask_name"] = getattr(kwargs.get("mask"), "name", "")
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(tiny_png).decode("ascii"))])
+
+    result = asyncio.run(
+        provider._generate_one_with_references(
+            SimpleNamespace(images=CapturingImages()),
+            "identity-local repair",
+            ImagePromptPlan(main_subject="portrait", variables={"input_fidelity": "high"}),
+            [reference_path],
+            index=0,
+            mask_path=mask_path,
+        )
+    )
+
+    assert captured["input_fidelity"] == "high"
+    assert captured["mask_name"].endswith("mask.png")
+    assert result[0]["identity_local_repair"] is True
+
+
 def test_openai_image_provider_retries_gateway_image_edit_500_once(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
     captured = {"attempts": 0}

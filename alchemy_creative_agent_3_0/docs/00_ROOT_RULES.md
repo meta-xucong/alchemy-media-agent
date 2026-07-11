@@ -484,7 +484,26 @@ A later retry must never replace a stronger earlier result merely because it is
 newer. Multi-image sets are compared per asset role whenever review evidence
 supports that mapping.
 
-## 21. Strategic Reminder
+## 21. High-Fidelity Identity Execution
+
+Doc96 is the authority for measurable same-person execution. Strong portrait or
+product identity references must request high provider input fidelity when the
+provider supports it. Unsupported capability fallback must be explicit and
+must not be inferred from transient 5xx, timeout, rate-limit, or connection
+errors.
+
+Portrait identity metrics may calculate face representations ephemerally for a
+single review operation. They must never persist embeddings or biometric
+vectors in Project, Brand Memory, output metadata, logs, or APIs. When the
+scene, wardrobe, light, and composition are already correct, one bounded local
+identity repair is preferred over full-frame regeneration. The repaired result
+must beat the prior candidate and preserve prompt-owned channels before it can
+be delivered.
+
+The user prompt remains lossless. Prompt cleanup may remove only duplicated
+framework-owned guidance.
+
+## 22. Strategic Reminder
 
 Do not build a Lovart clone.
 

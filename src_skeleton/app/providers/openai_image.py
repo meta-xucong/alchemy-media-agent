@@ -38,6 +38,33 @@ class _CrossLoopAsyncLock:
 _openai_image_generation_lock = _CrossLoopAsyncLock()
 
 
+class _ImageEditCapabilityCache:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._states: dict[str, tuple[str, float, str | None]] = {}
+
+    def state(self, key: str) -> tuple[str, str | None]:
+        now = time.monotonic()
+        ttl = max(60.0, float(settings.openai_image_input_fidelity_cache_ttl_seconds))
+        with self._lock:
+            state, checked_at, reason = self._states.get(key, ("unknown", 0.0, None))
+            if state == "unsupported" and now - checked_at >= ttl:
+                self._states.pop(key, None)
+                return "unknown", None
+            return state, reason
+
+    def note(self, key: str, state: str, reason: str | None = None) -> None:
+        with self._lock:
+            self._states[key] = (state, time.monotonic(), reason)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._states.clear()
+
+
+_image_edit_capability_cache = _ImageEditCapabilityCache()
+
+
 class _OpenAIImageRateLimiter:
     def __init__(self) -> None:
         self._lock = _CrossLoopAsyncLock()
@@ -230,7 +257,11 @@ class OpenAIGPTImageProvider:
         outputs = []
         asset_plan = request.asset_plan or (plan.variables.get("asset_plan") if getattr(plan, "variables", None) else None)
         reference_paths = reference_image_paths(asset_plan, max_images=settings.max_asset_upload_count)
+        repair_canvas = self._identity_repair_canvas_path(plan)
+        if repair_canvas is not None:
+            reference_paths = [repair_canvas, *reference_paths]
         reference_paths = self._provider_reference_paths(reference_paths)
+        repair_mask = self._identity_repair_mask_path(plan)
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
                 api_key=settings.openai_api_key,
@@ -245,7 +276,16 @@ class OpenAIGPTImageProvider:
             async with _openai_image_generation_lock:
                 for index in range(output_count):
                     if reference_paths:
-                        outputs.extend(await self._generate_one_with_references(client, prompt, plan, reference_paths, index=index))
+                        outputs.extend(
+                            await self._generate_one_with_references(
+                                client,
+                                prompt,
+                                plan,
+                                reference_paths,
+                                index=index,
+                                mask_path=repair_mask,
+                            )
+                        )
                     else:
                         outputs.extend(await self._generate_one(client, prompt, plan, index=index))
                     if len(outputs) >= output_count:
@@ -331,10 +371,24 @@ class OpenAIGPTImageProvider:
             )
         return self._outputs_from_response(response, plan, request_index=index)
 
-    async def _generate_one_with_references(self, client, prompt: str, plan, reference_paths: list, *, index: int) -> list[dict]:
+    async def _generate_one_with_references(
+        self,
+        client,
+        prompt: str,
+        plan,
+        reference_paths: list,
+        *,
+        index: int,
+        mask_path=None,
+    ) -> list[dict]:
         max_attempts = 6
         last_error: Exception | None = None
         transient_retry_count = 0
+        requested_fidelity = self._requested_input_fidelity(plan)
+        capability_key = self._input_fidelity_capability_key()
+        support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
+        applied_fidelity = requested_fidelity if support_state != "unsupported" else None
+        fidelity_fallback_reason = cached_reason if applied_fidelity is None and requested_fidelity else None
         operation_timeout = self._client_timeout_seconds(image_edit=True)
         operation_deadline = time.monotonic() + operation_timeout
         for attempt in range(1, max_attempts + 1):
@@ -357,6 +411,10 @@ class OpenAIGPTImageProvider:
                 with ExitStack() as stack:
                     image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
                     kwargs = self._image_kwargs(plan)
+                    if applied_fidelity:
+                        kwargs["input_fidelity"] = applied_fidelity
+                    if mask_path is not None:
+                        kwargs["mask"] = stack.enter_context(mask_path.open("rb"))
                     response = await self._call_with_timeout(
                         client.images.edit(
                             model=self._model(),
@@ -374,6 +432,15 @@ class OpenAIGPTImageProvider:
                 raise
             except Exception as exc:
                 last_error = exc
+                if applied_fidelity and self._is_input_fidelity_unsupported_error(exc):
+                    fidelity_fallback_reason = str(exc)[:240]
+                    _image_edit_capability_cache.note(
+                        capability_key,
+                        "unsupported",
+                        fidelity_fallback_reason,
+                    )
+                    applied_fidelity = None
+                    continue
                 if self._is_image_quota_limit_error(exc):
                     retry_after = self._retry_after_seconds_from_exception(exc)
                     cooldown = _openai_image_rate_limiter.note_upstream_image_quota_limit(
@@ -435,12 +502,75 @@ class OpenAIGPTImageProvider:
                 provider=self.name,
                 detail={"error_type": type(last_error).__name__, "message": str(last_error), "request_index": index},
             )
+        if applied_fidelity:
+            _image_edit_capability_cache.note(capability_key, "supported")
+            support_state = "supported"
+        else:
+            support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
+            fidelity_fallback_reason = fidelity_fallback_reason or cached_reason
         outputs = self._outputs_from_response(response, plan, request_index=index)
         for output in outputs:
             output["reference_image_count"] = len(reference_paths)
             output["api_operation"] = "images.edit"
             output["image_edit_transient_retries"] = transient_retry_count
+            output["input_fidelity_requested"] = requested_fidelity
+            output["input_fidelity_applied"] = applied_fidelity
+            output["input_fidelity_support_state"] = support_state
+            output["input_fidelity_fallback_reason"] = fidelity_fallback_reason
+            output["identity_local_repair"] = mask_path is not None
         return outputs
+
+    def _requested_input_fidelity(self, plan) -> str | None:
+        variables = getattr(plan, "variables", None)
+        value = variables.get("input_fidelity") if isinstance(variables, dict) else None
+        normalized = str(value or "").strip().lower()
+        return normalized if normalized in {"high", "low"} else None
+
+    def _input_fidelity_capability_key(self) -> str:
+        return "|".join(
+            [
+                str(settings.openai_base_url or "https://api.openai.com/v1").rstrip("/").lower(),
+                self.name,
+                self._model().lower(),
+            ]
+        )
+
+    def _is_input_fidelity_unsupported_error(self, exc: Exception) -> bool:
+        if self._status_code_from_exception(exc) != 400:
+            return False
+        message = str(exc).lower().replace("-", "_")
+        if "input_fidelity" not in message and "input fidelity" not in message:
+            return False
+        markers = (
+            "unsupported",
+            "not supported",
+            "unknown parameter",
+            "unrecognized",
+            "unexpected",
+            "extra_forbidden",
+            "not permitted",
+        )
+        return any(marker in message for marker in markers)
+
+    def _identity_repair_canvas_path(self, plan):
+        variables = getattr(plan, "variables", None)
+        value = variables.get("identity_repair_canvas_path") if isinstance(variables, dict) else None
+        if not value:
+            return None
+        from pathlib import Path
+
+        path = Path(str(value))
+        return path if path.exists() and path.is_file() else None
+
+    def _identity_repair_mask_path(self, plan):
+        variables = getattr(plan, "variables", None)
+        value = variables.get("identity_repair_mask_path") if isinstance(variables, dict) else None
+        if not value:
+            return None
+        from pathlib import Path
+
+        path = Path(str(value))
+        return path if path.exists() and path.is_file() else None
 
     async def edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         if not settings.openai_api_key:

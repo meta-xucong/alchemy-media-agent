@@ -250,7 +250,8 @@ Current code-stage priority:
 31. Apply Doc93 as the implementation closure for all reference assets: resolve asset role, per-channel strength, prompt ownership, selected-output support, review, and retry before provider prompt compilation.
 32. Apply Doc94 before further foundation tuning: remove narrow case-driven runtime branches and express shared quality through orthogonal visual variables while preserving legacy metadata readability.
 33. Apply Doc95 after Doc94: strengthen universal portrait identity through complementary evidence, a protected complete identity contract, reference-backed review, and best-attempt delivery selection.
-34. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
+34. Apply Doc96 after Doc95: capability-negotiate high-fidelity identity edits, add ephemeral objective identity metrics, deduplicate only framework-owned prompt prose, and use one bounded face-local repair when the rest of the image is already acceptable.
+35. Treat 42 as implemented; do not start V3.10 or another template without its own accepted spec and document 43 gate.
 ```
 
 ## 2. V3.0 Foundation

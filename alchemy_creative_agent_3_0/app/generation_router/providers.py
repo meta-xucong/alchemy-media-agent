@@ -392,6 +392,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "final_provider_prompt_chars": len(final_provider_prompt),
                     "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
                     "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
+                    "provider_prompt_audit": app_request.prompt_plan.variables.get("provider_prompt_audit", {}),
                     "negative_constraints": negative_constraints,
                     "style_notes": list(request.prompt_compilation.style_notes),
                     "layout_notes": list(request.prompt_compilation.layout_notes),
@@ -406,6 +407,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
                     "provider_failure_retry": provider_failure_retry,
                     "api_operation": output.get("api_operation"),
+                    "input_fidelity_requested": output.get("input_fidelity_requested"),
+                    "input_fidelity_applied": output.get("input_fidelity_applied"),
+                    "input_fidelity_support_state": output.get("input_fidelity_support_state"),
+                    "input_fidelity_fallback_reason": output.get("input_fidelity_fallback_reason"),
+                    "identity_local_repair": bool(output.get("identity_local_repair")),
                     "request_index": output.get("request_index"),
                     "requested_image_count": requested_group_count,
                     "requested_image_size": app_request.prompt_plan.size,
@@ -462,6 +468,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "final_provider_prompt_chars": len(final_provider_prompt),
                         "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
                         "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
+                        "provider_prompt_audit": app_request.prompt_plan.variables.get("provider_prompt_audit", {}),
                         "negative_constraints": negative_constraints,
                         "style_notes": list(request.prompt_compilation.style_notes),
                         "layout_notes": list(request.prompt_compilation.layout_notes),
@@ -475,6 +482,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                         "provider_failure_retry": provider_failure_retry,
                         "api_operation": output.get("api_operation"),
+                        "input_fidelity_requested": output.get("input_fidelity_requested"),
+                        "input_fidelity_applied": output.get("input_fidelity_applied"),
+                        "input_fidelity_support_state": output.get("input_fidelity_support_state"),
+                        "input_fidelity_fallback_reason": output.get("input_fidelity_fallback_reason"),
+                        "identity_local_repair": bool(output.get("identity_local_repair")),
                         "request_index": output.get("request_index"),
                         "v3_owned_output": True,
                         "requested_image_count": requested_group_count,
@@ -520,6 +532,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "final_provider_prompt_chars": len(final_provider_prompt),
                 "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
                 "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
+                "provider_prompt_audit": app_request.prompt_plan.variables.get("provider_prompt_audit", {}),
                 "llm_brain": llm_brain,
                 "shared_capabilities": shared_capabilities,
                 "visual_capability_cluster": visual_cluster,
@@ -537,6 +550,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "mode_quality_profile": mode_quality_profile,
                 "provider_failure_retry": provider_failure_retry,
                 "api_operations": [output.get("api_operation") for output in outputs if output.get("api_operation")],
+                "input_fidelity_requested": next(
+                    (output.get("input_fidelity_requested") for output in outputs if output.get("input_fidelity_requested")),
+                    None,
+                ),
+                "input_fidelity_applied": next(
+                    (output.get("input_fidelity_applied") for output in outputs if output.get("input_fidelity_applied")),
+                    None,
+                ),
+                "input_fidelity_support_states": _dedupe(
+                    [str(output.get("input_fidelity_support_state")) for output in outputs if output.get("input_fidelity_support_state")]
+                ),
             },
             warnings=warnings,
         )
@@ -728,6 +752,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         size = self._size_for_request(request)
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         protected_user_direction = self._provider_user_direction(request)
+        prompt_audit = self._provider_prompt_audit(generation_prompt, protected_user_direction)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
             scene=self._scene_for_request(request),
@@ -746,12 +771,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
                 "protected_user_direction_chars": len(protected_user_direction),
                 "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
+                "provider_prompt_audit": prompt_audit,
                 "asset_plan": asset_plan,
                 "v3_prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                 "v3_generation_plan_id": request.generation_plan.generation_plan_id,
                 "v3_provider_strategy": request.generation_plan.provider_strategy.value,
                 "requested_image_count": self._group_count_for_request(request),
                 "requested_image_size": size,
+                "input_fidelity": self._input_fidelity_for_asset_plan(asset_plan),
+                "identity_repair_canvas_path": request.metadata.get("identity_repair_canvas_path"),
+                "identity_repair_mask_path": request.metadata.get("identity_repair_mask_path"),
             },
         )
         return (
@@ -772,6 +801,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             provider_name,
             reference_assets,
         )
+
+    def _input_fidelity_for_asset_plan(self, asset_plan: dict[str, Any]) -> str | None:
+        input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else {}
+        truth_layers = input_plan.get("reference_truth_layers") if isinstance(input_plan, dict) else []
+        for item in truth_layers if isinstance(truth_layers, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("truth_layer") or "") in {"portrait_identity_truth", "product_identity_truth"}:
+                return "high"
+        return None
 
     def _app_provider(self, provider_name: str):
         if provider_name == "doubao_image":
@@ -1504,6 +1543,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if identity_evidence_prompt
                 else ""
             ),
+            self._identity_local_repair_prompt(request),
             f"Visual direction:\n{visual_direction}",
             reference_channel_contract,
             portrait_identity_contract,
@@ -1622,6 +1662,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return self._provider_prompt_for_delivery(
             "\n".join(part for part in parts if str(part or "").strip()),
             protected_user_direction=user_direction,
+        )
+
+    def _identity_local_repair_prompt(self, request: GenerationRequest) -> str:
+        if not bool(request.metadata.get("identity_local_repair_active")):
+            return ""
+        return (
+            "Identity-local repair operation: image 1 is the current generated canvas and its transparent mask is the only repair region. "
+            "Restore the uploaded person's face width/length, forehead-midface-lower-face proportion, brow-eye geometry, eye spacing, "
+            "nose-mouth relationship, cheek-jaw contour, and chin scale inside that region. Preserve the canvas outside the mask and keep "
+            "its prompt-owned makeup direction, expression, hairstyle, wardrobe, pose, scene, lighting, camera, mood, and finish. Do not "
+            "cast a new model, face-slim, enlarge eyes, sharpen the chin, copy source hair, or copy the source scene."
         )
 
     def _identity_evidence_prompt(self, asset_plan: dict[str, Any] | None) -> str:
@@ -1816,7 +1867,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not raw_prompt:
             return ""
         normalized_prompt = "\n".join(self._normalised_unique_prompt_lines(raw_prompt)).strip()
-        max_chars = self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        configured_max = self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        internal_budget = 6000
+        max_chars = min(configured_max, len(protected_user_direction) + internal_budget) if protected_user_direction else min(configured_max, internal_budget)
         if max_chars <= 0 or len(normalized_prompt) <= max_chars:
             return normalized_prompt
         return self._compact_provider_prompt(
@@ -1824,6 +1877,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
             max_chars=max_chars,
             protected_user_direction=protected_user_direction,
         )
+
+    def _provider_prompt_audit(self, prompt: str, protected_user_direction: str) -> dict[str, Any]:
+        prompt = str(prompt or "")
+        user_chars = len(str(protected_user_direction or ""))
+        internal_chars = max(0, len(prompt) - user_chars)
+        return {
+            "user_direction_chars": user_chars,
+            "internal_guidance_chars": internal_chars,
+            "final_provider_prompt_chars": len(prompt),
+            "internal_guidance_target_chars": 6000,
+            "prompt_budget_warning": internal_chars > 6000,
+            "protected_sections": [
+                *(["user_direction"] if protected_user_direction else []),
+                *(["identity_operation"] if "Primary operation:" in prompt else []),
+                *(["reference_channel_policy"] if "Reference channel policy:" in prompt else []),
+                *(["identity_repair_delta"] if "Identity-local repair operation:" in prompt else []),
+            ],
+            "user_direction_lossless": bool(not protected_user_direction or protected_user_direction in prompt),
+        }
 
     def _provider_hard_constraints(
         self,
@@ -1958,6 +2030,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         protected_indexes: set[int] = set()
         critical_prefixes = (
             "Create ",
+            "Primary operation: identity-preserving portrait edit",
+            "Identity-local repair operation:",
+            "Reference channel policy:",
+            "Current prompt owns",
+            "Do not copy the reference image's original lighting",
+            "Portrait identity contract:",
+            "Reference inheritance boundary:",
+            "Same person under changed styling",
+            "Bone structure to preserve:",
+            "Facial-feature relationships to preserve:",
+            "Styling may change; preserve the reference face",
+            "Forbidden identity drift:",
+            "Do not inherit from source reference:",
+            "Identity hero selection:",
+            "Allowed identity-safe variation:",
+            "Structured appearance lock:",
+            "Portrait identity evidence:",
+            "The two portrait reference images are complementary crops",
+            "Use the feature-detail crop",
+            "Use the head-geometry crop",
+            "Fuse both crops into the same-person identity",
             "Generate exactly one image; it must be a single complete image frame",
             "Do not render any final text",
             "Do not add any new visible text",
@@ -2057,6 +2150,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _provider_prompt_priority(self, line: str) -> int:
         lowered = line.lower()
         if line.startswith("Create ") or line.startswith("Visual direction:"):
+            return 0
+        if line.startswith("Primary operation:") or line.startswith("Identity-local repair operation:"):
             return 0
         if "doc90" in lowered or "advanced reference priority" in lowered or "doc93" in lowered or "reference channel policy" in lowered:
             return 0

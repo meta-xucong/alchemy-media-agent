@@ -703,6 +703,33 @@ class PortraitIdentitySimilarityReview(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class IdentityMetricResult(V3BaseModel):
+    status: str = "unavailable"
+    calibrated_score: float | None = None
+    raw_cosine_similarity: float | None = None
+    geometry_score: float | None = None
+    detection_confidence: float = 0.0
+    metric_confidence: float = 0.0
+    reference_face_count: int = 0
+    output_face_count: int = 0
+    selected_reference_index: int | None = None
+    selected_output_index: int | None = None
+    output_face_box: list[float] | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IdentityReviewFusion(V3BaseModel):
+    objective_metric_score: float | None = None
+    multimodal_same_person_score: float | None = None
+    geometry_relationship_score: float | None = None
+    fused_identity_score: float | None = None
+    fusion_confidence: float = 0.0
+    applied_weights: dict[str, float] = Field(default_factory=dict)
+    hard_gate_passed: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class PortraitReferenceBalancePolicy(V3BaseModel):
     policy_id: str
     project_id: str | None = None
