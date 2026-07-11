@@ -6,6 +6,11 @@ Doc93 compatibility note:
 Doc76 remains the placement authority. Doc93 follows this governance by adding
 one shared Reference Channel Policy child module under the Visual Capability
 Cluster. It does not move inheritance rules into Central Brain or templates.
+
+Doc101 is the activation and extensibility authority. Foundation ownership means
+a capability is reusable and centrally governed, not that it runs for every
+job. General Template uses universal base capabilities plus evidence-gated
+plugins; specialized templates configure deeper profiles and deliverable maps.
 ```
 
 ## 1. Purpose
@@ -54,9 +59,9 @@ benefit from them:
 ```text
 single-image aesthetics
 prompt understanding and refinement
-reference-image usage
-identity/product/style consistency primitives
-photorealism and anti-AI-feel rules
+reference-image ownership and usage primitives
+evidence-gated identity, product, scene, and style consistency plugins
+evidence-gated photorealism and anti-AI-feel plugins
 automatic curation / multi-generate-select-best
 generated-image visual review
 bounded retry
@@ -78,6 +83,10 @@ alchemy_creative_agent_3_0/app/project_mode/ project context and memory paths
 
 Foundation modules may expose knobs or contracts for templates, but they must
 not hard-code one vertical's output taxonomy.
+
+Foundation capabilities are split into universal base and evidence-gated shared
+plugins by Doc101. Only the frozen activation plan may make an evidence-gated
+plugin contribute to a job.
 
 ## 4. General Template Responsibility
 
@@ -216,6 +225,8 @@ If documents conflict:
 
 ```text
 Doc50 and Doc67 win for module boundary ownership.
+Doc101 wins for capability activation, manifests, selective execution, hot-plug
+versioning, and inactive-module isolation.
 Doc53 wins for retry budget and loop safety.
 Doc76 wins for foundation-vs-specialized-template placement.
 Doc75 remains the latest identity hero / strict review closure authority inside foundation quality.
@@ -241,6 +252,8 @@ Hard rules:
 6. Do not weaken foundation quality to satisfy one vertical's narrow style.
 7. Do not expose engineering concepts in beginner UI.
 8. Do not infer a full professional package from vague prompts without an explicit template or user-selected mode.
+9. Do not treat foundation ownership or registry presence as automatic activation.
+10. Do not let inactive capabilities contribute prompt, review, retry, or memory data.
 ```
 
 Preferred pattern:

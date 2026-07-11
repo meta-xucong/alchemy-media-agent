@@ -17,6 +17,11 @@ output curation.
 This document still owns the architecture rule that all reusable visual
 enhancement belongs inside one V3-native Visual Capability Cluster. Documents
 51 and 52 define the next child modules and quality gates under that cluster.
+
+Document 101 is the latest execution and extensibility refinement. The cluster
+owns a manifest-driven capability registry and Activation Planner. Registered
+child modules are not automatically executed; only capabilities in the frozen
+Doc101 activation plan may contribute to generation, review, or retry.
 ```
 
 ## 1. Purpose
@@ -85,8 +90,8 @@ Compatibility path:
 Existing files such as `asset_role_analyzer.py`, `asset_binding_planner.py`,
 `case_library.py`, `visual_grammar_lock.py`, `prompt_constraint_compiler.py`,
 `output_review.py`, and `history_reference.py` may remain in place during the
-first code phase. They must be registered and dispatched as child modules of
-the Visual Capability Cluster.
+first code phase. They must be registered as child modules of the Visual
+Capability Cluster and dispatched only through the Doc101 activation plan.
 
 Hard boundary:
 
@@ -137,6 +142,7 @@ The central brain remains an orchestrator and consumer:
 CentralCreativeBrain
   reads capability outputs
   reads Brain checkpoint outputs
+  carries the structured capability activation intent
   chooses V3-level creative decisions
   returns structured plans
 ```
@@ -144,6 +150,11 @@ CentralCreativeBrain
 It must not own reusable visual grammar extraction, visual-memory reuse,
 reference-binding semantics, output visual review, or style-consistency rules.
 Those belong to the Visual Capability Cluster.
+
+Under Doc101, the Central Brain layer is the semantic activation authority: the
+LLM checkpoint emits task and capability intent. This does not permit
+`CentralCreativeBrain` to instantiate plugins. The Visual Capability Cluster
+validates the intent and owns selective plugin execution.
 
 Document 67 tightens this rule into an implementation cleanup: the central
 brain and deterministic fallback Brain may consume visual cluster payloads, but
@@ -248,11 +259,18 @@ Project
   -> Template
       -> Scenario Pack
           -> ScenarioRuntime
+              -> Pre-Activation Base Capabilities
+                  -> asset and reference understanding
+                  -> project/template context normalization
+              -> DirectLLMCheckpointBrain
+                  -> VisualTaskProfile
+                  -> CapabilityActivationIntent
               -> SharedCapabilityRegistry
                   -> VisualCapabilityCluster
-                      -> child visual modules
+                      -> CapabilityActivationPlanner
+                      -> VisualCapabilityRegistry
+                      -> active child visual modules only
                   -> other shared capabilities
-              -> DirectLLMCheckpointBrain
               -> CentralCreativeBrain
               -> PromptCompilerAgent
               -> GenerationProvider

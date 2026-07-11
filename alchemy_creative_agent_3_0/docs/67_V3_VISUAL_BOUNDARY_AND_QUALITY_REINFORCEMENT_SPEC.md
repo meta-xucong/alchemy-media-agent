@@ -27,6 +27,16 @@ Document 69 is the accepted authority after Doc68 for prompt atom realism and
 reference absorption. It keeps this boundary intact and only strengthens
 existing visual_cluster modules.
 
+Doc101 execution refinement:
+
+```text
+This document still forbids CentralCreativeBrain and fallback Brain from
+constructing visual modules. Central Brain may emit semantic capability intent.
+The Visual Capability Cluster owns manifest validation, dependency/conflict
+resolution, and selective execution. Inactive modules must not leak into prompt,
+review, retry, or project memory.
+```
+
 ## 0. Boundary Cleanup Pre-Chapter
 
 ### 0.1 Goal
@@ -70,7 +80,8 @@ LLM Brain / fallback Brain
 Visual Capability Cluster
   owns reusable visual grammar, identity, reference, mode, suite, realism,
   review, and quality contracts
-  owns child module execution and exported cluster payloads
+  owns the capability registry, Activation Planner validation, selective child
+  module execution, and exported cluster payloads
 
 Scenario Pack / Vertical Pack
   owns business/template-specific asset intent

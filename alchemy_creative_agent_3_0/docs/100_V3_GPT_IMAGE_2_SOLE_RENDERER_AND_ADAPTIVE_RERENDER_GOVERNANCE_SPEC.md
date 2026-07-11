@@ -31,6 +31,11 @@ Project -> Template -> Scenario Pack -> Job
   -> best reviewed delivery
 ```
 
+Doc101 governs which capability-specific generation, review, and retry rules
+are allowed into this chain. GPT Image 2 remains the sole renderer regardless
+of plugin activation. Review and rerender must use the same frozen activation
+plan; an inactive plugin cannot add a retry reason after generation.
+
 It does not move visual rules into Central Brain, add a second template system,
 change Project history, or create a V1/V2 runtime dependency.
 

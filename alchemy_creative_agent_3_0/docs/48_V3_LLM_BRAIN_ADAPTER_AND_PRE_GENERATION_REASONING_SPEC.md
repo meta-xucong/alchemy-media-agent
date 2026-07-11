@@ -20,6 +20,11 @@ policy, suite variation planning, and output curation remain Visual Capability
 Cluster / Product API responsibilities. The LLM Brain may summarize reports and
 write beginner-facing explanations, but it must not own visual review or retry
 scoring.
+
+Document 101 adds the capability-activation checkpoint. The V3 Brain must emit
+`VisualTaskProfile` and `CapabilityActivationIntent`; it must not import or
+instantiate plugins. The shared Activation Planner performs deterministic
+manifest, evidence, dependency, conflict, and budget validation.
 ```
 
 ## 1. Purpose
@@ -79,6 +84,8 @@ Current authoritative refinement:
 5. The LLM Brain consumes Visual Capability Cluster outputs and produces
    checkpoint decisions; it must not absorb or duplicate the cluster's visual
    module responsibilities.
+6. The LLM Brain proposes capability activation semantically, while Doc101
+   runtime contracts validate and freeze the executable plan.
 ```
 
 Use document `50` for the next implementation phase that upgrades this adapter
@@ -136,8 +143,11 @@ V3 Foundation
   -> Project
       -> Template
           -> Scenario Pack
-              -> Shared Capabilities
+              -> Pre-Activation Base Capabilities
               -> LLM Brain Adapter
+                  -> VisualTaskProfile
+                  -> CapabilityActivationIntent
+              -> Visual Capability Cluster selective capabilities
               -> CentralCreativeBrain
               -> Job
               -> Generation Provider

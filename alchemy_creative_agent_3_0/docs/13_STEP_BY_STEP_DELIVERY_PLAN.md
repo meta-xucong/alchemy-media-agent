@@ -1075,6 +1075,10 @@ current phase requires another Lovart-quality pass
 document 82 project-output reconciliation is implemented so interrupted
 background generation cannot leave real output files detached from the Project
 timeline or frontend output board
+document 101 capability activation governance is implemented before adding more
+shared visual plugins: Central Brain emits task/activation intent, the planner
+validates a frozen plan, inactive modules cannot leak, and specialized templates
+configure reusable capability profiles instead of duplicating modules
 ```
 
 ## 17. Strategic Reminder

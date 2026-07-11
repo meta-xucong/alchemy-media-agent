@@ -13,10 +13,20 @@ and issue codes remain readable only for compatibility.
 Doc93 compatibility note:
 
 ```text
-Doc91 remains the Human Realism placement and activation authority. Reference
-inheritance belongs to Doc93. Human Realism may improve real-camera rendering
-and reject AI artifacts, but it cannot promote source hair, wardrobe, lighting,
-scene, camera, or style into identity truth.
+Doc91 remains the Human Realism placement, evidence, and contribution authority.
+Doc101 owns activation. Reference inheritance belongs to Doc93. Human Realism
+may improve real-camera rendering and reject AI artifacts, but it cannot promote
+source hair, wardrobe, lighting, scene, camera, or style into identity truth.
+```
+
+Doc101 activation correction:
+
+```text
+Doc91 remains the Human Realism ownership and contribution authority. Doc101 is
+the latest activation authority. Human Realism publishes manifest evidence and
+contribution contracts; it must not independently inject rules from broad
+keyword matching. Only a frozen Doc101 activation plan may enable its prompt,
+review, or retry contributions.
 ```
 
 ## 1. Purpose
@@ -73,7 +83,7 @@ Doc91 is the latest authority for:
 
 ```text
 where human realism logic lives
-when the human realism layer activates
+what evidence and profiles the activation planner may use for human realism
 how anti-AI-face rules are shared across General, E-Commerce, and future
 Photography templates
 how recent portrait realism tuning is consolidated into one pluggable module
@@ -101,7 +111,8 @@ If an earlier document implies that human realism is only a portrait or
 General Template concern, Doc91 wins.
 
 If an earlier implementation uses only `subject_type == "character"` to decide
-whether anti-AI-face and real-human rules apply, Doc91 wins.
+whether anti-AI-face and real-human rules apply, Doc91 supplies the richer
+evidence model and Doc101 owns the final activation decision.
 
 If a template needs real people, it must call the shared Human Realism Plugin
 instead of duplicating human face prompt rules locally.
@@ -229,9 +240,14 @@ human_realism_plugin:
   doc: "91"
 ```
 
-## 5. Activation Rules
+## 5. Activation Evidence Rules
 
-Enable the plugin when the requested image contains or implies real humans.
+The signals below are evidence supplied to Central Brain and the Doc101
+Activation Planner. They are not permission for the plugin to self-activate or
+write directly into the final prompt.
+
+The Activation Planner may enable the plugin when verified task evidence says
+the requested image contains or implies real humans.
 
 Strong enable signals:
 
@@ -257,14 +273,18 @@ product-in-use by a person
 hand-held product
 ```
 
-Chinese enable signals include equivalent natural-language concepts such as:
+Chinese evidence may include equivalent natural-language concepts such as:
 
 ```text
-真人, 人像, 写真, 摄影, 模特, 美女, 人物, 女孩, 男孩, 儿童, 小朋友,
-脸, 皮肤, 手, 穿着, 童装, 服装上身, 生活方式图, 街拍
+真人, 人像, 写真, 模特, 美女, 人物, 女孩, 男孩, 儿童, 小朋友,
+脸, 皮肤, 手, 穿着, 服装上身, 有人物的生活方式图, 街拍人物
 ```
 
-Enable even if `subject_type` is `product` when:
+Generic words such as `photo`, `photography`, `照片`, or `摄影` are not human
+evidence by themselves. They require a visible-person entity, person reference,
+or explicit human-subject phrase in the task profile.
+
+The planner may enable it even if `subject_type` is `product` when:
 
 ```text
 the product is worn by a person
@@ -275,8 +295,8 @@ fitness, lifestyle, or other people-present product photography
 the user uploads a face/person reference for a product scene
 ```
 
-Disable or reduce the plugin only when the user clearly requests a non-real
-human rendering:
+The planner must disable or reduce the plugin when there is no verified human
+entity or when the user clearly requests a non-real human rendering:
 
 ```text
 anime

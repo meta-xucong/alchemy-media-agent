@@ -10,6 +10,16 @@ This phase should be implemented after `23` is complete and before building the 
 
 ## Document 50/51 Refinement
 
+Doc101 activation refinement:
+
+```text
+The shared registry remains the module foundation, but registered does not mean
+executed. Central Brain proposes capabilities through a structured activation
+intent; the Doc101 Activation Planner resolves a frozen plan; only active
+modules execute and contribute to prompt, review, and retry. New plugins use
+manifests and must not add independent keyword-only activation paths.
+```
+
 Document `50` is the authority for the next ownership upgrade of this layer.
 Document `51` is the current authority for the commercial visual-consistency
 upgrade built on top of that ownership model.

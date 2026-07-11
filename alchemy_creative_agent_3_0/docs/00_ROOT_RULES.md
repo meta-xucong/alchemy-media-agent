@@ -212,7 +212,8 @@ Central Creative Brain
   → task interpretation
   → agent routing
   → vertical sub-agent selection
-  → provider routing
+  → capability activation intent
+  → template and generation strategy
   → scoring and refinement policy
   → asset pack assembly
 ```
@@ -262,7 +263,7 @@ A vertical agent pack may customize:
 - layout templates
 - prompt compilation
 - scoring rules
-- provider routing
+- capability profiles and generation strategy within Doc100 renderer limits
 - asset pack formats
 
 But every vertical agent pack must still use the V3 shared contracts:
@@ -334,8 +335,9 @@ task mood and art direction. Do not improve one axis by breaking the other two.
 For real human, model, fashion, kidswear, hand-held product, product-on-person,
 or lifestyle images with visible people, V3 must route realism and anti-AI-face
 guidance through the shared Human Realism Plugin in the Visual Capability
-Cluster. This applies even when the primary template subject is a product.
-Disable or reduce it only when the user explicitly requests anime, cartoon,
+Cluster when the Doc101 capability activation plan confirms real-human evidence.
+This applies even when the primary template subject is a product. Disable it
+when no person is present or when the user explicitly requests anime, cartoon,
 CG, illustration, toy, doll, mascot, or another non-photoreal human style.
 
 ## 12. Commercial Usability Comes Before Artistic Exploration
@@ -381,9 +383,13 @@ External projects may implement V3 interfaces such as:
 - StyleConditionProvider
 - LayoutConditionProvider
 - ScoringProvider
-- GenerationProvider
 - PromptOptimizationProvider
 - WorkflowSidecarProvider
+
+Doc100 supersedes any older implication that an optional external image model
+may become the V3 production final-pixel renderer. External visual extensions
+are analysis, conditioning, scoring, or research providers unless a later root
+rule explicitly replaces Doc100.
 
 ## 15. No Premature Heavy Dependency
 
@@ -525,6 +531,24 @@ sole final-pixel renderer for V3. Local CPU/GPU tools may contribute analysis
 metadata only; they may not repaint, composite, patch, or replace delivered
 pixels. Doc98 and Doc99 are isolated research records and are not production
 provider contracts.
+
+## 22.2 Capability Activation And Hot-Plug Boundary
+
+Doc101 is the current authority for reusable visual capability activation.
+Central Brain must emit a structured multi-label task profile and capability
+activation intent. The Capability Activation Planner validates manifests,
+evidence, dependencies, conflicts, template policy, user controls, and budget,
+then freezes one plan for generation, review, and retry.
+
+Foundation-owned does not mean always enabled. Inactive plugins contribute no
+prompt clauses, review checks, retry reasons, project memory, or user-facing
+explanations. New governed plugins must register through the Visual Capability
+Registry and remain reusable across templates without changing Central Brain,
+Project Mode, Product API, or the GPT Image 2 provider path.
+
+General Template remains broad and scenario-neutral. Specialized templates own
+professional deliverable maps, capability profiles, and domain acceptance
+criteria.
 
 ## 23. Strategic Reminder
 

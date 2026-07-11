@@ -258,6 +258,12 @@ boundaries before further tuning. Document 68 adds V3-owned casebook-guided
 photographic recipes distilled from V2 and GPT-Image-2 prompt patterns, while
 extending existing visual-cluster modules instead of creating duplicate
 functionality.
+Document 101 is the latest capability-activation and hot-plug authority:
+Central Brain emits a multi-label task profile and capability intent, the
+Visual Capability Cluster validates one frozen activation plan, and only active
+plugins may contribute to generation, review, retry, or memory. General Template
+stays broad while specialized templates configure deeper reusable profiles and
+own professional deliverable maps.
 E-Commerce is now unfrozen only
 inside Project Mode through document 42; future templates still require their
 own accepted specs, registry activation, and document 43 quality gate checks.
@@ -444,7 +450,7 @@ Documents 69-78: prompt-atom absorption, anti-AI-face tuning, East Asian fair-co
 Documents 80-82: provider reference upload compression, provider failure retry/status sync, and project output reconciliation/frontend recovery.
 Document 83: retry-delivery presentation and uploaded portrait reference conflict-closure authority. Main result surfaces must respect requested image count, show final delivery outputs only, keep retry-superseded originals in folded history, and let uploaded portrait identity-critical traits win over conflicting prompt aesthetics unless the user explicitly requests a new identity.
 Documents 84-90: structured appearance identity, image-to-image reference truth, portrait bone-structure locks, identity/style separation, portrait reference balance, portrait stability testing, and General Template advanced reference priority controls.
-Document 91: current Human Realism Plugin governance. Real-human rendering, anti-AI-face rules, child/model realism, and cross-template human realism activation belong in the shared Visual Capability Cluster; identity truth remains owned by the portrait identity/reference modules.
+Document 91: current Human Realism Plugin ownership and contribution governance. Real-human rendering, anti-AI-face rules, and child/model realism belong in the shared Visual Capability Cluster; Doc101 owns activation and identity truth remains owned by the portrait identity/reference modules.
 Document 92: style-aware Human Realism tuning. Moody, dark, ancient/traditional, cinematic, low-key, or melancholic portraits must not receive generic bright/fresh/luminous/high-key commercial skin pressure; AI-feel should be reduced through texture, controlled highlights, and anti-plastic rules while preserving the requested mood.
 Document 93: current reference-channel and prompt-ownership authority. Reference role and per-channel policy decide what may be inherited; ordinary portrait uploads preserve identity geometry but do not automatically preserve hair, makeup, wardrobe, lighting, scene, camera, or whole-image style. Human Realism remains independent from inheritance governance.
 Document 94: current shared-runtime anti-overfitting authority. Historical scene and demographic examples remain tests, while shared Human Realism and provider logic use universal rendering variables.
@@ -453,6 +459,7 @@ Document 96: objective portrait identity metric authority. Its former local-repa
 Document 97: current subject-continuity asset-pack and adaptive-reference authority. Explicit user selections lead the next generation while uploaded identity truth remains the root guard; weak generated anchors are quarantined and reference evidence is view-aware and bounded.
 Documents 98-99: isolated research records only. The identity sidecar and ComfyUI gateway are not production V3 providers and cannot create or modify user-delivered final images.
 Document 100: current production rendering authority. GPT Image 2 API is the sole final-pixel renderer; V3 improves quality through structured reasoning, ranked references, real review, bounded issue-specific whole-image rerender, and best-reviewed-result retention.
+Document 101: current planned capability activation and visual-plugin extensibility authority. Registered does not mean enabled; Central Brain proposes capabilities, the shared planner validates manifests/evidence/dependencies/conflicts, and inactive plugins contribute nothing. Runtime migration remains pending until its acceptance tests pass.
 V3.8 Project Mode: current accepted architecture.
 General Template: first active project template.
 E-Commerce Template: active only through Project Mode and the template registry; product references are required before E-Commerce jobs can be created.

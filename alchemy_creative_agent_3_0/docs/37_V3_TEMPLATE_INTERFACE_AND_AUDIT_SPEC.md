@@ -22,6 +22,11 @@ Templates may declare whether they prioritize style, product truth, character
 identity, brand assets, or layout, but they must not implement private strong
 reference binding, identity locks, output review, retry, or best-output
 selection outside the Visual Capability Cluster.
+
+Document 101 supersedes the earlier child-module activation shape. Templates
+declare capability requirements, recommendations, prohibitions, and profiles;
+they do not directly instantiate child modules. Central Brain proposes the job
+activation intent and the shared Activation Planner validates it.
 ```
 
 ---
@@ -109,13 +114,23 @@ Recommended `visual_capability_policy`:
 
 ```text
 enabled
-required_child_modules
-optional_child_modules
+required_capabilities
+recommended_capabilities
+optional_capabilities
+forbidden_capabilities
+capability_profile_overrides
+activation_threshold_overrides
 reads_project_visual_snapshot
 writes_project_visual_snapshot
 can_use_brand_memory_visuals
 output_review_required
+deliverable_role_owner
+review_threshold_profile
 ```
+
+Historical `required_child_modules` and `optional_child_modules` fields may be
+read during migration, but new templates must use Doc101 capability IDs and
+must not import plugin implementations.
 
 ---
 
@@ -201,6 +216,7 @@ A future template can become active only when it has:
 8. a declared `visual_capability_policy`,
 9. tests proving reusable visual logic runs through the Visual Capability
    Cluster rather than template-private code.
+10. a Doc101 `TemplateCapabilityPolicy` with no undeclared plugin dependency.
 
 No future template may become active by simply adding a card.
 
