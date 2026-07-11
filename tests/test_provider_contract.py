@@ -9,7 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.providers.base import ProviderNotConfiguredError, ProviderRateLimitError, ProviderRuntimeError
+from app.providers.base import (
+    ProviderCapabilityMismatchError,
+    ProviderNotConfiguredError,
+    ProviderRateLimitError,
+    ProviderRuntimeError,
+)
 import app.providers.doubao_image as doubao_image_provider
 import app.providers.gemini_image as gemini_image_provider
 import app.providers.openai_image as openai_image_provider
@@ -339,6 +344,40 @@ def test_openai_image_provider_passes_quality_to_sdk_call():
 
     assert captured["quality"] == "low"
     assert captured["model"] == "gpt-image-2"
+
+
+def test_openai_image_provider_generation_only_square_transport_is_explicit(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "generation_only_square_b64")
+
+    kwargs = provider._image_kwargs(  # noqa: SLF001
+        ImagePromptPlan(main_subject="咖啡海报", count=1, size="1024x1024", quality="medium", output_format="png")
+    )
+
+    assert kwargs == {"size": "1024x1024", "response_format": "b64_json"}
+    capabilities = asyncio.run(provider.capabilities())
+    assert capabilities.operations == ["generate"]
+    assert capabilities.limits["sizes"] == ["1024x1024"]
+    with pytest.raises(ProviderCapabilityMismatchError, match="1024x1024 images"):
+        provider._image_kwargs(ImagePromptPlan(main_subject="咖啡海报", count=1, size="1024x1536"))  # noqa: SLF001
+    with pytest.raises(ProviderCapabilityMismatchError, match="text-to-image generation only"):
+        provider._assert_reference_transport_supported(1)  # noqa: SLF001
+
+
+def test_openai_image_provider_square_b64_reference_edit_transport_is_explicit(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "square_b64_reference_edit")
+
+    kwargs = provider._image_kwargs(  # noqa: SLF001
+        ImagePromptPlan(main_subject="咖啡海报", count=1, size="1024x1024", quality="medium", output_format="png")
+    )
+
+    assert kwargs == {"size": "1024x1024", "response_format": "b64_json"}
+    capabilities = asyncio.run(provider.capabilities())
+    assert capabilities.operations == ["generate", "edit", "image_reference", "image_edit"]
+    assert capabilities.limits["sizes"] == ["1024x1024"]
+    provider._assert_reference_transport_supported(1)  # noqa: SLF001
+    assert provider._supports_input_fidelity() is False  # noqa: SLF001
 
 
 def test_openai_image_provider_accepts_url_response(monkeypatch):

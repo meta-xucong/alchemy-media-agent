@@ -2,6 +2,8 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -381,6 +383,39 @@ def test_production_provider_does_not_retry_non_retryable_configuration_failure(
     assert summary["attempts"][0]["classification"] == "non_retryable_provider_failure"
 
 
+def test_production_provider_does_not_retry_transport_capability_mismatch(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+    from app.providers.base import ProviderCapabilityMismatchError
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    calls: list[int] = []
+
+    async def capability_mismatch(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        calls.append(1)
+        raise ProviderCapabilityMismatchError(
+            "Configured OpenAI image transport only supports 1024x1024 text-to-image generation.",
+            provider="openai_gpt_image",
+            detail={"transport_profile": "generation_only_square_b64"},
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", capability_mismatch)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderCapabilityMismatchError):
+            provider.generate(_generation_request())
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert len(calls) == 1
+    summary = provider._last_provider_failure_retry_summary  # noqa: SLF001
+    assert summary["final_status"] == "failed"
+    assert summary["attempts"][0]["classification"] == "non_retryable_provider_failure"
+
+
 def test_production_provider_respects_requested_size_without_multiplying_group_count(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
@@ -587,6 +622,28 @@ def test_production_provider_can_apply_explicit_emergency_prompt_cap() -> None:
     assert "Human realism contract" in final_prompt
     assert "Identity continuity" in final_prompt
     assert "Avoid:" in final_prompt
+    assert "watermark" in final_prompt
+
+
+def test_production_provider_honors_transport_prompt_cap(monkeypatch) -> None:
+    from app.config import settings
+
+    request = _human_generation_request()
+    user_direction = "Keep the desk lamp centered on a warm oak desk in clean morning light; no text."
+    request.metadata["user_input"] = user_direction
+    request.prompt_compilation.visual_prompt = " ".join(
+        [
+            "premium product atmosphere with honest material rendering, clean composition, and natural commercial lighting"
+            for _ in range(80)
+        ]
+    )
+    request.prompt_compilation.negative_prompt = "watermark, distorted product, clutter, " * 60
+    monkeypatch.setattr(settings, "openai_image_transport_max_prompt_chars", 1800)
+
+    final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
+
+    assert len(final_prompt) <= 1800
+    assert user_direction in final_prompt
     assert "watermark" in final_prompt
 
 

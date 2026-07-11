@@ -16,7 +16,13 @@ import httpx
 
 from app.config import openai_sdk_client_kwargs, settings
 from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationResult
-from app.providers.base import ProviderCapabilities, ProviderNotConfiguredError, ProviderRateLimitError, ProviderRuntimeError
+from app.providers.base import (
+    ProviderCapabilities,
+    ProviderCapabilityMismatchError,
+    ProviderNotConfiguredError,
+    ProviderRateLimitError,
+    ProviderRuntimeError,
+)
 from app.services.asset_planning import reference_image_paths
 from app.services.provider_reference import prepare_provider_reference_image, prepare_provider_reference_images
 from app.storage import media_store
@@ -187,18 +193,23 @@ _openai_image_rate_limiter = _OpenAIImageRateLimiter()
 
 class OpenAIGPTImageProvider:
     name = "openai_gpt_image"
+    _STANDARD_TRANSPORT_PROFILE = "openai_standard"
+    _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
+    _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
 
     def __init__(self, model: str | None = None):
         self.model = model
 
     async def capabilities(self) -> ProviderCapabilities:
         configured = bool(settings.openai_api_key)
+        generation_only_square = self._uses_generation_only_square_b64_transport()
+        square_b64_transport = self._uses_square_b64_transport()
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
             models=[self._model()],
-            operations=["generate", "edit", "image_reference", "image_edit"],
-            advanced_asset_roles=[
+            operations=["generate"] if generation_only_square else ["generate", "edit", "image_reference", "image_edit"],
+            advanced_asset_roles=[] if generation_only_square else [
                 "style_reference",
                 "subject_reference",
                 "logo_overlay",
@@ -209,8 +220,8 @@ class OpenAIGPTImageProvider:
             model_capabilities=[
                 {
                     "id": self._model(),
-                    "capabilities": ["text_to_image", "image_reference", "image_edit"],
-                    "advanced_asset_roles": [
+                    "capabilities": ["text_to_image"] if generation_only_square else ["text_to_image", "image_reference", "image_edit"],
+                    "advanced_asset_roles": [] if generation_only_square else [
                         "style_reference",
                         "subject_reference",
                         "logo_overlay",
@@ -223,15 +234,16 @@ class OpenAIGPTImageProvider:
             limits={
                 "max_batch": 10,
                 "max_reference_images": 5,
-                "formats": ["png", "jpeg", "webp"],
-                "sizes": ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
+                "formats": ["png"] if square_b64_transport else ["png", "jpeg", "webp"],
+                "sizes": ["1024x1024"] if square_b64_transport else ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
                 "custom_size": {
                     "min_width": 1024,
                     "min_height": 1024,
                     "max_width": 3840,
                     "max_height": 3840,
                 },
-                "qualities": ["auto", "low", "medium", "high"],
+                "qualities": [] if square_b64_transport else ["auto", "low", "medium", "high"],
+                "transport_profile": self._transport_profile(),
                 "local_max_requests_per_minute": settings.openai_image_local_max_requests_per_minute,
                 "local_max_outputs_per_minute": settings.openai_image_local_max_outputs_per_minute,
                 "local_queue_timeout_seconds": settings.openai_image_local_queue_timeout_seconds,
@@ -262,6 +274,7 @@ class OpenAIGPTImageProvider:
             reference_paths = [repair_canvas, *reference_paths]
         reference_paths = self._provider_reference_paths(reference_paths)
         repair_mask = self._identity_repair_mask_path(plan)
+        self._assert_reference_transport_supported(len(reference_paths))
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
                 api_key=settings.openai_api_key,
@@ -387,8 +400,12 @@ class OpenAIGPTImageProvider:
         requested_fidelity = self._requested_input_fidelity(plan)
         capability_key = self._input_fidelity_capability_key()
         support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
-        applied_fidelity = requested_fidelity if support_state != "unsupported" else None
+        applied_fidelity = requested_fidelity if support_state != "unsupported" and self._supports_input_fidelity() else None
         fidelity_fallback_reason = cached_reason if applied_fidelity is None and requested_fidelity else None
+        if requested_fidelity and not self._supports_input_fidelity():
+            fidelity_fallback_reason = (
+                f"Configured OpenAI image transport profile {self._transport_profile()} does not accept input_fidelity."
+            )
         operation_timeout = self._client_timeout_seconds(image_edit=True)
         operation_deadline = time.monotonic() + operation_timeout
         for attempt in range(1, max_attempts + 1):
@@ -575,6 +592,7 @@ class OpenAIGPTImageProvider:
     async def edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         if not settings.openai_api_key:
             raise ProviderNotConfiguredError("OPENAI_API_KEY is not configured.", provider=self.name)
+        self._assert_reference_transport_supported(1)
         if not request.source_output_id:
             raise ProviderRuntimeError(
                 "OpenAI image edit requires a stored source output image.",
@@ -660,6 +678,19 @@ class OpenAIGPTImageProvider:
             return None, None
 
     def _image_kwargs(self, plan) -> dict[str, str]:
+        if self._uses_square_b64_transport():
+            requested_size = str(getattr(plan, "size", "") or "").strip().lower()
+            if requested_size and requested_size not in {"auto", "1024x1024"}:
+                raise ProviderCapabilityMismatchError(
+                    "Configured OpenAI image transport only supports 1024x1024 images.",
+                    provider=self.name,
+                    detail={
+                        "transport_profile": self._transport_profile(),
+                        "requested_size": requested_size,
+                        "supported_sizes": ["1024x1024"],
+                    },
+                )
+            return {"size": "1024x1024", "response_format": "b64_json"}
         kwargs = {
             "quality": plan.quality,
             "output_format": plan.output_format,
@@ -667,6 +698,39 @@ class OpenAIGPTImageProvider:
         if plan.size:
             kwargs["size"] = plan.size
         return kwargs
+
+    def _transport_profile(self) -> str:
+        configured = str(getattr(settings, "openai_image_transport_profile", "") or "").strip().lower()
+        if configured in {
+            self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE,
+            self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE,
+        }:
+            return configured
+        return self._STANDARD_TRANSPORT_PROFILE
+
+    def _uses_square_b64_transport(self) -> bool:
+        return self._transport_profile() in {
+            self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE,
+            self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE,
+        }
+
+    def _uses_generation_only_square_b64_transport(self) -> bool:
+        return self._transport_profile() == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE
+
+    def _supports_input_fidelity(self) -> bool:
+        return not self._uses_square_b64_transport()
+
+    def _assert_reference_transport_supported(self, reference_image_count: int) -> None:
+        if reference_image_count and self._uses_generation_only_square_b64_transport():
+            raise ProviderCapabilityMismatchError(
+                "Configured OpenAI image transport supports text-to-image generation only and cannot preserve uploaded or selected image references.",
+                provider=self.name,
+                detail={
+                    "transport_profile": self._transport_profile(),
+                    "reference_image_count": reference_image_count,
+                    "unsupported_operation": "image_reference",
+                },
+            )
 
     def _outputs_from_response(self, response, plan, *, request_index: int) -> list[dict]:
         outputs: list[dict] = []

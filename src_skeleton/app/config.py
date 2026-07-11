@@ -161,6 +161,14 @@ class Settings(BaseModel):
     default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
     default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")
     openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2"))
+    # Keep upstream-specific request quirks out of V3 planning.  The default is
+    # the standard OpenAI Images contract; a constrained OpenAI-compatible
+    # gateway can explicitly opt into a smaller, generation-only transport.
+    openai_image_transport_profile: str = os.getenv("OPENAI_IMAGE_TRANSPORT_PROFILE", "openai_standard").strip().lower() or "openai_standard"
+    # Zero keeps the V3 provider's normal prompt budget.  A constrained gateway
+    # can lower this cap; user-authored direction stays lossless while repeated
+    # framework guidance is compacted for transport.
+    openai_image_transport_max_prompt_chars: int = _int_env("OPENAI_IMAGE_TRANSPORT_MAX_PROMPT_CHARS", 0)
     doubao_image_api_key: str | None = os.getenv("DOUBAO_IMAGE_API_KEY")
     doubao_image_base_url: str | None = _normalize_openai_base_url(
         os.getenv("DOUBAO_IMAGE_BASE_URL") or "https://aiself.vip"

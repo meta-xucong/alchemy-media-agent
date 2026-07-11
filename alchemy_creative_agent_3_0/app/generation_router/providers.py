@@ -750,6 +750,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             # making explicit client-side 400 errors retryable.
             return "retryable_provider_failure"
         non_retryable_markers = [
+            "provider_capability_mismatch",
+            "transport_profile",
+            "only supports 1024x1024 text-to-image generation",
+            "supports text-to-image generation only",
             "provider_not_configured",
             "not configured",
             "missing api key",
@@ -2090,7 +2094,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not raw_prompt:
             return ""
         normalized_prompt = "\n".join(self._normalised_unique_prompt_lines(raw_prompt)).strip()
-        configured_max = self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        configured_max = self._transport_prompt_char_cap() or self.max_provider_prompt_chars or self.provider_prompt_target_chars
         internal_budget = 6000
         max_chars = min(configured_max, len(protected_user_direction) + internal_budget) if protected_user_direction else min(configured_max, internal_budget)
         if max_chars <= 0 or len(normalized_prompt) <= max_chars:
@@ -2100,6 +2104,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             max_chars=max_chars,
             protected_user_direction=protected_user_direction,
         )
+
+    def _transport_prompt_char_cap(self) -> int:
+        try:
+            from app.config import settings
+
+            return max(0, int(getattr(settings, "openai_image_transport_max_prompt_chars", 0) or 0))
+        except (ImportError, TypeError, ValueError):
+            return 0
 
     def _provider_prompt_audit(self, prompt: str, protected_user_direction: str) -> dict[str, Any]:
         prompt = str(prompt or "")
