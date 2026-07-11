@@ -477,3 +477,8 @@ Doc97 improves consistency with the existing provider. It does not claim that a
 generic image provider has become an identity-specialized generator. A future
 identity-native provider may plug into the repair/provider capability contract
 without changing Project Mode or Central Brain.
+
+Doc98 now defines that live provider contract. Doc97 remains authoritative for
+subject evidence, ordering, root-truth retention, and drift quarantine; Doc98 is
+authoritative for identity-sidecar capability proof, execution, fallback, and
+actual-provider repair eligibility.

@@ -1,5 +1,10 @@
 # 96 V3 High-Fidelity Portrait Identity Metric And Local Repair Spec
 
+> Compatibility note: Doc97 governs subject evidence and repair strategy;
+> Doc98 governs live identity-native provider capability evidence and fallback.
+> A generic mask edit or configured provider name alone cannot enable identity
+> local repair.
+
 ## 1. Purpose
 
 Doc96 is the implementation authority for moving universal portrait identity

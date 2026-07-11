@@ -1194,6 +1194,34 @@ class V3ProductApiService:
         plan = cluster.get("identity_repair_strategy_plan") if isinstance(cluster, dict) else None
         return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
 
+    def _result_has_identity_native_local_repair_capability(self, result: PlanningResult) -> bool:
+        store = getattr(self, "output_store", None)
+        if store is None:
+            return False
+        output_ids: list[str] = []
+        if getattr(result, "asset_pack", None) is not None:
+            output_ids.extend(self._visual_result_output_ids(result))
+        metadata = result.metadata if isinstance(getattr(result, "metadata", None), dict) else {}
+        package = metadata.get("post_generation_review_package")
+        if isinstance(package, dict):
+            for inspection in package.get("inspections", []) if isinstance(package.get("inspections"), list) else []:
+                if isinstance(inspection, dict) and inspection.get("output_id"):
+                    output_ids.append(str(inspection["output_id"]))
+        for output_id in self._dedupe_strings(output_ids):
+            output = store.get_output(output_id)
+            output_metadata = dict(output.metadata or {}) if output is not None else {}
+            routing = output_metadata.get("identity_native_routing")
+            if bool(output_metadata.get("identity_native_local_repair_capable")):
+                return True
+            if (
+                isinstance(routing, dict)
+                and bool(routing.get("delivered"))
+                and bool(routing.get("identity_native_local_repair"))
+                and routing.get("capability_evidence_source") == "live_sidecar_response"
+            ):
+                return True
+        return False
+
     def _identity_local_repair_metadata(
         self,
         result: PlanningResult,
@@ -1220,7 +1248,12 @@ class V3ProductApiService:
         if not identity_codes.intersection(reason_codes):
             return {}
         repair_strategy = self._identity_repair_strategy_from_result(result)
-        if repair_strategy and not bool(repair_strategy.get("allow_face_local_repair")):
+        actual_native_repair_capability = self._result_has_identity_native_local_repair_capability(result)
+        if (
+            repair_strategy
+            and not bool(repair_strategy.get("allow_face_local_repair"))
+            and not actual_native_repair_capability
+        ):
             return {}
         package = result.metadata.get("post_generation_review_package")
         inspections = package.get("inspections") if isinstance(package, dict) else []
