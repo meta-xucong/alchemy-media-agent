@@ -96,10 +96,10 @@ def test_doc69_product_and_ecommerce_receive_one_reference_truth_atoms() -> None
     ]
     scenario = next(recipe for recipe in recipes if recipe["role_key"] == "scenario_image")
 
-    assert scenario["metadata"]["doc69_prompt_atom_recipe"] is True
-    assert scenario["metadata"]["prompt_atom_recipe_library"] == VISUAL_PROMPT_ATOM_RECIPE_ID
-    assert "one product truth" in " ".join(scenario["metadata"]["prompt_atom_product_truth_guard"])
-    assert "real-use context" in " ".join(scenario["metadata"]["prompt_atom_review_targets"])
+    assert scenario["metadata"].get("doc69_prompt_atom_recipe") is not True
+    assert scenario["metadata"].get("prompt_atom_recipe_library") is None
+    assert scenario["metadata"]["creative_owner"] == "llm_and_image_provider"
+    assert "LLM and image provider" in scenario["prompt_pressure"]
 
 
 def test_doc69_provider_renders_prompt_atom_lines_from_metadata_only() -> None:

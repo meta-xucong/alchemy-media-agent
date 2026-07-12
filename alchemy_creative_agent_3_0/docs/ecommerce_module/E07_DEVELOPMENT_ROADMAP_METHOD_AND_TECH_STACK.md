@@ -67,7 +67,7 @@ continuation; it is not part of this branch's isolated implementation scope.
 | --- | --- |
 | Runtime | Python 3, existing V3 application runtime |
 | Contracts | Existing typed Python contracts/models; additive fields only |
-| Planning | Existing V3 Brain + Scenario Runtime + deterministic policy layer |
+| Planning | Existing V3 Brain + Scenario Runtime + factual/policy guardrails; LLM owns creative direction |
 | Capabilities | V3 Visual Capability Cluster and activation planner |
 | Rendering | GPT Image 2 through the existing V3 provider adapter |
 | Image inspection | Existing V3 vision/review interfaces plus OCR-capable validation |

@@ -4,6 +4,11 @@ Status: slot-continuation runtime implemented on the mainline; text-pixel
 delivery remains a shared non-production gate until deterministic composition,
 OCR, and live-provider Gate C evidence are accepted.
 
+Correction (Doc111): Sections 6-8 are historical only. New jobs use
+provider-native complete-image text and observational final-pixel review; they
+must not activate a deterministic compositor, `CopyRenderPlan`, fonts, or
+safe-area overlay contract. Slot continuation remains active and unchanged.
+
 ## 1. Purpose And Ownership
 
 E-Commerce owns suite roles, platform profiles, copy planning, and the

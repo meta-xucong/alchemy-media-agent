@@ -187,29 +187,6 @@ def build_task_profile_and_intent(
         add_entity("text_layout", 0.8)
         requested.append(RequestedCapability(capability_id="typography_layout", reason_codes=["layout_or_text_requested"], evidence_ids=[layout_evidence], confidence=0.8))
 
-    # This is deliberately an internal runtime envelope, not a public template
-    # control.  A future template maps its approved copy intent here before the
-    # plan is frozen; the shared capability never imports that template's slot
-    # or platform vocabulary.
-    internal_text_delivery = metadata.get("text_pixel_delivery_internal")
-    internal_copy_plan = (
-        internal_text_delivery.get("copy_render_plan")
-        if isinstance(internal_text_delivery, dict)
-        else None
-    )
-    if isinstance(internal_copy_plan, dict) or bool(metadata.get("internal_copy_render_plan_present")):
-        text_plan_evidence = add_evidence("copy_render_plan", "internal_template_runtime", True, 0.9)
-        if not any(entity.entity_type == "text_layout" for entity in entities):
-            add_entity("text_layout", 0.9)
-        requested.append(
-            RequestedCapability(
-                capability_id="text_pixel_delivery",
-                reason_codes=["frozen_copy_render_plan_present"],
-                evidence_ids=[text_plan_evidence],
-                confidence=0.9,
-            )
-        )
-
     requested_count = _int_value(metadata.get("requested_image_count"), 1)
     variation_mode = str(metadata.get("variation_mode") or metadata.get("effective_variation_mode") or "")
     if requested_count > 1 or variation_mode:

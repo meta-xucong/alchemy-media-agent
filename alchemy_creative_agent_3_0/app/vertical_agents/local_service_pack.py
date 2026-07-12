@@ -130,13 +130,14 @@ class LocalServiceAgentFamily(VerticalAgentPack):
                 "style_notes": self._append_unique(prompt_compilation.style_notes, ["trustworthy", "service_detail"]),
                 "layout_notes": self._append_unique(
                     prompt_compilation.layout_notes,
-                    ["service result visible", "booking CTA region reserved", "avoid messy environment"],
+                    ["service result visible", "provider-directed booking-ready visual mood", "avoid messy environment"],
                 ),
                 "provider_notes": {
                     **prompt_compilation.provider_notes,
                     "vertical_pack": self.name,
                     "service_result_required": True,
-                    "booking_cta_space_required": True,
+                    "booking_cta_space_required": False,
+                    "provider_native_complete_image": True,
                 },
                 "metadata": self._metadata(prompt_compilation.metadata, "prompt_compilation", prompt_bias="service_trust"),
             }

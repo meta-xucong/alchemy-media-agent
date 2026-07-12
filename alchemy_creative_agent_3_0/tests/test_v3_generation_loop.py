@@ -24,11 +24,14 @@ from alchemy_creative_agent_3_0.app.schemas import (
     TextRenderingMode,
 )
 from pathlib import Path
+from tempfile import gettempdir
 from uuid import uuid4
 
 
 def _test_store_root(name: str) -> Path:
-    root = Path(__file__).resolve().parent / "_runtime_generation_loop" / f"{name}_{uuid4().hex}"
+    # Keep Windows paths well below the legacy MAX_PATH boundary. The feature
+    # test needs an isolated store, not a repository-relative artifact.
+    root = Path(gettempdir()) / "alchemy_v3_generation" / f"{name}_{uuid4().hex}"
     root.mkdir(parents=True)
     return root
 
@@ -72,41 +75,34 @@ def _generation_request(mock_profile: str = "balanced") -> tuple[
         brand_id=brand.brand_id,
         concept="fresh beverage campaign",
         visual_direction="bright fresh commercial beverage image",
-        composition_strategy="center product with reserved text regions",
+        composition_strategy="a clear beverage subject with prompt-directed natural balance",
         color_strategy=["mint green", "cream white"],
     )
-    headline = LayoutRegion(name="headline_area", position="top_center", relative_box={"x": 0.1, "y": 0.05, "w": 0.8, "h": 0.2})
-    cta = LayoutRegion(name="cta_area", position="bottom_center", relative_box={"x": 0.1, "y": 0.78, "w": 0.8, "h": 0.14})
     layout = LayoutPlan(
         layout_plan_id="layout_generation_test",
         asset_id=asset.asset_id,
         platform=asset.platform,
         aspect_ratio=asset.aspect_ratio,
-        text_rendering=TextRenderingMode.HTML_OVERLAY,
-        visual_hierarchy=["headline", "product", "cta"],
+        text_rendering=TextRenderingMode.MODEL_TEXT_ALLOWED,
+        visual_hierarchy=["subject clarity", "scene atmosphere"],
         product_area=LayoutRegion(
             name="product_area",
-            position="center_large",
-            relative_box={"x": 0.2, "y": 0.25, "w": 0.6, "h": 0.5},
+            position="provider_directed",
         ),
-        headline_area=headline,
-        cta_area=cta,
-        reserved_text_regions=[headline, cta],
     )
     prompt = PromptCompilationResult(
         prompt_compilation_id="prompt_generation_test",
         asset_id=asset.asset_id,
         visual_prompt="fresh clean beverage poster with mint green palette",
-        negative_prompt="fake final Chinese text",
-        text_policy="do_not_render_final_text_in_image_model",
+        negative_prompt="unreadable text",
+        text_policy="provider_native_text_optional",
         style_notes=["fresh", "clean"],
-        layout_notes=["reserve top and bottom clean text areas"],
+        layout_notes=["provider-directed composition; no external text regions"],
         provider_notes={
-            "avoid_fake_chinese_text": True,
-            "required_note": (
-                "Generate the product / background / atmosphere only. Reserve clean regions for real "
-                "text overlay. Do not render fake final Chinese text inside the image."
-            ),
+            "text_rendering_owner": "image_provider",
+            "provider_native_text": [],
+            "provider_native_text_policy": "provider_native_text_optional",
+            "text_overlay_required": False,
         },
     )
     condition = ConditionPlan(condition_plan_id="condition_generation_test", asset_id=asset.asset_id)
@@ -177,21 +173,22 @@ def test_retry_creates_refinement_plan_and_required_repairs() -> None:
 
     assert report.recommendation == Recommendation.RETRY
     assert refinement is not None
-    assert "add commercial hook and conversion cue from CommercialBrief" in refinement.prompt_modifications
-    assert "add or strengthen CTA region" in refinement.layout_modifications
+    assert any("commercial story and conversion cue" in item for item in refinement.prompt_modifications)
+    assert not refinement.layout_modifications
 
 
 def test_repair_mappings_cover_text_fake_and_brand_style() -> None:
     request, asset, brief, brand, creative, layout, prompt = _generation_request()
     provider = MockScoringProvider()
     candidates = MockGenerationProvider().generate(request).candidates
-    candidates[0].metadata["forced_problem_codes"] = ["missing_text_region", "fake_text_risk", "brand_style_missing"]
+    candidates[0].metadata["forced_problem_codes"] = ["legacy_external_overlay_requested", "provider_native_text_fidelity_failure", "brand_style_missing"]
     report = provider.score_candidate(candidates[0], asset, brief, brand, creative, layout, prompt)
     refinement = RuleBasedRefinementProvider().propose_refinement(report)
 
     assert refinement is not None
-    assert "reserve top and bottom clean text regions" in refinement.layout_modifications
-    assert "add provider note to avoid fake final Chinese text" in refinement.prompt_modifications
+    assert not refinement.layout_modifications
+    assert any("provider-native complete-image path" in item for item in refinement.prompt_modifications)
+    assert any("final-pixel text fidelity" in item for item in refinement.prompt_modifications)
     assert "inject BrandProfile visual tone and color palette" in refinement.prompt_modifications
 
 

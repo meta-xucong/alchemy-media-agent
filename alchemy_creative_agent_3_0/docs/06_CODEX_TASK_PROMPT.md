@@ -1,5 +1,7 @@
 # 06 Codex Task Prompt
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering instruction in this historical task prompt. New work uses LLM creative direction and provider-native complete-image generation.
+
 Use this prompt when assigning the first Alchemy Creative Agent 3.0 implementation task to Codex.
 
 This document is intentionally scoped to the **Foundation** milestone only.

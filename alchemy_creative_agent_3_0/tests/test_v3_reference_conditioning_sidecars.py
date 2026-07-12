@@ -91,8 +91,9 @@ def test_rule_based_layout_provider_converts_layout_plan_to_condition_map() -> N
 
     assert response.condition_spec.enabled is True
     assert response.condition_spec.provider == "rule_based_layout_map_provider"
-    assert response.layout_map["regions"]["product_area"]["relative_box"]["w"] == 0.64
-    assert len(response.layout_map["reserved_text_regions"]) == 2
+    assert response.layout_map["creative_focus"]["subject_area"]["position"] == "provider_directed"
+    assert response.layout_map["creative_focus"]["composition_owner"] == "llm_and_image_provider"
+    assert not response.layout_map["reserved_text_regions"]
     assert response.condition_spec.metadata["layout_map"]["visual_hierarchy"]
 
 

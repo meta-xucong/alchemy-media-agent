@@ -1225,6 +1225,42 @@ class V3ProductApiService:
         if not isinstance(raw_plan, dict) and not isinstance(raw_plans, list):
             return generation_result
         is_batch = isinstance(raw_plans, list)
+        # Doc111 retires deterministic post-generation composition.  Keep a
+        # structured historical result for callers that still submit a legacy
+        # envelope, but never resolve fonts, rasterize text, or replace a
+        # provider output.  New provider-native text requests are compiled
+        # into the generation brief before this point.
+        retired_delivery = {
+            "status": "provider_native_required",
+            "rendered": False,
+            "review_passed": False,
+            "issue_codes": ["deterministic_text_pixel_delivery_retired"],
+            "user_visible_summary": ["Text must be generated and reviewed as part of the complete provider image; local overlay delivery is unavailable."],
+            "metadata": {"append_only": True, "legacy_read_compatibility": True},
+        }
+        if is_batch:
+            return self._with_text_pixel_delivery_metadata(
+                generation_result,
+                {
+                    "text_pixel_delivery_batch": {
+                        "schema_version": "v3_text_pixel_delivery_batch_v1",
+                        "batch_id": stable_id("text_pixel_delivery_batch", "retired"),
+                        "deliveries": [
+                            {
+                                "delivery_id": stable_id("text_pixel_delivery", "retired"),
+                                **retired_delivery,
+                            }
+                        ],
+                        "source_asset_ids_by_plan": {},
+                        "metadata": {"append_only": True, "legacy_read_compatibility": True},
+                    }
+                },
+            )
+        return self._with_text_pixel_delivery_metadata(generation_result, {"text_pixel_delivery": retired_delivery})
+
+        # The retained code below documents historical result parsing and is
+        # intentionally unreachable for new jobs.  It will be removed after
+        # archived records no longer need its compatibility vocabulary.
         if is_batch and isinstance(raw_plan, dict):
             return self._with_text_pixel_delivery_metadata(
                 generation_result,
@@ -4897,57 +4933,18 @@ class V3ProductApiService:
         }
 
     def _bind_internal_copy_render_plan(self, request: CreateCreativeJobRequest) -> None:
-        """Bind one plan or a scenario-neutral plan batch after planning freezes."""
+        """Mark a legacy plan as read-compatible without binding or executing it."""
 
         metadata = dict(request.metadata or {})
         envelope = metadata.get("text_pixel_delivery_internal")
-        raw_plan = envelope.get("copy_render_plan") if isinstance(envelope, dict) else None
-        raw_plans = envelope.get("copy_render_plans") if isinstance(envelope, dict) else None
-        frozen_plan_id = str(metadata.get("capability_activation_plan_id") or "").strip()
-        if not frozen_plan_id or not isinstance(envelope, dict):
-            return
-        if isinstance(raw_plan, dict) and isinstance(raw_plans, list):
+        if isinstance(envelope, dict):
             metadata["text_pixel_delivery_internal"] = {
-                **dict(envelope),
-                "copy_render_plan_binding_error": "copy_render_plan_and_copy_render_plans_conflict",
+                **envelope,
+                "legacy_read_compatibility": True,
+                "binding_skipped_reason": "deterministic_text_pixel_delivery_retired",
             }
             request.metadata = metadata
             return
-        if isinstance(raw_plans, list):
-            try:
-                bound_batch = CopyRenderPlanBatch(plans=list(raw_plans)).bind_to_frozen_plan(frozen_plan_id)
-            except Exception as exc:
-                metadata["text_pixel_delivery_internal"] = {
-                    **dict(envelope),
-                    "copy_render_plan_binding_error": str(exc)[:240],
-                }
-                request.metadata = metadata
-                return
-            metadata["text_pixel_delivery_internal"] = {
-                **dict(envelope),
-                "copy_render_plans": [plan.model_dump(mode="json") for plan in bound_batch.plans],
-                "copy_render_plan_batch_id": bound_batch.batch_id,
-                "bound_to_frozen_activation_plan_id": frozen_plan_id,
-            }
-            request.metadata = metadata
-            return
-        if not isinstance(raw_plan, dict):
-            return
-        try:
-            bound = CopyRenderPlan.model_validate(raw_plan).bind_to_frozen_plan(frozen_plan_id)
-        except Exception as exc:
-            metadata["text_pixel_delivery_internal"] = {
-                **dict(envelope),
-                "copy_render_plan_binding_error": str(exc)[:240],
-            }
-            request.metadata = metadata
-            return
-        metadata["text_pixel_delivery_internal"] = {
-            **dict(envelope),
-            "copy_render_plan": bound.model_dump(mode="json"),
-            "bound_to_frozen_activation_plan_id": frozen_plan_id,
-        }
-        request.metadata = metadata
 
     def _seed_ecommerce_slot_root_lineage(self, request: CreateCreativeJobRequest, job_id: str) -> None:
         metadata = dict(request.metadata or {})

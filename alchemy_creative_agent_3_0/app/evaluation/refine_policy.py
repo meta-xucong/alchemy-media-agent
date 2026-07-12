@@ -19,23 +19,30 @@ class RuleBasedRefinementProvider:
         provider_modifications: list[str] = []
         for problem in evaluation.problems:
             if problem.code == "missing_text_region":
-                layout_modifications.append("reserve top and bottom clean text regions")
-                prompt_modifications.append("request clean negative space for external text overlay")
-            elif problem.code == "fake_text_risk":
-                prompt_modifications.append("add provider note to avoid fake final Chinese text")
+                prompt_modifications.append(
+                    "Regenerate the complete image through the image provider; let the creative brief determine natural composition instead of reserving an external text region"
+                )
+            elif problem.code in {"fake_text_risk", "provider_native_text_fidelity_failure"}:
+                prompt_modifications.append(
+                    "Regenerate through the provider-native complete-image path and verify final-pixel text fidelity; do not add a local overlay"
+                )
+            elif problem.code in {"legacy_external_overlay_requested", "legacy_text_rendering_contract"}:
+                prompt_modifications.append(
+                    "Remove the retired external-text contract and regenerate through the provider-native complete-image path"
+                )
             elif problem.code == "platform_ratio_mismatch":
                 layout_modifications.append("replace aspect ratio with platform default")
             elif problem.code == "brand_style_missing":
                 prompt_modifications.append("inject BrandProfile visual tone and color palette")
                 condition_modifications.append("enable style condition if references exist")
             elif problem.code == "missing_product_area":
-                layout_modifications.append("increase product_area priority and set it to center_large")
-                prompt_modifications.append("emphasize clear product hero shot")
+                prompt_modifications.append("Strengthen the requested product or subject visibility in the provider-native creative brief")
             elif problem.code == "commercial_hook_missing":
-                prompt_modifications.append("add commercial hook and conversion cue from CommercialBrief")
-                layout_modifications.append("add or strengthen CTA region")
+                prompt_modifications.append(
+                    "Strengthen the commercial story and conversion cue from CommercialBrief through the complete image, without a fixed CTA region"
+                )
             elif problem.code == "provider_failure":
-                provider_modifications.append("discard failed candidate and retry with mock fallback")
+                provider_modifications.append("discard failed candidate and retry the selected image provider within the bounded retry policy")
         action = Recommendation.RETRY
         if any(problem.severity == Severity.HARD_FAILURE for problem in evaluation.problems):
             action = Recommendation.RETRY

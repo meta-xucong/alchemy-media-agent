@@ -1,5 +1,7 @@
 # 11 Evaluation and Refinement Spec
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes the historical external-overlay repair examples below. Text issues are diagnosed from final pixels and repaired through a bounded provider-native complete-image revision.
+
 Current Project Mode note:
 
 ```text

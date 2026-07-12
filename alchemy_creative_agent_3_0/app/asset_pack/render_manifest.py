@@ -10,6 +10,32 @@ from ..schemas import LayoutPlan, TextRenderingMode
 
 
 def render_spec_for_layout(layout_plan: LayoutPlan) -> dict[str, Any]:
+    if layout_plan.text_rendering in {TextRenderingMode.MODEL_TEXT_ALLOWED, TextRenderingMode.NO_TEXT}:
+        return {
+            "renderer": "image_provider",
+            "runtime_mode": "provider_native_complete_image",
+            "layout_plan_id": layout_plan.layout_plan_id,
+            "asset_id": layout_plan.asset_id,
+            "platform": layout_plan.platform,
+            "aspect_ratio": layout_plan.aspect_ratio,
+            "canvas": {},
+            "text_rendering": layout_plan.text_rendering,
+            "text_layers": [],
+            "text_regions": [],
+            "layers": [],
+            "editable_text_layer_count": 0,
+            "preserves_exact_text": False,
+            "composition_output": {
+                "owner": "image_provider",
+                "post_generation_overlay_allowed": False,
+                "final_pixel_review_required": True,
+            },
+            "metadata": {
+                "render_spec_version": "v3_provider_native_text_v1",
+                "source": "LayoutPlan",
+                "legacy_overlay_contract": False,
+            },
+        }
     if layout_plan.text_rendering == TextRenderingMode.SVG_OVERLAY:
         return build_svg_render_spec(layout_plan)
     return build_html_render_spec(layout_plan)

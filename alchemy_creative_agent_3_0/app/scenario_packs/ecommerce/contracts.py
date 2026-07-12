@@ -53,7 +53,10 @@ class EcommerceAssetRecipe(V3BaseModel):
     buyer_intent: str
     required_product_facts: list[str] = Field(default_factory=list)
     visual_scene: str
+    # Retained for historical payload reads only. New recipes leave it empty;
+    # approved copy is a provider-native request, never an overlay operation.
     overlay_text: str | None = None
+    provider_native_text: str | None = None
     reference_bindings: list[str] = Field(default_factory=list)
     review_checks: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -1,5 +1,7 @@
 # 02 System Architecture
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering guidance in this historical architecture document. New work uses LLM creative direction and provider-native complete-image generation.
+
 This document defines the target architecture for Alchemy Creative Agent 3.0.
 
 ## 1. Architecture Principle

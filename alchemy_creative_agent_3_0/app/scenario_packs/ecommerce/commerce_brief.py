@@ -58,9 +58,9 @@ class CommerceBriefBuilder:
         ]
         competitor_patterns = self._competitor_patterns(product_profile, parameters)
         visual_strategy = [
-            f"Use {marketplace_profile.platform} slot sequence so every image has one clear business job.",
-            "Start with product clarity, then prove benefits, then show use context and trust.",
-            "Convert copywriting ideas into short overlay labels, not long listing copy.",
+            f"Use {marketplace_profile.platform} policy evidence to frame buyer needs without hard-coding a visual recipe.",
+            "Cover product clarity, supported benefits, use context, and trust with distinct buyer-evidence goals.",
+            "When approved copy is present, let the LLM and image provider integrate it into the complete image; never create a local overlay.",
         ]
         if competitor_patterns:
             visual_strategy.append("Borrow reusable visual grammar from references without copying content or claims.")

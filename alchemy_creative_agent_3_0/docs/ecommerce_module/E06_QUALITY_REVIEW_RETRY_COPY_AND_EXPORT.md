@@ -16,7 +16,7 @@ Review:
 - selling-point clarity;
 - buyer-question coverage;
 - suite differentiation;
-- text correctness and safe area;
+- requested-text correctness and final-pixel legibility;
 - unsupported claims, fake certificates, and invented specifications;
 - packaging/logo/label integrity;
 - commercial direct-use readiness.
@@ -48,8 +48,9 @@ capability after review without an auditable plan amendment.
 - Product names, trademarks, numbers, and confirmed claims are protected.
 - Unconfirmed claims become warnings or are omitted.
 - Main-image text is forbidden by default where the profile requires it.
-- Text must be rendered deterministically or through a verified text-capable
-  path, then checked with OCR and layout validation.
+- Requested text must be generated as part of the provider image, then checked
+  from final pixels; a failure requests a provider-native revision and never a
+  local font/overlay repair.
 - Translation must not change product facts or claim strength.
 
 ## Export manifest

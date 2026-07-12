@@ -58,6 +58,7 @@ class EcommerceExportPackager:
                     "business_goal": recipe.business_goal,
                     "review_status": "needs_pixel_review",
                     "overlay_text": recipe.overlay_text,
+                    "provider_native_text": recipe.provider_native_text,
                     "copy_locale": copy_plan.get("copy_locale"),
                     "copy_source": copy_plan.get("source"),
                     "copy_review_required": copy_review_required,

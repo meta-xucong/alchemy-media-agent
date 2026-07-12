@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..condition_engine.providers import ProviderCapabilities
-from ..creative_core.rules import NO_FAKE_TEXT_PROVIDER_NOTE, RULE_VERSION, platform_aspect_ratio, stable_id
+from ..creative_core.rules import RULE_VERSION, platform_aspect_ratio, stable_id
 from ..schemas import (
     AssetSpec,
     BrandProfile,
@@ -64,11 +64,11 @@ class RuleBasedPlanningScorer:
         brand_consistency_score = (
             0.78 if brand_profile and any(tone in style_text for tone in brand_profile.visual_tone) else 0.65
         )
-        layout_score = 0.80 if layout_plan.product_area and layout_plan.reserved_text_regions else 0.55
+        layout_score = 0.80 if layout_plan.product_area else 0.55
         text_region_score = (
-            0.82
-            if layout_plan.text_rendering in {TextRenderingMode.HTML_OVERLAY, TextRenderingMode.SVG_OVERLAY}
-            and prompt_compilation.provider_notes.get("required_note") == NO_FAKE_TEXT_PROVIDER_NOTE
+            0.76
+            if layout_plan.text_rendering in {TextRenderingMode.MODEL_TEXT_ALLOWED, TextRenderingMode.NO_TEXT}
+            and prompt_compilation.provider_notes.get("text_rendering_owner") == "image_provider"
             else 0.50
         )
         platform_fit_score = 0.82 if asset_spec.aspect_ratio == platform_aspect_ratio(asset_spec.platform) else 0.55
@@ -121,16 +121,16 @@ class RuleBasedPlanningScorer:
                     code="missing_product_area",
                     message="LayoutPlan is missing product or subject area.",
                     severity=Severity.HARD_FAILURE,
-                    repair_hint="Add center_large product area.",
+                    repair_hint="Strengthen the requested product or subject visibility in the provider-native creative brief.",
                 )
             )
-        if asset_spec.requires_text_overlay and not layout_plan.reserved_text_regions:
+        if asset_spec.requires_text_overlay:
             problems.append(
                 EvaluationProblem(
-                    code="missing_text_region",
-                    message="Text overlay is required but no clean text region is reserved.",
-                    severity=Severity.HARD_FAILURE,
-                    repair_hint="Reserve top and bottom text regions.",
+                    code="legacy_external_overlay_requested",
+                    message="A legacy external-overlay flag was supplied; new jobs must use provider-native image text or no text.",
+                    severity=Severity.WARNING,
+                    repair_hint="Remove the overlay requirement and express approved copy in the provider-native creative brief.",
                 )
             )
         if asset_spec.aspect_ratio != platform_aspect_ratio(asset_spec.platform):
@@ -142,13 +142,13 @@ class RuleBasedPlanningScorer:
                     repair_hint="Use platform default aspect ratio.",
                 )
             )
-        if prompt_compilation.provider_notes.get("avoid_fake_chinese_text") is not True:
+        if prompt_compilation.provider_notes.get("text_rendering_owner") != "image_provider":
             problems.append(
                 EvaluationProblem(
-                    code="fake_text_risk",
-                    message="Prompt does not explicitly prevent fake final Chinese text.",
+                    code="legacy_text_rendering_contract",
+                    message="Prompt does not declare the image provider as the owner of final image text.",
                     severity=Severity.WARNING,
-                    repair_hint="Add no-fake-final-text provider note.",
+                    repair_hint="Use provider-native text or no-text policy; do not request a local overlay.",
                 )
             )
         if brand_profile.visual_tone and not prompt_compilation.style_notes:
@@ -199,17 +199,12 @@ class MockScoringProvider(RuleBasedPlanningScorer):
         brand_consistency_score = _clamp(
             mock_quality if brand_present and "brand_style_missing" not in problem_codes else min(mock_quality, 0.62)
         )
-        layout_score = _clamp(
-            mock_quality
-            if layout_plan.product_area and layout_plan.reserved_text_regions and "missing_product_area" not in problem_codes
-            else min(mock_quality, 0.45)
-        )
+        layout_score = _clamp(mock_quality if layout_plan.product_area and "missing_product_area" not in problem_codes else min(mock_quality, 0.45))
         text_region_score = _clamp(
             mock_quality
-            if layout_plan.text_rendering in {TextRenderingMode.HTML_OVERLAY, TextRenderingMode.SVG_OVERLAY}
-            and prompt_compilation.provider_notes.get("required_note") == NO_FAKE_TEXT_PROVIDER_NOTE
-            and "fake_text_risk" not in problem_codes
-            and "missing_text_region" not in problem_codes
+            if layout_plan.text_rendering in {TextRenderingMode.MODEL_TEXT_ALLOWED, TextRenderingMode.NO_TEXT}
+            and prompt_compilation.provider_notes.get("text_rendering_owner") == "image_provider"
+            and "legacy_text_rendering_contract" not in problem_codes
             else min(mock_quality, 0.50)
         )
         platform_fit_score = _clamp(
@@ -290,19 +285,25 @@ class MockScoringProvider(RuleBasedPlanningScorer):
                 code="missing_product_area",
                 message="Candidate does not preserve a clear product or subject hero area.",
                 severity=Severity.HARD_FAILURE,
-                repair_hint="Increase product area priority and request a centered product hero shot.",
+                repair_hint="Regenerate with clearer product or subject visibility from the creative brief.",
             ),
-            "missing_text_region": EvaluationProblem(
-                code="missing_text_region",
-                message="Candidate does not preserve a clean region for final overlay text.",
-                severity=Severity.HARD_FAILURE,
-                repair_hint="Reserve clean top and bottom text regions.",
-            ),
-            "fake_text_risk": EvaluationProblem(
-                code="fake_text_risk",
-                message="Candidate may include fake or unreadable final text.",
+            "legacy_external_overlay_requested": EvaluationProblem(
+                code="legacy_external_overlay_requested",
+                message="Candidate originated from a retired external-overlay rendering request.",
                 severity=Severity.WARNING,
-                repair_hint="Use external text overlay and add a no-fake-final-text provider note.",
+                repair_hint="Regenerate through the provider-native complete-image path.",
+            ),
+            "legacy_text_rendering_contract": EvaluationProblem(
+                code="legacy_text_rendering_contract",
+                message="Candidate was planned with a retired external-text contract.",
+                severity=Severity.WARNING,
+                repair_hint="Use final-pixel provider-native text review instead of an external overlay.",
+            ),
+            "provider_native_text_fidelity_failure": EvaluationProblem(
+                code="provider_native_text_fidelity_failure",
+                message="Final pixels do not faithfully render the requested provider-native text.",
+                severity=Severity.WARNING,
+                repair_hint="Regenerate through the image provider with the approved literal text and re-check final pixels.",
             ),
             "platform_ratio_mismatch": EvaluationProblem(
                 code="platform_ratio_mismatch",
@@ -320,13 +321,13 @@ class MockScoringProvider(RuleBasedPlanningScorer):
                 code="commercial_hook_missing",
                 message="Candidate lacks a clear commercial hook or conversion cue.",
                 severity=Severity.WARNING,
-                repair_hint="Add commercial hooks and a CTA region.",
+                repair_hint="Strengthen the commercial story through the complete provider-rendered image.",
             ),
             "provider_failure": EvaluationProblem(
                 code="provider_failure",
                 message="Generation provider returned a failed candidate.",
                 severity=Severity.HARD_FAILURE,
-                repair_hint="Discard failed candidate and retry with fallback provider.",
+                repair_hint="Discard failed candidate and retry the selected provider within the bounded retry policy.",
             ),
         }
         return problem_map.get(code)

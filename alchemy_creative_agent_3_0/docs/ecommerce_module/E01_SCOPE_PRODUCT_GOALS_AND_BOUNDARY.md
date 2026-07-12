@@ -13,7 +13,7 @@ restarting the entire project.
 - Platform/market profile selection.
 - Category-specific evidence and suite planning.
 - Selling-point prioritization.
-- Optional localized image copy planning and rendering.
+- Optional localized provider-native image copy intent and final-pixel review.
 - Product-first, lifestyle, detail, comparison, trust, and ad roles.
 - Per-slot generation, review, bounded retry, selection, and export.
 - Project continuation using selected product references and rejected directions.
@@ -34,10 +34,10 @@ restarting the entire project.
 
 | Layer | Owns | Must not own |
 | --- | --- | --- |
-| V3 foundation | visual quality, provider, review, retry, reference integrity | marketplace deliverable maps |
+| V3 foundation | visual quality, provider-native complete-image generation, review, retry, reference integrity | marketplace deliverable maps or local text rendering |
 | General Template | neutral single images and simple product scenes | listing suites, A+ roles, platform assumptions |
 | E-Commerce Template | platform/category suite roles and export | generic human/product rendering implementation |
-| Platform profile | market expectations, slots, text/export hints | product facts or generation provider choice |
+| Platform profile | market expectations, slots, text/export policy evidence | product facts, typography coordinates, or generation provider choice |
 | Category pack | buyer evidence and category slots | marketplace policy truth |
 | Product truth | confirmed facts and unknowns | invented claims or unsupported specs |
 
@@ -65,7 +65,8 @@ and category defaults are ranked recommendations, not irreversible assumptions.
    certification, ingredients, performance, or warranty claims.
 3. Main-image restrictions are slot-specific. A platform profile must not make
    all images look like the main image.
-4. Text is planned separately from visual generation and must be reviewable.
+4. Approved copy is expressed in the LLM/provider creative brief and reviewed
+   from final pixels; it is never locally overlaid after generation.
 5. Retry outputs remain append-only internally; delivery surfaces show only the
    final requested count.
 6. Every slot has one primary business purpose.

@@ -66,14 +66,14 @@ class BrandProfileService:
             visual_tone=list(brief.visual_tone),
             color_palette=default_color_palette(brief.industry, brief.visual_tone),
             layout_preference=(
-                "center product, top headline, bottom CTA"
+                "LLM/provider-directed product presentation responsive to the approved creative brief"
                 if allow_product_language
-                else "main subject centered with balanced clean space"
+                else "LLM/provider-directed subject presentation responsive to the creative brief"
             ),
             typography_preference=(
-                "large readable Chinese commercial typography"
+                "provider-native typography only when the user explicitly supplies or approves in-image copy"
                 if allow_product_language
-                else "clean optional external overlay typography"
+                else "provider-native typography only when the user explicitly requests in-image text"
             ),
             copywriting_tone=brief.copy_strategy,
             reference_assets=[],

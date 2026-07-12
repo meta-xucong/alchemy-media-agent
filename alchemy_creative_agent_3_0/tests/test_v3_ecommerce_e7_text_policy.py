@@ -29,5 +29,6 @@ def test_explicit_copy_obeys_profile_forbidden_slots_not_global_template_rules()
     assert hero.slot == "hero_image"
     assert hero.overlay_text is None
     assert hero.metadata["copy_plan"]["source"] == "marketplace_profile"
-    assert feature.overlay_text == "Pocket-ready case"
-    assert feature.metadata["copy_plan"]["policy"] == "text_allowed"
+    assert feature.overlay_text is None
+    assert feature.provider_native_text == "Pocket-ready case"
+    assert feature.metadata["copy_plan"]["policy"] == "text_requested"

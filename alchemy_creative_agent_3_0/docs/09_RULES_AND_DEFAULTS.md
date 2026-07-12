@@ -1,5 +1,7 @@
 # 09 Rules and Defaults
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering default in this historical rules document. New work uses LLM creative direction and provider-native complete-image generation.
+
 This document freezes first-pass deterministic rules for Alchemy Creative Agent 3.0.
 
 The V3.0 foundation should be testable offline. Therefore, the first implementation should use rule-based and stub behavior rather than hidden LLM calls.

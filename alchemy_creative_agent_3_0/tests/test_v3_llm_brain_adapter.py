@@ -132,7 +132,7 @@ def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) ->
     assert "human identity and natural variation balanced" in result.prompt_review.checks
 
 
-def test_brain_request_reduces_internal_multi_plan_to_an_opaque_boolean() -> None:
+def test_brain_request_excludes_retired_internal_copy_render_plans() -> None:
     adapter = V3LLMBrainAdapter()
     request = adapter.build_request(
         user_input="Create one neutral creative image.",
@@ -153,7 +153,6 @@ def test_brain_request_reduces_internal_multi_plan_to_an_opaque_boolean() -> Non
         },
     )
 
-    assert request.metadata["internal_copy_render_plan_present"] is True
     assert "text_pixel_delivery_internal" not in request.metadata
     assert "copy_render_plan" not in request.metadata
     assert "Private approved headline" not in str(request.metadata)
@@ -161,16 +160,21 @@ def test_brain_request_reduces_internal_multi_plan_to_an_opaque_boolean() -> Non
     assert "private-platform" not in str(request.metadata)
 
 
-def test_brain_request_requires_a_boolean_opaque_marker() -> None:
+def test_brain_request_exposes_literal_provider_native_copy_without_template_geometry() -> None:
     request = V3LLMBrainAdapter().build_request(
         user_input="Create one neutral creative image.",
         stage="plan",
         scenario_id="general_creative",
         template_id="general_template",
-        metadata={"internal_copy_render_plan_present": "false"},
+        metadata={
+            "scenario_parameters": {
+                "overlay_copy": {"feature_image_1": "Approved provider-native headline"},
+            }
+        },
     )
 
-    assert request.metadata["internal_copy_render_plan_present"] is False
+    assert request.metadata["provider_native_text_requirements"] == ["Approved provider-native headline"]
+    assert "feature_image_1" not in str(request.metadata["provider_native_text_requirements"])
 
 
 def test_general_brain_uses_doc58_suite_roles_and_strong_anchor(monkeypatch) -> None:

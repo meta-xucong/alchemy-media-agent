@@ -2,6 +2,10 @@
 
 Status: additive shared-runtime contract; production activation remains off.
 
+Superseded for forward implementation by Doc111. New templates must not bind
+or execute single- or multi-plan deterministic text delivery. The record shape
+is retained only so historical jobs remain readable.
+
 ## 1. Scope
 
 This document extends Doc107 with an ordered collection of independently bound

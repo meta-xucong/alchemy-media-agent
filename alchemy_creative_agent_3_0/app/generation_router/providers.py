@@ -330,7 +330,7 @@ class MockGenerationProvider(GenerationProvider):
     def _candidate_profile(self, profile: str, index: int, refine_round: int) -> tuple[float, list[str]]:
         if profile == "needs_refinement":
             if refine_round == 0:
-                return (0.61 - index * 0.02, ["commercial_hook_missing"] if index == 0 else ["fake_text_risk"])
+                return (0.61 - index * 0.02, ["commercial_hook_missing"] if index == 0 else ["provider_native_text_fidelity_failure"])
             return (0.86 - index * 0.03, [])
         if profile == "exhaust_retries":
             return (0.61 - index * 0.02, ["commercial_hook_missing"] if index == 0 else ["brand_style_missing"])
@@ -1946,6 +1946,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         user_direction = self._provider_user_direction(request)
         visual_direction = self._provider_visual_direction(request, user_direction=user_direction)
         allow_product_language = self._product_language_allowed(request, reference_assets)
+        provider_text_instruction = self._provider_native_text_instruction(
+            request,
+            product_language_allowed=allow_product_language,
+        )
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
@@ -1992,15 +1996,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 else ""
             ),
             f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
-            f"Composition: {layout.product_area.position}" if layout else "",
-            f"Visual hierarchy: {', '.join(layout.visual_hierarchy)}" if layout and layout.visual_hierarchy else "",
+            "Composition is owned by the LLM creative brief and image provider; use any planning focus only as advisory context, never as fixed coordinates or overlay lanes.",
             "Generate exactly one image; it must be a single complete image frame. Do not create a collage, split screen, contact sheet, storyboard, before-after comparison, duplicated frame, or grid of separate images inside the same output.",
-            "Reserve clean blank areas for later UI/text overlay outside the generated pixels.",
-            (
-                "Do not add any new visible text, captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, AI-generated marks, or product claims inside the image."
-                if allow_product_language
-                else "Do not render any final text or add captions, typography, icons, badges, seals, claim strips, infographic footers, watermarks, signatures, or AI-generated marks inside the image."
-            ),
+            provider_text_instruction,
             *(
                 [
                     "Only preserve text already visible on the supplied product label if it remains in frame; keep it readable and unobscured, and do not translate, rewrite, enlarge, blur, darken, cover, crop, or invent label copy.",
@@ -2362,8 +2360,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "use the v3-owned generation strategy",
             "generated subject, scene, style, and mood must match the user request",
             "preserve the user's detailed scene literally",
-            "do not render any final text",
-            "do not add visible captions",
             "each generated output must be one single complete image frame",
             "each output is one single complete image frame",
             "preserve the user's requested subject and usage scenario",
@@ -2505,8 +2501,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Use the head-geometry crop",
             "Fuse both crops into the same-person identity",
             "Generate exactly one image; it must be a single complete image frame",
-            "Do not render any final text",
-            "Do not add any new visible text",
+            "Render user-approved literal text",
+            "No literal copy is preselected",
+            "Do not invent marketing text",
+            "The final provider-rendered image must contain no added visible text",
             "Preserve the requested subject, scene, style, and mood",
         )
         for index, line in enumerate(lines):
@@ -2622,8 +2620,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 1
         if (
             line.startswith("Generate exactly one")
-            or line.startswith("Do not add any new visible text")
-            or line.startswith("Do not render any final text")
+            or line.startswith("Render user-approved literal text")
+            or line.startswith("No literal copy is preselected")
+            or line.startswith("Do not invent marketing text")
+            or line.startswith("The final provider-rendered image must contain no added visible text")
             or line.startswith("Preserve the requested subject, scene, style, and mood")
         ):
             return 4
@@ -3046,6 +3046,52 @@ class ProductionImageGenerationProvider(GenerationProvider):
             metadata=request.metadata,
             uploaded_assets=request.metadata.get("uploaded_assets", []),
             reference_assets=[*request.metadata.get("reference_assets", []), *reference_assets],
+        )
+
+    def _provider_native_text_instruction(
+        self,
+        request: GenerationRequest,
+        *,
+        product_language_allowed: bool,
+    ) -> str:
+        """Express text intent to the image provider without a local overlay contract."""
+
+        notes = request.prompt_compilation.provider_notes
+        policy = str(notes.get("provider_native_text_policy") or request.prompt_compilation.text_policy or "")
+        raw_text = notes.get("provider_native_text")
+        values = raw_text if isinstance(raw_text, list) else [raw_text]
+        approved = [str(value).strip() for value in values if str(value or "").strip()]
+        if policy == "provider_native_text_forbidden" or bool(notes.get("model_text_forbidden")):
+            reference_text_clause = (
+                "Existing product-label evidence may remain only when supplied by the reference."
+                if product_language_allowed
+                else "Existing reference text may remain only when supplied by the reference."
+            )
+            return (
+                "The final provider-rendered image must contain no added visible text, captions, badges, or claims. "
+                f"Check the final pixels for text artifacts; {reference_text_clause}"
+            )
+        if approved:
+            literals = "; ".join(f'"{value}"' for value in approved)
+            return (
+                f"Render user-approved literal text exactly once as part of this single complete image: {literals}. "
+                "Choose typography and placement from the creative brief, generate it in the image pixels, add no extra generated text, "
+                "and never create a local overlay, footer strip, or fixed text lane."
+            )
+        if policy == "provider_native_text_optional":
+            return (
+                "No literal copy is preselected. Let the LLM creative brief decide whether in-image text materially improves the requested image; "
+                "do not use a canned promotional phrase, unsupported claim, watermarks, signatures, AI-generated marks, or external overlay. "
+                "Any chosen text must be generated in the final image pixels and reviewed there."
+            )
+        prohibited = (
+            "marketing copy, captions, badges, seals, watermarks, signatures, AI-generated marks, or product claims"
+            if product_language_allowed
+            else "marketing copy, captions, badges, seals, watermarks, signatures, AI-generated marks, or unsupported claims"
+        )
+        return (
+            f"Do not invent {prohibited}. If the user explicitly requests in-image text, "
+            "render it directly in this complete provider-generated image rather than using a local overlay."
         )
 
     def _looks_like_human_photo_request(self, request: GenerationRequest) -> bool:

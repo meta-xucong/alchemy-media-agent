@@ -362,6 +362,18 @@ class TextPixelDeliveryRuntime:
             plan=render_plan,
             source_output_id=source_output.output_id if source_output else render_plan.source_lineage.source_output_id,
         )
+        # Doc111 retires this renderer for every execution path, including
+        # direct callers.  Keep the contract readable but never select a font,
+        # compose pixels, repair a layout, or replace the provider asset.
+        result.status = "provider_native_required"
+        result.issue_codes = ["deterministic_text_pixel_delivery_retired"]
+        result.user_visible_summary = ["Final text, when requested, must be generated and reviewed as part of the complete provider image."]
+        result.metadata["legacy_read_compatibility"] = True
+        return result
+
+        # Historical execution logic is retained below temporarily to keep
+        # archived implementation archaeology readable. It is unreachable and
+        # must not be re-enabled as a fallback.
         frozen_id = str((frozen_activation_plan or {}).get("plan_id") or "").strip()
         active = {str(item) for item in ((frozen_activation_plan or {}).get("dependency_order") or [])}
         if render_plan.source_lineage.capability_activation_plan_id != frozen_id:

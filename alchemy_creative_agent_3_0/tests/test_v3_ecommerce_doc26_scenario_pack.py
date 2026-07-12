@@ -79,8 +79,8 @@ def test_ecommerce_planner_unifies_requested_count_and_lifestyle_slots() -> None
     assert output.metadata["selected_image_slots"] == ["main_image", "scenario_image"]
     scenario_recipe = output.recipes[1]
     assert scenario_recipe.metadata["lifestyle_realism_required"] is True
-    assert scenario_recipe.metadata["lifestyle_scene_category"] == "drink_summer"
-    assert "Real outdoor or cafe summer refreshment moment" in scenario_recipe.visual_scene
+    assert scenario_recipe.metadata["lifestyle_scene_category"] == "llm_directed"
+    assert "Let the LLM and image provider derive a believable in-use setting" in scenario_recipe.visual_scene
 
 
 def test_ecommerce_planner_respects_explicit_slots_without_extra_fill() -> None:
@@ -207,8 +207,41 @@ def test_ecommerce_scenario_recipes_drive_generated_asset_series() -> None:
     assert generated.candidates[0].metadata["ecommerce_slot"] == "main_image"
     assert generated.candidates[0].metadata["ecommerce_recipe"]["selling_point"] == "Clear product identity"
     assert prompt.metadata["ecommerce_slot"] == "main_image"
-    assert "selling point to express visually without text" in prompt.visual_prompt
-    assert any("Do not add in-image text" in item for item in prompt.hard_constraints)
+    assert "selling point to express through the complete image" in prompt.visual_prompt
+    assert prompt.provider_notes["text_rendering_owner"] == "image_provider"
+    assert "external overlay" not in prompt.visual_prompt.lower()
+
+
+def test_ecommerce_approved_copy_is_rendered_by_provider_not_an_overlay() -> None:
+    service = V3ProductApiService()
+    created = service.create_job(
+        {
+            "user_input": "Create a premium product image set for a desk lamp.",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "platform_profile": "amazon_us",
+                "parameters": {
+                    "requested_image_count": 2,
+                    "overlay_copy": {"feature_image_1": "Adjustable warm light"},
+                },
+            },
+            "uploaded_asset_ids": ["desk_lamp_front"],
+            "product_profile": {"product_category": "desk lamp", "selling_points": ["Adjustable warm light"]},
+        }
+    )
+
+    generated = service.generate_job(created.job_id, {"quality_mode": "standard"})
+    record = service.job_store.get(created.job_id)
+    assert generated.status == "generated"
+    assert record is not None and record.generation_result is not None
+    feature_prompt = record.generation_result.prompt_compilations[1]
+    feature_asset = record.generation_result.series_plan.assets[1]
+
+    assert "\"Adjustable warm light\"" in feature_prompt.visual_prompt
+    assert feature_prompt.text_policy == "provider_native_text_requested"
+    assert feature_prompt.provider_notes["text_rendering_owner"] == "image_provider"
+    assert feature_prompt.provider_notes["text_overlay_required"] is False
+    assert feature_asset.requires_text_overlay is False
 
 
 def test_ecommerce_requested_slots_survive_doc60_role_reconciliation() -> None:

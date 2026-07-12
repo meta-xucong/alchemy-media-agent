@@ -18,11 +18,11 @@ def _assert_global_foundation_shape(result) -> None:
     for generation_plan in result.generation_plans:
         assert generation_plan.provider_strategy == ProviderStrategy.PLANNING_ONLY
     for layout in result.layout_plans:
-        assert layout.text_rendering == TextRenderingMode.HTML_OVERLAY
-        assert layout.reserved_text_regions
+        assert layout.text_rendering in {TextRenderingMode.NO_TEXT, TextRenderingMode.MODEL_TEXT_ALLOWED}
+        assert layout.reserved_text_regions == []
     for prompt in result.prompt_compilations:
-        assert prompt.provider_notes["avoid_fake_chinese_text"] is True
-        assert "Do not render fake final Chinese text" in prompt.provider_notes["required_note"]
+        assert prompt.provider_notes["text_rendering_owner"] == "image_provider"
+        assert prompt.provider_notes["text_overlay_required"] is False
 
 
 def test_golden_milk_tea_xiaohongshu_delivery() -> None:
@@ -92,14 +92,15 @@ def test_golden_minimal_input_defaults() -> None:
     assert len(result.series_plan.assets) == 3
 
 
-def test_golden_explicit_chinese_text_overlay() -> None:
+def test_golden_explicit_chinese_text_is_provider_native() -> None:
     result = run_creative_planning("做一张火锅店海报，标题写“冬季双人套餐 128 元”，下面写“今日下单送小酥肉”。")
     _assert_global_foundation_shape(result)
 
     first_layout = result.layout_plans[0]
-    assert first_layout.headline_area.text == "冬季双人套餐 128 元"
-    assert first_layout.cta_area.text == "今日下单送小酥肉"
-    assert first_layout.metadata["explicit_text_preserved"] is True
+    assert first_layout.headline_area is None
+    assert first_layout.cta_area is None
+    assert first_layout.text_rendering == TextRenderingMode.MODEL_TEXT_ALLOWED
+    assert first_layout.metadata["provider_native_literal_text"] == ["冬季双人套餐 128 元", "今日下单送小酥肉"]
 
 
 def test_golden_unknown_industry_platform_still_plans() -> None:

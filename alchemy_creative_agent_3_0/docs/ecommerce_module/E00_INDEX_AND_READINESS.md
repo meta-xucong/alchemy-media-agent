@@ -1,7 +1,7 @@
 # E-Commerce Module Documentation Set
 
-Status: development preparation baseline
-Document family: `E00-E08`
+Status: development preparation baseline with provider-native text correction
+Document family: `E00-E11`, corrected by V3 Doc111
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -18,8 +18,9 @@ commerce-specific deliverables.
 1. `AGENTS.md` repository safety and layer-boundary rules.
 2. V3 foundation and capability authorities, especially Docs 76, 77, 91-103.
 3. V3 template/project authorities, especially Docs 41-43, 57, and 60.
-4. This `E00-E08` module family.
-5. Implementation notes and examples.
+4. V3 Doc111 provider-native text and creative-direction correction.
+5. This E-Commerce module family.
+6. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -48,11 +49,17 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | Category packs | partial | need first five category definitions |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
+| In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |
 
 Current upstream coordination authority: V3 Doc103. It permits this isolated
 module work, while reserving frozen capability-plan runtime closure, live
 provider acceptance, General browser continuation, and production template
 activation for the shared foundation integration gates.
+
+The historical E12-E16 handoffs on the documentation branch must not merge
+unchanged: their deterministic compositor, font, safe-area, and multi-plan
+contracts are superseded for new work by Doc111. Product facts, platform
+evidence, output lineage, and final-pixel review remain valid inputs.
 
 ## Definition of preparation complete
 

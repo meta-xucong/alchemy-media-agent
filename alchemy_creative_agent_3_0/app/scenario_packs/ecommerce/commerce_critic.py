@@ -52,16 +52,16 @@ class CommerceCritic:
                 "Every selected slot has a distinct buyer-facing job and selling-point direction.",
             )
         )
-        main_image_copy = [
+        forbidden_text_request = [
             recipe
             for recipe in recipes
-            if (recipe.metadata.get("copy_plan") or {}).get("policy") == "text_forbidden" and recipe.overlay_text
+            if (recipe.metadata.get("copy_plan") or {}).get("policy") == "text_forbidden" and recipe.provider_native_text
         ]
         checks.append(
             self._check(
                 "main_image_text_policy",
-                not main_image_copy,
-                "Main-image slots do not carry overlay copy.",
+                not forbidden_text_request,
+                "Text-forbidden slots do not request provider-native copy.",
             )
         )
         localization_review_slots = [
@@ -73,7 +73,7 @@ class CommerceCritic:
             self._check(
                 "localization_review",
                 not localization_review_slots,
-                "Localized overlay copy is user-supplied or has passed the current metadata review gate.",
+                "Localized provider-native copy is user-supplied or has passed the current metadata review gate.",
             )
         )
         claim_review_slots = [
@@ -85,7 +85,7 @@ class CommerceCritic:
             self._check(
                 "overlay_claim_review",
                 not claim_review_slots,
-                "Overlay copy does not contain a claim that needs supplied evidence or publication review.",
+                "Requested provider-native copy does not contain a claim that needs supplied evidence or publication review.",
             )
         )
         checks.append(
@@ -110,10 +110,10 @@ class CommerceCritic:
             warnings.extend(brief.claim_risk_warnings)
         if localization_review_slots:
             warnings.append(
-                "Derived overlay copy requires native-language review before export: " + ", ".join(localization_review_slots)
+                "Provider-native copy requires native-language review before export: " + ", ".join(localization_review_slots)
             )
         if claim_review_slots:
-            warnings.append("Overlay copy requires claim review before export: " + ", ".join(claim_review_slots))
+            warnings.append("Provider-native copy requires claim review before export: " + ", ".join(claim_review_slots))
         if category_coverage and category_coverage["missing"]:
             warnings.append(
                 "Selected suite does not yet cover category evidence: " + ", ".join(category_coverage["missing"])

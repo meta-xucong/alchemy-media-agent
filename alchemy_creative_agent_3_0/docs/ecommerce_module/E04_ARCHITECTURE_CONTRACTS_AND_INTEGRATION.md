@@ -65,12 +65,12 @@ user request + uploaded refs
 5. Historical records without newer fields remain readable.
 6. Every job requires a project ID and product reference or an explicitly
    confirmed text-only product brief.
-7. Optional `commerce_profile.metadata.copy_locale` and
+7. Optional `commerce_profile.metadata.copy_locale` and legacy
    `commerce_profile.metadata.overlay_copy` are E-Commerce-only planning
-   signals. When absent, locale continues to resolve from platform/market;
-   supplied copy remains subject to the existing slot text policy and claim
-   review. They do not change provider, activation, review, retry, or General
-   Template contracts.
+   signals. Approved literal copy is passed to the LLM/provider as a
+   provider-native requirement, never a local overlay; it remains subject to
+   text policy and claim review. These signals do not add General Template
+   semantics or renderer controls.
 
 ## Compatibility rule
 

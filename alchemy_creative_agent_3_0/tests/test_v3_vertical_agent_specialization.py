@@ -10,8 +10,8 @@ def test_v36_ecommerce_pack_specializes_standard_schema_outputs() -> None:
     assert result.metadata["vertical_pack_metadata"]["extends_v3_standard_schemas"] is True
     assert result.metadata["vertical_pack_metadata"]["forks_runtime"] is False
     assert "product clarity" in result.commercial_brief.commercial_hooks
-    assert "feature_callout_space_required" in result.prompt_compilations[0].provider_notes
-    assert result.layout_plans[0].product_area.position == "center_product_hero"
+    assert result.prompt_compilations[0].provider_notes["provider_native_complete_image"] is True
+    assert result.layout_plans[0].product_area.position == "provider_directed"
     assert all(asset.metadata["selected_vertical_pack"] == "ecommerce_agent_family" for asset in result.series_plan.assets)
 
 
@@ -49,7 +49,8 @@ def test_v36_local_service_pack_specializes_booking_conversion_outputs() -> None
 
     assert result.metadata["selected_vertical_pack"] == "local_service_agent_family"
     assert "appointment intent" in result.commercial_brief.commercial_hooks
-    assert result.prompt_compilations[0].provider_notes["booking_cta_space_required"] is True
+    assert result.prompt_compilations[0].provider_notes["booking_cta_space_required"] is False
+    assert result.prompt_compilations[0].provider_notes["provider_native_complete_image"] is True
     assert result.layout_plans[0].product_area.position == "center_service_result"
 
 

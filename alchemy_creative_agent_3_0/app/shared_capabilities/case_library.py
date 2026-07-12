@@ -34,16 +34,6 @@ DEFAULT_CASES = [
         "use_case_tags": ["social", "cover", "campaign"],
         "visual_signals": ["square composition", "cover-safe clean space", "clean subject separation"],
     },
-    {
-        "case_id": "case_ecommerce_product_hero",
-        "scenario_id": "ecommerce",
-        "category": "marketplace",
-        "title": "Marketplace Product Hero",
-        "style_tags": ["product-first", "conversion-ready"],
-        "composition_tags": ["center product", "feature callout lanes"],
-        "use_case_tags": ["ecommerce", "listing", "product"],
-        "visual_signals": ["centered product hero", "white space for benefits", "sharp edge clarity"],
-    },
 ]
 
 

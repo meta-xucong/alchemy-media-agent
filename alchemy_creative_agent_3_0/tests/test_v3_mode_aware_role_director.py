@@ -57,65 +57,22 @@ def test_doc59_mode_role_director_makes_four_modes_distinct() -> None:
         assert all(recipe.prompt_pressure for recipe in plan.role_recipes)
 
 
-def test_doc60_ecommerce_recipe_aligned_roles_keep_requested_slots() -> None:
+def test_shared_mode_director_does_not_own_ecommerce_suite_recipes() -> None:
     director = ModeAwareRoleDirector()
-
-    plan = director.build_from_ecommerce_recipes(
+    plan = director.build(
         project_id="project_doc60",
         job_id="job_doc60",
         user_input="Create an ecommerce product suite",
+        mode="delivery_suite",
         requested_image_count=3,
-        ecommerce_recipes=[
-            {"slot": "main_image", "business_goal": "click", "visual_scene": "clean hero"},
-            {
-                "slot": "feature_image_1",
-                "business_goal": "understand",
-                "selling_point": "summer freshness",
-                "visual_scene": "feature proof with lime and condensation",
-                "required_product_facts": ["turquoise can", "lime mint label"],
-            },
-            {"slot": "scenario_image", "business_goal": "desire", "visual_scene": "real outdoor cafe table"},
-        ],
-        template_id="ecommerce",
+        subject_type="product",
         scenario_id="ecommerce",
+        template_id="ecommerce_template",
     )
 
-    assert plan.metadata["doc"] == "60"
-    assert plan.metadata["ecommerce_recipe_aligned"] is True
-    assert [recipe.role_key for recipe in plan.role_recipes] == ["main_image", "feature_image_1", "scenario_image"]
-    assert plan.role_recipes[1].metadata["ecommerce_slot"] == "feature_image_1"
-    assert "lime mint label" in " ".join(plan.role_recipes[1].must_keep_rules)
-    assert "without rendered text" in plan.role_recipes[1].prompt_pressure
-
-
-def test_doc60_ecommerce_role_review_detects_slot_mismatch() -> None:
-    director = ModeAwareRoleDirector()
-    plan = director.build_from_ecommerce_recipes(
-        project_id="project_doc60_review",
-        job_id="job_doc60_review",
-        user_input="Create an ecommerce product suite",
-        requested_image_count=3,
-        ecommerce_recipes=[
-            {"slot": "main_image"},
-            {"slot": "feature_image_1"},
-            {"slot": "scenario_image"},
-        ],
-    )
-
-    review = director.review(
-        project_id="project_doc60_review",
-        job_id="job_doc60_review",
-        role_plan=plan,
-        generated_candidates=[
-            {"metadata": {"mode_role_recipe": {"role_key": "main_image"}}},
-            {"metadata": {"mode_role_recipe": {"role_key": "scenario_image"}}},
-            {"metadata": {"mode_role_recipe": {"role_key": "detail_image"}}},
-        ],
-    )
-
-    assert review.status == "retry_recommended"
-    assert "ecommerce_slot_mismatch" in review.issue_codes
-    assert "requested listing slot ignored" in " ".join(review.retry_patch["negative_additions"])
+    assert plan.metadata["doc"] == "59"
+    assert all("ecommerce" not in recipe.role_key for recipe in plan.role_recipes)
+    assert not hasattr(director, "build_from_ecommerce_recipes")
 
 
 def test_doc62_portrait_delivery_roles_have_natural_role_lanes() -> None:

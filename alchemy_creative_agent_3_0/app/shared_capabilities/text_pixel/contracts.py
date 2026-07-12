@@ -199,6 +199,7 @@ class TextPixelDelivery(V3BaseModel):
         "passed",
         "requires_copy_correction",
         "repair_exhausted",
+        "provider_native_required",
         "blocked",
     ] = "not_requested"
     rendered: bool = False

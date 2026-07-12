@@ -354,16 +354,14 @@ class RuleBasedLayoutMapProvider(LayoutConditionProvider):
             "asset_id": request.asset_spec.asset_id,
             "aspect_ratio": request.layout_plan.aspect_ratio,
             "visual_hierarchy": request.layout_plan.visual_hierarchy,
-            "regions": {
-                "product_area": _region_payload(request.layout_plan.product_area),
-                "headline_area": _region_payload(request.layout_plan.headline_area),
-                "subtitle_area": _region_payload(request.layout_plan.subtitle_area),
-                "cta_area": _region_payload(request.layout_plan.cta_area),
-                "logo_area": _region_payload(request.layout_plan.logo_area),
+            # This sidecar is advisory only.  It deliberately has no text
+            # lanes, overlay regions, or fixed copy coordinates: typography,
+            # when requested, belongs to the image provider's complete frame.
+            "creative_focus": {
+                "subject_area": _region_payload(request.layout_plan.product_area),
+                "composition_owner": "llm_and_image_provider",
             },
-            "reserved_text_regions": [
-                _region_payload(region) for region in request.layout_plan.reserved_text_regions
-            ],
+            "reserved_text_regions": [],
         }
         strength = _clamp_strength(request.strength)
         condition = ConditionSpec(
@@ -371,7 +369,7 @@ class RuleBasedLayoutMapProvider(LayoutConditionProvider):
             provider=self.provider_name,
             reference_asset_ids=[],
             strength=strength,
-            notes="LayoutPlan converted to a provider-neutral structural conditioning map.",
+            notes="LayoutPlan converted to an advisory, provider-neutral creative-focus map.",
             metadata={
                 "provider_version": self.provider_version,
                 "asset_id": request.asset_spec.asset_id,
@@ -384,7 +382,7 @@ class RuleBasedLayoutMapProvider(LayoutConditionProvider):
         return LayoutConditionResponse(
             condition_spec=condition,
             layout_map=layout_map,
-            provider_payload={"layout_map": layout_map, "conditioning_goal": "preserve poster structure"},
+            provider_payload={"layout_map": layout_map, "conditioning_goal": "preserve requested subject visibility without fixed text geometry"},
             metadata={
                 "provider_name": self.provider_name,
                 "provider_version": self.provider_version,

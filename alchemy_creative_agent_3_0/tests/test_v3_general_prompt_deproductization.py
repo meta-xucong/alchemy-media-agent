@@ -108,7 +108,7 @@ def test_general_template_final_prompt_stays_subject_focused_not_product_ad() ->
 
     assert prompt.metadata["product_language_allowed"] is False
     assert layout.metadata["product_language_allowed"] is False
-    assert result.brand_profile.layout_preference == "main subject centered with balanced clean space"
+    assert result.brand_profile.layout_preference == "LLM/provider-directed subject presentation responsive to the creative brief"
     assert "main_subject" in layout.visual_hierarchy
     assert "subject_area" in layout.product_area.name
     for term in PRODUCT_TERMS:
@@ -116,7 +116,7 @@ def test_general_template_final_prompt_stays_subject_focused_not_product_ad() ->
     for term in GENERAL_AD_COPY_TERMS:
         assert term not in final_provider_prompt.lower()
     assert "output goal:" in final_provider_prompt.lower()
-    assert "do not render any final text" in final_provider_prompt.lower()
+    assert "no literal copy is preselected" in final_provider_prompt.lower()
     assert "requested subject, scene, style, and mood" in final_provider_prompt
     assert "unrelated props" in final_provider_prompt
     assert "watermarks" in final_provider_prompt

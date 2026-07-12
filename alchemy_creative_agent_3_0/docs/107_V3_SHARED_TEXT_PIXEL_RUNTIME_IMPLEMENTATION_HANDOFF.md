@@ -3,6 +3,10 @@
 Status: feature-branch handoff for mainline review. Production activation is
 intentionally off.
 
+Superseded for forward implementation by Doc111. Do not certify, enable, or
+extend this deterministic compositor. It remains historical provenance only;
+new text-bearing images must be generated and revised provider-natively.
+
 Handoff snapshot: the dedicated branch is `codex/shared-text-pixel-runtime`.
 Before handoff it was rebased in a Git-writable feature checkout onto
 `origin/main` at `1c9b2541c1d9cb20c0abca37348b3fc63c5eaefd`. The mainline

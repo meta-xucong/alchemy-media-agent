@@ -97,25 +97,12 @@ class V3LLMBrainAdapter:
             or None
         )
         scenario_parameters = as_dict(metadata.get("scenario_parameters"))
+        provider_native_text_requirements = _provider_native_text_requirements(metadata, scenario_parameters)
         capability_hints = scenario_parameters.get("capabilities")
         if not isinstance(capability_hints, list):
             capability_hints = []
-        internal_copy_envelope = metadata.get("text_pixel_delivery_internal")
         specialized_plan = metadata.get("specialized_scenario_plan")
         specialized_plan_present = isinstance(specialized_plan, dict) and bool(specialized_plan.get("planning_id"))
-        internal_copy_plan_present = bool(
-            metadata.get("internal_copy_render_plan_present") is True
-            or (
-                isinstance(internal_copy_envelope, dict)
-                and (
-                    isinstance(internal_copy_envelope.get("copy_render_plan"), dict)
-                    or (
-                        isinstance(internal_copy_envelope.get("copy_render_plans"), list)
-                        and bool(internal_copy_envelope.get("copy_render_plans"))
-                    )
-                )
-            )
-        )
         return BrainRunRequest(
             user_input=user_input,
             stage=stage,
@@ -144,10 +131,10 @@ class V3LLMBrainAdapter:
                 "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
                 "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
                 "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
-                # Only a boolean crosses the Brain boundary.  The approved
-                # copy itself stays in the internal runtime envelope and is
-                # bound to the frozen plan by Product API before generation.
-                "internal_copy_render_plan_present": internal_copy_plan_present,
+                # Literal approved copy belongs in the LLM/provider creative
+                # brief.  This deliberately carries no font, rectangle,
+                # template slot, or local-renderer instruction.
+                "provider_native_text_requirements": provider_native_text_requirements,
                 # Photography and future specialized planners remain opaque
                 # to Central Brain: only their confirmed presence crosses this
                 # boundary, while frozen direction stays in shared runtime.
@@ -201,6 +188,26 @@ class V3LLMBrainAdapter:
                 "remote_contract_rejected_sections": rejected_sections,
             }
         return BrainRunResult.model_validate(payload)
+
+
+def _provider_native_text_requirements(metadata: dict[str, Any], scenario_parameters: dict[str, Any]) -> list[str]:
+    """Flatten approved literal copy without leaking template geometry or roles."""
+
+    raw = (
+        metadata.get("provider_native_text_requirements")
+        or scenario_parameters.get("provider_native_text")
+        or scenario_parameters.get("approved_copy")
+        # Compatibility input only: this historic field is converted to a
+        # provider-native requirement and never to an overlay instruction.
+        or scenario_parameters.get("overlay_copy")
+    )
+    if isinstance(raw, dict):
+        values = list(raw.values())
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = [raw]
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value or "").strip()))[:8]
 
 
 def _enabled() -> bool:

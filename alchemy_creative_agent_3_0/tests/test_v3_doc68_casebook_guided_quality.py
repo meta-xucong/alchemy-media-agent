@@ -153,9 +153,10 @@ def test_doc68_ecommerce_vertical_pack_reuses_casebook_without_losing_pack_owner
     scenario = next(recipe for recipe in recipes if recipe["role_key"] == "scenario_image")
 
     assert all(recipe["metadata"]["owned_by"] == "ecommerce_vertical_pack" for recipe in recipes)
-    assert all(recipe["metadata"]["doc68_casebook_recipe"] is True for recipe in recipes)
-    assert scenario["metadata"]["casebook_recipe_library"] == VISUAL_CASEBOOK_RECIPE_LIBRARY_ID
-    assert "genuinely lived-in lifestyle/context image" in scenario["prompt_pressure"]
+    assert all(recipe["metadata"].get("doc68_casebook_recipe") is not True for recipe in recipes)
+    assert scenario["metadata"].get("casebook_recipe_library") is None
+    assert scenario["metadata"]["creative_owner"] == "llm_and_image_provider"
+    assert "LLM and image provider" in scenario["prompt_pressure"]
     assert "preserve product shape" in " ".join(scenario["must_keep_rules"])
 
 

@@ -9,7 +9,7 @@ def test_claim_risk_helper_flags_sensitive_claim_language() -> None:
     assert claim_review_required("Best daily companion", ["best daily companion"]) is True
 
 
-def test_risky_user_overlay_copy_requires_review_without_being_deleted() -> None:
+def test_risky_user_provider_native_copy_requires_review_without_being_deleted() -> None:
     output = EcommerceScenarioPackPlanner().plan(
         user_input="Create an Amazon listing image set",
         product_profile={
@@ -28,7 +28,8 @@ def test_risky_user_overlay_copy_requires_review_without_being_deleted() -> None
     )
 
     feature = output.recipes[1]
-    assert feature.overlay_text == "100% eye protection"
+    assert feature.overlay_text is None
+    assert feature.provider_native_text == "100% eye protection"
     assert feature.metadata["copy_plan"]["claim_review_required"] is True
     assert output.critic.metadata["claim_review_slots"] == ["feature_image_1"]
     assert any(check["id"] == "overlay_claim_review" and check["status"] == "attention" for check in output.critic.checks)

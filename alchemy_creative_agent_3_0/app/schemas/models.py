@@ -184,7 +184,10 @@ class AssetSpec(V3BaseModel):
     aspect_ratio: str
     purpose: str
     priority: int = 1
-    requires_text_overlay: bool = True
+    # New V3 assets are complete provider-generated images.  This legacy field
+    # remains readable for historical manifests but must never default a new
+    # job into an external HTML/SVG/canvas composition path.
+    requires_text_overlay: bool = False
     requires_brand_consistency: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -212,7 +215,10 @@ class LayoutPlan(V3BaseModel):
     asset_id: str
     platform: Platform
     aspect_ratio: str
-    text_rendering: TextRenderingMode = TextRenderingMode.HTML_OVERLAY
+    # Provider-native text, when a user explicitly requests it, is part of the
+    # image-generation brief.  Layout regions are not a local post-render
+    # typography instruction.
+    text_rendering: TextRenderingMode = TextRenderingMode.MODEL_TEXT_ALLOWED
     visual_hierarchy: list[str] = Field(default_factory=list)
     product_area: LayoutRegion
     headline_area: LayoutRegion | None = None

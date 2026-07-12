@@ -9,7 +9,7 @@ from ..creative_core.prompt_language import (
     split_positive_and_negative_prompt,
     strip_negated_product_phrases,
 )
-from ..creative_core.rules import NO_FAKE_TEXT_PROVIDER_NOTE, RULE_VERSION, stable_id
+from ..creative_core.rules import RULE_VERSION, stable_id
 from ..schemas import BrandProfile, CommercialBrief, CreativePlan, LayoutPlan, PromptCompilationResult
 
 
@@ -69,12 +69,14 @@ class PromptCompilerAgent(BaseAgent):
         ecommerce_recipe = asset_metadata.get("ecommerce_recipe")
         if not isinstance(ecommerce_recipe, dict):
             ecommerce_recipe = None
+        provider_text, provider_text_policy = self._provider_native_text_intent(layout_plan, ecommerce_recipe)
+        provider_text_requested = bool(provider_text)
         ecommerce_prompt = self._ecommerce_recipe_prompt(ecommerce_recipe)
         general_external_copy_tone = self._general_external_copy_tone(brand_profile)
         layout_notes = [
             f"platform {layout_plan.platform}",
             f"aspect ratio {layout_plan.aspect_ratio}",
-            "reserve top and bottom clean text areas" if allow_product_language else "reserve optional clean blank areas",
+            "LLM/provider-selected composition; no external text regions",
             f"brand layout preference: {brand_profile.layout_preference}" if brand_profile.layout_preference else "",
             f"brand typography preference: {brand_profile.typography_preference}" if brand_profile.typography_preference else "",
             layout_plan.background_strategy or "",
@@ -106,13 +108,16 @@ class PromptCompilerAgent(BaseAgent):
                 f"Use palette as image atmosphere only: {color_text}. "
                 "Keep the requested subject, scene, style, and mood clear and prominent."
                 + (
-                    f" External overlay tone for later non-image text: {general_external_copy_tone}."
+                    f" If the user later explicitly requests in-image copy, use this provider-native copy tone: {general_external_copy_tone}."
                     if general_external_copy_tone
                     else ""
                 )
             )
         if ecommerce_prompt:
             visual_prompt = f"{visual_prompt} {ecommerce_prompt}"
+        provider_text_prompt = self._provider_native_text_prompt(provider_text, provider_text_policy)
+        if provider_text_prompt:
+            visual_prompt = f"{visual_prompt} {provider_text_prompt}"
         role_prompt = self._mode_role_prompt(mode_role_recipe, mode_execution_policy)
         if role_prompt:
             visual_prompt = f"{visual_prompt} Role-specific output direction: {role_prompt}"
@@ -138,10 +143,9 @@ class PromptCompilerAgent(BaseAgent):
                     *brain_guidance.get("negative_prompt_addons", []),
                     *(general_negated_retail_constraints(raw_user_request) if not allow_product_language else []),
                     *SINGLE_FRAME_NEGATIVE_PARTS,
-                    "fake final Chinese text",
-                    "unreadable text",
+                    *( ["extra generated text", "unreadable text"] if provider_text_requested else ["unintended generated text", "unreadable text"] ),
                     "cluttered background",
-                    *self._ecommerce_negative_parts(ecommerce_recipe),
+                    *self._ecommerce_negative_parts(ecommerce_recipe, provider_text_requested),
                 ]
             )
         )
@@ -162,11 +166,7 @@ class PromptCompilerAgent(BaseAgent):
                 if user_request
                 else []
             ),
-            (
-                "Do not render final offer text inside the image model output."
-                if allow_product_language
-                else "Do not render any final text, captions, or UI copy inside the image model output."
-            ),
+            self._provider_native_text_constraint(provider_text, provider_text_policy),
             SINGLE_FRAME_HARD_CONSTRAINT,
             *self._complex_prompt_fidelity_constraints(user_request, explicit_negative_parts),
             *(
@@ -175,7 +175,7 @@ class PromptCompilerAgent(BaseAgent):
                 else [strip_negated_product_phrases(item) for item in brain_guidance.get("hard_constraints", [])]
             ),
             *self._mode_role_hard_constraints(mode_role_recipe, mode_execution_policy),
-            *self._ecommerce_hard_constraints(ecommerce_recipe),
+            *self._ecommerce_hard_constraints(ecommerce_recipe, provider_text_requested),
         ]
         compiled_layout_notes = [
             note
@@ -198,20 +198,23 @@ class PromptCompilerAgent(BaseAgent):
             visual_prompt=visual_prompt,
             negative_prompt=", ".join(part for part in negative_parts if part),
             hard_constraints=hard_constraints,
-            text_policy="do_not_render_final_text_in_image_model",
+            text_policy=provider_text_policy,
             style_notes=style_notes,
             layout_notes=compiled_layout_notes,
             provider_notes={
-                "text_overlay_required": True,
-                "reserve_clean_text_areas": True,
-                "avoid_fake_chinese_text": True,
-                "required_note": NO_FAKE_TEXT_PROVIDER_NOTE,
+                "text_overlay_required": False,
+                "reserve_clean_text_areas": False,
+                "text_rendering_owner": "image_provider",
+                "provider_native_text": provider_text,
+                "provider_native_text_requested": provider_text_requested,
+                "provider_native_text_policy": provider_text_policy,
+                "final_pixel_text_review_required": provider_text_policy in {"provider_native_text_requested", "provider_native_text_forbidden"},
                 "brand_consistency": f"Preserve brand tone: {', '.join(style_notes)}. Use palette: {color_text}.",
                 "negative_style_constraints": rejected_text,
                 "copywriting_tone": (
                     brand_profile.copywriting_tone or brief.copy_strategy
                     if allow_product_language
-                    else general_external_copy_tone or "no in-image text; optional external overlay only"
+                    else general_external_copy_tone or "no in-image text unless the user explicitly requests it"
                 ),
                 "layout_preference": brand_profile.layout_preference,
                 "asset_metadata": asset_metadata,
@@ -222,7 +225,7 @@ class PromptCompilerAgent(BaseAgent):
                 "mode_role_recipe": mode_role_recipe,
                 "mode_role_key": mode_role_recipe.get("role_key"),
                 "mode_role_label": mode_role_recipe.get("label"),
-                "model_text_forbidden": bool(ecommerce_recipe),
+                "model_text_forbidden": provider_text_policy == "provider_native_text_forbidden",
                 "llm_brain_summary": self._brain_user_summary(llm_brain),
                 "llm_brain_consistency_strategy": brain_guidance.get("consistency_strategy"),
                 "llm_brain_prompt_review": self._brain_prompt_review(llm_brain),
@@ -241,6 +244,8 @@ class PromptCompilerAgent(BaseAgent):
                 llm_brain_enabled=bool(llm_brain and llm_brain.get("enabled")),
                 llm_brain_used=bool(llm_brain and llm_brain.get("llm_used")),
                 product_language_allowed=allow_product_language,
+                provider_native_text_requested=provider_text_requested,
+                provider_native_text_policy=provider_text_policy,
                 explicit_negative_prompt_parts=explicit_negative_parts,
                 complex_prompt_fidelity=bool(self._complex_prompt_fidelity_constraints(user_request, explicit_negative_parts)),
             ),
@@ -350,11 +355,48 @@ class PromptCompilerAgent(BaseAgent):
             "commercial image": "creative image",
             "commercial visual": "creative visual",
             "commercial": "polished",
-            "later copy": "optional external overlay",
+            "later copy": "optional provider-native copy",
         }
         for source, target in replacements.items():
             value = value.replace(source, target)
         return value
+
+    def _provider_native_text_intent(self, layout_plan: LayoutPlan, recipe: dict | None) -> tuple[list[str], str]:
+        if recipe:
+            copy_plan = recipe.get("metadata", {}).get("copy_plan") if isinstance(recipe.get("metadata"), dict) else {}
+            policy = str(copy_plan.get("policy") or "") if isinstance(copy_plan, dict) else ""
+            if policy == "text_forbidden":
+                return [], "provider_native_text_forbidden"
+            copy = recipe.get("provider_native_text") or recipe.get("overlay_text")
+            if isinstance(copy, str) and copy.strip():
+                return [copy.strip()], "provider_native_text_requested"
+            return [], "provider_native_text_optional"
+        raw = layout_plan.metadata.get("provider_native_literal_text")
+        values = raw if isinstance(raw, list) else [raw]
+        text = [str(value).strip() for value in values if str(value or "").strip()]
+        return text, "provider_native_text_requested" if text else "provider_native_text_optional"
+
+    def _provider_native_text_prompt(self, text: list[str], policy: str) -> str:
+        if policy == "provider_native_text_forbidden":
+            return "Do not add visible captions, promotional copy, badges, icons, watermarks, or other generated text."
+        if not text:
+            return (
+                "No literal copy is preselected. Let the LLM creative brief decide whether in-image text materially helps the user's request; "
+                "do not use a canned promotional phrase, unsupported claim, or local overlay."
+            )
+        literals = "; ".join(f'"{value}"' for value in text)
+        return (
+            f"Render these exact user-approved text strings once, with no extra generated text: {literals}. "
+            "Integrate the typography naturally into the complete image; choose its visual treatment and placement from the creative brief. "
+            "Do not create a separate overlay, footer strip, callout lane, or post-processing layer."
+        )
+
+    def _provider_native_text_constraint(self, text: list[str], policy: str) -> str:
+        if policy == "provider_native_text_forbidden":
+            return "The final provider-rendered image must contain no added visible text; final pixels require text-artifact review."
+        if text:
+            return "The image provider, not a local renderer, must render the approved literal copy as part of the final image; final pixels require text-fidelity review."
+        return "If the LLM/provider chooses optional in-image text, it must be part of the complete provider image and receive final-pixel review; no local text-rendering fallback is available."
 
     def _ecommerce_recipe_prompt(self, recipe: dict | None) -> str:
         if not recipe:
@@ -364,7 +406,7 @@ class PromptCompilerAgent(BaseAgent):
             f"E-commerce slot: {recipe.get('slot')}",
             f"business goal: {recipe.get('business_goal')}",
             f"buyer intent: {recipe.get('buyer_intent')}",
-            f"selling point to express visually without text: {recipe.get('selling_point')}",
+            f"selling point to express through the complete image: {recipe.get('selling_point')}",
             f"visual scene: {recipe.get('visual_scene')}",
             f"required product facts to preserve: {facts}" if facts else "",
         ]
@@ -376,34 +418,37 @@ class PromptCompilerAgent(BaseAgent):
         notes = [
             f"ecommerce slot {recipe.get('slot')}",
             f"business goal {recipe.get('business_goal')}",
-            "communicate the selling point through composition, lighting, props, and product scale",
-            "leave blank space for external overlay text only",
+            "communicate the selling point through provider-native composition, lighting, props, and product scale",
+            "the LLM and image provider own typography and placement when approved text is requested",
         ]
         return [note for note in notes if note]
 
-    def _ecommerce_hard_constraints(self, recipe: dict | None) -> list[str]:
+    def _ecommerce_hard_constraints(self, recipe: dict | None, provider_text_requested: bool) -> list[str]:
         if not recipe:
             return []
-        return [
-            "Do not add in-image text, icons, badges, seals, charts, footer strips, or unsupported claims.",
-            "Any planned ecommerce copy must be treated as an external overlay layer, not rendered pixels.",
+        constraints = [
             "Preserve the uploaded product identity, material cues, proportions, label placement, logo placement, and packaging shape.",
             "If the reference product has visible label or logo details, keep the existing label/logo readable, high-contrast, and unobscured when it remains in frame.",
             "Do not translate, rewrite, invent, crop, blur, darken, cover, or replace existing product label/logo details.",
             "Do not invent product functions, certifications, awards, ingredients, compatibility, or performance claims.",
         ]
+        if not provider_text_requested:
+            constraints.insert(0, "Do not add in-image text, icons, badges, seals, charts, footer strips, or unsupported claims.")
+        return constraints
 
-    def _ecommerce_negative_parts(self, recipe: dict | None) -> list[str]:
+    def _ecommerce_negative_parts(self, recipe: dict | None, provider_text_requested: bool) -> list[str]:
         if not recipe:
             return []
-        return [
-            "generated typography",
-            "feature icons",
+        negative = [
+            "feature icons" if not provider_text_requested else "extra feature icons",
             "claim badges",
             "comparison text",
             "fake certification seals",
             "invented product labels",
         ]
+        if not provider_text_requested:
+            negative.insert(0, "generated typography")
+        return negative
 
     def _brain_prompt_guidance(self, llm_brain: dict | None) -> dict:
         if not isinstance(llm_brain, dict):

@@ -1,4 +1,4 @@
-"""Visual-copy bridge for concise e-commerce overlays."""
+"""Prepare optional provider-native text intent without writing an overlay."""
 
 from __future__ import annotations
 
@@ -9,26 +9,7 @@ from .utils import clean_text
 
 
 class EcommerceCopyBridge:
-    """Suggest short overlay copy from commerce intent without forcing listing copy workflows."""
-
-    def overlay_for_slot(self, *, slot: str, selling_point: str, brief: CommerceIntelligenceBrief) -> str | None:
-        if slot in {"main_image", "hero_image"}:
-            return None
-        point = clean_text(selling_point)
-        if not point:
-            return None
-        if point.lower().startswith("matches shopper intent:"):
-            point = point.split(":", 1)[-1].strip()
-        words = point.split()
-        if len(words) > 7:
-            point = " ".join(words[:7])
-        if slot in {"trust_image", "trust_comparison_image"} and brief.trust_drivers:
-            return clean_text(brief.trust_drivers[0])[:42]
-        if slot in {"size_spec_image", "detail_image"}:
-            return point[:46]
-        if slot in {"ad_cover", "benefit_hook", "store_banner", "collection_cover"}:
-            return point[:38]
-        return point[:44]
+    """Keep approved wording intact and leave creative typography to the LLM/provider."""
 
     def plan_for_slot(
         self,
@@ -41,7 +22,7 @@ class EcommerceCopyBridge:
         unsupported_claims: list[str] | None = None,
         text_forbidden_slots: set[str] | None = None,
     ) -> dict[str, object]:
-        """Return a reviewable copy plan without pretending to translate text."""
+        """Return a text intent, never a local overlay or auto-written promotion."""
 
         if slot in (text_forbidden_slots or set()):
             return {
@@ -50,31 +31,35 @@ class EcommerceCopyBridge:
                 "source": "marketplace_profile",
                 "needs_localization_review": False,
                 "claim_review_required": False,
+                "provider_native_text": False,
+                "final_pixel_review_required": True,
                 **localization.metadata(),
             }
 
         supplied = self._supplied_copy(slot, parameters)
         if supplied:
-            text = self._truncate(supplied, localization.character_limit(slot))
             return {
-                "text": text,
-                "policy": "text_allowed",
+                "text": supplied,
+                "policy": "text_requested",
                 "source": "user_supplied",
                 "needs_localization_review": False,
-                "truncated": text != supplied,
-                "claim_review_required": claim_review_required(text, unsupported_claims),
+                "truncated": False,
+                "claim_review_required": claim_review_required(supplied, unsupported_claims),
+                "provider_native_text": True,
+                "final_pixel_review_required": True,
                 **localization.metadata(),
             }
 
-        derived = self.overlay_for_slot(slot=slot, selling_point=selling_point, brief=brief)
-        text = self._truncate(derived or "", localization.character_limit(slot)) or None
         return {
-            "text": text,
-            "policy": "text_allowed",
-            "source": "derived",
-            "needs_localization_review": bool(text and localization.language != "en"),
-            "truncated": bool(derived and text != derived),
-            "claim_review_required": claim_review_required(text or "", unsupported_claims),
+            "text": None,
+            "policy": "text_optional",
+            "source": "llm_creative_direction",
+            "needs_localization_review": False,
+            "truncated": False,
+            "claim_review_required": False,
+            "provider_native_text": False,
+            "final_pixel_review_required": False,
+            "creative_direction": clean_text(selling_point),
             **localization.metadata(),
         }
 
@@ -83,6 +68,3 @@ class EcommerceCopyBridge:
         if isinstance(values, dict):
             return clean_text(values.get(slot) or values.get("default"))
         return clean_text(values)
-
-    def _truncate(self, text: str, limit: int) -> str:
-        return clean_text(text)[:limit]

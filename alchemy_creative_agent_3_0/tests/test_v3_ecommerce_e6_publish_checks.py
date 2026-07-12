@@ -14,7 +14,7 @@ def test_export_package_collects_concise_publish_checks_from_existing_metadata()
     checks = {check["id"]: check for check in output.export_package.metadata["publish_checks"]}
     assert checks["product_truth"]["status"] == "attention"
     assert checks["platform_profile"]["status"] == "attention"
-    assert checks["localized_copy"]["status"] == "attention"
+    assert "localized_copy" not in checks
     assert checks["category_evidence_coverage"]["status"] == "attention"
     assert output.export_package.review_status == "attention"
     assert "2 planned image(s)" in output.export_package.metadata["publish_summary"]
@@ -40,4 +40,5 @@ def test_publish_checks_include_claim_evidence_without_rewriting_copy() -> None:
 
     checks = {check["id"]: check for check in output.export_package.metadata["publish_checks"]}
     assert checks["claim_evidence"]["status"] == "attention"
-    assert output.export_package.files[1]["overlay_text"] == "100% eye protection"
+    assert output.export_package.files[1]["overlay_text"] is None
+    assert output.export_package.files[1]["provider_native_text"] == "100% eye protection"

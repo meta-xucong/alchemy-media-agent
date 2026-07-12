@@ -36,7 +36,7 @@
 - product drift is caught for product jobs;
 - fake claims, fake certificates, and invented specs are warnings/failures;
 - main-image text policy is enforced per profile;
-- OCR/layout issues trigger only bounded relevant retries;
+- final-pixel OCR/vision issues trigger only bounded provider-native revisions;
 - retry-superseded outputs stay folded from delivery;
 - best-reviewed candidate wins over newest candidate;
 - out-of-scope review issues do not trigger commerce retries.

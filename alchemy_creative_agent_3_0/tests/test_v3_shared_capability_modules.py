@@ -119,7 +119,7 @@ def test_asset_binding_planner_prioritizes_product_and_warns_logo_conflicts(tmp_
     assert any(warning.code == "asset_binding_role_conflict" for warning in binding.warnings)
 
 
-def test_case_library_excludes_ecommerce_cases_from_general_creative() -> None:
+def test_case_library_has_no_ecommerce_delivery_recipe_in_shared_foundation() -> None:
     registry = SharedCapabilityRegistry.with_default_modules()
 
     general = registry.run(
@@ -133,8 +133,8 @@ def test_case_library_excludes_ecommerce_cases_from_general_creative() -> None:
 
     general_case_ids = [case["case_id"] for case in general.results[0].facts["selected_cases"]]
     ecommerce_case_ids = [case["case_id"] for case in ecommerce.results[0].facts["selected_cases"]]
-    assert "case_ecommerce_product_hero" not in general_case_ids
-    assert "case_ecommerce_product_hero" in ecommerce_case_ids
+    assert all("ecommerce" not in case_id for case_id in general_case_ids)
+    assert all("ecommerce" not in case_id for case_id in ecommerce_case_ids)
 
 
 def test_visual_grammar_and_prompt_compiler_produce_deduped_constraints(tmp_path) -> None:

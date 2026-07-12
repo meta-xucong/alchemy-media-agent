@@ -14,9 +14,11 @@ from .prompt_language import contains_explicit_ecommerce_context, looks_like_hum
 
 
 RULE_VERSION = "v3.0-foundation-rules-001"
+# Compatibility export for older callers.  It now describes the forward
+# provider-native path rather than authorising an external overlay pipeline.
 NO_FAKE_TEXT_PROVIDER_NOTE = (
-    "Generate the product / background / atmosphere only. Reserve clean regions for real "
-    "text overlay. Do not render fake final Chinese text inside the image."
+    "Create one complete image in the image provider. Render approved in-image text only when the user "
+    "explicitly requests it; never rely on a local text overlay."
 )
 
 
@@ -292,7 +294,7 @@ COLOR_DEFAULTS: dict[IndustryCategory, list[str]] = {
 CREATIVE_DEFAULTS: dict[IndustryCategory, dict[str, object]] = {
     IndustryCategory.BEVERAGE: {
         "visual_direction": "bright commercial beverage photography with clean premium freshness",
-        "composition": "large centered drink product with clean top and bottom text areas",
+        "composition": "a clear drink subject with an inviting, naturally balanced scene",
         "lighting": "soft daylight with refreshing highlights",
         "materials": ["ice", "fruit", "condensation", "clean gradient background"],
         "negative": ["messy table", "cheap plastic look", "fake unreadable text"],
@@ -306,28 +308,28 @@ CREATIVE_DEFAULTS: dict[IndustryCategory, dict[str, object]] = {
     },
     IndustryCategory.RESTAURANT_HOTPOT: {
         "visual_direction": "modern appetizing hotpot visual with warm steam and rich ingredients",
-        "composition": "central hotpot or ingredient hero with clear promotional text regions",
+        "composition": "an appetizing hotpot or ingredient hero with naturally balanced scene depth",
         "lighting": "warm dining light with clean commercial contrast",
         "materials": ["warm steam", "fresh ingredients", "modern restaurant table"],
         "negative": ["outdated festive clutter", "overly red cheap poster style"],
     },
     IndustryCategory.ECOMMERCE_PRODUCT: {
         "visual_direction": "clean premium product hero shot with feature-focused platform conversion",
-        "composition": "center product hero with crisp separation and clean feature label regions",
+        "composition": "a clear product hero whose presentation is chosen from the creative brief",
         "lighting": "high contrast studio lighting",
-        "materials": ["premium background", "feature callout space", "subtle tech accents"],
+        "materials": ["premium background", "subtle tech accents"],
         "negative": ["unclear product shape", "busy background", "fake text"],
     },
     IndustryCategory.LOCAL_SERVICE_BEAUTY: {
         "visual_direction": "soft premium beauty service image with elegant clean details",
-        "composition": "service detail hero with gentle negative space for offer and CTA",
+        "composition": "service-detail hero with an elegant, uncluttered visual rhythm",
         "lighting": "soft premium lighting",
         "materials": ["clean hands or service detail", "elegant background", "soft color accents"],
         "negative": ["medical fear style", "messy salon background", "cheap overdecorated poster"],
     },
     IndustryCategory.UNKNOWN: {
         "visual_direction": "clean polished creative visual with clear subject and atmosphere",
-        "composition": "main subject centered with balanced scene space and optional clean overlay area",
+        "composition": "a clear main subject with balanced, prompt-directed scene space",
         "lighting": "clean refined lighting",
         "materials": ["clean background", "simple scene elements"],
         "negative": ["messy background", "fake unreadable text"],

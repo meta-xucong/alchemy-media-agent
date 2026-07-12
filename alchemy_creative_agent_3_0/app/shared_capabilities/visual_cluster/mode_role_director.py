@@ -108,93 +108,6 @@ class ModeAwareRoleDirector:
             },
         )
 
-    def build_from_ecommerce_recipes(
-        self,
-        *,
-        project_id: str | None,
-        job_id: str | None,
-        user_input: str,
-        requested_image_count: int,
-        ecommerce_recipes: list[dict[str, Any]],
-        template_id: str | None = None,
-        scenario_id: str | None = "ecommerce",
-        has_identity_anchor: bool = False,
-    ) -> RoleSpecificGenerationPlan:
-        """Build Doc60 role contracts from Scenario Pack ecommerce recipes."""
-
-        source_recipes = [dict(item) for item in ecommerce_recipes if isinstance(item, dict)]
-        count = max(1, min(8, int(requested_image_count or len(source_recipes) or 1)))
-        policy = self._policy("delivery_suite", has_identity_anchor=has_identity_anchor)
-        raw_recipes = [
-            _ecommerce_recipe_to_role_recipe(recipe, index=index)
-            for index, recipe in enumerate(source_recipes[:count], 1)
-        ]
-        if not raw_recipes:
-            raw_recipes = _ecommerce_delivery_recipes()[:count]
-        raw_recipes = [
-            apply_role_recipe_casebook_overlay(
-                recipe,
-                mode="delivery_suite",
-                subject_type="product",
-                index=index,
-            )
-            for index, recipe in enumerate(raw_recipes[:count], 1)
-        ]
-        recipes = [
-            self._recipe_model(
-                project_id=project_id,
-                job_id=job_id,
-                mode="delivery_suite",
-                subject_type="product",
-                recipe=recipe,
-                index=index,
-            )
-            for index, recipe in enumerate(raw_recipes, 1)
-        ]
-        prompt_additions = [
-            f"Output {recipe.index} must follow ecommerce slot '{recipe.role_key}': {recipe.prompt_pressure}"
-            for recipe in recipes
-        ]
-        negative_additions = _dedupe(
-            rule
-            for recipe in recipes
-            for rule in recipe.negative_pressure
-        )
-        return RoleSpecificGenerationPlan(
-            plan_id=stable_id(
-                "role_specific_generation_plan",
-                "doc60",
-                project_id,
-                job_id,
-                count,
-                user_input,
-                ",".join(recipe.role_key for recipe in recipes),
-            ),
-            project_id=project_id,
-            job_id=job_id,
-            mode="delivery_suite",
-            subject_type="product",
-            requested_image_count=count,
-            policy=policy,
-            role_recipes=recipes,
-            prompt_additions=prompt_additions,
-            negative_additions=negative_additions,
-            user_visible_summary=[
-                "Prepared the ecommerce image set according to the requested listing roles.",
-                f"{count} ecommerce output role(s) planned.",
-            ],
-            metadata={
-                "doc": "60",
-                "extends": "59",
-                "scenario_id": scenario_id,
-                "template_id": template_id,
-                "has_identity_anchor": has_identity_anchor,
-                "mode_role_director": True,
-                "ecommerce_recipe_aligned": True,
-                "ecommerce_role_keys": [recipe.role_key for recipe in recipes],
-            },
-        )
-
     def review(
         self,
         *,
@@ -217,17 +130,10 @@ class ModeAwareRoleDirector:
                 for candidate in candidates
             ]
             role_keys = [key for key in role_keys if key]
-            expected_role_keys = [recipe.role_key for recipe in role_plan.role_recipes if recipe.role_key]
-            role_metadata = dict(role_plan.metadata or {})
             if not role_keys:
                 issue_codes.append("mode_role_metadata_missing")
             elif len(set(role_keys)) < min(len(role_keys), len(role_plan.role_recipes)):
                 issue_codes.append("mode_role_duplication")
-            if role_metadata.get("ecommerce_recipe_aligned") and role_keys:
-                if len(role_keys) != len(expected_role_keys):
-                    issue_codes.append("ecommerce_suite_role_mismatch")
-                elif role_keys != expected_role_keys[: len(role_keys)]:
-                    issue_codes.append("ecommerce_slot_mismatch")
             if role_plan.mode == "delivery_suite" and len(set(role_keys)) <= 1 and len(role_keys) > 1:
                 issue_codes.append("delivery_suite_role_collapse")
             if role_plan.mode == "format_layout_adaptation":
@@ -262,11 +168,10 @@ class ModeAwareRoleDirector:
             retry_patch=retry_patch,
             user_visible_summary=_review_summary(role_plan.mode, status),
             metadata={
-                "doc": "60" if dict(role_plan.metadata or {}).get("ecommerce_recipe_aligned") else "59",
+                "doc": "59",
                 "candidate_count": len(candidates),
                 "role_count": len(role_plan.role_recipes),
                 "append_only": True,
-                "ecommerce_recipe_aligned": bool(dict(role_plan.metadata or {}).get("ecommerce_recipe_aligned")),
             },
         )
 
@@ -334,8 +239,6 @@ class ModeAwareRoleDirector:
             return _creative_exploration_recipes(subject_type)
         if mode == "format_layout_adaptation":
             return _format_layout_recipes(subject_type)
-        if subject_type == "product" and scenario_id == "ecommerce":
-            return _ecommerce_delivery_recipes()
         if subject_type == "product":
             return _product_delivery_recipes()
         if subject_type == "character":
@@ -386,13 +289,6 @@ class ModeAwareRoleDirector:
         return {
             "prompt_additions": [
                 "generate each output with its own role-specific camera distance, crop, angle, scene duty, or layout duty",
-                *(
-                    [
-                        "for ecommerce output, preserve the requested slot order exactly and do not replace a feature, scenario, detail, trust, or cover slot with another role",
-                    ]
-                    if any(code in {"ecommerce_slot_mismatch", "ecommerce_suite_role_mismatch"} for code in issue_codes)
-                    else []
-                ),
                 *role_plan.prompt_additions[:4],
             ],
             "negative_additions": _dedupe(
@@ -400,223 +296,11 @@ class ModeAwareRoleDirector:
                     "same crop and camera distance for every output",
                     "duplicated pose across the whole batch",
                     "same image duty repeated for all outputs",
-                    *(
-                        [
-                            "wrong ecommerce image role",
-                            "feature image replaced by detail image",
-                            "requested listing slot ignored",
-                        ]
-                        if any(code in {"ecommerce_slot_mismatch", "ecommerce_suite_role_mismatch"} for code in issue_codes)
-                        else []
-                    ),
                     *role_plan.negative_additions[:6],
                 ]
             ),
             "reason_codes": _dedupe(issue_codes),
         }
-
-
-def _ecommerce_recipe_to_role_recipe(recipe: dict[str, Any], *, index: int) -> dict[str, Any]:
-    slot = str(recipe.get("slot") or recipe.get("role_key") or f"ecommerce_slot_{index}").strip()
-    base = _ecommerce_slot_defaults(slot)
-    facts = _string_list(recipe.get("required_product_facts"))[:6]
-    business_goal = str(recipe.get("business_goal") or base["purpose"]).strip()
-    selling_point = str(recipe.get("selling_point") or "").strip()
-    buyer_intent = str(recipe.get("buyer_intent") or "").strip()
-    visual_scene = str(recipe.get("visual_scene") or base["scene_rule"]).strip()
-    keep = _dedupe(
-        [
-            *_base_keep("product"),
-            "same product shape, material, color, proportions, logo, label position, and readable existing label text",
-            "existing product label or logo must stay legible when visible",
-            *[f"preserve supplied product fact: {fact}" for fact in facts],
-        ]
-    )
-    prompt_bits = [
-        base["prompt_pressure"],
-        f"Requested ecommerce slot: {slot}",
-        f"Business goal: {business_goal}" if business_goal else "",
-        f"Buyer intent: {buyer_intent}" if buyer_intent else "",
-        f"Selling point to express visually without rendered text: {selling_point}" if selling_point else "",
-        f"Visual scene: {visual_scene}" if visual_scene else "",
-        "Preserve visible product label/logo exactly as reference evidence; keep it readable and unobscured when in frame.",
-    ]
-    return {
-        "role_key": slot,
-        "label": base["label"],
-        "purpose": business_goal or base["purpose"],
-        "shot_family": base["shot_family"],
-        "camera_distance": base["camera_distance"],
-        "angle_rule": base["angle_rule"],
-        "crop_rule": base["crop_rule"],
-        "scene_rule": visual_scene,
-        "variation_axes": base["variation_axes"],
-        "must_keep_rules": keep,
-        "must_not_rules": [
-            "do not add rendered feature copy, icons, badges, seals, charts, footer strips, or unsupported claims",
-            "do not translate, rewrite, invent, crop, blur, darken, or cover the existing product label or logo",
-            "do not replace the requested ecommerce slot with a different image role",
-            "do not make every output the same studio packshot",
-        ],
-        "prompt_pressure": " ".join(part for part in prompt_bits if part),
-        "negative_pressure": _dedupe(
-            [
-                *_common_negative(),
-                "invented product label",
-                "rewritten logo",
-                "unreadable product label",
-                "covered product logo",
-                "wrong ecommerce image role",
-            ]
-        ),
-        "review_checks": [
-            f"output follows ecommerce slot {slot}",
-            "product identity remains large and recognizable",
-            "visible product label/logo is preserved and readable",
-            "selling point is expressed visually without rendered overlay text",
-        ],
-        "user_visible_summary": [base["label"], business_goal or base["purpose"]],
-        "metadata": {
-            "doc": "60",
-            "ecommerce_slot": slot,
-            "ecommerce_recipe": recipe,
-            "ecommerce_business_goal": business_goal,
-            "ecommerce_selling_point": selling_point,
-            "ecommerce_buyer_intent": buyer_intent,
-            "ecommerce_visual_scene": visual_scene,
-            "ecommerce_recipe_aligned": True,
-            "sequence_index": index,
-        },
-    }
-
-
-def _ecommerce_slot_defaults(slot: str) -> dict[str, Any]:
-    defaults: dict[str, dict[str, Any]] = {
-        "main_image": {
-            "label": "Main image",
-            "purpose": "Clean product-first hero",
-            "shot_family": "product hero",
-            "camera_distance": "medium",
-            "angle_rule": "front or three-quarter",
-            "crop_rule": "clear full product crop",
-            "scene_rule": "clean product setup",
-            "variation_axes": ["silhouette", "scale"],
-            "prompt_pressure": "Create the main product image with unmistakable product identity, clear silhouette, and marketplace-ready clarity.",
-        },
-        "hero_image": {
-            "label": "Hero image",
-            "purpose": "Premium product hero",
-            "shot_family": "product hero",
-            "camera_distance": "medium",
-            "angle_rule": "front or three-quarter",
-            "crop_rule": "thumbnail-readable crop",
-            "scene_rule": "premium product setup",
-            "variation_axes": ["silhouette", "thumbnail readability"],
-            "prompt_pressure": "Create a premium hero image with strong thumbnail readability and preserved product identity.",
-        },
-        "feature_image_1": {
-            "label": "Feature image",
-            "purpose": "First benefit proof",
-            "shot_family": "feature proof",
-            "camera_distance": "medium",
-            "angle_rule": "benefit-led product angle",
-            "crop_rule": "product plus visual benefit cue",
-            "scene_rule": "feature-led composition",
-            "variation_axes": ["benefit cue", "prop relationship"],
-            "prompt_pressure": "Create the first feature image: prove one clear benefit visually through props, lighting, layout, and product scale, without rendered text.",
-        },
-        "feature_image_2": {
-            "label": "Feature image 2",
-            "purpose": "Second benefit proof",
-            "shot_family": "feature proof",
-            "camera_distance": "medium",
-            "angle_rule": "second benefit angle",
-            "crop_rule": "product plus second benefit cue",
-            "scene_rule": "secondary feature-led composition",
-            "variation_axes": ["second benefit", "usage cue"],
-            "prompt_pressure": "Create the second feature image: show a different supplied benefit visually, not a repeated main image.",
-        },
-        "benefit_image": {
-            "label": "Benefit image",
-            "purpose": "Benefit-led proof",
-            "shot_family": "benefit proof",
-            "camera_distance": "medium",
-            "angle_rule": "benefit-forward angle",
-            "crop_rule": "benefit readable crop",
-            "scene_rule": "benefit-led visual setup",
-            "variation_axes": ["benefit", "usage context"],
-            "prompt_pressure": "Create a benefit-led image that lets shoppers understand the value quickly through the scene, not rendered copy.",
-        },
-        "scenario_image": {
-            "label": "Lifestyle scene",
-            "purpose": "Realistic use context",
-            "shot_family": "lifestyle context",
-            "camera_distance": "medium-wide",
-            "angle_rule": "realistic scene angle",
-            "crop_rule": "product plus believable environment",
-            "scene_rule": "real-life scene",
-            "variation_axes": ["scene", "surface", "usage context"],
-            "prompt_pressure": "Create a realistic lifestyle scene; avoid making it feel like another studio packshot.",
-        },
-        "detail_image": {
-            "label": "Detail image",
-            "purpose": "Material or feature closeup",
-            "shot_family": "detail proof",
-            "camera_distance": "close",
-            "angle_rule": "detail angle",
-            "crop_rule": "tight detail crop",
-            "scene_rule": "same product setup",
-            "variation_axes": ["texture", "feature", "material"],
-            "prompt_pressure": "Create a close detail image that clearly differs from the main and lifestyle image.",
-        },
-        "trust_image": {
-            "label": "Trust image",
-            "purpose": "Trust cue",
-            "shot_family": "trust proof",
-            "camera_distance": "medium",
-            "angle_rule": "organized proof angle",
-            "crop_rule": "product plus proof cue",
-            "scene_rule": "trust-building setup",
-            "variation_axes": ["evidence cue", "quality cue"],
-            "prompt_pressure": "Create a trust-building product image using supplied facts as visual evidence without rendering unsupported text.",
-        },
-        "trust_comparison_image": {
-            "label": "Comparison image",
-            "purpose": "Comparison-safe proof",
-            "shot_family": "comparison proof",
-            "camera_distance": "medium",
-            "angle_rule": "comparison-safe angle",
-            "crop_rule": "clear product comparison space",
-            "scene_rule": "comparison-safe setup",
-            "variation_axes": ["comparison cue", "scale cue"],
-            "prompt_pressure": "Create a comparison-safe image focused on supplied differences, without charts or fake competitor claims.",
-        },
-        "ad_cover": {
-            "label": "Ad cover",
-            "purpose": "Traffic cover",
-            "shot_family": "layout-safe ad cover",
-            "camera_distance": "medium",
-            "angle_rule": "clean cover angle",
-            "crop_rule": "blank-space crop",
-            "scene_rule": "clean ad-ready setup",
-            "variation_axes": ["negative space", "cover crop"],
-            "prompt_pressure": "Create a polished ad-ready cover with product identity preserved and clear open space for external copy.",
-        },
-    }
-    return defaults.get(
-        slot,
-        {
-            "label": slot.replace("_", " ").title(),
-            "purpose": "Ecommerce support image",
-            "shot_family": "ecommerce support",
-            "camera_distance": "medium",
-            "angle_rule": "clear product angle",
-            "crop_rule": "product-readable crop",
-            "scene_rule": "product-focused commercial setup",
-            "variation_axes": ["role", "composition"],
-            "prompt_pressure": "Create the requested ecommerce support image while preserving product identity and not replacing the slot with a generic role.",
-        },
-    )
 
 
 def normalize_mode(mode: str | None) -> str:
@@ -804,17 +488,7 @@ def _product_delivery_recipes() -> list[dict[str, Any]]:
         _recipe("hero_object", "Hero object", "Main object image", "object hero", "medium", "front or three-quarter", "balanced main crop", "clean primary setup", ["scale", "placement"], keep, "Create a product/object-first hero image with clear silhouette and premium finish."),
         _recipe("context_scene", "Context scene", "Object in use or in scene", "context image", "medium-wide", "natural scene angle", "more environment", "realistic contextual setup", ["scene", "surface", "props"], keep, "Create a realistic context image that shows the object naturally in its scene."),
         _recipe("detail_or_material_closeup", "Detail closeup", "Material/detail proof", "detail closeup", "close", "detail angle", "tight crop", "same product setup", ["texture", "material", "detail"], keep, "Create a closer detail or material image that proves finish and texture."),
-        _recipe("layout_safe_cover", "Layout cover", "Cover-safe version", "layout cover", "medium", "clean angle", "extra blank space", "clean layout-safe setup", ["negative space", "crop"], keep, "Create a layout-safe cover version with useful blank space for later external overlay."),
-    ]
-
-
-def _ecommerce_delivery_recipes() -> list[dict[str, Any]]:
-    keep = _base_keep("product")
-    return [
-        _recipe("main_image", "Main image", "Clear product-first hero", "product hero", "medium", "front or three-quarter", "clear full product crop", "clean product setup", ["silhouette", "scale"], keep, "Create the main product image with unmistakable product identity and clear silhouette."),
-        _recipe("scenario_image", "Lifestyle scene", "Realistic use context", "lifestyle context", "medium-wide", "realistic scene angle", "product plus environment", "real-life scene", ["scene", "surface", "usage context"], keep, "Create a more realistic lifestyle scene; avoid making every image feel like the same premium studio packshot."),
-        _recipe("detail_image", "Detail image", "Material or feature closeup", "detail proof", "close", "detail angle", "tight detail crop", "same product setup", ["texture", "feature", "material"], keep, "Create a close detail image that clearly differs from the main and lifestyle image."),
-        _recipe("trust_or_ad_cover", "Trust cover", "Ad/cover-safe product image", "layout-safe ad cover", "medium", "clean cover angle", "blank-space crop", "clean ad-ready setup", ["negative space", "cover crop"], keep, "Create a polished cover-safe version with product identity preserved and clear open space."),
+        _recipe("layout_safe_cover", "Layout cover", "Cover-safe version", "layout cover", "medium", "clean angle", "broader contextual crop", "clean layout-safe setup", ["negative space", "crop"], keep, "Create a cover version with a broader, naturally balanced contextual composition."),
     ]
 
 
@@ -922,7 +596,7 @@ def _candidate_role_key(candidate: dict[str, Any]) -> str:
     recipe = candidate.get("mode_role_recipe") or metadata.get("mode_role_recipe")
     if isinstance(recipe, dict):
         return str(recipe.get("role_key") or recipe.get("label") or "").strip()
-    for key in ("mode_role_key", "suite_role", "role", "ecommerce_slot"):
+    for key in ("mode_role_key", "suite_role", "role"):
         value = candidate.get(key) or metadata.get(key)
         if value:
             return str(value).strip()

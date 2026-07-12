@@ -1,5 +1,7 @@
 # 07 Schema Contracts
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering contract in this historical schema document. New work uses LLM creative direction and provider-native complete-image generation.
+
 This document freezes the first-pass V3 schema contracts before Codex starts implementation.
 
 The goal is to reduce implementation ambiguity and prevent Codex from inventing incompatible field names.

@@ -1,5 +1,7 @@
 # 13 Step-by-Step Delivery Plan
 
+> **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering step in this historical delivery plan. New work uses LLM creative direction and provider-native complete-image generation.
+
 This document converts the V3 roadmap into concrete development waves.
 
 The goal is to let the project move step by step without re-discussing architecture before every Codex task.

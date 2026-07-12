@@ -65,18 +65,17 @@ measurements, and claims exactly unless the user requests translation.
 ## Text pipeline
 
 ```text
-selling point
-→ localized short copy
-→ copy validation
-→ layout/safe-area plan
-→ image generation with reserved space
-→ deterministic text render
-→ OCR, overflow, spelling, and claim review
+seller facts and approved literal copy
+→ LLM creative reasoning
+→ provider-native complete-image generation
+→ final-pixel OCR/vision/claim review
+→ provider-native targeted revision when needed
 ```
 
-Main images default to `text_forbidden`. Text-enabled slots must declare the
-language, exact text, position, maximum length, and whether post-render text is
-mandatory.
+Main images default to `text_forbidden`. A text-enabled image may carry
+approved literal wording and locale, but the LLM/provider—not a slot
+coordinate, maximum-length rule, or post-render layer—decides the visual
+expression. Final-pixel review decides whether it is accepted.
 
 ## Profile update policy
 
