@@ -212,7 +212,7 @@ confirmation/removal controls for the next plan, and plain-language per-slot
 
 ### D5 — owner-approved real-output fixture harness
 
-Status: can start fixture design after D1; real execution depends on shared
+Status: fixture contract implemented; real execution depends on shared
 Provider/Review readiness.
 
 Build a registry of project-owned, consented product fixtures. Each fixture
@@ -232,6 +232,11 @@ Every real run must score:
 
 Acceptance: real Provider/Review Gate C evidence, bounded terminal behavior,
 and no fixture marked passed solely from planner metadata or image similarity.
+
+Delivered: the E-Commerce fixture registry accepts descriptors only (never
+source images), requires explicit owner consent and a source-fact/role map,
+and refuses a passed record unless real Gate C, terminal, human-score,
+retry-closure, and applicable text-review evidence are present.
 
 ### D6 — A+ module builder and provider-native text delivery closure
 

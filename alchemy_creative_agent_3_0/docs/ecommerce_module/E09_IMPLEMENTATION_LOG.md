@@ -542,6 +542,18 @@ Status: implemented and verified on `codex/ecommerce-module-docs`.
 Verification: focused workspace/D4/Doc105 tests: 75 passed; full V3 +
 commercial frontend + provider contract regression: 608 passed.
 
+## E31 — owner-approved fixture harness contract
+
+Status: fixture contract implemented on `codex/ecommerce-module-docs`.
+
+- Added descriptor-only fixture registry with owner-consent, source-fact,
+  role-map, platform, placement, claim, and human-acceptance contracts.
+- It explicitly rejects a pass based only on planner metadata or similarity;
+  real Gate C, bounded terminal evidence, human scores, retry closure, and
+  required text review are mandatory.
+
+Verification: focused D5/D4/Doc105 tests: 8 passed; full regression: 611 passed.
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.
