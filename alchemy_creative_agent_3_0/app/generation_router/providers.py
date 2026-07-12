@@ -1227,6 +1227,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
         assets = []
         suppressed_original_ids: list[str] = []
+        reference_sanitization_records: list[dict[str, Any]] = []
         for index, asset in enumerate(reference_assets):
             role = str(asset.get("role") or "")
             use_policy = str(asset.get("use_policy") or role)
@@ -1340,7 +1341,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_reference_bytes": self._provider_reference_file_size(derivative.get("path")),
                     }
                 )
-            if self._should_include_original_reference(
+            reference_sanitization = self._full_frame_reference_sanitization(
+                asset,
+                derivatives=derivatives,
+            )
+            if not reference_sanitization.get("applies") and self._should_include_original_reference(
                 truth_layers=truth_layers,
                 derivatives=derivatives,
                 reference_policy=reference_policy,
@@ -1372,6 +1377,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 )
             else:
                 suppressed_original_ids.append(asset["asset_id"])
+                if reference_sanitization.get("applies"):
+                    reference_sanitization_records.append(
+                        {
+                            "source_asset_id": asset["asset_id"],
+                            "action": "suppress_full_frame_provider_reference",
+                            "reason_codes": reference_sanitization.get("reason_codes") or [],
+                            "retained_derivative_ids": [
+                                f"{asset['asset_id']}::{item['derivative_kind']}"
+                                for item in derivatives
+                                if item.get("derivative_kind")
+                            ],
+                        }
+                    )
         truth_package = {
             **truth_package,
             "truth_derivative_ids": [
@@ -1380,6 +1398,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if item.get("provider_reference_derivative") and item.get("provider_input_mode") == "reference_image"
             ],
             "provider_reference_image_count": len(assets),
+            "reference_sanitization": reference_sanitization_records,
         }
         return {
             "asset_mode": "advanced",
@@ -1401,6 +1420,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ),
                 "original_reference_asset_ids": [asset["asset_id"] for asset in reference_assets],
                 "suppressed_full_frame_identity_asset_ids": suppressed_original_ids,
+                "suppressed_full_frame_reference_asset_ids": suppressed_original_ids,
+                "reference_sanitization": reference_sanitization_records,
                 "reference_truth_layers": [
                     {
                         "asset_id": item.get("asset_id"),
@@ -1463,6 +1484,37 @@ class ProductionImageGenerationProvider(GenerationProvider):
             for channel in non_identity_channels
         )
         return has_explicit_reference_channel
+
+    def _full_frame_reference_sanitization(
+        self,
+        asset: dict[str, Any],
+        *,
+        derivatives: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply an explicit, auditable source-artifact policy to provider input.
+
+        The original upload is always retained in project history.  This policy
+        only withholds its full frame from the upstream provider when a caller
+        has established that a source artifact (for example, a social watermark)
+        is not product, person, or subject truth and a focused truth derivative
+        is available to retain the required evidence.
+        """
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        raw_policy = metadata.get("reference_sanitization")
+        policy = dict(raw_policy) if isinstance(raw_policy, dict) else {}
+        requested = bool(policy.get("suppress_full_frame_provider_reference"))
+        usable_derivatives = [
+            item
+            for item in derivatives
+            if item.get("derivative_kind") and not bool(item.get("fallback_to_original"))
+        ]
+        if not requested or not usable_derivatives:
+            return {"applies": False}
+        reason_codes = self._string_list(policy.get("reason_codes"))
+        return {
+            "applies": True,
+            "reason_codes": reason_codes or ["source_artifact_excluded_from_truth"],
+        }
 
     def _reference_truth_package(
         self,

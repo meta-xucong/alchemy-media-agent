@@ -240,6 +240,35 @@ Manual acceptance is required for product truth and commercial usability.
 Automated tests verify contracts, ownership, state transitions, and the result
 surface; they do not replace visual inspection.
 
+### 7.1 Reference-source artifact containment
+
+An uploaded reference can contain a social watermark, corner badge, caption,
+or other source artifact that is explicitly not part of the desired subject
+truth. It must never be silently reclassified as product, portrait, or
+non-human identity evidence.
+
+The shared provider-input contract supports this explicit, auditable policy:
+
+```text
+uploaded asset history remains immutable
+-> asset.metadata.reference_sanitization declares the source artifact
+-> a non-fallback focused truth derivative remains provider input
+-> the original full frame is withheld from that provider request
+-> asset plan records source ID, reason codes, action, and retained derivative IDs
+```
+
+`suppress_full_frame_provider_reference=true` is valid only when the asset has
+a usable focused truth derivative. If it does not, the runtime preserves the
+original reference rather than silently removing the only evidence. This is a
+shared foundation mechanism: it applies to any reference type with explicit
+source-artifact evidence and is not an E-Commerce-only image-editing path.
+
+Generated-output artifact inspection remains active after this input control.
+It may request one bounded retry with the same frozen plan, but retry is not a
+substitute for excluding a known source watermark from full-frame provider
+input. Both source containment and post-generation review must be auditable in
+the Gate C evidence record.
+
 ## 8. General Project Continuation Browser Acceptance
 
 Before E-Commerce is production-active, manually verify this General user path

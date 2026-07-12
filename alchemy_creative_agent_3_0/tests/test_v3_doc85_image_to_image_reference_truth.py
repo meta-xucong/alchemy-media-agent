@@ -232,6 +232,34 @@ def test_doc85_product_truth_derivative_and_metadata_are_persisted(tmp_path, mon
     assert any(item["truth_layer"] == "product_identity_truth" for item in metadata["provider_reference_assets"])
 
 
+def test_doc104_known_source_artifact_uses_truth_derivative_without_full_frame(tmp_path) -> None:
+    reference = _image(tmp_path / "product_reference.png", width=140, height=100)
+    request = _product_request(reference)
+    request.metadata["uploaded_assets"][0].setdefault("metadata", {})["reference_sanitization"] = {
+        "suppress_full_frame_provider_reference": True,
+        "reason_codes": ["source_corner_watermark"],
+    }
+    provider = ProductionImageGenerationProvider()
+
+    references = provider._reference_assets(request)  # noqa: SLF001
+    asset_plan = provider._asset_plan(request, references)  # noqa: SLF001
+    input_plan = asset_plan["provider_input_plan"]
+
+    assert input_plan["reference_image_asset_ids"] == ["uploaded_product_truth::product_truth_crop"]
+    assert input_plan["suppressed_full_frame_reference_asset_ids"] == ["uploaded_product_truth"]
+    assert input_plan["reference_sanitization"] == [
+        {
+            "source_asset_id": "uploaded_product_truth",
+            "action": "suppress_full_frame_provider_reference",
+            "reason_codes": ["source_corner_watermark"],
+            "retained_derivative_ids": ["uploaded_product_truth::product_truth_crop"],
+        }
+    ]
+    assert asset_plan["provider_input_plan"]["reference_truth_package"]["reference_sanitization"] == input_plan[
+        "reference_sanitization"
+    ]
+
+
 def test_doc85_retry_patch_mentions_exact_reference_truth_sources() -> None:
     report = VisionOutputInspector(vision_provider=None).inspect(
         GeneratedOutputResolution(
