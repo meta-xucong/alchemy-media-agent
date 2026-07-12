@@ -378,6 +378,17 @@ class HumanPhotorealismLayer:
         human_subject_kind = str(activation.get("human_subject_kind") or "person")
         style_profile = str(activation.get("style_profile") or "neutral_real_camera")
         rendering_profile = dict(activation.get("universal_rendering_profile") or {})
+        if human_subject_kind == "hand_or_skin_detail":
+            return self._hand_or_skin_guidance(
+                guidance_id=guidance_id,
+                project_id=project_id,
+                job_id=job_id,
+                subject_type=subject_type,
+                variation_mode=variation_mode,
+                realism_level=realism_level,
+                activation=activation,
+                rendering_profile=rendering_profile,
+            )
         positives = [
             "real camera photograph, not a rendered or AI-beauty face",
             "natural human skin texture with subtle pores, fine detail, and small tonal variation",
@@ -564,6 +575,91 @@ class HumanPhotorealismLayer:
             },
         )
 
+    def _hand_or_skin_guidance(
+        self,
+        *,
+        guidance_id: str,
+        project_id: str | None,
+        job_id: str | None,
+        subject_type: str,
+        variation_mode: str,
+        realism_level: str,
+        activation: dict[str, Any],
+        rendering_profile: dict[str, Any],
+    ) -> HumanPhotorealismGuidance:
+        """Keep the shared human capability precise when the face is out of frame."""
+        positives = [
+            "real camera close detail of an adult hand or forearm, never a rendered mannequin surface",
+            "natural hand skin texture with fine pores, subtle tonal variation, believable knuckle creases, and non-plastic highlights",
+            "anatomically believable hand with the correct finger count, natural joints, coherent fingernails, and realistic proportions",
+            "physically credible finger placement, contact pressure, and grip on the requested object",
+            "real lens perspective and natural depth of field around the hand, object, and contact points",
+            "keep any face out of frame when the prompt explicitly requests a hand-only crop",
+        ]
+        negatives = [
+            "plastic skin",
+            "over-smoothed hand skin",
+            "extra fingers",
+            "missing fingers",
+            "fused fingers",
+            "duplicated digits",
+            "warped knuckles",
+            "malformed fingernails",
+            "impossible grip",
+            "floating hand",
+            "waxy skin highlights",
+            "mannequin hand",
+        ]
+        do_not_inherit = [
+            "do not inherit watermarks, AI badges, plastic-skin artifacts, or malformed hand anatomy from a reference",
+        ]
+        review_targets = [
+            "finger count, joints, nails, and hand proportions are anatomically believable",
+            "the hand makes physically credible contact with the object",
+            "visible skin retains natural texture and non-plastic highlight response",
+            "a hand-only request does not introduce an unrequested face",
+        ]
+        retry_patch_templates = {
+            "prompt_additions": list(positives),
+            "negative_additions": list(negatives),
+            "artifact_repair": [
+                "repair the hand toward correct finger count, coherent joints and nails, natural skin texture, and a physically credible grip while keeping the requested face-out-of-frame crop",
+            ],
+            "identity_reinforcement": [],
+        }
+        return HumanPhotorealismGuidance(
+            guidance_id=guidance_id,
+            project_id=project_id,
+            job_id=job_id,
+            applies=True,
+            subject_type=subject_type,
+            realism_level=realism_level,
+            variation_mode=variation_mode,
+            positive_prompt_fragments=_dedupe(positives),
+            negative_prompt_fragments=_dedupe(negatives),
+            reference_preserve_rules=[],
+            reference_do_not_inherit_rules=do_not_inherit,
+            review_targets=review_targets,
+            retry_patch_templates=retry_patch_templates,
+            user_visible_summary=[
+                "Adds real-camera hand and skin detail",
+                "Checks finger anatomy and physical object contact",
+            ],
+            metadata={
+                "doc": "65",
+                "module_id": self.module_id,
+                "enable_reason": "hand_or_skin_detail_detected",
+                "doc91_human_realism_plugin": True,
+                "human_detail_scope": "hand_or_skin_only",
+                "doc94_universal_rendering_profile": True,
+                HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
+                "universal_rendering_profile": rendering_profile,
+                "has_identity_reference": False,
+                "doc68_casebook_recipe": False,
+                "doc70_human_real_camera_tuning": True,
+            },
+        )
+
     def review(
         self,
         *,
@@ -585,6 +681,8 @@ class HumanPhotorealismLayer:
                 metadata={"doc": "65", **dict(metadata or {})},
             )
         retry_patch = dict(guidance.retry_patch_templates) if issue_codes else {}
+        plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
+        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         return AntiAIFaceReviewResult(
             review_id=review_id,
             project_id=project_id,
@@ -595,9 +693,13 @@ class HumanPhotorealismLayer:
             severity="medium" if issue_codes else "pass",
             retry_patch=retry_patch,
             user_visible_summary=(
-                ["Face realism needs one cleaner retry", "V3 prepared more natural skin and expression guidance"]
+                (
+                    ["Hand and skin realism needs one cleaner retry", "V3 prepared anatomy and grip guidance"]
+                    if hand_detail
+                    else ["Face realism needs one cleaner retry", "V3 prepared more natural skin and expression guidance"]
+                )
                 if issue_codes
-                else ["Face realism will be checked after generation"]
+                else ["Hand and skin realism will be checked after generation"] if hand_detail else ["Face realism will be checked after generation"]
             ),
             metadata={"doc": "65", **dict(metadata or {})},
         )
@@ -715,13 +817,29 @@ class HumanPhotorealismLayer:
 
         explicit_age_signal = _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS)
         is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
-        if any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
-            human_subject_kind = "product_on_person"
-            strictness = "commercial_strict"
-        elif is_hand_or_skin and not any(token in text for token in ["face", "\u8138", "portrait", "\u4eba\u50cf"]):
+        face_is_explicitly_excluded = _contains_any(
+            text,
+            {
+                "no face",
+                "without a face",
+                "without face",
+                "face out of frame",
+                "no visible face",
+                "不露脸",
+                "无脸",
+                "不出现脸",
+            },
+        )
+        has_visible_face = (
+            _contains_any(text, {"face", "portrait"}) or _contains_any(text, {"脸", "人像"})
+        ) and not face_is_explicitly_excluded
+        if is_hand_or_skin and not has_visible_face:
             human_subject_kind = "hand_or_skin_detail"
             strictness = "balanced"
             reason_codes.append("hand_or_skin_detail_detected")
+        elif any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
+            human_subject_kind = "product_on_person"
+            strictness = "commercial_strict"
         elif "model" in text or "\u6a21\u7279" in text:
             human_subject_kind = "person"
             strictness = "commercial_strict"

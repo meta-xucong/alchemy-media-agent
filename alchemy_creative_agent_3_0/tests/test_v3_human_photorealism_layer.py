@@ -276,6 +276,34 @@ def test_doc91_product_only_request_does_not_force_human_realism() -> None:
     assert guidance.metadata["disabled_reason"] == "no_human_signal"
 
 
+def test_doc104_hand_only_product_context_uses_hand_specific_shared_guidance() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc104_hand",
+        job_id="job_doc104_hand",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input="Create a product surface scene with an adult hand and visible fingers holding a drink; no face.",
+        subject_type="product",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+    prompt_text = " ".join(guidance.positive_prompt_fragments).lower()
+    negative_text = " ".join(guidance.negative_prompt_fragments).lower()
+
+    assert guidance.applies is True
+    assert plugin["human_subject_kind"] == "hand_or_skin_detail"
+    assert "correct finger count" in prompt_text
+    assert "physically credible finger placement" in prompt_text
+    assert "natural eye moisture" not in prompt_text
+    assert "micro-expression" not in prompt_text
+    assert "extra fingers" in negative_text
+    assert "face-slimming" not in negative_text
+
+
 def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None:
     layer = HumanPhotorealismLayer()
 

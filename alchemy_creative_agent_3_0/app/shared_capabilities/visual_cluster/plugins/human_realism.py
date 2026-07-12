@@ -10,7 +10,9 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
         guidance = as_dict(context.cluster.get("human_photorealism_guidance"))
         if not guidance.get("applies"):
             return self.contribution(context)
-        issues = ["ai_face_render", "plastic_skin", "bad_hands_or_body"]
+        plugin_metadata = as_dict(as_dict(guidance.get("metadata")).get("human_realism_plugin"))
+        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
+        issues = ["plastic_skin", "bad_hands_or_body"] if hand_detail else ["ai_face_render", "plastic_skin", "bad_hands_or_body"]
         return self.contribution(
             context,
             prompt=string_list(guidance.get("positive_prompt_fragments")),
