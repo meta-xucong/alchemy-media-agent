@@ -84,6 +84,11 @@ user request + uploaded refs
 9. Historical local text-pixel inputs remain readable but must return the
    structured `provider_native_required` state. Production text delivery still
    requires real authorized-material Doc111 Provider Gate C/D evidence.
+10. Optional `commerce_profile.price_positioning` is an E-Commerce visual
+    planning signal with controlled `value`, `balanced`, and `premium` values.
+    It may guide composition, feature proof, material detail, and lighting,
+    but it must not create price, discount, savings, award, certification, or
+    provenance claims.
 
 ## Compatibility rule
 

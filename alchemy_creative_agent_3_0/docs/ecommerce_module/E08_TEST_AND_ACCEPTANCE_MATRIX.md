@@ -19,6 +19,8 @@
 - duplicate roles are removed or explained;
 - suite roles remain differentiated;
 - selected explicit slots are not silently expanded;
+- product visual positioning reaches every selected recipe without creating a
+  price, discount, award, certification, or provenance claim;
 - General Template does not receive commerce suite metadata.
 
 ## Isolation tests

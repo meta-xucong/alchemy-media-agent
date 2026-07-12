@@ -602,6 +602,7 @@ const els = {
   v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
+  v3EcommercePricePositioningInput: document.querySelector("#v3EcommercePricePositioningInput"),
   v3EcommerceCopyLocaleInput: document.querySelector("#v3EcommerceCopyLocaleInput"),
   v3EcommerceOverlayCopyInput: document.querySelector("#v3EcommerceOverlayCopyInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
@@ -4931,6 +4932,20 @@ function v3EcommerceCopyLocaleLabel(locale) {
   return labels[locale] || locale || "按平台和市场自动判断";
 }
 
+function v3EcommercePricePositioningValue() {
+  const value = (els.v3EcommercePricePositioningInput?.value || "").trim();
+  return ["", "value", "balanced", "premium"].includes(value) ? value : "";
+}
+
+function v3EcommercePricePositioningLabel(positioning) {
+  const labels = {
+    value: "实用价值",
+    balanced: "均衡品质",
+    premium: "高端质感",
+  };
+  return labels[positioning] || "";
+}
+
 function v3EcommerceSuiteScopeLabel(scopeId, presetId = v3State.selectedPreset) {
   const labels = {
     listing_core: "基础上架图",
@@ -4999,6 +5014,7 @@ function v3EcommerceProfilePatch() {
     target_platform: (els.v3EcommercePlatformInput?.value || "generic").trim(),
     target_market: (els.v3EcommerceMarketInput?.value || "").trim() || null,
     target_audience: (els.v3EcommerceAudienceInput?.value || "").trim() || null,
+    price_positioning: v3EcommercePricePositioningValue() || null,
     core_selling_points: sellingPoint ? [sellingPoint] : [],
     must_keep_facts: v3TextLines(els.v3EcommerceSpecsInput?.value || ""),
     avoid_claims: v3CsvList(els.v3EcommerceClaimsInput?.value || ""),
@@ -5460,6 +5476,7 @@ function resetV3Workspace() {
   if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
+  if (els.v3EcommercePricePositioningInput) els.v3EcommercePricePositioningInput.value = "";
   if (els.v3EcommerceCopyLocaleInput) els.v3EcommerceCopyLocaleInput.value = "";
   if (els.v3EcommerceOverlayCopyInput) els.v3EcommerceOverlayCopyInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
@@ -5830,10 +5847,14 @@ function renderV3EcommercePlanList(summary) {
     const evidence = Array.isArray(recipe?.metadata?.category_evidence_targets)
       ? recipe.metadata.category_evidence_targets.filter(Boolean).join(" / ")
       : "";
+    const positioningId = String(recipe?.metadata?.price_positioning || "").trim();
+    const positioningLabel = v3EcommercePricePositioningLabel(positioningId)
+      || String(recipe?.metadata?.price_positioning_label || "").trim();
     row.innerHTML = `
       <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
       ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
+      ${positioningLabel ? `<small>画面定位：${escapeHtml(positioningLabel)}</small>` : ""}
     `;
     els.v3EcommercePlanList.appendChild(row);
   });

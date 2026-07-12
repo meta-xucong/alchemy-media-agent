@@ -43,6 +43,14 @@ class SellingPointToImagePlanner:
         scenario_parameters: dict | None = None,
     ) -> list[EcommerceAssetRecipe]:
         scenario_parameters = scenario_parameters or {}
+        brief_metadata = dict(brief.metadata or {})
+        price_positioning = str(brief_metadata.get("price_positioning") or "").strip()
+        price_positioning_label = str(brief_metadata.get("price_positioning_label") or "").strip()
+        price_positioning_direction = str(brief_metadata.get("price_positioning_direction") or "").strip()
+        price_positioning_metadata = {
+            "price_positioning": price_positioning,
+            "price_positioning_label": price_positioning_label,
+        } if price_positioning else {}
         localization = resolve_localization(
             platform=marketplace_profile.platform,
             market=marketplace_profile.market,
@@ -78,6 +86,8 @@ class SellingPointToImagePlanner:
                 brief=brief,
                 marketplace_profile=marketplace_profile,
             )
+            if price_positioning_direction:
+                visual_scene = f"{visual_scene} {price_positioning_direction}"
             recipes.append(
                 EcommerceAssetRecipe(
                     slot=slot,
@@ -103,6 +113,7 @@ class SellingPointToImagePlanner:
                         **(category_profile.metadata() if category_profile else {}),
                         "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
                         "copy_plan": copy_plan,
+                        **price_positioning_metadata,
                         **lifestyle_metadata,
                     },
                 )

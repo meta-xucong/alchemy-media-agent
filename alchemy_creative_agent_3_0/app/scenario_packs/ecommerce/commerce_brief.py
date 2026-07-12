@@ -36,6 +36,50 @@ CATEGORY_DEFAULTS = {
 }
 
 
+PRICE_POSITIONING_PROFILES = {
+    "value": {
+        "label": "value-led practical positioning",
+        "direction": (
+            "Prioritize clear scale, quantity, practical function, and honest feature proof to communicate value; "
+            "do not add discount badges, price comparisons, or savings claims."
+        ),
+    },
+    "balanced": {
+        "label": "balanced quality positioning",
+        "direction": (
+            "Balance clear product proof with refined but approachable materials, lighting, and composition; "
+            "do not imply an unverified price tier or award."
+        ),
+    },
+    "premium": {
+        "label": "premium visual positioning",
+        "direction": (
+            "Use restrained composition, controlled lighting, and close material detail to express a premium positioning; "
+            "do not invent luxury provenance, certification, or price claims."
+        ),
+    },
+}
+
+PRICE_POSITIONING_ALIASES = {
+    "value": "value",
+    "value-led": "value",
+    "budget": "value",
+    "practical": "value",
+    "性价比": "value",
+    "实用": "value",
+    "balanced": "balanced",
+    "mid": "balanced",
+    "mid-range": "balanced",
+    "均衡": "balanced",
+    "品质": "balanced",
+    "premium": "premium",
+    "high-end": "premium",
+    "luxury": "premium",
+    "高端": "premium",
+    "高档": "premium",
+}
+
+
 class CommerceBriefBuilder:
     """Turn seller inputs into a conversion-oriented visual brief."""
 
@@ -57,6 +101,7 @@ class CommerceBriefBuilder:
             if "claim" in warning.lower() or "evidence" in warning.lower()
         ]
         competitor_patterns = self._competitor_patterns(product_profile, parameters)
+        price_positioning = self._price_positioning(product_profile, parameters)
         visual_strategy = [
             f"Use {marketplace_profile.platform} policy evidence to frame buyer needs without hard-coding a visual recipe.",
             "Cover product clarity, supported benefits, use context, and trust with distinct buyer-evidence goals.",
@@ -64,6 +109,24 @@ class CommerceBriefBuilder:
         ]
         if competitor_patterns:
             visual_strategy.append("Borrow reusable visual grammar from references without copying content or claims.")
+        if price_positioning:
+            visual_strategy.append(price_positioning["direction"])
+
+        metadata = {
+            "source": "CommerceBriefBuilder",
+            "platform": marketplace_profile.platform,
+            "market": marketplace_profile.market,
+            "external_research_used": False,
+            "user_input_digest": clean_text(user_input)[:180],
+        }
+        if price_positioning:
+            metadata.update(
+                {
+                    "price_positioning": price_positioning["id"],
+                    "price_positioning_label": price_positioning["label"],
+                    "price_positioning_direction": price_positioning["direction"],
+                }
+            )
 
         return CommerceIntelligenceBrief(
             target_audience=unique_preserve_order([*as_list(parameter_value(parameters, product_profile, "target_audience", "audience")), *defaults["audience"]])[:8],
@@ -75,14 +138,16 @@ class CommerceBriefBuilder:
             differentiated_selling_points=selling_points,
             visual_strategy=visual_strategy,
             claim_risk_warnings=claim_warnings,
-            metadata={
-                "source": "CommerceBriefBuilder",
-                "platform": marketplace_profile.platform,
-                "market": marketplace_profile.market,
-                "external_research_used": False,
-                "user_input_digest": clean_text(user_input)[:180],
-            },
+            metadata=metadata,
         )
+
+    def _price_positioning(self, profile: dict[str, Any], parameters: dict[str, Any]) -> dict[str, str] | None:
+        raw = clean_text(parameter_value(parameters, profile, "price_positioning", "positioning", "value_positioning")).lower()
+        positioning_id = PRICE_POSITIONING_ALIASES.get(raw)
+        if not positioning_id:
+            return None
+        profile_entry = PRICE_POSITIONING_PROFILES[positioning_id]
+        return {"id": positioning_id, **profile_entry}
 
     def _keywords(self, profile: dict[str, Any], parameters: dict[str, Any]) -> list[str]:
         values: list[str] = []

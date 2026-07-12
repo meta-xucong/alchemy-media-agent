@@ -365,6 +365,37 @@ Integration dependency: this is a Doc104 Section 9 public interface and
 shared retry/append-only-history coordination item. It requires the mainline
 foundation owner before implementation or production activation.
 
+## E20 — product visual-positioning planning control
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Exposed the existing optional `price_positioning` project-profile field as a
+  simple E-Commerce-only visual choice: value, balanced, or premium.
+- The planner carries the normalized choice from the commerce brief into every
+  selected recipe, where it guides proof, composition, material detail, and
+  lighting. The workspace shows the resulting plan label on each suite row.
+- Each controlled direction expressly rejects discounts, price comparisons,
+  savings, awards, certifications, and unsupported luxury provenance. It is
+  not a product price, compliance, or market-status claim.
+- The Project Mode regression proves the old profile field persists and reaches
+  the E-Commerce recipes; no shared schema, provider, activation, retry, or
+  General Template behavior changed.
+
+Verification:
+
+```text
+focused E-Commerce/Project Mode tests: 22 passed
+full V3 tests: 523 passed
+commercial frontend shell + provider contract tests: 50 passed
+JavaScript syntax and diff checks: passed
+```
+
+Integration dependency: none beyond normal rebase before integration. The
+separate Doc105 continuation route/lifecycle/resolver dependency remains
+unchanged.
+
 ## E19 — Doc105 and gateway-managed failover synchronization
 
 Status: integrated into the E-Commerce branch documentation; implementation

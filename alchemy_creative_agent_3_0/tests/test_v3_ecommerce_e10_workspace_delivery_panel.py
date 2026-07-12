@@ -102,6 +102,23 @@ def test_ecommerce_workspace_exposes_existing_target_audience_profile_field() ->
     assert summary_block.index("...(suiteScopeLabel") < summary_block.index("...(targetAudience.length")
 
 
+def test_ecommerce_workspace_exposes_price_positioning_without_a_price_claim() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommercePricePositioningInput"' in html
+    assert 'option value="value"' in html
+    assert 'option value="balanced"' in html
+    assert 'option value="premium"' in html
+    assert 'v3EcommercePricePositioningInput: document.querySelector("#v3EcommercePricePositioningInput")' in script
+    assert "function v3EcommercePricePositioningValue()" in script
+    assert "function v3EcommercePricePositioningLabel(positioning)" in script
+    assert "price_positioning: v3EcommercePricePositioningValue() || null" in script
+    assert 'els.v3EcommercePricePositioningInput.value = ""' in script
+    assert 'recipe?.metadata?.price_positioning_label' in script
+    assert "画面定位：${escapeHtml(positioningLabel)}" in script
+
+
 def test_ecommerce_workspace_exposes_copy_locale_and_slot_safe_overlay_copy_controls() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     html = INDEX_HTML.read_text(encoding="utf-8")

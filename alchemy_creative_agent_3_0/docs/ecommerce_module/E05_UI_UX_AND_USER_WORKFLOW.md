@@ -41,6 +41,7 @@ select/create product project
 Default view shows only product, platform, category, suite scope, request, and
 generate. Advanced controls may expose:
 
+- product visual positioning (value, balanced, or premium presentation);
 - target audience;
 - keywords;
 - competitor/style reference notes;
