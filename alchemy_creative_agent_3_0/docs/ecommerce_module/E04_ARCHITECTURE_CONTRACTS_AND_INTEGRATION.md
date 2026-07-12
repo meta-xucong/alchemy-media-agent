@@ -23,6 +23,11 @@ capability activation plan supplied by the shared runtime. This module may
 configure E-Commerce-owned profiles and recipes, but may not alter activation,
 provider, shared review, or retry semantics.
 
+Doc105 freezes the E-Commerce slot-continuation boundary. It is the authority
+for a user-directed replacement of a single suite role. Doc111 is the current
+text-delivery authority: literal approved copy is a provider-native complete
+image requirement, never a local typography/OCR/composition workflow.
+
 ## Existing code ownership
 
 | Existing location | E-Commerce responsibility |
@@ -67,10 +72,18 @@ user request + uploaded refs
    confirmed text-only product brief.
 7. Optional `commerce_profile.metadata.copy_locale` and legacy
    `commerce_profile.metadata.overlay_copy` are E-Commerce-only planning
-   signals. Approved literal copy is passed to the LLM/provider as a
-   provider-native requirement, never a local overlay; it remains subject to
-   text policy and claim review. These signals do not add General Template
-   semantics or renderer controls.
+   signals. When absent, locale resolves from platform/market; user-approved
+   literal copy remains subject to slot text policy and claim review. Under
+   Doc111 it is passed only as a provider-native complete-image requirement.
+   It does not add General Template semantics, local overlay rendering,
+   `CopyRenderPlan`, fonts, OCR, coordinates, safe areas, or template retries.
+8. A single-role replacement must use the future Doc105 namespaced child-job
+   action. It may not reuse select/delete or internal retry, must keep the
+   parent immutable, and must inherit the frozen parent plan unless authorized
+   new evidence produces the one bounded recorded amendment.
+9. Historical local text-pixel inputs remain readable but must return the
+   structured `provider_native_required` state. Production text delivery still
+   requires real authorized-material Doc111 Provider Gate C/D evidence.
 
 ## Compatibility rule
 
@@ -78,6 +91,22 @@ Existing E-Commerce APIs and fields must remain readable. New fields are
 optional until the activation gate requires them. The module may add profile
 versions, recipe metadata, and export metadata without changing General
 Template semantics.
+
+Historical jobs without Doc105 lineage stay readable but are not eligible for
+per-slot continuation. The workspace must not render a slot-redo control until
+the mainline route, lifecycle, delivery resolver, and browser tests in Doc105
+exist.
+
+## Shared gateway-managed failover
+
+`OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER` is a foundation provider-runtime mode,
+not an E-Commerce setting. When the deployment enables it for a gateway that
+owns line failover, backoff, and health routing, one logical image output has
+one in-flight request and the shared runtime records its terminal result.
+
+E-Commerce must not add a second template-local retry loop or change provider
+timeouts in this mode. The gateway budget is deployment-owned; the E-Commerce
+module continues to use the governed generation/review/retry path unchanged.
 
 ## Forbidden integration patterns
 

@@ -45,21 +45,26 @@ Add `en-US`, `ru-RU`, and `zh-CN` copy paths. Keep policy updates configurable.
 
 ### E5 Review, copy, and export closure
 
-Connect commerce review, text/OCR checks, bounded slot retry, best-result
-selection, and platform-aware export metadata.
+Connect commerce review, copy-planning signals, best-result selection, and
+platform-aware export metadata. Deterministic text/OCR delivery and bounded
+text recovery are shared Doc105 capability work; this module must not claim
+pixel-correct copy before that contract is implemented and accepted.
 
 ### E6 Dedicated workspace UI
 
-Implement the beginner-facing E-Commerce workspace and per-slot continuation.
+Implement the beginner-facing E-Commerce workspace. Render per-slot
+continuation only after the Doc105 route, lifecycle, delivery resolver, and
+browser tests exist; do not pre-stage a cosmetic or disabled redo control.
 
 ### E7 Real-output acceptance
 
 Run a fixture matrix with real product images, inspect final files, verify
 provider behavior, and pass the template activation gate.
 
-E7 is a coordinated integration phase. It requires the Doc103 foundation gates
+E7 is a coordinated integration phase. It requires the Doc104 foundation gates
 for enforced activation runtime, real provider/review, and General project
-continuation; it is not part of this branch's isolated implementation scope.
+continuation, plus Doc105 text-pixel and slot-continuation acceptance; it is
+not part of this branch's isolated implementation scope.
 
 ## Recommended technology stack
 

@@ -365,6 +365,44 @@ Integration dependency: this is a Doc104 Section 9 public interface and
 shared retry/append-only-history coordination item. It requires the mainline
 foundation owner before implementation or production activation.
 
+## E19 — Doc105 and gateway-managed failover synchronization
+
+Status: integrated into the E-Commerce branch documentation; implementation
+waits for the mainline continuation route/lifecycle/resolver.
+
+Delivered:
+
+- Rebasing onto `origin/main` at `f1552a2` brings the accepted Doc105 slot
+  continuation and text-pixel delivery contract, plus the shared gateway
+  managed-failover provider mode.
+- E04 and the roadmap now reference Doc105: E-Commerce owns copy intent and
+  suite roles, while final typography/OCR and user-directed child-job lineage
+  remain shared-runtime work.
+- The deployment-only gateway-managed failover mode is recorded as a
+  foundation constraint. E-Commerce must not add another retry loop or change
+  provider timeout behavior when it is enabled.
+
+Verified mainline boundary:
+
+- The named `ecommerce-slots/{slot_id}/continuations` route, handler,
+  lifecycle, and delivery resolver are not yet present.
+- Mainline contract tests explicitly require no slot-redo path or button in the
+  workspace before those shared pieces and browser tests are implemented.
+
+Integration dependency: wait for the Doc105 route/lifecycle/resolver
+implementation. At that point, add the E-Commerce request body, result-card
+control, and feature tests without changing shared provider, frozen-plan, or
+review/retry semantics.
+
+Verification:
+
+```text
+Doc105 contract + E-Commerce Project Mode focused tests: 20 passed
+full V3 tests: 519 passed
+commercial frontend shell + provider contract tests: 50 passed
+JavaScript syntax: passed
+```
+
 ## E8 — category normalization and conditional evidence
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
