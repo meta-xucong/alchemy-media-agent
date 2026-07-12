@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...creative_core.rules import stable_id
@@ -48,6 +49,7 @@ class LicensedFont:
     file_path: str
     supported_locales: tuple[str, ...]
     license_id: str
+    license_evidence_reference: str | None = None
     expected_sha256: str | None = None
     production_approved: bool = False
 
@@ -59,6 +61,7 @@ class LicensedFont:
             "font_version": self.version,
             "font_path": str(path),
             "font_license_id": self.license_id,
+            "font_license_evidence_reference": self.license_evidence_reference,
             "font_sha256": digest,
             "font_expected_sha256": self.expected_sha256,
             "production_approved": self.production_approved,
@@ -72,22 +75,60 @@ class FontResolution:
     provenance: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class FontPreflightResult:
+    locale: str
+    passed: bool
+    issue_code: str | None = None
+    provenance: dict[str, Any] | None = None
+
+
 class FontRegistry:
     """Only explicitly declared and verified fonts may be selected."""
 
-    def __init__(self, fonts: list[LicensedFont] | None = None) -> None:
+    def __init__(
+        self,
+        fonts: list[LicensedFont] | None = None,
+        *,
+        manifest_version: str | None = None,
+        manifest_error: str | None = None,
+    ) -> None:
         self.fonts = list(fonts or [])
+        self.manifest_version = str(manifest_version or "").strip() or None
+        self.manifest_error = str(manifest_error or "").strip() or None
 
     @classmethod
     def from_environment(cls) -> "FontRegistry":
         raw = os.getenv("V3_TEXT_PIXEL_FONT_MANIFEST_JSON", "").strip()
+        manifest_path = os.getenv("V3_TEXT_PIXEL_FONT_MANIFEST_PATH", "").strip()
         entries: list[dict[str, Any]] = []
-        if raw:
+        manifest_version: str | None = None
+        manifest_error: str | None = None
+        if manifest_path:
+            try:
+                parsed = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+                if not isinstance(parsed, dict) or not isinstance(parsed.get("fonts"), list):
+                    raise ValueError("font_manifest_invalid")
+                entries = parsed["fonts"]
+                manifest_version = str(parsed.get("manifest_version") or "").strip() or None
+                if not manifest_version:
+                    raise ValueError("font_manifest_version_missing")
+            except Exception as exc:
+                manifest_error = str(exc)[:160] or "font_manifest_invalid"
+        elif raw:
             try:
                 parsed = json.loads(raw)
-                entries = parsed if isinstance(parsed, list) else []
+                if isinstance(parsed, dict):
+                    entries = parsed.get("fonts") if isinstance(parsed.get("fonts"), list) else []
+                    manifest_version = str(parsed.get("manifest_version") or "").strip() or None
+                    if not manifest_version:
+                        manifest_error = "font_manifest_version_missing"
+                elif isinstance(parsed, list):
+                    entries = parsed
+                else:
+                    manifest_error = "font_manifest_invalid"
             except json.JSONDecodeError:
-                entries = []
+                manifest_error = "font_manifest_invalid_json"
         elif os.getenv("V3_TEXT_PIXEL_FONT_PATH"):
             entries = [
                 {
@@ -96,6 +137,7 @@ class FontRegistry:
                     "file_path": os.getenv("V3_TEXT_PIXEL_FONT_PATH", ""),
                     "supported_locales": os.getenv("V3_TEXT_PIXEL_FONT_LOCALES", "").split(","),
                     "license_id": os.getenv("V3_TEXT_PIXEL_FONT_LICENSE_ID", ""),
+                    "license_evidence_reference": os.getenv("V3_TEXT_PIXEL_FONT_LICENSE_EVIDENCE", "") or None,
                     "expected_sha256": os.getenv("V3_TEXT_PIXEL_FONT_SHA256") or None,
                     "production_approved": _env_bool("V3_TEXT_PIXEL_FONT_PRODUCTION_APPROVED"),
                 }
@@ -113,36 +155,122 @@ class FontRegistry:
                         file_path=str(entry.get("file_path") or "").strip(),
                         supported_locales=locales,
                         license_id=str(entry.get("license_id") or "").strip(),
+                        license_evidence_reference=str(entry.get("license_evidence_reference") or "").strip() or None,
                         expected_sha256=str(entry.get("expected_sha256") or "").strip() or None,
-                        production_approved=bool(entry.get("production_approved")),
+                        # Production manifests are deployment contracts, not a
+                        # permissive environment convention: the JSON value
+                        # must be the boolean ``true``.  In particular,
+                        # ``\"false\"`` must never become truthy here.
+                        production_approved=entry.get("production_approved") is True,
                     )
                 )
             except Exception:
                 continue
-        return cls(fonts)
+        return cls(fonts, manifest_version=manifest_version, manifest_error=manifest_error)
+
+    def manifest_provenance(self) -> dict[str, Any]:
+        return {
+            "font_manifest_version": self.manifest_version,
+            "font_manifest_error": self.manifest_error,
+            "font_count": len(self.fonts),
+        }
 
     def resolve(self, locale: str | None, *, require_production_approval: bool) -> FontResolution:
         if locale not in _SUPPORTED_LOCALES:
             return FontResolution(None, "unsupported_locale")
+        if require_production_approval and self.manifest_error:
+            return FontResolution(None, "font_manifest_invalid", self.manifest_provenance())
+        if require_production_approval and not self.manifest_version:
+            return FontResolution(None, "font_manifest_version_missing", self.manifest_provenance())
         last_failure: FontResolution | None = None
         for font in self.fonts:
             if locale not in font.supported_locales:
                 continue
-            provenance = font.provenance()
+            provenance = {**font.provenance(), **self.manifest_provenance()}
             if not Path(font.file_path).is_file():
                 last_failure = FontResolution(None, "font_unavailable", provenance)
                 continue
             if not font.license_id:
                 last_failure = FontResolution(None, "font_license_unverified", provenance)
                 continue
+            if require_production_approval and not font.license_evidence_reference:
+                last_failure = FontResolution(None, "font_license_evidence_missing", provenance)
+                continue
             digest = provenance.get("font_sha256")
-            if require_production_approval and (
-                not font.production_approved or not font.expected_sha256 or digest != font.expected_sha256
-            ):
-                last_failure = FontResolution(None, "font_license_unverified", provenance)
+            if require_production_approval and not font.expected_sha256:
+                last_failure = FontResolution(None, "font_hash_missing", provenance)
+                continue
+            if require_production_approval and digest != font.expected_sha256:
+                last_failure = FontResolution(None, "font_hash_mismatch", provenance)
+                continue
+            if require_production_approval and not font.production_approved:
+                last_failure = FontResolution(None, "font_not_production_approved", provenance)
                 continue
             return FontResolution(font, None, provenance)
         return last_failure or FontResolution(None, "font_unavailable")
+
+    def preflight(self, locale: str, *, expected_text: str | None = None) -> FontPreflightResult:
+        resolution = self.resolve(locale, require_production_approval=True)
+        if resolution.font is None:
+            return FontPreflightResult(locale, False, resolution.issue_code, resolution.provenance)
+        if expected_text and not _font_supports_text(resolution.font.file_path, expected_text):
+            return FontPreflightResult(locale, False, "glyph_unavailable", resolution.provenance)
+        return FontPreflightResult(locale, True, None, resolution.provenance)
+
+
+@dataclass(frozen=True)
+class ProductionTextPixelCertification:
+    """Deployment-owned record that permits a production text-pixel flag."""
+
+    certification_version: str
+    font_manifest_version: str
+    ocr_preflight_passed: bool
+    gate_c_passed: bool
+    gate_d_passed: bool
+    evidence_references: tuple[str, ...] = ()
+
+    @classmethod
+    def from_environment(cls) -> "ProductionTextPixelCertification | None":
+        raw = os.getenv("V3_TEXT_PIXEL_PRODUCTION_CERTIFICATION_JSON", "").strip()
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        references = payload.get("evidence_references")
+        return cls(
+            certification_version=str(payload.get("certification_version") or "").strip(),
+            font_manifest_version=str(payload.get("font_manifest_version") or "").strip(),
+            ocr_preflight_passed=payload.get("ocr_preflight_passed") is True,
+            gate_c_passed=payload.get("gate_c_passed") is True,
+            gate_d_passed=payload.get("gate_d_passed") is True,
+            evidence_references=tuple(str(item).strip() for item in references if str(item).strip()) if isinstance(references, list) else (),
+        )
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(
+            self.certification_version
+            and self.font_manifest_version
+            and self.ocr_preflight_passed
+            and self.gate_c_passed
+            and self.gate_d_passed
+            and self.evidence_references
+        )
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "certification_version": self.certification_version,
+            "font_manifest_version": self.font_manifest_version,
+            "ocr_preflight_passed": self.ocr_preflight_passed,
+            "gate_c_passed": self.gate_c_passed,
+            "gate_d_passed": self.gate_d_passed,
+            "evidence_references": list(self.evidence_references),
+            "complete": self.is_complete,
+        }
 
 
 @dataclass(frozen=True)
@@ -152,6 +280,11 @@ class TextPixelRuntimeSettings:
     allow_development_fonts: bool = False
     min_contrast_ratio: float = 4.5
     max_deterministic_repairs: int = 1
+    production_certification: ProductionTextPixelCertification | None = None
+
+    @property
+    def production_certified(self) -> bool:
+        return bool(self.production_certification and self.production_certification.is_complete)
 
     @classmethod
     def from_environment(cls) -> "TextPixelRuntimeSettings":
@@ -159,6 +292,7 @@ class TextPixelRuntimeSettings:
             enabled=_env_bool("V3_TEXT_PIXEL_DELIVERY_ENABLED"),
             production_activation_enabled=_env_bool("V3_TEXT_PIXEL_DELIVERY_PRODUCTION_ENABLED"),
             allow_development_fonts=_env_bool("V3_TEXT_PIXEL_ALLOW_DEVELOPMENT_FONTS"),
+            production_certification=ProductionTextPixelCertification.from_environment(),
         )
 
 
@@ -168,6 +302,15 @@ class OcrResult:
     engine_id: str
     text: str = ""
     confidence: float | None = None
+    details: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class OcrPreflightResult:
+    locale: str
+    language: str | None
+    passed: bool
+    outcome: str
     details: dict[str, Any] | None = None
 
 
@@ -186,7 +329,7 @@ class TesseractOcrEngine:
 
     def inspect(self, image_path: str, locale: str | None) -> OcrResult:
         if not self.executable:
-            return OcrResult(False, "tesseract", details={"reason": "tesseract_not_configured"})
+            return OcrResult(False, "tesseract", details={"reason": "ocr_binary_unavailable"})
         language = self.locale_languages.get(locale or "")
         if not language:
             return OcrResult(False, "tesseract", details={"reason": "unsupported_locale"})
@@ -199,10 +342,44 @@ class TesseractOcrEngine:
                 check=False,
             )
         except Exception as exc:
-            return OcrResult(False, "tesseract", details={"reason": type(exc).__name__})
+            reason = "ocr_binary_unavailable" if isinstance(exc, FileNotFoundError) else "ocr_invocation_failed"
+            return OcrResult(False, "tesseract", details={"reason": reason, "exception": type(exc).__name__})
         if completed.returncode != 0:
-            return OcrResult(False, "tesseract", details={"reason": completed.stderr[-300:]})
-        return OcrResult(True, "tesseract", text=completed.stdout.strip(), details={"final_pixel_path": image_path})
+            stderr = (completed.stderr or "")[-300:]
+            return OcrResult(False, "tesseract", details={"reason": _tesseract_failure_reason(stderr), "stderr": stderr, "language": language})
+        return OcrResult(
+            True,
+            "tesseract",
+            text=completed.stdout.strip(),
+            details={"final_pixel_path": image_path, "language": language, "outcome": "ocr_final_pixel_success"},
+        )
+
+    def preflight(self, locales: tuple[str, ...] = ("en-US", "zh-CN", "ru-RU")) -> list[OcrPreflightResult]:
+        """Run a harmless final-raster OCR probe for every release locale."""
+
+        results: list[OcrPreflightResult] = []
+        for locale in locales:
+            language = self.locale_languages.get(locale)
+            if not self.executable:
+                results.append(OcrPreflightResult(locale, language, False, "ocr_binary_unavailable"))
+                continue
+            if not language:
+                results.append(OcrPreflightResult(locale, None, False, "unsupported_locale"))
+                continue
+            try:
+                from PIL import Image
+
+                with tempfile.TemporaryDirectory(prefix="v3_text_pixel_ocr_") as directory:
+                    probe_path = Path(directory) / "final_pixel_probe.png"
+                    Image.new("RGB", (32, 16), "white").save(probe_path, format="PNG")
+                    inspected = self.inspect(str(probe_path), locale)
+            except Exception as exc:
+                results.append(OcrPreflightResult(locale, language, False, "ocr_preflight_probe_failed", {"exception": type(exc).__name__}))
+                continue
+            details = dict(inspected.details or {})
+            outcome = "ocr_final_pixel_success" if inspected.available else str(details.get("reason") or "ocr_invocation_failed")
+            results.append(OcrPreflightResult(locale, language, inspected.available, outcome, details))
+        return results
 
 
 class StaticOcrEngine:
@@ -343,6 +520,51 @@ class TextPixelDeliveryRuntime:
         self.settings = settings or TextPixelRuntimeSettings.from_environment()
         self.compositor = compositor or PillowDeterministicCompositor()
 
+    def production_preflight(self) -> dict[str, Any]:
+        """Report deployment readiness without enabling any runtime flag."""
+
+        samples = {"en-US": "Text", "zh-CN": "文字", "ru-RU": "Текст"}
+        font_results = [
+            self.font_registry.preflight(locale, expected_text=sample).__dict__
+            for locale, sample in samples.items()
+        ]
+        preflight = getattr(self.ocr_engine, "preflight", None)
+        if callable(preflight):
+            ocr_results = [item.__dict__ for item in preflight(tuple(samples))]
+        else:
+            ocr_results = [
+                OcrPreflightResult(locale, None, False, "ocr_engine_not_deployment_capable").__dict__
+                for locale in samples
+            ]
+        certification = self.settings.production_certification
+        certification_provenance = certification.provenance() if certification else {"complete": False}
+        certification_matches_fonts = bool(
+            certification
+            and certification.is_complete
+            and certification.font_manifest_version == self.font_registry.manifest_version
+        )
+        return {
+            "schema_version": "v3_text_pixel_production_preflight_v1",
+            "passed": bool(
+                all(item["passed"] for item in font_results)
+                and all(item["passed"] for item in ocr_results)
+                and certification_matches_fonts
+            ),
+            "font_manifest": self.font_registry.manifest_provenance(),
+            "font_results": font_results,
+            "ocr_results": ocr_results,
+            "certification": certification_provenance,
+            "certification_matches_font_manifest": certification_matches_fonts,
+        }
+
+    def _production_certification_is_valid(self) -> bool:
+        certification = self.settings.production_certification
+        return bool(
+            certification
+            and certification.is_complete
+            and certification.font_manifest_version == self.font_registry.manifest_version
+        )
+
     def deliver(
         self,
         *,
@@ -378,6 +600,16 @@ class TextPixelDeliveryRuntime:
         # A shared generation retry may replace only the background output while
         # retaining this exact frozen plan.  The original output remains in
         # lineage, while the currently reviewed output is recorded per attempt.
+        if self.settings.production_activation_enabled and not self._production_certification_is_valid():
+            return self._blocked(
+                result,
+                "production_certification_incomplete",
+                "Production text delivery remains blocked until font, OCR, and Gate C/D certification is recorded.",
+                provenance={
+                    **self.font_registry.manifest_provenance(),
+                    "certification": self.settings.production_certification.provenance() if self.settings.production_certification else {"complete": False},
+                },
+            )
         policy = self._policy_eligibility(result, render_plan, source_output)
         if policy is not None:
             return policy
@@ -484,7 +716,7 @@ class TextPixelDeliveryRuntime:
             result.review_passed = True
             result.status = "passed"
             result.user_visible_summary = ["The final image passed the text-forbidden check."]
-            result.gate_c_eligible = bool(self.settings.production_activation_enabled)
+            result.gate_c_eligible = bool(self.settings.production_activation_enabled and self._production_certification_is_valid())
             return result
         if plan.claim_review_state == "blocked":
             return self._correction(result, "copy_claim_blocked", "Blocked copy was omitted and needs an approved correction.")
@@ -521,6 +753,7 @@ class TextPixelDeliveryRuntime:
                     "capability_activation_plan_id": plan.source_lineage.capability_activation_plan_id,
                     "renderer": self.compositor.renderer_id,
                     "font": font.provenance(),
+                    "font_manifest": self.font_registry.manifest_provenance(),
                     "geometry": {"safe_area": plan.normalized_safe_area.model_dump(mode="json"), "rendered_bounds_px": outcome.bounds_px},
                     "composition_attempt_index": attempt_index,
                     "composition_stage": stage,
@@ -587,6 +820,8 @@ class TextPixelDeliveryRuntime:
 
     def _finish_unrendered(self, result: TextPixelDelivery, outcome: CompositionOutcome) -> TextPixelDelivery:
         issues = _dedupe([*result.issue_codes, *outcome.issue_codes])
+        if "ocr_runtime_unavailable" in issues:
+            return self._blocked(result, "ocr_runtime_unavailable", "Final-pixel OCR is unavailable, so text delivery cannot pass.")
         if set(issues).intersection(_COPY_CORRECTION_ISSUES):
             return self._correction(result, issues[0], "Text delivery needs a corrected copy plan or supported font.")
         return self._blocked(result, issues[0] if issues else "composition_failed", "Text delivery could not compose final pixels.")
@@ -594,6 +829,8 @@ class TextPixelDeliveryRuntime:
     def _recovery_exhausted(self, result: TextPixelDelivery, review: dict[str, Any]) -> TextPixelDelivery:
         issues = _dedupe([*result.issue_codes, *review.get("issues", [])])
         result.issue_codes = issues
+        if "ocr_runtime_unavailable" in issues:
+            return self._blocked(result, "ocr_runtime_unavailable", "Final-pixel OCR is unavailable, so text delivery cannot pass.")
         if set(issues).intersection(_COPY_CORRECTION_ISSUES):
             return self._correction(result, next(item for item in issues if item in _COPY_CORRECTION_ISSUES), "Final text pixels need a copy correction; no generation retry was started.")
         result.status = "repair_exhausted"
@@ -626,7 +863,14 @@ class TextPixelDeliveryRuntime:
             source_output_id=source_output_id,
             issue_codes=list(issue_codes or []),
             user_visible_summary=list(summary or []),
-            metadata={"details": details or {}, "production_activation_enabled": self.settings.production_activation_enabled, "append_only": True},
+            metadata={
+                "details": details or {},
+                "production_activation_enabled": self.settings.production_activation_enabled,
+                "production_certified": self._production_certification_is_valid(),
+                "production_certification": self.settings.production_certification.provenance() if self.settings.production_certification else {"complete": False},
+                "font_manifest": self.font_registry.manifest_provenance(),
+                "append_only": True,
+            },
         )
 
     def _attempt(self, result: TextPixelDelivery, index: int, stage: str, status: str, source_output_id: str | None, derived_output_id: str | None = None, *, issue_codes: list[str], details: dict[str, Any]) -> TextPixelDeliveryAttempt:
@@ -663,7 +907,7 @@ class TextPixelDeliveryRuntime:
         result.status = "passed"
         result.review_passed = True
         result.issue_codes = []
-        result.gate_c_eligible = bool(self.settings.production_activation_enabled)
+        result.gate_c_eligible = bool(self.settings.production_activation_enabled and self._production_certification_is_valid())
         result.recovery = {"deterministic_repair_attempts": max((item.attempt_index for item in result.attempts if item.stage == "deterministic_repair"), default=0), "append_only": True}
         result.user_visible_summary = ["Final text pixels passed OCR, layout, contrast, and copy-policy review."]
         return result
@@ -752,6 +996,17 @@ def _inside_safe_area(bounds: dict[str, int], safe: dict[str, int]) -> bool:
 def _normalize_copy(value: str, locale: str | None) -> str:
     text = "".join(str(value or "").casefold().split())
     return text.replace("，", ",").replace("。", ".") if locale == "zh-CN" else text
+
+
+def _tesseract_failure_reason(stderr: str) -> str:
+    normalized = str(stderr or "").casefold()
+    language_markers = (
+        "failed loading language",
+        "couldn't load any languages",
+        "could not initialize tesseract",
+        "error opening data file",
+    )
+    return "ocr_language_data_unavailable" if any(marker in normalized for marker in language_markers) else "ocr_invocation_failed"
 
 
 def _file_sha256(path: Path) -> str | None:

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V3 production text-pixel certification record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "certification_version",
+    "font_manifest_version",
+    "ocr_preflight_passed",
+    "gate_c_passed",
+    "gate_d_passed",
+    "evidence_references"
+  ],
+  "properties": {
+    "certification_version": {"type": "string", "minLength": 1},
+    "font_manifest_version": {"type": "string", "minLength": 1},
+    "ocr_preflight_passed": {"const": true},
+    "gate_c_passed": {"const": true},
+    "gate_d_passed": {"const": true},
+    "evidence_references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

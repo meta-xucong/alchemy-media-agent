@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 from hashlib import sha256
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from PIL import Image, ImageFont
@@ -20,9 +22,11 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.text_pixel import (
     FontRegistry,
     LicensedFont,
     NormalizedSafeArea,
+    ProductionTextPixelCertification,
     StaticOcrEngine,
     TextPixelDeliveryRuntime,
     TextPixelRuntimeSettings,
+    TesseractOcrEngine,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.text_pixel.runtime import CompositionOutcome
 
@@ -616,3 +620,212 @@ def test_multi_plan_retry_history_remains_append_only_per_plan() -> None:
     assert deliveries["plan_b"]["current_output_id"] == "retry_b"
     assert [item["attempt_id"] for item in deliveries["plan_a"]["attempts"]] == ["base_a", "retry_a"]
     assert [item["attempt_id"] for item in deliveries["plan_b"]["attempts"]] == ["base_b", "retry_b"]
+
+
+def _production_font() -> LicensedFont:
+    path = _font_path()
+    return LicensedFont(
+        font_id="production_fixture_font",
+        version="fixture-v1",
+        file_path=str(path),
+        supported_locales=("en-US",),
+        license_id="OFL-1.1-fixture",
+        license_evidence_reference="fixtures/licenses/OFL-1.1.txt",
+        expected_sha256=sha256(path.read_bytes()).hexdigest(),
+        production_approved=True,
+    )
+
+
+def test_production_font_resolver_requires_manifest_version_license_evidence_and_hash() -> None:
+    font = _production_font()
+    registry = FontRegistry([font], manifest_version="production-fonts-v1")
+
+    assert registry.resolve("en-US", require_production_approval=True).font == font
+    missing_evidence = LicensedFont(
+        **{**font.__dict__, "license_evidence_reference": None}
+    )
+    assert FontRegistry([missing_evidence], manifest_version="production-fonts-v1").resolve(
+        "en-US", require_production_approval=True
+    ).issue_code == "font_license_evidence_missing"
+    bad_hash = LicensedFont(**{**font.__dict__, "expected_sha256": "0" * 64})
+    assert FontRegistry([bad_hash], manifest_version="production-fonts-v1").resolve(
+        "en-US", require_production_approval=True
+    ).issue_code == "font_hash_mismatch"
+    assert FontRegistry([font]).resolve("en-US", require_production_approval=True).issue_code == "font_manifest_version_missing"
+
+
+def test_production_delivery_requires_matching_certification_and_ocr_failure_blocks(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    source = _base_output(store)
+    font = _production_font()
+    incomplete = TextPixelDeliveryRuntime(
+        store,
+        font_registry=FontRegistry([font], manifest_version="production-fonts-v1"),
+        ocr_engine=StaticOcrEngine("Clear delivery text"),
+        settings=TextPixelRuntimeSettings(enabled=True, production_activation_enabled=True),
+    ).deliver(
+        plan=_plan(),
+        frozen_activation_plan=_frozen_plan(),
+        source_output=source,
+        candidate_id="text_pixel_candidate",
+        asset_id="text_pixel_asset",
+    )
+    assert incomplete.status == "blocked"
+    assert "production_certification_incomplete" in incomplete.issue_codes
+
+    certification = ProductionTextPixelCertification(
+        certification_version="release-v1",
+        font_manifest_version="production-fonts-v1",
+        ocr_preflight_passed=True,
+        gate_c_passed=True,
+        gate_d_passed=True,
+        evidence_references=("release-evidence://gate-cd-v1",),
+    )
+    certified = TextPixelDeliveryRuntime(
+        store,
+        font_registry=FontRegistry([font], manifest_version="production-fonts-v1"),
+        ocr_engine=StaticOcrEngine("Clear delivery text"),
+        settings=TextPixelRuntimeSettings(
+            enabled=True,
+            production_activation_enabled=True,
+            production_certification=certification,
+        ),
+    ).deliver(
+        plan=_plan(),
+        frozen_activation_plan=_frozen_plan(),
+        source_output=source,
+        candidate_id="text_pixel_candidate",
+        asset_id="text_pixel_asset",
+    )
+    assert certified.status == "passed"
+    assert certified.gate_c_eligible is True
+
+    ocr_missing = _runtime(store, StaticOcrEngine("", available=False)).deliver(
+        plan=_plan(),
+        frozen_activation_plan=_frozen_plan(),
+        source_output=source,
+        candidate_id="text_pixel_candidate",
+        asset_id="text_pixel_asset",
+    )
+    assert ocr_missing.status == "blocked"
+    assert "ocr_runtime_unavailable" in ocr_missing.issue_codes
+
+
+def test_tesseract_preflight_distinguishes_binary_language_and_final_pixel_success() -> None:
+    with patch("alchemy_creative_agent_3_0.app.shared_capabilities.text_pixel.runtime.shutil.which", return_value=None):
+        missing = TesseractOcrEngine(executable=None)
+    assert {item.outcome for item in missing.preflight()} == {"ocr_binary_unavailable"}
+
+    engine = TesseractOcrEngine(executable="tesseract")
+    with patch(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.text_pixel.runtime.subprocess.run",
+        return_value=SimpleNamespace(returncode=1, stderr="Error opening data file rus.traineddata", stdout=""),
+    ):
+        language_missing = engine.inspect("final.png", "ru-RU")
+    assert language_missing.available is False
+    assert language_missing.details["reason"] == "ocr_language_data_unavailable"
+
+    with patch(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.text_pixel.runtime.subprocess.run",
+        return_value=SimpleNamespace(returncode=0, stderr="", stdout="final text"),
+    ):
+        success = engine.inspect("final.png", "en-US")
+    assert success.available is True
+    assert success.details["outcome"] == "ocr_final_pixel_success"
+
+
+def test_production_preflight_reports_static_ocr_as_non_deployment_ready(tmp_path) -> None:
+    runtime = TextPixelDeliveryRuntime(
+        V3GeneratedOutputStore(tmp_path / "outputs"),
+        font_registry=FontRegistry([_production_font()], manifest_version="production-fonts-v1"),
+        ocr_engine=StaticOcrEngine("fixture"),
+        settings=TextPixelRuntimeSettings(enabled=False, production_activation_enabled=False),
+    )
+
+    report = runtime.production_preflight()
+    assert report["passed"] is False
+    assert {item["outcome"] for item in report["ocr_results"]} == {"ocr_engine_not_deployment_capable"}
+
+
+def test_versioned_production_font_manifest_path_is_loaded_without_fallback(monkeypatch, tmp_path) -> None:
+    font = _production_font()
+    manifest_path = tmp_path / "text_pixel_fonts.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_version": "production-fonts-v1",
+                "fonts": [
+                    {
+                        "font_id": font.font_id,
+                        "version": font.version,
+                        "file_path": font.file_path,
+                        "license_id": font.license_id,
+                        "license_evidence_reference": font.license_evidence_reference,
+                        "expected_sha256": font.expected_sha256,
+                        "supported_locales": list(font.supported_locales),
+                        "production_approved": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("V3_TEXT_PIXEL_FONT_MANIFEST_PATH", str(manifest_path))
+    monkeypatch.delenv("V3_TEXT_PIXEL_FONT_MANIFEST_JSON", raising=False)
+    registry = FontRegistry.from_environment()
+
+    assert registry.manifest_version == "production-fonts-v1"
+    assert registry.resolve("en-US", require_production_approval=True).font is not None
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_version": "production-fonts-v1",
+                "fonts": [
+                    {
+                        "font_id": font.font_id,
+                        "version": font.version,
+                        "file_path": font.file_path,
+                        "license_id": font.license_id,
+                        "license_evidence_reference": font.license_evidence_reference,
+                        "expected_sha256": font.expected_sha256,
+                        "supported_locales": list(font.supported_locales),
+                        "production_approved": "false",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert FontRegistry.from_environment().resolve("en-US", require_production_approval=True).issue_code == "font_not_production_approved"
+
+
+def test_production_flags_remain_disabled_without_explicit_environment(monkeypatch) -> None:
+    for key in (
+        "V3_TEXT_PIXEL_DELIVERY_ENABLED",
+        "V3_TEXT_PIXEL_DELIVERY_PRODUCTION_ENABLED",
+        "V3_TEXT_PIXEL_ALLOW_DEVELOPMENT_FONTS",
+        "V3_TEXT_PIXEL_PRODUCTION_CERTIFICATION_JSON",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = TextPixelRuntimeSettings.from_environment()
+    assert settings.enabled is False
+    assert settings.production_activation_enabled is False
+    assert settings.allow_development_fonts is False
+    assert settings.production_certified is False
+
+    monkeypatch.setenv(
+        "V3_TEXT_PIXEL_PRODUCTION_CERTIFICATION_JSON",
+        json.dumps(
+            {
+                "certification_version": "release-v1",
+                "font_manifest_version": "production-fonts-v1",
+                "ocr_preflight_passed": True,
+                "gate_c_passed": True,
+                "gate_d_passed": "true",
+                "evidence_references": ["release-evidence://invalid-type"],
+            }
+        ),
+    )
+    assert TextPixelRuntimeSettings.from_environment().production_certified is False
