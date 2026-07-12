@@ -131,6 +131,24 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     assert late_worker.status == ProductJobStatusValue.BLOCKED
 
 
+def test_job_polling_closes_an_expired_background_watchdog_when_timer_delivery_is_lost() -> None:
+    service, _, _ = _service("gateway_background_polling_timeout")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+    service.mark_job_generating(
+        created.job_id,
+        background_attempt_id="polling_attempt",
+        background_timeout_seconds=5,
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.request.metadata["background_generation_watchdog"]["started_at"] = "2000-01-01T00:00:00+00:00"
+
+    expired = service.get_job(created.job_id)
+
+    assert expired.status == ProductJobStatusValue.BLOCKED
+    assert expired.metadata["generation_lifecycle_timeout"]["owner"] == "v3_background_generation_watchdog"
+
+
 def test_project_timeout_handler_records_one_safe_terminal_timeline_item() -> None:
     service, _, _ = _service("project_gateway_background_timeout")
     handlers = V3ProductRouteHandlers(service)

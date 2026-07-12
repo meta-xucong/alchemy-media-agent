@@ -651,6 +651,7 @@ class V3ProductApiService:
         if record is None:
             restored = self._status_from_output_store(job_id)
             return restored or self._not_found_status(job_id)
+        self._expire_background_generation_if_due(record)
         return self._status_from_record(record)
 
     def mark_job_generating(
@@ -677,6 +678,7 @@ class V3ProductApiService:
                 watchdog = {
                     "background_attempt_id": str(background_attempt_id),
                     "enabled": background_timeout_seconds is not None,
+                    "started_at": _utc_now_iso(),
                 }
                 if background_timeout_seconds is not None:
                     watchdog["timeout_seconds"] = max(1, int(round(float(background_timeout_seconds))))
@@ -688,6 +690,33 @@ class V3ProductApiService:
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
         return self._status_from_record(record)
+
+    def _expire_background_generation_if_due(self, record: ProductJobRecord) -> None:
+        """Polling is a durable fallback when a host loses a timer thread."""
+
+        watchdog = dict(record.request.metadata).get("background_generation_watchdog")
+        if not isinstance(watchdog, dict) or not watchdog.get("enabled"):
+            return
+        if record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            return
+        attempt_id = str(watchdog.get("background_attempt_id") or "")
+        timeout_seconds = watchdog.get("timeout_seconds")
+        started_at = str(watchdog.get("started_at") or "")
+        if not attempt_id or not started_at:
+            return
+        try:
+            deadline = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+            elapsed_seconds = (datetime.now(timezone.utc) - deadline).total_seconds()
+            timeout_value = float(timeout_seconds)
+        except (TypeError, ValueError):
+            return
+        if elapsed_seconds < max(1.0, timeout_value):
+            return
+        self.mark_job_generation_timed_out(
+            record.job_id,
+            background_attempt_id=attempt_id,
+            timeout_seconds=timeout_value,
+        )
 
     def mark_job_generation_timed_out(
         self,
