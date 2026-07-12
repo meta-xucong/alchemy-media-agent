@@ -2941,9 +2941,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # This is V3's end-to-end client deadline. It includes a
                 # finalization margin beyond the gateway's own image budget,
                 # so V3 records the gateway terminal result instead of
-                # canceling a final line switch prematurely.
+                # canceling a final line switch prematurely. Keep this outer
+                # guard slightly later than the provider's HTTP deadline so
+                # the provider can convert its terminal timeout into a normal
+                # failed job rather than leaving a canceled request behind.
                 value = app_settings.openai_image_gateway_managed_failover_timeout_seconds
-                return max(30.0, float(value))
+                return max(660.0, float(value)) + 5.0
         except Exception:
             value = 240.0
         return max(30.0, float(value) + 15.0)

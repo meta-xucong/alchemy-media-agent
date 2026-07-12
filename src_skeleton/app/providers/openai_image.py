@@ -42,6 +42,7 @@ class _CrossLoopAsyncLock:
 
 
 _openai_image_generation_lock = _CrossLoopAsyncLock()
+_GATEWAY_MANAGED_FAILOVER_MINIMUM_TIMEOUT_SECONDS = 660.0
 
 
 class _ImageEditCapabilityCache:
@@ -196,10 +197,6 @@ class OpenAIGPTImageProvider:
     _STANDARD_TRANSPORT_PROFILE = "openai_standard"
     _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
     _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
-    # Keep the OpenAI SDK deadline slightly inside the outer V3 deadline. The
-    # configured V3 deadline itself already includes the gateway's 60-second
-    # finalization margin over aiself's 600-second total image budget.
-    _GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS = 5.0
 
     def __init__(self, model: str | None = None):
         self.model = model
@@ -284,6 +281,7 @@ class OpenAIGPTImageProvider:
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
                 timeout=self._client_timeout_seconds(image_edit=bool(reference_paths)),
+                max_retries=self._sdk_max_retries(),
             )
         )
         # The upstream image gateway may enforce account-level concurrency. Keep
@@ -318,6 +316,8 @@ class OpenAIGPTImageProvider:
                 "output_count": len(outputs),
                 "requests": output_count,
                 "gateway_managed_failover": self._uses_gateway_managed_failover(),
+                "sdk_max_retries": self._sdk_max_retries(),
+                "client_timeout_seconds": self._client_timeout_seconds(image_edit=bool(reference_paths)),
             },
         )
 
@@ -625,6 +625,7 @@ class OpenAIGPTImageProvider:
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
                 timeout=self._client_timeout_seconds(image_edit=True),
+                max_retries=self._sdk_max_retries(),
             )
         )
         plan = request.prompt_plan
@@ -644,6 +645,8 @@ class OpenAIGPTImageProvider:
                 "requests": 1,
                 "api_style": "images.edit",
                 "gateway_managed_failover": self._uses_gateway_managed_failover(),
+                "sdk_max_retries": self._sdk_max_retries(),
+                "client_timeout_seconds": self._client_timeout_seconds(image_edit=True),
                 "source_output_id": request.source_output_id,
                 "source_job_id": source_job_id,
                 "source_output_format": source_format,
@@ -1042,10 +1045,20 @@ class OpenAIGPTImageProvider:
             # The managed deadline covers every line transition plus the
             # gateway's terminal-response margin. Do not cap it with the
             # historical per-line client timeout or a later line will be
-            # canceled before it receives its own bounded attempt.
+            # canceled before it receives its own bounded attempt. Do not
+            # reserve this margin by shortening the SDK deadline: that makes
+            # the SDK itself cancel a still-valid gateway request early.
             value = settings.openai_image_gateway_managed_failover_timeout_seconds
-            return max(30.0, float(value) - self._GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS)
+            return max(_GATEWAY_MANAGED_FAILOVER_MINIMUM_TIMEOUT_SECONDS, float(value))
         return max(30.0, float(value))
+
+    def _sdk_max_retries(self) -> int:
+        # OpenAI's SDK otherwise retries retryable transport/status failures
+        # by default. For an image gateway that owns line failover, that would
+        # turn one V3 attempt into an invisible second gateway request. Image
+        # retry is deliberately never an SDK configuration knob: V3's explicit
+        # retry owner or the gateway must remain the only retry authority.
+        return 0
 
     def _uses_gateway_managed_failover(self) -> bool:
         return bool(getattr(settings, "openai_image_gateway_managed_failover", False))

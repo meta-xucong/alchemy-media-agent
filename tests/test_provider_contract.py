@@ -52,6 +52,7 @@ def test_openai_image_provider_closes_async_client_after_generate(monkeypatch):
     original_key = settings.openai_api_key
     original_base_url = settings.openai_base_url
     closed = {"value": False}
+    captured = {}
 
     class FakeImages:
         async def generate(self, **kwargs):
@@ -65,6 +66,7 @@ def test_openai_image_provider_closes_async_client_after_generate(monkeypatch):
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
+            captured.update(kwargs)
             self.images = FakeImages()
 
         async def close(self):
@@ -82,6 +84,7 @@ def test_openai_image_provider_closes_async_client_after_generate(monkeypatch):
         openai_image_provider._openai_image_rate_limiter.reset()
 
     assert closed["value"] is True
+    assert captured["max_retries"] == 0
 
 
 def test_v3_threaded_handler_does_not_block_event_loop():
@@ -252,7 +255,7 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
             raise TimeoutError("upstream request timed out after its own failover budget")
 
     monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
-    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 420.0)
     monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 240.0)
     monkeypatch.setattr(settings, "openai_image_edit_request_timeout_seconds", 420.0)
     openai_image_provider._openai_image_rate_limiter.reset()
@@ -269,8 +272,9 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
 
     assert calls["count"] == 1
     assert error.value.detail["attempts"] == 1
-    assert provider._client_timeout_seconds(image_edit=False) == 655.0  # noqa: SLF001
-    assert provider._client_timeout_seconds(image_edit=True) == 655.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=False) == 660.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=True) == 660.0  # noqa: SLF001
+    assert provider._sdk_max_retries() == 0  # noqa: SLF001
 
 
 def test_openai_image_provider_compresses_large_reference_png(tmp_path):
@@ -905,6 +909,7 @@ def test_openai_image_provider_edit_uses_stored_source_output(tmp_path, monkeypa
     )
 
     assert captured["client_kwargs"]["base_url"] == "https://openai.example.test/v1"
+    assert captured["client_kwargs"]["max_retries"] == 0
     assert captured["model"] == "gpt-image-2"
     assert captured["prompt"].startswith("Main subject: 精品咖啡海报")
     assert captured["quality"] == "high"
