@@ -27,8 +27,8 @@ planning approval: accepted
 foundation rules: accepted for module development
 master development specification: accepted for phased implementation
 named-photographer governance: drafted
-implementation: P1 skeleton, P2 audit and P3 shadow General runtime complete
-mainline contract requests: none submitted yet
+implementation: P1-P3 complete; P4 first-wave scene shadow planning verified
+mainline contract requests: PHOTOGRAPHY-MAINLINE-001 and -002 open
 activation status: inactive
 merge readiness: not ready
 ```
@@ -60,6 +60,17 @@ P3 publication: feature-branch milestone 450137f, rebased and verified on curren
 production activation: still disabled
 ```
 
+P4 continuation status:
+
+```text
+P4 scope: module-local Portrait, Landscape, Still Life and Animal scene contributions
+P4 verification: 28 Photography focused, 132 isolation regression and 553 full V3 tests passed
+P4 publication: implementation milestone 507a9b3
+real-output acceptance: paused until shared production hooks exist
+P5 status: blocked on trusted profile selection/frontend/persistence mainline contract
+specific-animal identity: blocked on shared foundation capability review
+```
+
 ## 3. Authority Order
 
 Photography development must follow this order when rules overlap:
@@ -86,6 +97,9 @@ contract wins and Photography work pauses for an explicit design decision.
 | P03 | Named-photographer manual selection and rights governance | Active |
 | P04 | Roadmap, tests, acceptance and mainline coordination | Active |
 | P05 | P2 mainline integration audit and P3 shadow boundary | Active |
+| P06 | P4 first-wave scene director implementation audit | Active |
+| PX Mainline 001 | Trusted photographer profile selection contract request | Open - blocking |
+| PX Mainline 002 | Non-human subject identity foundation request | Open - blocking |
 
 Future documents must remain in this directory and use the `Pxx_` number
 family. Do not continue the root V3 document number sequence for Photography.
