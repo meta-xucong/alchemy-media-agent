@@ -38,12 +38,13 @@ The following is already implemented and remains the compatibility baseline:
 | --- | --- |
 | Platform profile | Separates verified constraints from documented operation, internal strategy, and seller configuration. Amazon main-image baseline is the current narrow verified visual constraint. |
 | Default strategy | `evidence_first`; `scene_story`, `information_rich`, `content_hook`, and `brand_story` are explicit secondary-role choices. |
-| Product truth | Existing immutable product truth is carried into every recipe. `unverified_visual_facts` records supplier/user facts not visible in the reference and forces delivery attention. |
+| Current suite selector | `recommended`, `listing_core`, `listing_full`, and `detail_supplement`. D3 replaces this planning-only range with explicit delivery scopes while retaining compatibility. |
+| Product truth | Product Fact Ledger v1 carries source, verification, channel, and slot bindings into each recipe. `unverified_visual_facts` remains a compatible supplier-spec alias and creates export publish-check attention; D4 adds persisted owner confirmation. |
 | Apparel director | Garments receive a seven-role evidence sequence: primary, worn front, back/side, detail, real wear, fit/size, and styling versatility. Garment guidance is suppressed for shoes and bags. |
 | Benchmark | E10 records an external Amazon apparel quality bar without copying external images or using pixel matching. E24 covers the planning contract. |
 | Text / continuation | E-Commerce passes approved literal copy, claims, locale, and creative intent only through Doc111 provider-native complete-image generation. Per-slot continuation remains governed by shared Doc105 routes. |
 
-## 3. Default user behavior after completion
+## 3. Default user behavior after D3-D4 completion
 
 For an ordinary E-Commerce request, the system must behave as follows:
 
@@ -79,7 +80,7 @@ Acceptance: documentation review, focused isolation tests, `git diff --check`.
 
 ### D1 — structured Product Fact Ledger
 
-Status: next safe independent implementation phase.
+Status: implemented and verified on the E-Commerce branch.
 
 Replace the current list-only fact representation with an additive ledger that
 can carry one record per product fact:
@@ -101,13 +102,22 @@ Requirements:
   materialized as `supplier_spec + requires_confirmation` records.
 - A fact marked `derived_blocked` cannot enter a prompt, overlay copy, or
   export claim.
+- `claim_eligible` is opt-in and remains true only for a verified
+  `reference_visible` or `user_confirmed` fact. It never bypasses the existing
+  claim-review gate.
 - Each recipe receives the minimal relevant facts, not an arbitrary truncated
   list; main, back, detail, and size slots can therefore be reviewed against
   the right evidence.
 - No biometric vector, provider control, or shared schema migration is added.
 
+Delivered: `ProductFactRecord` is additive to `ProductTruthLock`; the planner
+binds only non-blocked facts to compatible slots; Copy Bridge suppresses
+blocked wording; Critic and export manifests surface pending confirmation and
+blocked-fact withholding. Historical locks without the ledger load with an
+empty ledger.
+
 Acceptance: fact-source/slot-binding unit tests, old product profiles remain
-readable, and no unsupported fact reaches copy or a recipe without a warning.
+readable, and no unsupported fact reaches copy, a recipe, or an export binding.
 
 ### D2 — complete first-wave category directors
 

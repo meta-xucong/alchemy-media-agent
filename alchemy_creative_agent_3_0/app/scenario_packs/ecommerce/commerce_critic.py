@@ -102,16 +102,42 @@ class CommerceCritic:
                 "Unsupported claims require softer copy or evidence before export.",
             )
         )
-        unverified_visual_facts = [
-            str(fact)
-            for fact in truth.metadata.get("unverified_visual_facts") or []
-            if str(fact).strip()
+        confirmation_facts = [
+            fact
+            for fact in truth.fact_ledger
+            if fact.verification == "requires_confirmation"
         ]
+        unverified_visual_facts = [fact.value for fact in confirmation_facts]
         checks.append(
             self._check(
                 "unverified_visual_fact_confirmation",
                 not unverified_visual_facts,
                 "Supplier-provided visual facts not visible in the reference require product-owner confirmation before delivery.",
+            )
+        )
+        blocked_fact_values = [
+            fact.value
+            for fact in truth.fact_ledger
+            if fact.verification == "blocked"
+        ]
+        blocked_fact_leaks = [
+            recipe.slot
+            for recipe in recipes
+            if any(
+                fact.lower() in " ".join([*recipe.required_product_facts, recipe.visual_scene, recipe.overlay_text or ""]).lower()
+                for fact in blocked_fact_values
+            )
+        ]
+        blocked_copy_slots = [
+            recipe.slot
+            for recipe in recipes
+            if (recipe.metadata.get("copy_plan") or {}).get("policy") == "text_blocked"
+        ]
+        checks.append(
+            self._check(
+                "blocked_product_fact_leakage",
+                not blocked_fact_leaks,
+                "Facts marked blocked do not appear in product prompts, overlay copy, or export bindings.",
             )
         )
         if truth.warnings:
@@ -125,6 +151,12 @@ class CommerceCritic:
                 "Supplier-provided visual facts need product-owner confirmation before delivery: "
                 + ", ".join(unverified_visual_facts)
             )
+        if blocked_copy_slots:
+            warnings.append(
+                "Overlay copy was removed because it repeated blocked product facts: " + ", ".join(blocked_copy_slots)
+            )
+        if blocked_fact_leaks:
+            warnings.append("Blocked product facts leaked into planned slots: " + ", ".join(blocked_fact_leaks))
         if localization_review_slots:
             warnings.append(
                 "Provider-native copy requires native-language review before export: " + ", ".join(localization_review_slots)
@@ -153,6 +185,10 @@ class CommerceCritic:
                 "localization_review_slots": localization_review_slots,
                 "claim_review_slots": claim_review_slots,
                 "unverified_visual_facts": unverified_visual_facts,
+                "confirmation_fact_ids": [fact.fact_id for fact in confirmation_facts],
+                "blocked_fact_ids": [fact.fact_id for fact in truth.fact_ledger if fact.verification == "blocked"],
+                "blocked_fact_leak_slots": blocked_fact_leaks,
+                "blocked_copy_slots": blocked_copy_slots,
                 "category_evidence": category_coverage,
                 "duplicate_slot_pairs": duplicate_pairs,
             },

@@ -41,8 +41,8 @@ The following observations are **not** accepted as proof by themselves:
   in the reference; or
 - a scene or three-look composition is aesthetically successful.
 
-Those still require the supplied product facts, deterministic text/OCR gate,
-and real-provider review.
+Those still require supplied product facts, Doc111 provider-native
+complete-image acceptance, and real-provider review.
 
 ## Product truth contract learned from the case
 
@@ -51,12 +51,13 @@ For apparel, split facts into three sources before planning:
 | Fact class | Example | Runtime treatment |
 | --- | --- | --- |
 | Reference-visible, immutable | stripe direction/scale, collar, placket, cropped silhouette, embroidery placement | Bind as product truth on every slot and review it visually. |
-| Supplier-confirmed but not visible | a back pintuck, hidden lining, exact composition | Keep it as product truth only with `unverified_visual_facts`; require owner confirmation before delivery. |
+| Supplier-confirmed but not visible | a back pintuck, hidden lining, exact composition | Keep it as product truth only with `unverified_visual_facts`; current export attention requires review, while D4 adds persisted owner confirmation. |
 | Marketing or unconfirmed claim | comfort, performance, premium quality | Do not turn it into image copy or a visual assertion without evidence. |
 
 The optional E-Commerce input `unverified_visual_facts` is additive. It does
-not weaken a supplied reference. It makes the pending confirmation visible in
-the planner and critic rather than allowing a generator to “prove” the fact.
+not weaken a supplied reference. It currently produces critic and export
+publish-check attention rather than allowing a generator to “prove” the fact;
+D4 will add persisted owner confirmation.
 
 ## Current Amazon apparel listing map
 
@@ -88,8 +89,8 @@ Before such a scope is added, it needs:
 
 1. an explicit placement choice distinct from listing images;
 2. merchant/category/market confirmation of the target A+ module rules;
-3. deterministic typography, safe-area, OCR, overflow, spelling, and claim
-   review through the shared text-pixel runtime; and
+3. Doc111 provider-native complete-image acceptance for any approved literal
+   copy and claims; and
 4. a bounded real-provider acceptance run.
 
 Until then, the planner may use `scene_story`, `information_rich`, or
@@ -110,7 +111,7 @@ Score each selected output pass/fail, not by pixel similarity:
 | Suite differentiation | Each image proves its mapped role; no duplicate model pose or redundant crop substitutes for a detail/back/fit proof. |
 | Amazon primary | Main image satisfies the verified primary-image baseline and category/region check. |
 | Human realism | Hands, face, fit, fabric drape, and posture are commercially believable through the shared Human Realism path. |
-| Text and claims | Main image has no text. Any secondary/A+ text is rendered and accepted by the shared OCR/layout/claim gate. |
+| Text and claims | Main image has no text. Any secondary/A+ copy is user-approved literal text passed only through the Doc111 provider-native complete-image path; production use remains blocked until Gate C/D. |
 | Delivery closure | Review/retry history is bounded, superseded attempts are folded, and only final selected outputs are surfaced. |
 
 An output fails the fixture if any hard product-fidelity, primary-image, or
@@ -134,6 +135,6 @@ cross-category default.
 
 Still shared-runtime or future-template work:
 
-- rendered text pixel correctness, OCR, safe-area, and bounded recovery;
+- provider-native complete-image text acceptance and Doc111 Gate C/D evidence;
 - real-provider visual review and acceptance; and
 - a separately scoped A+ module builder, placement rules, and UI.

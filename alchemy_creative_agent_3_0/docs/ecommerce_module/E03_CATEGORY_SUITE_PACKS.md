@@ -1,8 +1,8 @@
 # E03 Category Suite Packs and Evidence Maps
 
-## Category pack contract
+## Target category pack contract (D2)
 
-Each category pack declares:
+The completed D2 category-pack contract will declare:
 
 ```text
 category_id
@@ -17,7 +17,10 @@ product_truth_fields
 review_checks
 ```
 
-It defines what must be shown, not merely a visual style.
+The current first-wave implementation contains category ID, display name,
+required/optional evidence, default slot priority, and review checks. D2 adds
+the remaining source-aware fields below; this target contract is not a claim
+that every field is already stored today.
 
 ## First-release category packs
 
@@ -32,7 +35,7 @@ It defines what must be shown, not merely a visual style.
 Second-wave packs may include jewelry/accessories, furniture/decor,
 sports/outdoor, pet, and baby products after the first five pass review.
 
-## Shared slot vocabulary
+## Semantic slot vocabulary
 
 ```text
 main_image
@@ -46,8 +49,10 @@ package_or_accessories
 social_cover
 ```
 
-Category packs may rename a role for the UI, but internal slot IDs stay stable.
-Each selected slot must be mapped to one business goal such as `click`,
+These are semantic roles, not literal runtime slot IDs. Current runtime IDs
+such as `feature_image_1`, `feature_image_2`, `detail_image`, and
+`trust_comparison_image` map to them through the E-Commerce planner. Each
+selected slot must be mapped to one business goal such as `click`,
 `understand`, `trust`, `compare`, `desire`, or `remember`.
 
 ## Product-category adaptation

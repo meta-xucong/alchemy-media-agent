@@ -9,10 +9,25 @@ from pydantic import Field
 from ...schemas.models import V3BaseModel
 
 
+class ProductFactRecord(V3BaseModel):
+    """One source-aware product fact for E-Commerce planning and review."""
+
+    fact_id: str
+    label: str
+    value: str
+    source_type: str = "user_confirmed"
+    verification: str = "verified"
+    visual_channels: list[str] = Field(default_factory=lambda: ["product"])
+    allowed_slot_ids: list[str] = Field(default_factory=list)
+    claim_eligible: bool = False
+    review_requirement: str = "none"
+
+
 class ProductTruthLock(V3BaseModel):
     product_category: str = "generic_product"
     visible_attributes: list[str] = Field(default_factory=list)
     immutable_attributes: list[str] = Field(default_factory=list)
+    fact_ledger: list[ProductFactRecord] = Field(default_factory=list)
     allowed_scene_changes: list[str] = Field(default_factory=list)
     forbidden_transformations: list[str] = Field(default_factory=list)
     evidence_sources: list[str] = Field(default_factory=list)

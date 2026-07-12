@@ -19,7 +19,7 @@ select/create product project
 → review proposed suite
 → generate
 → select/reject individual results
-→ regenerate one slot or continue the suite
+→ review folded history and delivery warnings
 → export selected images
 ```
 
@@ -33,7 +33,8 @@ select/create product project
 6. One-sentence request composer.
 7. Optional selling-point and copy-language controls.
 8. Image-first suite board with slot labels.
-9. Per-slot regenerate, select, reject, and continue actions.
+9. Selection, rejection, and folded-history actions; per-slot redo remains
+   unavailable until the shared Doc105 continuation route is accepted.
 10. Export panel with publish-check summary.
 
 ## Progressive disclosure
@@ -52,6 +53,11 @@ generate. Advanced controls may expose:
 - requested aspect ratio.
 - suite expression strategy: evidence first (default), scene story,
   information-rich, content hook, or brand story.
+
+The current scope selector remains `recommended`, `listing_core`,
+`listing_full`, or `detail_supplement`. D3 will introduce the separate
+`listing_only`, A+, content, and storefront delivery-scope contract; those
+future values must not be presented as current UI behavior.
 
 ## Beginner-facing language
 
@@ -75,7 +81,9 @@ folded history and do not occupy the final delivery board.
   other marketplace policy claim.
 - The expression-strategy control is advanced and defaults to evidence-first.
   Its hint explains that it cannot override verified main-image rules.
-- A slot can be regenerated without recreating the whole suite.
+- A slot may be selected or rejected today. User-directed single-slot redo is
+  unavailable until Doc105 supplies its append-only route, lifecycle, resolver,
+  and browser coverage.
 - Platform/category choices are visible in the run summary.
 - Locked or unavailable features cannot appear executable.
 - Mobile layout keeps images and next actions above dense metadata.

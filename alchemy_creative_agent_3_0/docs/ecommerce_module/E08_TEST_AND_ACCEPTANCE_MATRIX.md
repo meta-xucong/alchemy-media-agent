@@ -28,10 +28,14 @@
   roles and remains separately auditable;
 - historical `platform_visual_intent_id` jobs remain readable while new jobs
   use evidence/compliance/strategy metadata.
+- fact-ledger source, verification, channel, and allowed-slot bindings remain
+  auditable; blocked facts cannot reach a recipe, copy plan, or export binding,
+  while confirmation facts create a publish-check warning.
 - the Amazon apparel benchmark plans a distinct primary, worn-front,
   back-or-side, detail, lifestyle, fit/size, and styling-versatility role;
   a supplier-provided visual fact that is absent from the reference remains an
-  explicit delivery confirmation, not silent product truth.
+  explicit export publish-check attention, not silent product truth. D4 adds
+  persisted owner confirmation before final delivery.
 - General Template does not receive commerce suite metadata.
 
 ## Isolation tests
@@ -66,7 +70,8 @@
 - suite cards show image, slot label, purpose, and action;
 - planned suite rows expose separate plain-language evidence, strategy, and
   verified-platform-restriction labels where applicable;
-- one slot can be regenerated;
+- user-directed single-slot redo remains unavailable until the Doc105 shared
+  continuation route, lifecycle, resolver, and browser coverage are accepted;
 - selected references persist after refresh;
 - rejected direction is carried forward;
 - export summary is plain language;
@@ -91,7 +96,7 @@ Each run must inspect:
 - scene realism;
 - slot differentiation;
 - verified primary-image restrictions, conservative text default, and the
-  source of each placement/canvas decision;
+  source/evidence tier of each placement constraint;
 - final file resolution and export names;
 - retry history and delivery count.
 
@@ -101,14 +106,15 @@ Each run must inspect:
 benchmark card. Its screenshots are not repository assets and must not be used
 as pixel-match test data. The automated E24 fixture tests the role map and
 unverified-fact contract; a real-provider run must score product fidelity,
-slot differentiation, Amazon main-image compliance, human realism, and OCR/
-claim safety before it can become an accepted regression fixture.
+slot differentiation, Amazon main-image compliance, human realism, and
+provider-native literal-copy/claim acceptance before it can become an accepted
+regression fixture.
 
 ## Activation gate
 
 E-Commerce may be marked active only when:
 
-1. E00-E08 are accepted.
+1. E00-E11 are accepted.
 2. All contract, planner, isolation, review, retry, and UI tests pass.
 3. Real-output fixtures pass manual visual review.
 4. Product references and project_id are enforced.

@@ -23,6 +23,8 @@ class EcommerceExportPackager:
         files = []
         localization_review_required = False
         claim_review_required = False
+        pending_product_facts: dict[str, dict] = {}
+        blocked_product_fact_ids: set[str] = set()
         category_ids = list(
             dict.fromkeys(
                 str(recipe.metadata.get("category_id"))
@@ -41,6 +43,14 @@ class EcommerceExportPackager:
             copy_plan = recipe.metadata.get("copy_plan") or {}
             copy_review_required = bool(copy_plan.get("needs_localization_review"))
             copy_claim_review_required = bool(copy_plan.get("claim_review_required"))
+            fact_bindings = list(recipe.metadata.get("product_fact_bindings") or [])
+            pending_fact_ids = [str(item) for item in recipe.metadata.get("pending_product_fact_ids") or [] if str(item)]
+            for fact in fact_bindings:
+                if isinstance(fact, dict) and str(fact.get("fact_id") or "") in pending_fact_ids:
+                    pending_product_facts[str(fact["fact_id"])] = fact
+            blocked_product_fact_ids.update(
+                str(item) for item in recipe.metadata.get("blocked_product_fact_ids") or [] if str(item)
+            )
             localization_review_required = localization_review_required or copy_review_required
             claim_review_required = claim_review_required or copy_claim_review_required
             filename = naming.format(
@@ -59,6 +69,9 @@ class EcommerceExportPackager:
                     "platform_compliance_evidence_tier": recipe.metadata.get("platform_compliance_evidence_tier"),
                     "creative_strategy_id": recipe.metadata.get("creative_strategy_id"),
                     "creative_strategy_applied": recipe.metadata.get("creative_strategy_applied"),
+                    "product_fact_ledger_version": recipe.metadata.get("product_fact_ledger_version"),
+                    "product_fact_bindings": fact_bindings,
+                    "pending_product_fact_ids": pending_fact_ids,
                     "format": export_rules.get("format", "png"),
                     "business_goal": recipe.business_goal,
                     "review_status": "needs_pixel_review",
@@ -77,6 +90,8 @@ class EcommerceExportPackager:
             critic=critic,
             localization_review_required=localization_review_required,
             claim_review_required=claim_review_required,
+            pending_product_facts=list(pending_product_facts.values()),
+            blocked_product_fact_ids=sorted(blocked_product_fact_ids),
         )
         return EcommerceExportPackage(
             package_id=stable_id("ecommerce_export", job_key, marketplace_profile.platform, marketplace_profile.market),
@@ -114,6 +129,20 @@ class EcommerceExportPackager:
                     for recipe in recipes
                     if recipe.metadata.get("creative_strategy_id")
                 },
+                "product_fact_ledger_versions": list(
+                    dict.fromkeys(
+                        str(recipe.metadata.get("product_fact_ledger_version"))
+                        for recipe in recipes
+                        if recipe.metadata.get("product_fact_ledger_version")
+                    )
+                ),
+                "product_fact_bindings": {
+                    recipe.slot: list(recipe.metadata.get("product_fact_bindings") or [])
+                    for recipe in recipes
+                    if recipe.metadata.get("product_fact_bindings")
+                },
+                "pending_product_facts": list(pending_product_facts.values()),
+                "blocked_product_fact_ids": sorted(blocked_product_fact_ids),
                 "publish_checks": publish_checks,
                 "publish_summary": self._publish_summary(files, publish_checks),
             },
@@ -126,6 +155,8 @@ class EcommerceExportPackager:
         critic: CommerceCriticReport | None,
         localization_review_required: bool,
         claim_review_required: bool,
+        pending_product_facts: list[dict],
+        blocked_product_fact_ids: list[str],
     ) -> list[dict[str, str]]:
         checks = [
             {
@@ -155,9 +186,30 @@ class EcommerceExportPackager:
                     "message": "Verify evidence and platform eligibility for overlay claims before publishing.",
                 }
             )
+        if pending_product_facts:
+            checks.append(
+                {
+                    "id": "product_fact_confirmation",
+                    "status": "attention",
+                    "message": "Confirm supplier or user facts not visible in the product reference before publishing: "
+                    + ", ".join(str(fact.get("label") or fact.get("value") or "fact") for fact in pending_product_facts),
+                }
+            )
+        if blocked_product_fact_ids:
+            checks.append(
+                {
+                    "id": "blocked_product_facts",
+                    "status": "attention",
+                    "message": "Blocked product facts were withheld from planned prompts and copy; review the source before adding them manually.",
+                }
+            )
         if critic:
             for check in critic.checks:
-                if check["status"] == "attention" and check["id"] in {"category_evidence_coverage", "suite_differentiation"}:
+                if check["status"] == "attention" and check["id"] in {
+                    "category_evidence_coverage",
+                    "suite_differentiation",
+                    "blocked_product_fact_leakage",
+                }:
                     checks.append(
                         {
                             "id": check["id"],

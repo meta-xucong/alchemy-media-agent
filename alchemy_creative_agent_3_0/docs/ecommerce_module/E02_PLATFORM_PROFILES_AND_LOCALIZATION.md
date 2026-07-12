@@ -118,8 +118,7 @@ default locale, but the seller can choose a supported locale.
 seller facts and approved literal copy
 → LLM creative reasoning
 → provider-native complete-image generation
-→ final-pixel OCR/vision/claim review
-→ provider-native targeted revision when needed
+→ shared provider-native delivery and claim acceptance
 ```
 
 The E-Commerce template keeps main and hero images text-free as a conservative

@@ -98,7 +98,7 @@ compatibility proposal is accepted.
 
 Recommended commits:
 
-1. E00-E08 docs and governance.
+1. E00-E11 docs and governance.
 2. contracts and compatibility fixtures.
 3. profile registry and planner.
 4. category packs.
@@ -106,3 +106,5 @@ Recommended commits:
 6. review/retry/export.
 7. workspace UI.
 8. real-output acceptance fixes.
+9. Director-method phases D1-D7, each independently tested and documented in
+   E11.

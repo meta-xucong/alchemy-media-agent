@@ -100,6 +100,11 @@ user request + uploaded refs
     compatible secondary roles and can never override a verified primary-image
     restriction, product truth, review, retry, provider, or General Template
     contract.
+14. The current additive `unverified_visual_facts` alias materializes as
+    E-Commerce fact-ledger entries that require confirmation. It produces
+    critic and export publish-check attention today; D4 will add a persisted
+    user-confirmation UI. A fact marked blocked must not enter a recipe,
+    overlay copy, or export binding.
 
 ## Compatibility rule
 

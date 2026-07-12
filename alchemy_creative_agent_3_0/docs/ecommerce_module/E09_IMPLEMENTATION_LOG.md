@@ -6,6 +6,10 @@ Record independently deliverable E-Commerce milestones, their boundary, test
 evidence, and integration dependency. This log does not replace the roadmap;
 it makes later rebase and integration decisions auditable.
 
+Milestone labels in this historical log are implementation records, not the
+E00-E11 document identifiers. Rebase chronology may therefore place entries
+out of numeric order; E11 remains the current forward-looking authority.
+
 ## E1 — category and marketplace planning baseline
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.
@@ -417,6 +421,34 @@ commercial frontend shell + provider contract tests: 50 passed
 JavaScript syntax, Python compile, and diff checks: passed
 ```
 
+## E26 — structured Product Fact Ledger
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added the E-Commerce-only, additive `ProductFactRecord` ledger: stable ID,
+  label/value, source, verification, visual channel, allowed slot, claim
+  eligibility, and review requirement.
+- Preserved legacy product profiles and materialized
+  `unverified_visual_facts` as `supplier_spec + requires_confirmation`.
+- Bound relevant non-blocked facts to individual recipes and their export
+  records. Blocked facts are withheld from prompts, planned copy, and export
+  bindings; pending facts generate a publish-check attention item.
+- Preserved historical `ProductTruthLock` records that pre-date the ledger.
+
+Boundary: this is an E-Commerce planner, review, and export metadata change.
+It does not change the shared Provider, Review/Retry lifecycle, General
+Template, or Doc104/Doc105 runtime contracts.
+
+Verification:
+
+```text
+focused D1 / E-Commerce contract tests: 26 passed
+full V3 + commercial frontend + provider contract regression: 590 passed after rebase to `fc3d3eb`
+Python compile, JavaScript syntax, and diff checks: passed
+```
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.
@@ -427,9 +459,11 @@ Delivered:
   method. It distinguishes current baseline from the missing fact ledger,
   remaining category directors, explicit delivery scopes, user confirmation
   UI, real-output fixture harness, A+ closure, and Doc105 continuation work.
-- Fixed the default product decision: `listing_only` plus `evidence_first`.
-  A+ and campaign-like outputs require an explicit scope and remain behind the
-  shared text-pixel and real-provider gates.
+- Fixed the target product decision: future D3 `listing_only` plus
+  `evidence_first`. Current UI remains `recommended` / `listing_core` /
+  `listing_full` / `detail_supplement`; A+ and campaign-like outputs require
+  an explicit future scope and remain behind shared text-pixel and real-provider
+  gates.
 - Defined D1 as the next independent code phase: an additive structured
   Product Fact Ledger that preserves existing profiles and
   `unverified_visual_facts` compatibility while adding source, verification,
@@ -458,9 +492,9 @@ Delivered:
   styling versatility. Amazon's generic campaign-cover role no longer occupies
   the default listing suite; a dedicated detail slot does.
 - Added additive `unverified_visual_facts` metadata. A supplier-confirmed but
-  reference-invisible visual detail remains prompt-bound but forces
-  product-owner confirmation before delivery instead of silently passing as
-  visually verified truth.
+  reference-invisible visual detail remains prompt-bound and produces
+  critic/export attention instead of silently passing as visually verified
+  truth. D4 will add persisted product-owner confirmation before delivery.
 - Added the E24 automated planning fixture and made an unrelated food test
   select its scenario role by slot rather than the former Amazon sequence
   index.

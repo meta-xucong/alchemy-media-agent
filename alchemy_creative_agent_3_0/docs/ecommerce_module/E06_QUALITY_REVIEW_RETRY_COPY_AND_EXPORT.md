@@ -12,6 +12,7 @@ watermarks, anatomy, and general image usability.
 Review:
 
 - product truth and visible product identity;
+- source, verification state, and slot binding of E-Commerce product facts;
 - platform slot fit;
 - selling-point clarity;
 - buyer-question coverage;
@@ -47,6 +48,9 @@ capability after review without an auditable plan amendment.
 
 - Product names, trademarks, numbers, and confirmed claims are protected.
 - Unconfirmed claims become warnings or are omitted.
+- Facts marked blocked by the E-Commerce fact ledger are omitted from recipe
+  bindings and overlay copy. Facts requiring confirmation produce an export
+  publish-check warning; D4 will add persisted owner confirmation.
 - Main-image text is forbidden by the E-Commerce module's conservative default.
   A verified platform restriction may strengthen that default, but the default
   itself is not represented as universal marketplace policy.
@@ -77,6 +81,9 @@ platform_compliance_intent_id
 platform_compliance_evidence_tier
 creative_strategy_id
 creative_strategy_applied
+product_fact_ledger_version
+product_fact_bindings
+pending_product_fact_ids
 review_summary
 publish_checklist
 generated_at

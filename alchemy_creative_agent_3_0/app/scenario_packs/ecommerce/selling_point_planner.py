@@ -71,8 +71,16 @@ class SellingPointToImagePlanner:
             for fact in truth.metadata.get("unverified_visual_facts") or []
             if str(fact).strip()
         ]
-        required_product_facts = list(dict.fromkeys([*unverified_visual_facts, *truth.immutable_attributes]))[:8]
-        selling_points = brief.differentiated_selling_points or ["Clear product identity"]
+        blocked_fact_values = [
+            str(fact)
+            for fact in truth.metadata.get("blocked_fact_values") or []
+            if str(fact).strip()
+        ]
+        selling_points = [
+            point
+            for point in (brief.differentiated_selling_points or ["Clear product identity"])
+            if not any(blocked.lower() in point.lower() for blocked in blocked_fact_values)
+        ] or ["Clear product identity"]
         recipes: list[EcommerceAssetRecipe] = []
         for index, slot in enumerate(marketplace_profile.image_slots):
             goal, scene = SLOT_GOALS.get(slot, ("support", "Product-focused commercial composition."))
@@ -90,8 +98,10 @@ class SellingPointToImagePlanner:
                 parameters=scenario_parameters,
                 unsupported_claims=list(truth.metadata.get("unsupported_claims") or []),
                 text_forbidden_slots=text_forbidden_slots,
+                blocked_fact_values=blocked_fact_values,
             )
             provider_native_text = copy_plan["text"]
+            fact_bindings = self._fact_bindings_for_slot(truth, slot)
             evidence_intent = evidence_intent_for_slot(slot)
             category_slot_guidance = slot_guidance_for(
                 category_profile,
@@ -126,7 +136,7 @@ class SellingPointToImagePlanner:
                     business_goal=goal,
                     selling_point=selling_point,
                     buyer_intent=buyer_intent,
-                    required_product_facts=required_product_facts,
+                    required_product_facts=fact_bindings["required_product_facts"],
                     visual_scene=visual_scene,
                     overlay_text=None,
                     provider_native_text=provider_native_text,
@@ -147,6 +157,10 @@ class SellingPointToImagePlanner:
                         "category_slot_guidance_id": category_slot_guidance["id"],
                         "category_slot_guidance": category_slot_guidance["direction"],
                         "unverified_visual_facts": unverified_visual_facts,
+                        "product_fact_ledger_version": truth.metadata.get("fact_ledger_version"),
+                        "product_fact_bindings": fact_bindings["records"],
+                        "pending_product_fact_ids": fact_bindings["pending_ids"],
+                        "blocked_product_fact_ids": list(truth.metadata.get("blocked_fact_ids") or []),
                         "copy_plan": copy_plan,
                         "evidence_intent_id": evidence_intent["id"],
                         "evidence_intent_direction": evidence_intent["direction"],
@@ -161,6 +175,28 @@ class SellingPointToImagePlanner:
                 )
             )
         return recipes
+
+    def _fact_bindings_for_slot(self, truth: ProductTruthLock, slot: str) -> dict[str, object]:
+        records = [
+            fact
+            for fact in truth.fact_ledger
+            if fact.verification != "blocked" and (not fact.allowed_slot_ids or slot in fact.allowed_slot_ids)
+        ]
+        values = [fact.value for fact in records]
+        ledger_values = {fact.value.lower() for fact in truth.fact_ledger}
+        generic_truth = [
+            fact
+            for fact in truth.immutable_attributes
+            if fact.lower() not in ledger_values and fact not in values
+        ]
+        return {
+            # A fact record determines relevance. Do not truncate this list by
+            # position: losing a sourced global fact would turn the ledger back
+            # into an arbitrary best-effort summary.
+            "required_product_facts": list(dict.fromkeys([*values, *generic_truth])),
+            "records": [fact.model_dump(mode="json") for fact in records],
+            "pending_ids": [fact.fact_id for fact in records if fact.verification == "requires_confirmation"],
+        }
 
     def _buyer_intent(self, index: int, brief: CommerceIntelligenceBrief) -> str:
         for pool in [brief.buying_motivations, brief.pain_points, brief.trust_drivers]:

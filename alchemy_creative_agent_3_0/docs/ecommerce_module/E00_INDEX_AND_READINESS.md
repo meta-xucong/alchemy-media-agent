@@ -46,7 +46,7 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | General Template | active and broad | may support light product visuals only |
 | E-Commerce Scenario Pack | existing skeleton | needs professional suite expansion |
 | Platform profiles | evidence-led baseline | separate verified constraints, seller configuration, and internal strategy |
-| Category packs | partial | need first five category definitions |
+| Category packs | first-wave baseline | five category definitions exist; source-aware slot directors remain phased work |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
 | In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |
@@ -63,7 +63,7 @@ evidence, output lineage, and final-pixel review remain valid inputs.
 
 ## Definition of preparation complete
 
-Before implementation starts, the team must have accepted:
+Before a new E-Commerce phase starts, the team must retain and follow:
 
 1. E01 scope and boundary.
 2. E02 platform/localization model.
@@ -75,5 +75,4 @@ Before implementation starts, the team must have accepted:
 8. E08 test and acceptance matrix.
 9. E09 implementation record, including superseded assumptions.
 10. E10 external Amazon apparel benchmark and visual-acceptance card.
-11. E11 director-method completion roadmap and phased delivery contract.
 11. E11 director-method completion roadmap and phased delivery contract.
