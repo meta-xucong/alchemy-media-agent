@@ -52,6 +52,11 @@ def test_v36_local_service_pack_specializes_booking_conversion_outputs() -> None
     assert result.prompt_compilations[0].provider_notes["booking_cta_space_required"] is False
     assert result.prompt_compilations[0].provider_notes["provider_native_complete_image"] is True
     assert result.layout_plans[0].product_area.position == "center_service_result"
+    assert all(asset.requires_text_overlay is False for asset in result.series_plan.assets)
+    assert all(
+        asset["render_manifest"]["composition_output"]["post_generation_overlay_allowed"] is False
+        for asset in result.asset_pack.manifest["assets"]
+    )
 
 
 def test_v36_vertical_registry_uses_priority_and_default_fallback() -> None:

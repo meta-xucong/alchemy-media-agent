@@ -50,3 +50,16 @@ def test_no_text_request_does_not_create_an_external_render_contract() -> None:
     assert layout.text_rendering == TextRenderingMode.NO_TEXT
     assert entry["renderer"] == "image_provider"
     assert entry["editable_text_layers"] == []
+
+
+def test_legacy_overlay_layout_cannot_reactivate_a_local_renderer() -> None:
+    result = run_creative_planning("Create a simple event image.")
+    legacy_layout = result.layout_plans[0].model_copy(update={"text_rendering": TextRenderingMode.HTML_OVERLAY})
+
+    entry = render_manifest_entry(legacy_layout)
+
+    assert entry["renderer"] == "image_provider"
+    assert entry["runtime_mode"] == "provider_native_complete_image"
+    assert entry["editable_text_layers"] == []
+    assert entry["composition_output"]["post_generation_overlay_allowed"] is False
+    assert entry["render_spec"]["metadata"]["legacy_overlay_contract"] is True

@@ -39,11 +39,16 @@ class LocalServiceAgentFamily(VerticalAgentPack):
                     ["clean service detail", "easy booking"],
                 ),
                 "visual_tone": self._append_unique(brief.visual_tone, ["clean", "trustworthy", "service_detail"]),
-                "copy_strategy": "short local service copy with clear benefit, location or booking CTA",
+                "copy_strategy": (
+                    "provider-native image direction: express appointment intent through the scene; "
+                    "render literal in-image copy only when the user explicitly supplies it"
+                ),
                 "platform_notes": {
                     **brief.platform_notes,
                     "vertical_pack": self.name,
-                    "local_service_rule": "show service result, trust cue, offer, and booking path",
+                    "local_service_rule": (
+                        "show service result, trust cue, offer context, and appointment intent without a fixed text or CTA lane"
+                    ),
                 },
                 "metadata": self._metadata(brief.metadata, "commercial_brief", priorities=["booking", "trust"]),
             }
@@ -57,7 +62,7 @@ class LocalServiceAgentFamily(VerticalAgentPack):
             update={
                 "visual_direction": f"{plan.visual_direction}; service-result hero with clean trustworthy environment",
                 "composition_strategy": (
-                    f"{plan.composition_strategy}; show the service result or environment clearly while preserving CTA space"
+                    f"{plan.composition_strategy}; show the service result or environment clearly with a trustworthy appointment-ready mood"
                 ),
                 "materials_and_props": self._append_unique(
                     plan.materials_and_props,
@@ -78,8 +83,8 @@ class LocalServiceAgentFamily(VerticalAgentPack):
         assets = [
             asset.model_copy(
                 update={
-                    "purpose": "local service conversion asset with clear result, trust cue, and booking CTA",
-                    "requires_text_overlay": True,
+                    "purpose": "local service conversion asset with clear result, trust cue, and appointment intent",
+                    "requires_text_overlay": False,
                     "metadata": self._metadata(asset.metadata, "asset_spec", asset_role="service_conversion"),
                 }
             )
@@ -109,7 +114,7 @@ class LocalServiceAgentFamily(VerticalAgentPack):
             update={
                 "product_area": product_area,
                 "visual_hierarchy": ["service_result", "trust_cue", "offer", "booking_cta"],
-                "background_strategy": "clean local-service environment with reliable booking-focused text space",
+                "background_strategy": "clean local-service environment with a trustworthy booking-ready atmosphere",
                 "metadata": self._metadata(layout_plan.metadata, "layout_plan", layout_bias="service_conversion"),
             }
         )

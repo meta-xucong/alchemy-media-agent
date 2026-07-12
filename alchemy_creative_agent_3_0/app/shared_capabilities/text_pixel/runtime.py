@@ -1,8 +1,9 @@
-"""Licensed-font composition and final-pixel text review for V3.
+"""Read-compatible contracts for the retired deterministic text-pixel runtime.
 
-The package is intentionally inactive unless its internal runtime gate is
-enabled.  It never chooses a provider, template, marketplace profile, or raw
-public request parameter.
+Doc111 makes provider-native complete-image generation the only forward text
+path. The legacy structures below remain importable so old records can be
+read, but public delivery calls never initialize or execute a local font, OCR,
+or raster-composition workflow.
 """
 
 from __future__ import annotations
@@ -338,10 +339,10 @@ class TextPixelDeliveryRuntime:
         compositor: PillowDeterministicCompositor | None = None,
     ) -> None:
         self.output_store = output_store
-        self.font_registry = font_registry or FontRegistry.from_environment()
-        self.ocr_engine = ocr_engine or TesseractOcrEngine()
-        self.settings = settings or TextPixelRuntimeSettings.from_environment()
-        self.compositor = compositor or PillowDeterministicCompositor()
+        # Accept historical injection arguments for direct-caller compatibility,
+        # but deliberately retain none of them. This avoids probing fonts/OCR
+        # or preparing a compositor in every new V3 job.
+        _ = (font_registry, ocr_engine, settings, compositor)
 
     def deliver(
         self,
@@ -638,7 +639,12 @@ class TextPixelDeliveryRuntime:
             source_output_id=source_output_id,
             issue_codes=list(issue_codes or []),
             user_visible_summary=list(summary or []),
-            metadata={"details": details or {}, "production_activation_enabled": self.settings.production_activation_enabled, "append_only": True},
+            metadata={
+                "details": details or {},
+                "production_activation_enabled": False,
+                "append_only": True,
+                "deterministic_text_pixel_delivery_retired": True,
+            },
         )
 
     def _attempt(self, result: TextPixelDelivery, index: int, stage: str, status: str, source_output_id: str | None, derived_output_id: str | None = None, *, issue_codes: list[str], details: dict[str, Any]) -> TextPixelDeliveryAttempt:

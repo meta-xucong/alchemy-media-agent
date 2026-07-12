@@ -1,44 +1,50 @@
-"""Render manifest helpers for V3.3 editable poster output."""
+"""Provider-native image manifest helpers with legacy-overlay read compatibility."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..layout_engine.html_renderer import build_html_render_spec
-from ..layout_engine.svg_renderer import build_svg_render_spec
 from ..schemas import LayoutPlan, TextRenderingMode
 
 
 def render_spec_for_layout(layout_plan: LayoutPlan) -> dict[str, Any]:
-    if layout_plan.text_rendering in {TextRenderingMode.MODEL_TEXT_ALLOWED, TextRenderingMode.NO_TEXT}:
-        return {
-            "renderer": "image_provider",
-            "runtime_mode": "provider_native_complete_image",
-            "layout_plan_id": layout_plan.layout_plan_id,
-            "asset_id": layout_plan.asset_id,
-            "platform": layout_plan.platform,
-            "aspect_ratio": layout_plan.aspect_ratio,
-            "canvas": {},
-            "text_rendering": layout_plan.text_rendering,
-            "text_layers": [],
-            "text_regions": [],
-            "layers": [],
-            "editable_text_layer_count": 0,
-            "preserves_exact_text": False,
-            "composition_output": {
-                "owner": "image_provider",
-                "post_generation_overlay_allowed": False,
-                "final_pixel_review_required": True,
-            },
-            "metadata": {
-                "render_spec_version": "v3_provider_native_text_v1",
-                "source": "LayoutPlan",
-                "legacy_overlay_contract": False,
-            },
-        }
-    if layout_plan.text_rendering == TextRenderingMode.SVG_OVERLAY:
-        return build_svg_render_spec(layout_plan)
-    return build_html_render_spec(layout_plan)
+    """Never materialize local HTML/SVG text for a newly planned asset.
+
+    Stored historical manifests remain readable as stored provenance. If an old
+    LayoutPlan is passed through a current process, expose its provenance while
+    returning a provider-native non-overlay manifest instead of reviving a
+    local renderer.
+    """
+    legacy_overlay_contract = layout_plan.text_rendering not in {
+        TextRenderingMode.MODEL_TEXT_ALLOWED,
+        TextRenderingMode.NO_TEXT,
+    }
+    return {
+        "renderer": "image_provider",
+        "runtime_mode": "provider_native_complete_image",
+        "layout_plan_id": layout_plan.layout_plan_id,
+        "asset_id": layout_plan.asset_id,
+        "platform": layout_plan.platform,
+        "aspect_ratio": layout_plan.aspect_ratio,
+        "canvas": {},
+        "text_rendering": layout_plan.text_rendering,
+        "text_layers": [],
+        "text_regions": [],
+        "layers": [],
+        "editable_text_layer_count": 0,
+        "preserves_exact_text": False,
+        "composition_output": {
+            "owner": "image_provider",
+            "post_generation_overlay_allowed": False,
+            "final_pixel_review_required": True,
+        },
+        "metadata": {
+            "render_spec_version": "v3_provider_native_text_v1",
+            "source": "LayoutPlan",
+            "legacy_overlay_contract": legacy_overlay_contract,
+            "legacy_text_rendering": layout_plan.text_rendering.value if legacy_overlay_contract else None,
+        },
+    }
 
 
 def render_manifest_entry(layout_plan: LayoutPlan) -> dict[str, Any]:
