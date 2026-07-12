@@ -653,7 +653,7 @@ class V3ProductApiService:
             return restored or self._not_found_status(job_id)
         return self._status_from_record(record)
 
-    def mark_job_generating(self, job_id: str) -> ProductJobStatus:
+    def mark_job_generating(self, job_id: str, *, background_attempt_id: str | None = None) -> ProductJobStatus:
         """Persist the public pre-render state before a background worker starts.
 
         A generated output file is not a user delivery while shared review and
@@ -665,10 +665,76 @@ class V3ProductApiService:
         record = self.job_store.get(job_id)
         if record is None:
             return self._not_found_status(job_id)
-        if record.status == ProductJobStatusValue.PLANNED:
+        if record.status in {ProductJobStatusValue.PLANNED, ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
             record.status = ProductJobStatusValue.GENERATING
+            if background_attempt_id:
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "background_generation_attempt_id": str(background_attempt_id),
+                }
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def mark_job_generation_timed_out(
+        self,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        timeout_seconds: float,
+    ) -> ProductJobStatus:
+        """Close a background run that outlived the gateway-owned deadline.
+
+        A later return from the non-cancellable worker must not turn this
+        terminal timeout into a delivery. The attempt ID also protects a
+        deliberate later rerun from a stale watchdog callback.
+        """
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            return self._not_found_status(job_id)
+        active_attempt_id = str(dict(record.request.metadata).get("background_generation_attempt_id") or "")
+        if (
+            active_attempt_id != str(background_attempt_id)
+            or record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        ):
+            return self._status_from_record(record)
+        rounded_timeout = max(1, int(round(float(timeout_seconds))))
+        provider_failure_retry = {
+            "executed_count": 0,
+            "max_attempts": 1,
+            "fresh_upstream_requests": 1,
+            "final_status": "failed",
+            "final_classification": "gateway_managed_lifecycle_timeout",
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "status": "failed",
+                    "classification": "gateway_managed_lifecycle_timeout",
+                    "error_type": "TimeoutError",
+                    "message": f"V3 background generation exceeded {rounded_timeout}s without a terminal gateway response.",
+                    "retryable": False,
+                }
+            ],
+        }
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **dict(record.request.metadata),
+            "provider_failure_retry": provider_failure_retry,
+            "provider_failure_retry_exhausted": True,
+            "generation_lifecycle_timeout": {
+                "background_attempt_id": active_attempt_id,
+                "timeout_seconds": rounded_timeout,
+                "status": "terminal_timeout",
+                "owner": "v3_background_generation_watchdog",
+            },
+        }
+        record.warnings.append(
+            f"V3 real image generation failed (gateway_managed_lifecycle_timeout): "
+            f"no terminal gateway response after {rounded_timeout}s."
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
         return self._status_from_record(record)
 
     def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
@@ -708,6 +774,9 @@ class V3ProductApiService:
         generate_request = self._coerce_generate_request(request or {})
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
+        background_attempt_id = str(generate_request.metadata.pop("_v3_background_generation_attempt_id", "") or "")
+        if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
         if record.status == ProductJobStatusValue.FINALIZING:
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
@@ -738,6 +807,8 @@ class V3ProductApiService:
                 quality_mode=generate_request.quality_mode,
             )
         except Exception as exc:
+            if not self._background_generation_attempt_is_current(record, background_attempt_id):
+                return self._status_from_record(record)
             record.status = ProductJobStatusValue.BLOCKED
             provider_failure_retry = self._provider_failure_retry_summary_from_exception(exc)
             if provider_failure_retry:
@@ -749,6 +820,8 @@ class V3ProductApiService:
             record.warnings.append(self._generation_failure_message(exc, provider_strategy))
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
+            return self._status_from_record(record)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         if generation_runtime_result.generation_result is None:
             record.status = ProductJobStatusValue.BLOCKED
@@ -771,8 +844,12 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
         self._clear_superseded_pre_generation_review_warning(record, generation_result)
         generation_result = self._apply_text_pixel_delivery(record, generation_result)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
         generation_result = self._run_visual_auto_retries(
             record=record,
             generate_request=generate_request,
@@ -780,6 +857,8 @@ class V3ProductApiService:
             generation_result=generation_result,
         )
         generation_result = self._apply_reviewed_delivery_preference(generation_result)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
         record.generation_result = generation_result
         record.scenario_resolution = generation_runtime_result.scenario_resolution
         record.capability_run = generation_runtime_result.capability_run
@@ -883,6 +962,15 @@ class V3ProductApiService:
         request: GenerateJobRequest | dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         return self.generate_asset_series(job_id, request)
+
+    def _background_generation_attempt_is_current(self, record: ProductJobRecord, background_attempt_id: str) -> bool:
+        if not background_attempt_id:
+            return True
+        active_attempt_id = str(dict(record.request.metadata).get("background_generation_attempt_id") or "")
+        return (
+            active_attempt_id == background_attempt_id
+            and record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        )
 
     def _provider_strategy_for_generate(
         self,
@@ -3781,6 +3869,7 @@ class V3ProductApiService:
             "capability_activation_mode",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
+            "generation_lifecycle_timeout",
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",
         }

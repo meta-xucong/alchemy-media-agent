@@ -813,6 +813,44 @@ def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypat
     assert background_calls == [(project_id, job_id, {"quality_mode": "standard"})]
 
 
+def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_path) -> None:
+    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    v3_route_handlers.service.job_store = InMemoryProductJobStore()
+    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    client = TestClient(app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one clean still-life image."},
+    ).json()["project"]["project_id"]
+    job_id = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    ).json()["job_id"]
+    attempt_id = "watchdog_attempt"
+    v3_route_handlers.mark_project_job_generating(
+        project_id,
+        job_id,
+        background_attempt_id=attempt_id,
+    )
+    key = f"{project_id}:{job_id}"
+    with app_main._v3_background_generation_jobs_lock:
+        app_main._v3_background_generation_jobs[key] = attempt_id
+    try:
+        app_main._timeout_v3_project_generation_background(project_id, job_id, attempt_id, 675.0)
+    finally:
+        with app_main._v3_background_generation_jobs_lock:
+            app_main._v3_background_generation_jobs.pop(key, None)
+            watchdog = app_main._v3_background_generation_watchdogs.pop(key, None)
+            if watchdog is not None:
+                watchdog.cancel()
+
+    timed_out = client.get(f"/api/v3/creative-agent/jobs/{job_id}")
+
+    assert timed_out.status_code == 200
+    assert timed_out.json()["status"] == "blocked"
+    assert timed_out.json()["metadata"]["generation_lifecycle_timeout"]["timeout_seconds"] == 675
+
+
 def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:
     client = TestClient(app)
 

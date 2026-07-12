@@ -92,6 +92,71 @@ def test_v3_product_api_creates_and_retrieves_creative_job_status() -> None:
     assert fetched.metadata["v3_independent_product_api"] is True
 
 
+def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_reopen_it() -> None:
+    service, _, _ = _service("gateway_background_timeout")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+
+    pending = service.mark_job_generating(created.job_id, background_attempt_id="attempt_one")
+    stale_watchdog = service.mark_job_generation_timed_out(
+        created.job_id,
+        background_attempt_id="different_attempt",
+        timeout_seconds=675,
+    )
+    timed_out = service.mark_job_generation_timed_out(
+        created.job_id,
+        background_attempt_id="attempt_one",
+        timeout_seconds=675,
+    )
+    late_worker = service.generate_job(
+        created.job_id,
+        {
+            "metadata": {
+                "_v3_background_worker_claim": True,
+                "_v3_background_generation_attempt_id": "attempt_one",
+            }
+        },
+    )
+
+    assert pending.status == ProductJobStatusValue.GENERATING
+    assert stale_watchdog.status == ProductJobStatusValue.GENERATING
+    assert timed_out.status == ProductJobStatusValue.BLOCKED
+    assert timed_out.metadata["provider_failure_retry"]["fresh_upstream_requests"] == 1
+    assert timed_out.metadata["generation_lifecycle_timeout"]["timeout_seconds"] == 675
+    assert "gateway_managed_lifecycle_timeout" in " ".join(timed_out.warnings)
+    assert late_worker.status == ProductJobStatusValue.BLOCKED
+
+
+def test_project_timeout_handler_records_one_safe_terminal_timeline_item() -> None:
+    service, _, _ = _service("project_gateway_background_timeout")
+    handlers = V3ProductRouteHandlers(service)
+    project = handlers.post_projects({"user_goal": "Create one clean still-life image."})
+    created = handlers.post_project_job(
+        project["project"]["project_id"],
+        {"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    )
+
+    pending = handlers.mark_project_job_generating(
+        project["project"]["project_id"],
+        created["job_id"],
+        background_attempt_id="project_attempt_one",
+    )
+    timed_out = handlers.mark_project_job_generation_timed_out(
+        project["project"]["project_id"],
+        created["job_id"],
+        background_attempt_id="project_attempt_one",
+        timeout_seconds=675,
+    )
+    timeline = handlers.get_project_timeline(project["project"]["project_id"])
+
+    assert pending["status"] == "generating"
+    assert timed_out["status"] == "blocked"
+    assert timed_out["metadata"]["generation_lifecycle_timeout"]["owner"] == "v3_background_generation_watchdog"
+    assert any(
+        item["related_job_id"] == created["job_id"] and item["item_type"] == "job_blocked"
+        for item in timeline["items"]
+    )
+
+
 def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts() -> None:
     service, _, _ = _service("campaign")
     brand = service.create_brand(

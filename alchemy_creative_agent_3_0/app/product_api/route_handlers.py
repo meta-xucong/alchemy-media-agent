@@ -152,8 +152,33 @@ class V3ProductRouteHandlers:
     def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.generate_project_job(project_id, job_id, payload or {}).model_dump(mode="json")
 
-    def mark_project_job_generating(self, project_id: str, job_id: str) -> dict[str, Any]:
-        return self.project_service.mark_project_job_generating(project_id, job_id).model_dump(mode="json")
+    def mark_project_job_generating(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.project_service.mark_project_job_generating(
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+        ).model_dump(mode="json")
+
+    def mark_project_job_generation_timed_out(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        return self.project_service.mark_project_job_generation_timed_out(
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+            timeout_seconds=timeout_seconds,
+        ).model_dump(mode="json")
 
     def post_project_job_select(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.select_project_job(project_id, job_id, payload or {})

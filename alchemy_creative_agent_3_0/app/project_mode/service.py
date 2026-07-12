@@ -1095,12 +1095,52 @@ class V3ProjectModeService:
             )
         return status
 
-    def mark_project_job_generating(self, project_id: str, job_id: str) -> ProductJobStatus:
+    def mark_project_job_generating(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str | None = None,
+    ) -> ProductJobStatus:
         """Mark a queued project job before the web layer releases its worker."""
 
         project = self._require_project(project_id)
         self._ensure_project_job(project, job_id)
-        return self.product_service.mark_job_generating(job_id)
+        return self.product_service.mark_job_generating(job_id, background_attempt_id=background_attempt_id)
+
+    def mark_project_job_generation_timed_out(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        timeout_seconds: float,
+    ) -> ProductJobStatus:
+        """Persist one terminal timeout without permitting a late worker delivery."""
+
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, job_id)
+        status = self.product_service.mark_job_generation_timed_out(
+            job_id,
+            background_attempt_id=background_attempt_id,
+            timeout_seconds=timeout_seconds,
+        )
+        timeout_metadata = status.metadata.get("generation_lifecycle_timeout") if isinstance(status.metadata, dict) else None
+        if isinstance(timeout_metadata, dict) and timeout_metadata.get("background_attempt_id") == background_attempt_id:
+            self._append_timeline(
+                project.project_id,
+                TimelineItemType.JOB_BLOCKED,
+                "本次没有生成图片",
+                "上游生图在总等待时间内没有返回终态，本次已安全结束，不会自动重复提交。",
+                job_id=job_id,
+                metadata={
+                    "template_id": self._template_id_for_project_job(project, job_id),
+                    "timeout_seconds": timeout_metadata.get("timeout_seconds"),
+                    "timeout_owner": timeout_metadata.get("owner"),
+                    "background_attempt_id": background_attempt_id,
+                },
+            )
+        return status
 
     def _blocked_generation_summary(self, status: ProductJobStatus) -> str:
         warnings = [str(item).strip() for item in (status.warnings or []) if str(item).strip()]

@@ -13,6 +13,7 @@ from pathlib import Path
 import threading
 import textwrap
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -89,7 +90,8 @@ _v3_generation_executor = ThreadPoolExecutor(
     max_workers=max(1, int(os.getenv("V3_BACKGROUND_GENERATION_WORKERS", "2"))),
     thread_name_prefix="v3-generation",
 )
-_v3_background_generation_jobs: set[str] = set()
+_v3_background_generation_jobs: dict[str, str] = {}
+_v3_background_generation_watchdogs: dict[str, threading.Timer] = {}
 _v3_background_generation_jobs_lock = threading.Lock()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
@@ -246,9 +248,9 @@ def _v3_payload_with_veyra_owner(payload: dict, user_id: int | None) -> dict:
     return updated
 
 
-def _run_v3_handler(handler, *args):
+def _run_v3_handler(handler, *args, **kwargs):
     try:
-        return handler(*args)
+        return handler(*args, **kwargs)
     except ValidationError as exc:
         raise HTTPException(
             status_code=400,
@@ -278,33 +280,103 @@ async def _run_v3_handler_threaded(handler, *args):
     return await run_in_threadpool(_run_v3_handler, handler, *args)
 
 
-def _run_v3_project_generation_background(project_id: str, job_id: str, payload: dict):
+def _run_v3_project_generation_background(project_id: str, job_id: str, payload: dict, background_attempt_id: str):
+    key = f"{project_id}:{job_id}"
     try:
         _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
     except Exception:
         logger.exception("V3 background project generation failed for project=%s job=%s", project_id, job_id)
     finally:
         with _v3_background_generation_jobs_lock:
-            _v3_background_generation_jobs.discard(f"{project_id}:{job_id}")
+            if _v3_background_generation_jobs.get(key) == background_attempt_id:
+                _v3_background_generation_jobs.pop(key, None)
+                watchdog = _v3_background_generation_watchdogs.pop(key, None)
+                if watchdog is not None:
+                    watchdog.cancel()
+
+
+def _v3_gateway_managed_background_timeout_seconds() -> float | None:
+    if not bool(getattr(settings, "openai_image_gateway_managed_failover", False)):
+        return None
+    # The provider's own boundary is gateway budget plus a small conversion
+    # margin. This separate watchdog exists only when that lower layer never
+    # returns a terminal outcome, so it receives one further short margin.
+    return max(1.0, float(settings.openai_image_gateway_managed_failover_timeout_seconds) + 15.0)
+
+
+def _timeout_v3_project_generation_background(
+    project_id: str,
+    job_id: str,
+    background_attempt_id: str,
+    timeout_seconds: float,
+) -> None:
+    key = f"{project_id}:{job_id}"
+    with _v3_background_generation_jobs_lock:
+        if _v3_background_generation_jobs.get(key) != background_attempt_id:
+            return
+    try:
+        _run_v3_handler(
+            v3_route_handlers.mark_project_job_generation_timed_out,
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception:
+        logger.exception("V3 background watchdog failed for project=%s job=%s", project_id, job_id)
+    finally:
+        with _v3_background_generation_jobs_lock:
+            if _v3_background_generation_jobs.get(key) == background_attempt_id:
+                _v3_background_generation_jobs.pop(key, None)
+                _v3_background_generation_watchdogs.pop(key, None)
 
 
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
+    background_attempt_id = uuid4().hex
     with _v3_background_generation_jobs_lock:
         if key in _v3_background_generation_jobs:
             return False
-        _v3_background_generation_jobs.add(key)
+        _v3_background_generation_jobs[key] = background_attempt_id
     try:
-        _run_v3_handler(v3_route_handlers.mark_project_job_generating, project_id, job_id)
+        _run_v3_handler(
+            v3_route_handlers.mark_project_job_generating,
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+        )
     except Exception:
         with _v3_background_generation_jobs_lock:
-            _v3_background_generation_jobs.discard(key)
+            if _v3_background_generation_jobs.get(key) == background_attempt_id:
+                _v3_background_generation_jobs.pop(key, None)
         raise
     worker_payload = {
         **dict(payload or {}),
-        "metadata": {**dict((payload or {}).get("metadata") or {}), "_v3_background_worker_claim": True},
+        "metadata": {
+            **dict((payload or {}).get("metadata") or {}),
+            "_v3_background_worker_claim": True,
+            "_v3_background_generation_attempt_id": background_attempt_id,
+        },
     }
-    _v3_generation_executor.submit(_run_v3_project_generation_background, project_id, job_id, worker_payload)
+    timeout_seconds = _v3_gateway_managed_background_timeout_seconds()
+    if timeout_seconds is not None:
+        watchdog = threading.Timer(
+            timeout_seconds,
+            _timeout_v3_project_generation_background,
+            args=(project_id, job_id, background_attempt_id, timeout_seconds),
+        )
+        watchdog.daemon = True
+        with _v3_background_generation_jobs_lock:
+            if _v3_background_generation_jobs.get(key) == background_attempt_id:
+                _v3_background_generation_watchdogs[key] = watchdog
+                watchdog.start()
+    _v3_generation_executor.submit(
+        _run_v3_project_generation_background,
+        project_id,
+        job_id,
+        worker_payload,
+        background_attempt_id,
+    )
     return True
 
 
