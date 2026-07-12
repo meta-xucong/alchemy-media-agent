@@ -104,6 +104,22 @@ def test_ecommerce_workspace_exposes_existing_target_audience_profile_field() ->
     assert summary_block.index("...(suiteScopeLabel") < summary_block.index("...(targetAudience.length")
 
 
+def test_ecommerce_workspace_exposes_supplier_fact_review_without_slot_redo_controls() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="v3EcommerceSupplierFactsInput"' in html
+    assert "unverified_visual_facts: supplierFacts" in script
+    assert "product_fact_confirmations: { ...v3EcommerceFactDecisions }" in script
+    assert "pending_product_facts" in script
+    assert "category_slot_purpose" in script
+    assert "本图证明" in script
+    assert 'data-v3-fact-decision="confirmed"' in script
+    assert 'data-v3-fact-decision="removed"' in script
+    assert "下一次生成会保存并应用" in script
+    assert "重做这张" not in script
+
+
 def test_ecommerce_workspace_exposes_price_positioning_without_a_price_claim() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     html = INDEX_HTML.read_text(encoding="utf-8")

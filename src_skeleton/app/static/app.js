@@ -367,6 +367,7 @@ let heroCarouselTimer = null;
 let heroCarouselIndex = 0;
 let activeTabName = "image";
 let activeLightboxActions = [];
+let v3EcommerceFactDecisions = {};
 
 const els = {
   brandHomeLink: document.querySelector("#brandHomeLink"),
@@ -601,6 +602,7 @@ const els = {
   v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput"),
   v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
+  v3EcommerceSupplierFactsInput: document.querySelector("#v3EcommerceSupplierFactsInput"),
   v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
   v3EcommercePricePositioningInput: document.querySelector("#v3EcommercePricePositioningInput"),
   v3EcommerceCreativeStrategyInput: document.querySelector("#v3EcommerceCreativeStrategyInput"),
@@ -5065,6 +5067,7 @@ function v3EcommerceProfilePatch() {
   const copyLocale = v3EcommerceCopyLocaleValue();
   const creativeStrategy = v3EcommerceCreativeStrategyValue();
   const overlayCopy = (els.v3EcommerceOverlayCopyInput?.value || "").trim();
+  const supplierFacts = v3TextLines(els.v3EcommerceSupplierFactsInput?.value || "");
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
     product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
@@ -5082,6 +5085,8 @@ function v3EcommerceProfilePatch() {
     metadata: {
       delivery_scope: "listing_only",
       delivery_scope_label: "Listing only",
+      unverified_visual_facts: supplierFacts,
+      product_fact_confirmations: { ...v3EcommerceFactDecisions },
       suite_scope: suiteScope,
       suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
       creative_strategy: creativeStrategy,
@@ -5535,6 +5540,8 @@ function resetV3Workspace() {
   if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
   if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
+  if (els.v3EcommerceSupplierFactsInput) els.v3EcommerceSupplierFactsInput.value = "";
+  v3EcommerceFactDecisions = {};
   if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
   if (els.v3EcommercePricePositioningInput) els.v3EcommercePricePositioningInput.value = "";
   if (els.v3EcommerceCreativeStrategyInput) els.v3EcommerceCreativeStrategyInput.value = "evidence_first";
@@ -5900,11 +5907,39 @@ function renderV3EcommercePlanList(summary) {
     return;
   }
   els.v3EcommercePlanList.hidden = false;
+  const pendingFacts = Array.isArray(summary?.export_package?.metadata?.pending_product_facts)
+    ? summary.export_package.metadata.pending_product_facts.filter((fact) => fact?.value || fact?.label)
+    : [];
+  if (pendingFacts.length) {
+    const review = document.createElement("div");
+    review.className = "v3-commerce-plan-row";
+    review.innerHTML = `<strong>待确认的商品事实</strong><span>这些信息不在参考图中；确认或移除后，下一次生成会保存你的决定。</span>`;
+    pendingFacts.forEach((fact) => {
+      const value = String(fact.value || fact.label || "").trim();
+      if (!value) return;
+      const decision = v3EcommerceFactDecisions[value] || "";
+      const item = document.createElement("small");
+      item.innerHTML = `${escapeHtml(value)} ${decision ? `（${decision === "confirmed" ? "已确认" : "已移除"}）` : ""} <button type="button" data-v3-fact-decision="confirmed" data-v3-fact-value="${escapeHtml(value)}">确认</button> <button type="button" data-v3-fact-decision="removed" data-v3-fact-value="${escapeHtml(value)}">移除</button>`;
+      review.appendChild(item);
+    });
+    review.querySelectorAll("[data-v3-fact-decision]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const value = button.dataset.v3FactValue || "";
+        const decision = button.dataset.v3FactDecision || "";
+        if (!value || !decision) return;
+        v3EcommerceFactDecisions = { ...v3EcommerceFactDecisions, [value]: decision };
+        updateV3Notice("已记录商品事实决定；下一次生成会保存并应用。", "success");
+        renderV3EcommercePlanList(summary);
+      });
+    });
+    els.v3EcommercePlanList.appendChild(review);
+  }
   recipes.slice(0, 6).forEach((recipe, index) => {
     const row = document.createElement("div");
     row.className = "v3-commerce-plan-row";
     const slotLabel = v3EcommerceSlotLabel(recipe.slot || "") || `套图 ${index + 1}`;
-    const purpose = recipe.selling_point || v3CommercePurposeLabel(recipe.business_goal) || recipe.visual_scene || "用于展示商品卖点";
+    const categoryPurpose = String(recipe?.metadata?.category_slot_purpose || "").trim();
+    const purpose = categoryPurpose || recipe.selling_point || v3CommercePurposeLabel(recipe.business_goal) || recipe.visual_scene || "用于展示商品卖点";
     const evidence = Array.isArray(recipe?.metadata?.category_evidence_targets)
       ? recipe.metadata.category_evidence_targets.filter(Boolean).join(" / ")
       : "";
@@ -5926,6 +5961,7 @@ function renderV3EcommercePlanList(summary) {
     row.innerHTML = `
       <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
+      ${categoryPurpose ? `<small>本图证明：${escapeHtml(categoryPurpose)}</small>` : ""}
       ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
       ${evidenceIntentLabel ? `<small>本图证明：${escapeHtml(evidenceIntentLabel)}</small>` : ""}
       ${positioningLabel ? `<small>画面定位：${escapeHtml(positioningLabel)}</small>` : ""}

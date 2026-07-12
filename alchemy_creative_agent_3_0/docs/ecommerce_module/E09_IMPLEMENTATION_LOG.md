@@ -529,6 +529,19 @@ full V3 + commercial frontend + provider contract regression: 607 passed
 Python compile, JavaScript syntax, and diff checks: passed
 ```
 
+## E30 — D4 workspace fact-review completion
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+- Added supplier-fact entry plus pending-fact `confirm` / `remove` controls to
+  the E-Commerce workspace. Decisions are saved on the next generation through
+  existing E-Commerce metadata, not a public schema change.
+- Each planned slot now prefers a plain-language “this image proves” purpose.
+  The workspace still contains no slot-redo control or prompt/provider UI.
+
+Verification: focused workspace/D4/Doc105 tests: 75 passed; full V3 +
+commercial frontend + provider contract regression: 608 passed.
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.
