@@ -28,7 +28,7 @@ from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPac
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
-from ..shared_capabilities.text_pixel import CopyRenderPlan, TextPixelDeliveryRuntime
+from ..shared_capabilities.text_pixel import CopyRenderPlan, CopyRenderPlanBatch, TextPixelDeliveryRuntime
 from ..shared_capabilities.visual_cluster import (
     HumanPhotorealismLayer,
     ModeAwareRoleDirector,
@@ -1056,114 +1056,145 @@ class V3ProductApiService:
 
         envelope = record.request.metadata.get("text_pixel_delivery_internal")
         raw_plan = envelope.get("copy_render_plan") if isinstance(envelope, dict) else None
-        if not isinstance(raw_plan, dict):
+        raw_plans = envelope.get("copy_render_plans") if isinstance(envelope, dict) else None
+        if not isinstance(raw_plan, dict) and not isinstance(raw_plans, list):
             return generation_result
+        is_batch = isinstance(raw_plans, list)
+        if is_batch and isinstance(raw_plan, dict):
+            return self._with_text_pixel_delivery_metadata(
+                generation_result,
+                {
+                    "text_pixel_delivery_batch": {
+                        "schema_version": "v3_text_pixel_delivery_batch_v1",
+                        "batch_id": stable_id("text_pixel_delivery_batch", "ambiguous"),
+                        "deliveries": [],
+                        "source_asset_ids_by_plan": {},
+                        "metadata": {"append_only": True, "error": "copy_render_plan_and_copy_render_plans_conflict"},
+                    }
+                },
+            )
         try:
-            copy_plan = CopyRenderPlan.model_validate(raw_plan)
+            plan_batch = CopyRenderPlanBatch(
+                plans=[CopyRenderPlan.model_validate(raw_plan)] if isinstance(raw_plan, dict) else list(raw_plans or [])
+            )
         except Exception as exc:
             delivery = {
                 "status": "blocked",
                 "rendered": False,
                 "review_passed": False,
-                "issue_codes": ["copy_render_plan_invalid"],
+                "issue_codes": ["copy_render_plan_batch_invalid" if is_batch else "copy_render_plan_invalid"],
                 "user_visible_summary": ["Text delivery plan needs correction."],
                 "metadata": {"error": str(exc)[:240], "append_only": True},
             }
-            return self._with_text_pixel_delivery_metadata(generation_result, delivery)
+            key = "text_pixel_delivery_batch" if is_batch else "text_pixel_delivery"
+            return self._with_text_pixel_delivery_metadata(generation_result, {key: delivery})
 
-        target_assets = list(generation_result.asset_pack.assets)
-        if copy_plan.source_lineage.source_asset_id:
-            matching_assets = [asset for asset in target_assets if asset.asset_id == copy_plan.source_lineage.source_asset_id]
-            if matching_assets:
-                target_assets = matching_assets
-        if copy_plan.source_lineage.source_output_id:
-            target_assets = [
-                asset
-                for asset in target_assets
-                if self._asset_output_id(asset) == copy_plan.source_lineage.source_output_id
-            ] or target_assets
-        if len(target_assets) != 1:
-            delivery = {
-                "status": "blocked",
-                "rendered": False,
-                "review_passed": False,
-                "issue_codes": ["source_asset_ambiguous"],
-                "user_visible_summary": ["Text delivery needs one declared generated asset."],
-                "metadata": {"append_only": True},
-            }
-            return self._with_text_pixel_delivery_metadata(generation_result, delivery)
+        source_outputs_by_plan: dict[str, Any] = {}
+        candidate_ids_by_plan: dict[str, str] = {}
+        asset_ids_by_plan: dict[str, str] = {}
+        all_assets = list(generation_result.asset_pack.assets)
+        for copy_plan in plan_batch.plans:
+            target_assets = list(all_assets)
+            if copy_plan.source_lineage.source_asset_id:
+                target_assets = [asset for asset in target_assets if asset.asset_id == copy_plan.source_lineage.source_asset_id]
+            if copy_plan.source_lineage.source_output_id:
+                target_assets = [
+                    asset
+                    for asset in target_assets
+                    if self._asset_output_id(asset) == copy_plan.source_lineage.source_output_id
+                ]
+            if len(target_assets) != 1:
+                source_outputs_by_plan[copy_plan.plan_id] = None
+                asset_ids_by_plan[copy_plan.plan_id] = str(copy_plan.source_lineage.source_asset_id or "")
+                continue
+            asset = target_assets[0]
+            source_output_id = self._asset_output_id(asset)
+            source_outputs_by_plan[copy_plan.plan_id] = self.output_store.get_output(source_output_id) if source_output_id else None
+            candidate_ids_by_plan[copy_plan.plan_id] = str(asset.metadata.get("selected_candidate_id") or source_output_id or asset.asset_id)
+            asset_ids_by_plan[copy_plan.plan_id] = asset.asset_id
 
-        asset = target_assets[0]
-        source_output_id = self._asset_output_id(asset)
-        source_output = self.output_store.get_output(source_output_id) if source_output_id else None
         frozen_plan = self._activation_plan_from_result(generation_result)
-        candidate_id = str(asset.metadata.get("selected_candidate_id") or "")
-        delivery_result = self.text_pixel_delivery_runtime.deliver(
-            plan=copy_plan,
+        delivery_batch = self.text_pixel_delivery_runtime.deliver_many(
+            plans=plan_batch,
             frozen_activation_plan=frozen_plan,
-            source_output=source_output,
-            candidate_id=candidate_id or source_output_id or asset.asset_id,
-            asset_id=asset.asset_id,
+            source_outputs_by_plan=source_outputs_by_plan,
+            candidate_ids_by_plan=candidate_ids_by_plan,
+            asset_ids_by_plan=asset_ids_by_plan,
         )
-        delivery = delivery_result.model_dump(mode="json")
-        current_output = self.output_store.get_output(delivery_result.current_output_id or "")
+        batch_payload = delivery_batch.model_dump(mode="json")
+        deliveries_by_asset_id = {
+            asset_id: delivery
+            for plan_id, asset_id in delivery_batch.source_asset_ids_by_plan.items()
+            for delivery in delivery_batch.deliveries
+            if delivery.copy_render_plan_id == plan_id
+        }
         updated_assets: list[PackagedAsset] = []
         for item in generation_result.asset_pack.assets:
-            if item.asset_id != asset.asset_id or current_output is None:
+            delivery_result = deliveries_by_asset_id.get(item.asset_id)
+            if delivery_result is None:
                 updated_assets.append(item)
                 continue
             metadata = dict(item.metadata)
             candidate_metadata = dict(metadata.get("candidate_metadata") or {})
+            delivery = delivery_result.model_dump(mode="json")
+            source_output_id = delivery_result.source_output_id
+            current_output = self.output_store.get_output(delivery_result.current_output_id or "")
             candidate_metadata.update(
                 {
-                    "output_id": current_output.output_id,
-                    "download_url": current_output.download_url,
-                    "preview_url": current_output.preview_url,
-                    "thumbnail_url": current_output.thumbnail_url,
-                    "file_path": current_output.file_path,
                     "text_pixel_source_output_id": source_output_id,
                     "text_pixel_delivery": delivery,
                 }
             )
             metadata.update(
                 {
-                    "output_id": current_output.output_id,
                     "text_pixel_source_output_id": source_output_id,
                     "text_pixel_delivery": delivery,
                     "candidate_metadata": candidate_metadata,
                 }
             )
-            updated_assets.append(
-                item.model_copy(
-                    update={
+            update: dict[str, Any] = {"metadata": metadata}
+            if current_output is not None:
+                candidate_metadata.update(
+                    {
+                        "output_id": current_output.output_id,
+                        "download_url": current_output.download_url,
+                        "preview_url": current_output.preview_url,
+                        "thumbnail_url": current_output.thumbnail_url,
                         "file_path": current_output.file_path,
-                        "uri": current_output.download_url,
-                        "metadata": metadata,
                     }
                 )
+                metadata["output_id"] = current_output.output_id
+                update.update({"file_path": current_output.file_path, "uri": current_output.download_url})
+            updated_assets.append(
+                item.model_copy(update=update)
             )
+        delivery_metadata = (
+            {"text_pixel_delivery_batch": batch_payload}
+            if is_batch
+            else {"text_pixel_delivery": batch_payload["deliveries"][0]}
+        )
         asset_pack = generation_result.asset_pack.model_copy(
             update={
                 "assets": updated_assets,
-                "manifest": {**dict(generation_result.asset_pack.manifest), "text_pixel_delivery": delivery},
-                "metadata": {**dict(generation_result.asset_pack.metadata), "text_pixel_delivery": delivery},
+                "manifest": {**dict(generation_result.asset_pack.manifest), **delivery_metadata},
+                "metadata": {**dict(generation_result.asset_pack.metadata), **delivery_metadata},
             }
         )
         return generation_result.model_copy(
             update={
                 "asset_pack": asset_pack,
-                "metadata": {**dict(generation_result.metadata), "text_pixel_delivery": delivery},
+                "metadata": {**dict(generation_result.metadata), **delivery_metadata},
             }
         )
 
-    def _with_text_pixel_delivery_metadata(self, result: PlanningResult, delivery: dict[str, Any]) -> PlanningResult:
+    def _with_text_pixel_delivery_metadata(self, result: PlanningResult, delivery_metadata: dict[str, Any]) -> PlanningResult:
         asset_pack = result.asset_pack.model_copy(
             update={
-                "manifest": {**dict(result.asset_pack.manifest), "text_pixel_delivery": delivery},
-                "metadata": {**dict(result.asset_pack.metadata), "text_pixel_delivery": delivery},
+                "manifest": {**dict(result.asset_pack.manifest), **delivery_metadata},
+                "metadata": {**dict(result.asset_pack.metadata), **delivery_metadata},
             }
         )
-        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), "text_pixel_delivery": delivery}})
+        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), **delivery_metadata}})
 
     def _asset_output_id(self, asset: PackagedAsset) -> str | None:
         metadata = dict(asset.metadata or {})
@@ -1688,8 +1719,15 @@ class V3ProductApiService:
                 "request_metadata",
             )
 
-        text_delivery = result.metadata.get("text_pixel_delivery") if isinstance(result.metadata, dict) else None
-        if isinstance(text_delivery, dict):
+        text_deliveries: list[dict[str, Any]] = []
+        result_metadata = dict(result.metadata or {})
+        single_delivery = result_metadata.get("text_pixel_delivery")
+        if isinstance(single_delivery, dict):
+            text_deliveries.append(single_delivery)
+        batch_delivery = result_metadata.get("text_pixel_delivery_batch")
+        if isinstance(batch_delivery, dict):
+            text_deliveries.extend(item for item in batch_delivery.get("deliveries", []) if isinstance(item, dict))
+        for text_delivery in text_deliveries:
             recovery = text_delivery.get("recovery")
             generation_retry = recovery.get("generation_retry") if isinstance(recovery, dict) else None
             if isinstance(generation_retry, dict) and bool(generation_retry.get("eligible")):
@@ -2426,6 +2464,7 @@ class V3ProductApiService:
             max_attempts=max_attempts,
         )
         text_delivery = self._merge_text_pixel_delivery_chain(base_result, retry_result)
+        text_delivery_metadata = self._text_pixel_delivery_metadata_updates(text_delivery)
         asset_pack = base_result.asset_pack.model_copy(
             update={
                 "assets": [*base_result.asset_pack.assets, *retry_result.asset_pack.assets],
@@ -2433,13 +2472,13 @@ class V3ProductApiService:
                     **dict(base_result.asset_pack.manifest),
                     **dict(review_updates.get("asset_pack_manifest") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
-                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
+                    **text_delivery_metadata,
                 },
                 "metadata": {
                     **dict(base_result.asset_pack.metadata),
                     **dict(review_updates.get("asset_pack_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
-                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
+                    **text_delivery_metadata,
                 },
             }
         )
@@ -2455,7 +2494,7 @@ class V3ProductApiService:
                     **dict(base_result.metadata),
                     **dict(review_updates.get("result_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
-                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
+                    **text_delivery_metadata,
                     "retry_generation_result_ids": self._dedupe_strings(
                         [
                             *self._string_list(base_result.metadata.get("retry_generation_result_ids")),
@@ -2473,12 +2512,23 @@ class V3ProductApiService:
     ) -> dict[str, Any]:
         """Keep deterministic composition/review records append-only across retries."""
 
+        base_batch = base_result.metadata.get("text_pixel_delivery_batch") if isinstance(base_result.metadata, dict) else None
+        retry_batch = retry_result.metadata.get("text_pixel_delivery_batch") if isinstance(retry_result.metadata, dict) else None
+        if isinstance(base_batch, dict) or isinstance(retry_batch, dict):
+            return self._merge_text_pixel_delivery_batches(
+                dict(base_batch) if isinstance(base_batch, dict) else {},
+                dict(retry_batch) if isinstance(retry_batch, dict) else {},
+            )
         base = base_result.metadata.get("text_pixel_delivery") if isinstance(base_result.metadata, dict) else None
         retry = retry_result.metadata.get("text_pixel_delivery") if isinstance(retry_result.metadata, dict) else None
         if not isinstance(base, dict):
             return dict(retry) if isinstance(retry, dict) else {}
         if not isinstance(retry, dict):
             return dict(base)
+        return self._merge_text_pixel_delivery_values(base, retry)
+
+    def _merge_text_pixel_delivery_values(self, base: dict[str, Any], retry: dict[str, Any]) -> dict[str, Any]:
+        """Select the reviewed delivery while retaining an append-only attempt chain."""
         base_passed = base.get("status") == "passed" and bool(base.get("current_output_id"))
         retry_passed = retry.get("status") == "passed" and bool(retry.get("current_output_id"))
         selected = retry if retry_passed or not base_passed else base
@@ -2509,6 +2559,52 @@ class V3ProductApiService:
                 "merged_retry_delivery_history": True,
             },
         }
+
+    def _merge_text_pixel_delivery_batches(self, base: dict[str, Any], retry: dict[str, Any]) -> dict[str, Any]:
+        """Merge independently reviewed batch members without cross-asset replacement."""
+
+        base_items = [dict(item) for item in base.get("deliveries", []) if isinstance(item, dict)]
+        retry_items = [dict(item) for item in retry.get("deliveries", []) if isinstance(item, dict)]
+
+        def item_key(item: dict[str, Any], index: int, prefix: str) -> str:
+            return str(item.get("copy_render_plan_id") or item.get("delivery_id") or f"{prefix}-{index}")
+
+        base_by_key = {item_key(item, index, "base"): item for index, item in enumerate(base_items)}
+        retry_by_key = {item_key(item, index, "retry"): item for index, item in enumerate(retry_items)}
+        ordered_keys = [item_key(item, index, "base") for index, item in enumerate(base_items)]
+        ordered_keys.extend(key for key in (item_key(item, index, "retry") for index, item in enumerate(retry_items)) if key not in base_by_key)
+        merged_deliveries: list[dict[str, Any]] = []
+        for key in ordered_keys:
+            base_item = base_by_key.get(key)
+            retry_item = retry_by_key.get(key)
+            if base_item is not None and retry_item is not None:
+                merged_deliveries.append(self._merge_text_pixel_delivery_values(base_item, retry_item))
+            elif retry_item is not None:
+                merged_deliveries.append(dict(retry_item))
+            elif base_item is not None:
+                merged_deliveries.append(dict(base_item))
+        return {
+            "schema_version": "v3_text_pixel_delivery_batch_v1",
+            "batch_id": str(retry.get("batch_id") or base.get("batch_id") or stable_id("text_pixel_delivery_batch", *ordered_keys)),
+            "deliveries": merged_deliveries,
+            "source_asset_ids_by_plan": {
+                **dict(base.get("source_asset_ids_by_plan") or {}),
+                **dict(retry.get("source_asset_ids_by_plan") or {}),
+            },
+            "metadata": {
+                **dict(base.get("metadata") or {}),
+                **dict(retry.get("metadata") or {}),
+                "append_only": True,
+                "merged_retry_delivery_history": True,
+            },
+        }
+
+    def _text_pixel_delivery_metadata_updates(self, delivery: dict[str, Any]) -> dict[str, Any]:
+        if not delivery:
+            return {}
+        if isinstance(delivery.get("deliveries"), list):
+            return {"text_pixel_delivery_batch": delivery}
+        return {"text_pixel_delivery": delivery}
 
     def _merge_post_generation_review_chain(
         self,
@@ -3340,6 +3436,7 @@ class V3ProductApiService:
                 "visual_auto_retry": result.metadata.get("visual_auto_retry", {}),
                 "post_generation_review": result.metadata.get("post_generation_review_package", {}),
                 "text_pixel_delivery": result.metadata.get("text_pixel_delivery", {}),
+                "text_pixel_delivery_batch": result.metadata.get("text_pixel_delivery_batch", {}),
                 "exposes_product_concepts_only": True,
                 "lifecycle": self._lifecycle_summary(record),
                 **self._workflow_artifacts_metadata(record, result),
@@ -4581,13 +4678,41 @@ class V3ProductApiService:
         }
 
     def _bind_internal_copy_render_plan(self, request: CreateCreativeJobRequest) -> None:
-        """Bind template-provided copy intent after the capability plan freezes."""
+        """Bind one plan or a scenario-neutral plan batch after planning freezes."""
 
         metadata = dict(request.metadata or {})
         envelope = metadata.get("text_pixel_delivery_internal")
         raw_plan = envelope.get("copy_render_plan") if isinstance(envelope, dict) else None
+        raw_plans = envelope.get("copy_render_plans") if isinstance(envelope, dict) else None
         frozen_plan_id = str(metadata.get("capability_activation_plan_id") or "").strip()
-        if not isinstance(raw_plan, dict) or not frozen_plan_id:
+        if not frozen_plan_id or not isinstance(envelope, dict):
+            return
+        if isinstance(raw_plan, dict) and isinstance(raw_plans, list):
+            metadata["text_pixel_delivery_internal"] = {
+                **dict(envelope),
+                "copy_render_plan_binding_error": "copy_render_plan_and_copy_render_plans_conflict",
+            }
+            request.metadata = metadata
+            return
+        if isinstance(raw_plans, list):
+            try:
+                bound_batch = CopyRenderPlanBatch(plans=list(raw_plans)).bind_to_frozen_plan(frozen_plan_id)
+            except Exception as exc:
+                metadata["text_pixel_delivery_internal"] = {
+                    **dict(envelope),
+                    "copy_render_plan_binding_error": str(exc)[:240],
+                }
+                request.metadata = metadata
+                return
+            metadata["text_pixel_delivery_internal"] = {
+                **dict(envelope),
+                "copy_render_plans": [plan.model_dump(mode="json") for plan in bound_batch.plans],
+                "copy_render_plan_batch_id": bound_batch.batch_id,
+                "bound_to_frozen_activation_plan_id": frozen_plan_id,
+            }
+            request.metadata = metadata
+            return
+        if not isinstance(raw_plan, dict):
             return
         try:
             bound = CopyRenderPlan.model_validate(raw_plan).bind_to_frozen_plan(frozen_plan_id)

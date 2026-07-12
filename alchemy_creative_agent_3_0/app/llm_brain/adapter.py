@@ -132,8 +132,17 @@ class V3LLMBrainAdapter:
                 # copy itself stays in the internal runtime envelope and is
                 # bound to the frozen plan by Product API before generation.
                 "internal_copy_render_plan_present": bool(
-                    isinstance(metadata.get("text_pixel_delivery_internal"), dict)
-                    and isinstance(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plan"), dict)
+                    metadata.get("internal_copy_render_plan_present")
+                    or (
+                        isinstance(metadata.get("text_pixel_delivery_internal"), dict)
+                        and (
+                            isinstance(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plan"), dict)
+                            or (
+                                isinstance(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plans"), list)
+                                and bool(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plans"))
+                            )
+                        )
+                    )
                 ),
             },
             capability_catalog=dict(capability_catalog or {}),

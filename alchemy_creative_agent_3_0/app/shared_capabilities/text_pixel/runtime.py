@@ -19,7 +19,7 @@ import subprocess
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...creative_core.rules import stable_id
-from .contracts import CopyRenderPlan, TextPixelDelivery, TextPixelDeliveryAttempt
+from .contracts import CopyRenderPlan, CopyRenderPlanBatch, TextPixelDelivery, TextPixelDeliveryAttempt, TextPixelDeliveryBatch
 
 if TYPE_CHECKING:
     from ...product_api.outputs import V3GeneratedOutputRecord, V3GeneratedOutputStore
@@ -411,6 +411,67 @@ class TextPixelDeliveryRuntime:
             else:
                 review = {"passed": False, "issues": list(repaired.issue_codes), "summary": "The deterministic text repair did not fit the approved area."}
         return self._recovery_exhausted(result, review)
+
+    def deliver_many(
+        self,
+        *,
+        plans: CopyRenderPlanBatch | list[CopyRenderPlan | dict[str, Any]] | dict[str, Any] | None,
+        frozen_activation_plan: dict[str, Any] | None,
+        source_outputs_by_plan: dict[str, V3GeneratedOutputRecord | None],
+        candidate_ids_by_plan: dict[str, str],
+        asset_ids_by_plan: dict[str, str],
+    ) -> TextPixelDeliveryBatch:
+        """Deliver an ordered set of independently bound copy plans.
+
+        The batch is deliberately owned by the shared runtime: templates
+        provide plan lineage once and never loop a single-plan renderer,
+        reviewer, or retry protocol themselves.
+        """
+
+        try:
+            if isinstance(plans, CopyRenderPlanBatch):
+                plan_batch = plans
+            elif isinstance(plans, dict):
+                plan_batch = CopyRenderPlanBatch.model_validate(plans)
+            else:
+                plan_batch = CopyRenderPlanBatch(plans=list(plans or []))
+        except Exception as exc:
+            invalid = self._result(
+                status="blocked",
+                issue_codes=["copy_render_plan_batch_invalid"],
+                summary=["Text delivery plans need correction."],
+                details={"error": str(exc)[:240]},
+            )
+            return TextPixelDeliveryBatch(
+                batch_id=stable_id("text_pixel_delivery_batch", "invalid"),
+                deliveries=[invalid],
+                metadata={"append_only": True, "invalid_batch": True},
+            )
+
+        deliveries: list[TextPixelDelivery] = []
+        source_asset_ids_by_plan: dict[str, str] = {}
+        for plan in plan_batch.plans:
+            asset_id = str(asset_ids_by_plan.get(plan.plan_id) or plan.source_lineage.source_asset_id or "").strip()
+            if asset_id:
+                source_asset_ids_by_plan[plan.plan_id] = asset_id
+            delivery = self.deliver(
+                plan=plan,
+                frozen_activation_plan=frozen_activation_plan,
+                source_output=source_outputs_by_plan.get(plan.plan_id),
+                candidate_id=str(candidate_ids_by_plan.get(plan.plan_id) or asset_id or plan.plan_id),
+                asset_id=asset_id or plan.plan_id,
+            )
+            deliveries.append(delivery)
+        return TextPixelDeliveryBatch(
+            batch_id=stable_id("text_pixel_delivery_batch", plan_batch.batch_id),
+            deliveries=deliveries,
+            source_asset_ids_by_plan=source_asset_ids_by_plan,
+            metadata={
+                "append_only": True,
+                "copy_render_plan_batch_id": plan_batch.batch_id,
+                "delivery_count": len(deliveries),
+            },
+        )
 
     def _policy_eligibility(self, result: TextPixelDelivery, plan: CopyRenderPlan, source_output: V3GeneratedOutputRecord) -> TextPixelDelivery | None:
         if plan.text_policy == "forbidden":
