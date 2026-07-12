@@ -27,7 +27,7 @@ planning approval: accepted
 foundation rules: accepted for module development
 master development specification: accepted for phased implementation
 named-photographer governance: drafted
-implementation: P1 inactive module skeleton complete
+implementation: P1 skeleton, P2 audit and P3 shadow General runtime complete
 mainline contract requests: none submitted yet
 activation status: inactive
 merge readiness: not ready
@@ -47,6 +47,17 @@ full V3 suite: 530 passed
 root suite: 144 passed, 1 unrelated pre-existing Alchemy Lab failure
 shared file changes: none
 production registration: none
+```
+
+P2/P3 continuation status:
+
+```text
+P2 mainline audit: documented in P05
+P3 scope: module-local General Photography shadow planner only
+P3 verification: 19 Photography focused, 29 isolation regression and 538 full V3 tests passed
+P3 audit repairs: keyword boundaries, general-scene fallback, domain isolation and Doc93 prompt ownership
+P3 commit/push: pending milestone rebase and publication
+production activation: still disabled
 ```
 
 ## 3. Authority Order
@@ -74,6 +85,7 @@ contract wins and Photography work pauses for an explicit design decision.
 | P02 | Product model, architecture, contracts and UX | Active |
 | P03 | Named-photographer manual selection and rights governance | Active |
 | P04 | Roadmap, tests, acceptance and mainline coordination | Active |
+| P05 | P2 mainline integration audit and P3 shadow boundary | Active |
 
 Future documents must remain in this directory and use the `Pxx_` number
 family. Do not continue the root V3 document number sequence for Photography.
