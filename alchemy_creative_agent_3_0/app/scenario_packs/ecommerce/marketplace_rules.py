@@ -129,7 +129,15 @@ def creative_strategy_for_slot(strategy: object, slot: str) -> dict[str, str]:
             "id": strategy_id,
             "direction": "Organize one proof point with clear visual hierarchy and reserve uncluttered space for a future approved text layer.",
         }
-    if strategy_id == "content_hook" and slot in {"ad_cover", "benefit_hook", "collection_cover", "store_banner"}:
+    if strategy_id == "content_hook" and slot in {
+        "ad_cover",
+        "benefit_hook",
+        "collection_cover",
+        "store_banner",
+        "content_cover",
+        "content_feature_hook",
+        "content_creator_context",
+    }:
         return {
             "id": strategy_id,
             "direction": "Use one truthful, immediately understandable visual hook for content placement without obscuring the product.",

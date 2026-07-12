@@ -9,6 +9,7 @@ from .commerce_brief import CommerceBriefBuilder
 from .commerce_critic import CommerceCritic
 from .category_profiles import resolve_category
 from .contracts import EcommercePackOutput
+from .delivery_scopes import delivery_scope_metadata, resolve_delivery_scope, slots_for_scope
 from .export_packager import EcommerceExportPackager
 from .manifest import ECOMMERCE_MANIFEST
 from .marketplace_rules import MarketplaceRuleEngine
@@ -61,9 +62,15 @@ class EcommerceScenarioPackPlanner:
             product_profile=product_profile,
         )
         category_profile = resolve_category(product_profile.get("product_category"), user_input=user_input)
+        resolved_scope = resolve_delivery_scope(
+            scenario_parameters,
+            product_category=str(product_profile.get("product_category") or ""),
+            market=marketplace_profile.market,
+        )
+        scope_slots = slots_for_scope(marketplace_profile.image_slots, resolved_scope)
         requested_count = _bounded_requested_count(scenario_parameters.get("requested_image_count"))
         selected_slots = _selected_slots(
-            marketplace_profile.image_slots,
+            scope_slots,
             scenario_parameters=scenario_parameters,
             user_input=user_input,
             requested_count=requested_count,
@@ -78,6 +85,7 @@ class EcommerceScenarioPackPlanner:
                     "slot_count_unified_with_requested_count": bool(requested_count),
                     "default_image_slot_count": len(marketplace_profile.image_slots),
                     "selected_image_slots": selected_slots,
+                    **delivery_scope_metadata(resolved_scope),
                     **(category_profile.metadata() if category_profile else {"category_id": "generic_product"}),
                 },
             }
@@ -132,6 +140,7 @@ class EcommerceScenarioPackPlanner:
                 "requested_image_count": requested_count,
                 "selected_image_slots": selected_slots,
                 "category_id": category_profile.category_id if category_profile else "generic_product",
+                **delivery_scope_metadata(resolved_scope),
                 "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
                 "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 "uses_v3_core": True,

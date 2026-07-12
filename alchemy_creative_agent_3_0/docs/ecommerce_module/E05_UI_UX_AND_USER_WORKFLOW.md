@@ -55,9 +55,12 @@ generate. Advanced controls may expose:
   information-rich, content hook, or brand story.
 
 The current scope selector remains `recommended`, `listing_core`,
-`listing_full`, or `detail_supplement`. D3 will introduce the separate
-`listing_only`, A+, content, and storefront delivery-scope contract; those
-future values must not be presented as current UI behavior.
+`listing_full`, or `detail_supplement`; it remains a compatible slot-selection
+preference. D3 now maps it to the safe `listing_only` delivery scope in the
+backend. The explicit A+, content, and storefront scope contract is available
+to E-Commerce API/metadata callers, but its controls and placement-context
+form are deferred to D4 so the current UI cannot offer an executable-looking
+scope without the required context.
 
 ## Beginner-facing language
 

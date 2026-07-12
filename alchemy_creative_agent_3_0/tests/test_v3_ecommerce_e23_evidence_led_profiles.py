@@ -48,11 +48,10 @@ def test_ozon_default_does_not_impose_scene_led_styling_but_scene_story_is_opt_i
 
 
 def test_content_hook_is_explicit_and_cannot_create_price_or_promotion_claims() -> None:
-    output = _plan("tiktok_shop", ["ad_cover", "main_image"], parameters={"creative_strategy": "content_hook"})
+    output = _plan("tiktok_shop", [], parameters={"delivery_scope": "content_assets", "creative_strategy": "content_hook"})
     recipes = {recipe.slot: recipe for recipe in output.recipes}
 
-    assert recipes["ad_cover"].metadata["creative_strategy_id"] == "content_hook"
-    assert "truthful, immediately understandable visual hook" in recipes["ad_cover"].visual_scene.lower()
-    assert recipes["main_image"].metadata["creative_strategy_id"] == "content_hook"
-    assert "truthful, immediately understandable visual hook" not in recipes["main_image"].visual_scene.lower()
+    assert recipes["content_cover"].metadata["creative_strategy_id"] == "content_hook"
+    assert "truthful, immediately understandable visual hook" in recipes["content_cover"].visual_scene.lower()
+    assert all(recipe.metadata["creative_strategy_id"] == "content_hook" for recipe in output.recipes)
     assert "price, discount, savings, or promotion" not in " ".join(recipe.visual_scene for recipe in output.recipes).lower()

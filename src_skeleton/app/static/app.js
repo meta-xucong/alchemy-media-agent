@@ -5080,6 +5080,8 @@ function v3EcommerceProfilePatch() {
     competitor_notes: v3CsvList(els.v3EcommerceCompetitorInput?.value || ""),
     suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset, suiteScope),
     metadata: {
+      delivery_scope: "listing_only",
+      delivery_scope_label: "Listing only",
       suite_scope: suiteScope,
       suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
       creative_strategy: creativeStrategy,

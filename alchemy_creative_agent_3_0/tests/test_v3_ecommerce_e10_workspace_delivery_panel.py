@@ -84,6 +84,8 @@ def test_ecommerce_workspace_exposes_suite_scope_without_a_new_project_contract(
     assert 'if (scopeId === "listing_full")' in script
     assert 'if (scopeId === "detail_supplement")' in script
     assert 'suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset, suiteScope)' in script
+    assert 'delivery_scope: "listing_only"' in script
+    assert 'delivery_scope_label: "Listing only"' in script
     assert 'ecommerce_suite_scope: ecommerceSuiteScope || undefined' in script
     assert 'renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata)' in script
     assert 'els.v3EcommerceSuiteScopeInput.value = "recommended"' in script

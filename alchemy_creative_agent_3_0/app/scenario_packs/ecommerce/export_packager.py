@@ -83,6 +83,9 @@ class EcommerceExportPackager:
                     "claim_review_required": copy_claim_review_required,
                     "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
                     "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
+                    "delivery_scope_id": marketplace_profile.metadata.get("delivery_scope_id"),
+                    "delivery_scope_status": marketplace_profile.metadata.get("status"),
+                    "delivery_scope_text_pixel_delivery_promised": marketplace_profile.metadata.get("text_pixel_delivery_promised"),
                     "category_slot_role_id": recipe.metadata.get("category_slot_guidance_id"),
                     "category_slot_purpose": recipe.metadata.get("category_slot_purpose"),
                     "category_slot_fact_channels": list(recipe.metadata.get("category_slot_fact_channels") or []),
@@ -117,6 +120,14 @@ class EcommerceExportPackager:
                 "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 "marketplace_profile_status": marketplace_profile.metadata.get("profile_status"),
                 "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
+                "delivery_scope_id": marketplace_profile.metadata.get("delivery_scope_id"),
+                "delivery_scope_label": marketplace_profile.metadata.get("delivery_scope_label"),
+                "delivery_scope_version": marketplace_profile.metadata.get("delivery_scope_version"),
+                "delivery_scope_source": marketplace_profile.metadata.get("delivery_scope_source"),
+                "legacy_suite_scope": marketplace_profile.metadata.get("legacy_suite_scope"),
+                "delivery_scope_status": marketplace_profile.metadata.get("status"),
+                "delivery_scope_missing_requirements": list(marketplace_profile.metadata.get("missing_requirements") or []),
+                "delivery_scope_text_pixel_delivery_promised": bool(marketplace_profile.metadata.get("text_pixel_delivery_promised")),
                 "category_ids": category_ids,
                 "category_profile_versions": category_profile_versions,
                 "category_slot_directors": {
@@ -217,6 +228,15 @@ class EcommerceExportPackager:
                     "id": "blocked_product_facts",
                     "status": "attention",
                     "message": "Blocked product facts were withheld from planned prompts and copy; review the source before adding them manually.",
+                }
+            )
+        if str(marketplace_profile.metadata.get("status") or "ready") != "ready":
+            checks.append(
+                {
+                    "id": "delivery_scope_context",
+                    "status": "attention",
+                    "message": "Provide the required delivery-scope placement context before planning or publishing: "
+                    + ", ".join(str(item) for item in marketplace_profile.metadata.get("missing_requirements") or []),
                 }
             )
         if critic:

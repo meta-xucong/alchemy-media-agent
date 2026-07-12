@@ -35,6 +35,21 @@ class CommerceCritic:
                 "Platform profile identifier, version, and status are frozen for the planned suite.",
             )
         )
+        delivery_scope_status = str(profile_lineage.get("status") or "ready")
+        delivery_scope_id = str(profile_lineage.get("delivery_scope_id") or "listing_only")
+        scope_missing_requirements = [str(item) for item in profile_lineage.get("missing_requirements") or [] if str(item)]
+        checks.append(
+            self._check(
+                "delivery_scope_context",
+                delivery_scope_status == "ready",
+                (
+                    f"Delivery scope {delivery_scope_id} has the required placement context."
+                    if delivery_scope_status == "ready"
+                    else "Delivery scope needs explicit context before it can plan deliverables: "
+                    + ", ".join(scope_missing_requirements)
+                ),
+            )
+        )
         category_coverage = self._category_coverage(recipes)
         if category_coverage is not None:
             checks.append(
@@ -144,6 +159,11 @@ class CommerceCritic:
             warnings.extend(truth.warnings)
         if marketplace_profile.warnings:
             warnings.extend(marketplace_profile.warnings)
+        if delivery_scope_status != "ready":
+            warnings.append(
+                "Delivery scope cannot plan files until required placement context is supplied: "
+                + ", ".join(scope_missing_requirements)
+            )
         if brief.claim_risk_warnings:
             warnings.extend(brief.claim_risk_warnings)
         if unverified_visual_facts:
@@ -182,6 +202,9 @@ class CommerceCritic:
                 "source": "CommerceCritic",
                 "metadata_only_review": True,
                 "recipe_count": len(recipes),
+                "delivery_scope_id": delivery_scope_id,
+                "delivery_scope_status": delivery_scope_status,
+                "delivery_scope_missing_requirements": scope_missing_requirements,
                 "localization_review_slots": localization_review_slots,
                 "claim_review_slots": claim_review_slots,
                 "unverified_visual_facts": unverified_visual_facts,

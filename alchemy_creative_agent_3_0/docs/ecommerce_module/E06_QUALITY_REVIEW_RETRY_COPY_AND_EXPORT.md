@@ -81,6 +81,13 @@ category_slot_purpose
 category_slot_fact_channels
 category_slot_review_checks
 category_slot_differentiation_key
+delivery_scope_id
+delivery_scope_version
+delivery_scope_source
+legacy_suite_scope
+delivery_scope_status
+delivery_scope_missing_requirements
+delivery_scope_text_pixel_delivery_promised
 selected_slot_ids
 delivery_files
 copy_locale
@@ -109,3 +116,8 @@ It must never claim guaranteed approval or guaranteed performance.
 An export may preserve a seller-selected creative strategy for traceability,
 but that value is never evidence that a marketplace requires or approves the
 chosen visual style.
+
+`listing_only` is the default delivery scope. A+ modules, content assets, and
+storefront assets use separate role IDs. A+ and storefront plans without their
+required placement context carry an attention check and no substitute listing
+role; A+ planning never claims final text-pixel delivery.

@@ -47,6 +47,7 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | E-Commerce Scenario Pack | existing skeleton | needs professional suite expansion |
 | Platform profiles | evidence-led baseline | separate verified constraints, seller configuration, and internal strategy |
 | Category packs | first-wave director baseline | five category directors now carry buyer questions, proof roles, review checks, and export lineage; subtype expansion remains phased work |
+| Delivery scopes | backend contract baseline | `listing_only` is the safe default; A+, content, and storefront plans are separate E-Commerce maps with context gates |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
 | In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |

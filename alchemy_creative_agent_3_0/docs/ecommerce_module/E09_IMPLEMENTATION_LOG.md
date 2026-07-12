@@ -476,6 +476,34 @@ full V3 + commercial frontend + provider contract regression: 598 passed
 Python compile, JavaScript syntax, and diff checks: passed
 ```
 
+## E28 — explicit delivery scopes
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added an E-Commerce-only delivery-scope resolver. `listing_only` is the
+  default; historical `recommended`, `listing_core`, `listing_full`, and
+  `detail_supplement` values remain readable as slot-selection intent and map
+  safely to listing delivery.
+- Added distinct A+ planning, content, and storefront role maps. A+ and
+  storefront requests require merchant placement, category, and market context;
+  otherwise the planner emits no substitute listing roles and records an
+  attention check.
+- Recorded scope lineage and the no-text-pixel-delivery boundary in recipes,
+  exports, and Project Mode's existing E-Commerce metadata pathway. No public
+  Project Mode schema, General Template, provider, or continuation API changed.
+- Updated legacy canvas/content tests to select their new explicit scope rather
+  than relying on content or storefront roles inside a listing suite.
+
+Verification:
+
+```text
+focused D3 / Project Mode / E-Commerce regression tests: 92 passed
+full V3 + commercial frontend + provider contract regression: 604 passed
+Python compile, JavaScript syntax, and diff checks: passed
+```
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.

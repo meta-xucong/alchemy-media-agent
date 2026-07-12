@@ -1758,6 +1758,20 @@ class V3ProjectModeService:
             creative_strategy = str(commerce_metadata.get("creative_strategy") or "").strip()
             if creative_strategy:
                 parameters["creative_strategy"] = creative_strategy
+            delivery_scope = str(commerce_metadata.get("delivery_scope") or "").strip()
+            if delivery_scope:
+                parameters["ecommerce_delivery_scope"] = delivery_scope
+            legacy_suite_scope = str(commerce_metadata.get("suite_scope") or "").strip()
+            if legacy_suite_scope:
+                parameters["legacy_suite_scope"] = legacy_suite_scope
+            placement_context = str(
+                commerce_metadata.get("placement_context")
+                or commerce_metadata.get("a_plus_placement_context")
+                or commerce_metadata.get("storefront_placement_context")
+                or ""
+            ).strip()
+            if placement_context:
+                parameters["placement_context"] = placement_context
             raw_overlay_copy = commerce_metadata.get("overlay_copy")
             if isinstance(raw_overlay_copy, dict):
                 overlay_copy = {

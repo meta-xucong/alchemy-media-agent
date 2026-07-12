@@ -38,7 +38,7 @@ The following is already implemented and remains the compatibility baseline:
 | --- | --- |
 | Platform profile | Separates verified constraints from documented operation, internal strategy, and seller configuration. Amazon main-image baseline is the current narrow verified visual constraint. |
 | Default strategy | `evidence_first`; `scene_story`, `information_rich`, `content_hook`, and `brand_story` are explicit secondary-role choices. |
-| Current suite selector | `recommended`, `listing_core`, `listing_full`, and `detail_supplement`. D3 replaces this planning-only range with explicit delivery scopes while retaining compatibility. |
+| Current suite selector | `recommended`, `listing_core`, `listing_full`, and `detail_supplement` remain compatible slot-selection preferences. D3 maps them to `listing_only` and adds separate API/metadata delivery scopes for A+, content, and storefront planning. |
 | Product truth | Product Fact Ledger v1 carries source, verification, channel, and slot bindings into each recipe. `unverified_visual_facts` remains a compatible supplier-spec alias and creates export publish-check attention; D4 adds persisted owner confirmation. |
 | Apparel director | Garments receive a seven-role evidence sequence: primary, worn front, back/side, detail, real wear, fit/size, and styling versatility. Garment guidance is suppressed for shoes and bags. |
 | Benchmark | E10 records an external Amazon apparel quality bar without copying external images or using pixel matching. E24 covers the planning contract. |
@@ -154,7 +154,7 @@ lineage. Shoes and bags use accessory directors rather than garment guidance.
 
 ### D3 — explicit delivery scopes
 
-Status: follows D2.
+Status: implemented and verified on the E-Commerce branch.
 
 Add an E-Commerce-only, additive scope contract:
 
@@ -177,6 +177,14 @@ Requirements:
 Acceptance: scope selection and compatibility tests; General Template remains
 unchanged; no clickable continuation or text-delivery affordance before shared
 runtime gates exist.
+
+Delivered: `listing_only` is now the default E-Commerce delivery scope.
+Existing suite-scope metadata maps backward-compatibly without changing the
+current UI control. A+, content, and storefront scopes own distinct role IDs;
+A+ and storefront plans require placement/category/market context and produce
+an attention state with no substituted listing roles when it is absent. The
+contract records that it does not promise text pixels. No Project Mode public
+schema, General Template, provider, or continuation route changed.
 
 ### D4 — workspace fact and suite review
 

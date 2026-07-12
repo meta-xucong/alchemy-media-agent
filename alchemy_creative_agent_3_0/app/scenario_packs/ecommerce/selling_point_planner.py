@@ -29,6 +29,15 @@ SLOT_GOALS = {
     "ad_cover": ("remember", "Campaign cover for traffic acquisition."),
     "store_banner": ("remember", "Store asset with product family and brand feel."),
     "collection_cover": ("remember", "Collection cover with product family rhythm."),
+    "a_plus_brand_story": ("remember", "A+ planning module for a distinct product/brand-story image role."),
+    "a_plus_feature_proof": ("understand", "A+ planning module for one evidence-backed feature proof."),
+    "a_plus_comparison_context": ("compare", "A+ planning module for a supplied-fact comparison or context role."),
+    "content_cover": ("remember", "Content asset cover with a truthful product-first hook."),
+    "content_feature_hook": ("desire", "Content asset that makes one supplied feature immediately understandable."),
+    "content_creator_context": ("desire", "Content asset that plans a believable creator or real-use context."),
+    "storefront_hero": ("click", "Storefront hero placement with clear product identity."),
+    "storefront_collection": ("remember", "Storefront collection placement for a merchant-defined assortment context."),
+    "storefront_feature": ("understand", "Storefront feature placement for one evidence-backed product proof."),
 }
 
 

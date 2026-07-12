@@ -42,6 +42,10 @@
 - General Template does not receive commerce suite metadata.
 - garment directors never leak into shoes or bags; they use accessory-specific
   E-Commerce directors instead.
+- legacy suite-scope metadata maps to `listing_only` delivery without losing
+  lineage; A+, content, and storefront scopes use distinct role IDs; A+ and
+  storefront requests without placement/category/market context are blocked
+  with an attention check rather than silently producing listing roles.
 
 ## Isolation tests
 

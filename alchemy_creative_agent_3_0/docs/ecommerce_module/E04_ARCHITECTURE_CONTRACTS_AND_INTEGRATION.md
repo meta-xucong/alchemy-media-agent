@@ -110,6 +110,13 @@ user request + uploaded refs
     into E-Commerce recipe/export metadata; they must not alter shared prompt
     ownership, Human Realism, Provider, Review/Retry, or platform-compliance
     semantics.
+16. Delivery scope is an additive E-Commerce metadata contract, not a new
+    Project Mode public-schema field. `listing_only` is its default; existing
+    `recommended`, `listing_core`, `listing_full`, and `detail_supplement`
+    values remain readable as legacy suite-selection intent and map safely to
+    listing-only delivery. A+, content, and storefront roles use distinct slot
+    IDs and cannot silently reuse listing roles. A+ and storefront planning
+    require explicit placement, product-category, and market context.
 
 ## Compatibility rule
 
