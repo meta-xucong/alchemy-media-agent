@@ -424,13 +424,15 @@ text-pixel production gate remains open.
 Pass only when the Section 8 path is recorded against a live General project
 and its restored state is correct.
 
-Current preflight evidence: a browser-driven General project can be created in
-isolated local storage, opened into its compose workspace, returned to its
-project detail, reopened from the project list, and navigated back to the V3
-home. The home control is an explicit route link so it remains reliable even
-when transient workspace state is being cleared. The final select, reject,
-upload, and continuation-after-real-render steps remain pending Gate C because
-they require a real provider output rather than a fabricated browser fixture.
+2026-07-12 update: the real manual browser sequence was run, including upload,
+selection, rejection, restoration, and continuation. Gate D **failed** rather
+than passed: a selected generated result lacked a canonical output binding and
+the next request supplied the uploaded source twice; user-visible completion
+also preceded bounded review/retry settlement, and the General board counted
+an unresolved reference as an image. The source files and media route worked,
+so this is not a provider-storage failure. Doc109 is the required corrective
+contract and rerun matrix. Gate D remains closed until that document's live
+pixel-review rerun passes.
 
 ### Gate E: E-Commerce Template Activation
 

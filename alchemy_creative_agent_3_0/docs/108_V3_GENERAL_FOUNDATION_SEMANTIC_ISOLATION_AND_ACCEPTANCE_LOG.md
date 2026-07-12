@@ -109,13 +109,16 @@ Acceptance artifact (Git-ignored):
 
 ## Remaining delivery gates
 
-This milestone closes the observed General semantic-isolation and false-review
-defects. The following requirements are deliberately still open:
+This milestone closes the then-observed text-only and controlled no-reference
+General semantic-isolation and false-review defects. A later real
+reference-conditioned Project Mode run exposed additional inactive
+human/portrait prompt leakage and continuation-resolution defects, governed by
+Doc109. The following requirements are deliberately still open:
 
 | Gate | Required evidence before production declaration |
 | --- | --- |
 | Doc104 Gate C | Core owned-reference cases now pass and are recorded in Doc104: product truth, lifestyle, product-on-person, bounded review/retry, append-only history, and provider-failure recovery. The current fixture is unbranded, so visible label/logo fidelity remains a conditional future-fixture check. |
-| Doc104 Gate D | A real General browser continuation that includes the upload-reference interaction on a browser surface with a usable file chooser, then select, reject, restore, and continue. |
+| Doc104 Gate D | The manual browser sequence has now run and failed: selected generated output materialization, duplicate provider input, truthful finalization, media-only result display, live pixel review, and neutral General UX must be corrected and rerun under Doc109. |
 | Doc107 | An approved redistributable font manifest, required Tesseract locale data, and real OCR/layout evidence before text-pixel delivery is enabled. |
 
 Until those gates have recorded evidence, E-Commerce text suites and other
