@@ -577,6 +577,27 @@ Verification: 26 focused Doc105 runtime/contract/workspace/frontend tests,
 Python compile, JavaScript syntax, and `git diff --check` passed; full V3,
 commercial frontend-shell, and provider-contract regression passed: 617 tests.
 
+## E33 — D5 fixture coverage catalog
+
+Status: implemented as a descriptor-only preparation increment; it does not
+activate D6 or claim a real fixture pass.
+
+Delivered:
+
+- Added a future owner-input matrix spanning apparel, beauty, electronics,
+  home/kitchen, and food/beverage; it covers a text-forbidden Amazon primary
+  image, text-bearing `en-US` / `zh-CN` / `ru-RU` cases, and a provider-failure
+  probe.
+- A case can become a registry-ready fixture only after an owner supplies
+  consent and source facts. No image, asset ID, real provider output, or pass
+  record is bundled into the repository.
+- Fixture metadata now makes a catalog-required text review mandatory even if
+  a later acceptance record incorrectly leaves its own text-review flag off.
+
+Verification: 12 focused D5/category tests, Python compilation, and `git diff
+--check` passed; full V3, commercial frontend-shell, and provider-contract
+regression passed: 619 tests.
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.

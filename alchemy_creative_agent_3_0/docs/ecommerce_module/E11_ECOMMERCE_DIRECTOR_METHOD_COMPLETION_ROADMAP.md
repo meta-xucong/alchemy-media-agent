@@ -238,6 +238,13 @@ source images), requires explicit owner consent and a source-fact/role map,
 and refuses a passed record unless real Gate C, terminal, human-score,
 retry-closure, and applicable text-review evidence are present.
 
+The fixture-coverage catalog now defines the future owner-input matrix without
+bundling a product asset: all first-wave categories, one text-forbidden Amazon
+primary-image case, required `en-US` / `zh-CN` / `ru-RU` approved-literal-copy
+cases, and one provider-failure probe. It may instantiate a registry-ready
+fixture only after an owner supplies consent and source facts. A catalog row is
+not a fixture, a provider run, or a passing acceptance record.
+
 ### D6 — A+ module builder and provider-native text delivery closure
 
 Status: blocked on real authorized-material Doc111 Provider Gate C/D evidence.

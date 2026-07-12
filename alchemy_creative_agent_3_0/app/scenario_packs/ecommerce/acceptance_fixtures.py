@@ -73,7 +73,8 @@ class EcommerceFixtureRegistry:
             issues.append("human-scored product, role, realism, and delivery evidence is required")
         if not record.retry_superseded_closed:
             issues.append("retry-superseded delivery closure is required")
-        if record.text_review_required and not record.text_review_passed:
+        fixture_requires_text_review = bool(fixture.metadata.get("text_review_required"))
+        if (fixture_requires_text_review or record.text_review_required) and not record.text_review_passed:
             issues.append("required provider-native literal-copy/claim acceptance has not passed")
         if record.passed and issues:
             issues.append("record cannot be marked passed while acceptance evidence is incomplete")

@@ -5,6 +5,13 @@ from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.acceptance_fixtures
     EcommerceFixtureAcceptanceRecord,
     EcommerceFixtureRegistry,
 )
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.fixture_coverage_catalog import (
+    FIRST_WAVE_CATEGORY_IDS,
+    REQUIRED_TEXT_LOCALES,
+    baseline_ecommerce_fixture_coverage,
+    owner_fixture_from_coverage,
+    validate_fixture_coverage,
+)
 
 
 def _fixture() -> EcommerceAcceptanceFixture:
@@ -53,3 +60,40 @@ def test_real_output_acceptance_contract_requires_all_evidence_dimensions() -> N
     )
 
     assert registry.validate_acceptance(record) == []
+
+
+def test_fixture_coverage_catalog_is_descriptor_only_and_covers_first_production_gate() -> None:
+    cases = baseline_ecommerce_fixture_coverage()
+
+    assert validate_fixture_coverage(cases) == []
+    assert {case.category_id for case in cases} == FIRST_WAVE_CATEGORY_IDS
+    assert {case.copy_locale for case in cases if case.text_policy == "required"} == REQUIRED_TEXT_LOCALES
+    assert any("text_forbidden_primary" in case.required_evidence for case in cases)
+    assert any(case.requires_provider_failure_probe for case in cases)
+    assert all("asset" not in case.metadata for case in cases)
+
+
+def test_owner_fixture_from_coverage_requires_real_text_review_when_its_case_requires_text() -> None:
+    coverage_case = next(case for case in baseline_ecommerce_fixture_coverage() if case.copy_locale == "en-US")
+    fixture = owner_fixture_from_coverage(
+        coverage_case,
+        fixture_id="owner_electronics_fixture",
+        owner_consent=True,
+        source_facts=["metal body", "visible USB-C port"],
+    )
+    registry = EcommerceFixtureRegistry()
+    registry.register(fixture)
+    record = EcommerceFixtureAcceptanceRecord(
+        fixture_id=fixture.fixture_id,
+        provider_run_id="provider_run_coverage",
+        gate_c_status="passed",
+        terminal_seconds=120,
+        planner_metadata_only=False,
+        human_scores={"product_fidelity": 4.5, "role_differentiation": 4.0, "realism": 4.0, "delivery_closure": 4.5},
+        retry_superseded_closed=True,
+        text_review_required=False,
+        text_review_passed=False,
+        passed=True,
+    )
+
+    assert "required provider-native literal-copy/claim acceptance has not passed" in registry.validate_acceptance(record)
