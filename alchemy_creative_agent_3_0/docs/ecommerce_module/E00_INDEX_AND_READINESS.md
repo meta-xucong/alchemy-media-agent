@@ -75,3 +75,5 @@ Before implementation starts, the team must have accepted:
 8. E08 test and acceptance matrix.
 9. E09 implementation record, including superseded assumptions.
 10. E10 external Amazon apparel benchmark and visual-acceptance card.
+11. E11 director-method completion roadmap and phased delivery contract.
+11. E11 director-method completion roadmap and phased delivery contract.

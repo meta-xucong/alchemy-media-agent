@@ -18,6 +18,12 @@ compatibility note before implementation.
 
 ## Milestones
 
+The detailed, post-E24 director-method completion sequence is maintained in
+`E11_ECOMMERCE_DIRECTOR_METHOD_COMPLETION_ROADMAP.md`. This document retains
+the module-wide development method and technology boundary; E11 defines the
+ordered implementation contracts for the fact ledger, category directors,
+delivery scopes, UI, fixture acceptance, and future A+ work.
+
 ### E0 Documentation and governance
 
 Deliver this document family, update repository rules, and record the existing
@@ -46,9 +52,11 @@ Add `en-US`, `ru-RU`, and `zh-CN` copy paths. Keep policy updates configurable.
 ### E5 Review, copy, and export closure
 
 Connect commerce review, copy-planning signals, best-result selection, and
-platform-aware export metadata. Deterministic text/OCR delivery and bounded
-text recovery are shared Doc105 capability work; this module must not claim
-pixel-correct copy before that contract is implemented and accepted.
+platform-aware export metadata. Literal copy, when explicitly approved, is
+passed only through Doc111 provider-native complete-image generation; this
+module must not use local composition, fonts, OCR, coordinates, safe areas, or
+text-specific retry loops, and must not claim production text delivery before
+Doc111 Provider Gate C/D is accepted.
 
 ### E6 Dedicated workspace UI
 
@@ -63,8 +71,9 @@ provider behavior, and pass the template activation gate.
 
 E7 is a coordinated integration phase. It requires the Doc104 foundation gates
 for enforced activation runtime, real provider/review, and General project
-continuation, plus Doc105 text-pixel and slot-continuation acceptance; it is
-not part of this branch's isolated implementation scope.
+continuation, plus Doc105 slot-continuation and Doc111 provider-native
+complete-image text acceptance; it is not part of this branch's isolated
+implementation scope.
 
 ## Recommended technology stack
 
@@ -75,7 +84,7 @@ not part of this branch's isolated implementation scope.
 | Planning | Existing V3 Brain + Scenario Runtime + factual/policy guardrails; LLM owns creative direction |
 | Capabilities | V3 Visual Capability Cluster and activation planner |
 | Rendering | GPT Image 2 through the existing V3 provider adapter |
-| Image inspection | Existing V3 vision/review interfaces plus OCR-capable validation |
+| Image inspection | Existing V3 provider/review interfaces and Doc111 real-output acceptance |
 | Persistence | Existing Project Store/Job records; versioned profile metadata |
 | Frontend | Existing V3 project/workspace shell and image-first components |
 | Tests | pytest, compileall, frontend syntax checks, browser smoke tests |

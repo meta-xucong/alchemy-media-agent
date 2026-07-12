@@ -417,6 +417,28 @@ commercial frontend shell + provider contract tests: 50 passed
 JavaScript syntax, Python compile, and diff checks: passed
 ```
 
+## E25 — director-method completion roadmap
+
+Status: documented and ready for phased implementation.
+
+Delivered:
+
+- Added E11 as the formal continuation authority for the E-Commerce director
+  method. It distinguishes current baseline from the missing fact ledger,
+  remaining category directors, explicit delivery scopes, user confirmation
+  UI, real-output fixture harness, A+ closure, and Doc105 continuation work.
+- Fixed the default product decision: `listing_only` plus `evidence_first`.
+  A+ and campaign-like outputs require an explicit scope and remain behind the
+  shared text-pixel and real-provider gates.
+- Defined D1 as the next independent code phase: an additive structured
+  Product Fact Ledger that preserves existing profiles and
+  `unverified_visual_facts` compatibility while adding source, verification,
+  channel, slot-binding, and claim-eligibility semantics.
+
+Boundary: E11 is a specialized E-Commerce roadmap. It does not authorize
+General Template changes, shared-provider modifications, or local substitutes
+for Doc104/Doc105 runtime gates.
+
 Evidence sources and profile update policy are maintained in E02. This
 milestone does not claim marketplace approval, text-pixel delivery, or
 real-provider activation acceptance.
