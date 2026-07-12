@@ -114,7 +114,7 @@ defects. The following requirements are deliberately still open:
 
 | Gate | Required evidence before production declaration |
 | --- | --- |
-| Doc104 Gate C | An owner-approved real product reference set: product truth, lifestyle, product-on-person, bounded review/retry, append-only history, and provider-failure recovery. |
+| Doc104 Gate C | Core owned-reference cases now pass and are recorded in Doc104: product truth, lifestyle, product-on-person, bounded review/retry, append-only history, and provider-failure recovery. The current fixture is unbranded, so visible label/logo fidelity remains a conditional future-fixture check. |
 | Doc104 Gate D | A real General browser continuation that includes the upload-reference interaction on a browser surface with a usable file chooser, then select, reject, restore, and continue. |
 | Doc107 | An approved redistributable font manifest, required Tesseract locale data, and real OCR/layout evidence before text-pixel delivery is enabled. |
 

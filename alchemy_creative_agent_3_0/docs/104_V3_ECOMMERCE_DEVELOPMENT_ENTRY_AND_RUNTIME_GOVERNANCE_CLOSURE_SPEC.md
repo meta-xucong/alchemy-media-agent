@@ -385,6 +385,40 @@ must additionally prove that an upstream terminal failure creates no duplicate
 fresh request for the same logical output and becomes a bounded Project Mode
 job result.
 
+#### 2026-07-12 owned-reference evidence
+
+The foundation maintainer ran the Section 7 cases against an owned, unbranded
+transparent fruit-drink cup reference through `gpt-image-2` and the
+gateway-managed provider path. The source carried a lower-right social
+watermark. It was explicitly declared source noise, retained unchanged in
+project history, and withheld from full-frame provider input in favor of the
+focused product-truth derivative under Section 7.1.
+
+| Case | Result | Recorded behavior |
+| --- | --- | --- |
+| Product identity | pass | 1024x1536 studio image in 59.83s; product identity only; one product-truth crop input; no copied watermark on manual inspection. |
+| Product lifestyle | pass | 1024x1024 tabletop image in 45.84s; product identity only; one sanitized product-truth crop input; no copied watermark on manual inspection. |
+| Product-on-person | pass | 1024x1536 hand-held image in 57.22s; frozen plan activated `product_identity` and `human_realism`; Human Realism was scoped to hand/skin anatomy rather than face guidance; no copied watermark on manual inspection. |
+| Text/artifact retry | pass | Controlled retry signal created two append-only candidates in 142.73s; exactly one retry executed; the final delivery surface exposed one final asset and preserved the earlier candidate as history. |
+| Provider failure | pass | Controlled unreachable provider ended `blocked` in 1.69s with zero candidates, no output file or URLs, and no retry. The retained asset-series item was explicitly `blocked`, with no output or preview pointer, so it cannot be presented as a successful image. |
+
+Git-ignored evidence records:
+
+```text
+.codex-longrun/generated/doc104_gate_c_20260712_221306/result.json
+.codex-longrun/generated/doc104_gate_c_20260712_221124/result.json
+.codex-longrun/generated/doc104_gate_c_20260712_222957/result.json
+.codex-longrun/generated/doc104_gate_c_20260712_223303/result.json
+.codex-longrun/generated/doc104_gate_c_20260712_223859/result.json
+```
+
+The automatic review in this run used the local image heuristic, supplemented
+by maintainer manual visual inspection of every delivered image. This fixture
+has no brand logo or readable package label, so label/logo fidelity is not
+claimed by this evidence; that conditional check remains required whenever a
+future product reference visibly contains one. The separate Doc107 OCR and
+text-pixel production gate remains open.
+
 ### Gate D: General Browser Continuation
 
 Pass only when the Section 8 path is recorded against a live General project
