@@ -37,6 +37,7 @@ class PhotographyShotListDirector:
     ) -> PhotoShotSpec:
         scene = brief.scene_domain
         scene_defaults = self._scene_defaults(scene)
+        scene_contribution = self._scene_contribution(contributions)
         review_issue_codes = [
             issue_code
             for contribution in contributions
@@ -46,8 +47,10 @@ class PhotographyShotListDirector:
             shot_id=stable_id("photo_shot", job_key, brief.brief_id, "hero"),
             role="hero_photograph",
             sequence_index=1,
-            subject_and_decisive_moment=scene_defaults["moment"],
-            framing_and_crop=scene_defaults["framing"],
+            subject_and_decisive_moment=self._scene_fact(
+                scene_contribution, "decisive_moment", scene_defaults["moment"]
+            ),
+            framing_and_crop=self._scene_fact(scene_contribution, "framing", scene_defaults["framing"]),
             camera_position_and_perspective_effect=scene_defaults["camera"],
             depth_and_focus_behavior=scene_defaults["depth"],
             motion_behavior=scene_defaults["motion"],
@@ -57,8 +60,14 @@ class PhotographyShotListDirector:
                 "lighting_topology",
             ),
             palette_and_tone_curve=self._fact(contributions, "photography_color_finish", "color_response"),
-            surface_texture_and_grain=scene_defaults["texture"],
-            subject_direction="; ".join(brief.moment_and_subject_direction),
+            surface_texture_and_grain=self._scene_fact(
+                scene_contribution, "material_realism", scene_defaults["texture"]
+            ),
+            subject_direction=self._scene_fact(
+                scene_contribution,
+                "subject_direction",
+                "; ".join(brief.moment_and_subject_direction),
+            ),
             retouch_direction=self._fact(contributions, "photography_retouch_direction", "retouch_restraint"),
             immutable_reference_truth=self._immutable_reference_truth(brief),
             allowed_changes=self._allowed_changes(brief),
@@ -84,7 +93,7 @@ class PhotographyShotListDirector:
             },
             metadata={
                 "source": "PhotographyShotListDirector",
-                "phase": "P3_shadow_general_runtime",
+                "phase": "P4_shadow_scene_directors",
                 "single_hero_only": True,
                 "provider_strategy": "planning_only",
             },
@@ -181,3 +190,23 @@ class PhotographyShotListDirector:
                 if value:
                     return str(value)
         return "scene-appropriate professional photographic behavior"
+
+    def _scene_contribution(
+        self,
+        contributions: list[CapabilityContribution],
+    ) -> CapabilityContribution | None:
+        return next(
+            (item for item in contributions if item.facts.get("scene_owned_scope") is True),
+            None,
+        )
+
+    def _scene_fact(
+        self,
+        contribution: CapabilityContribution | None,
+        fact_key: str,
+        fallback: str,
+    ) -> str:
+        if contribution is None:
+            return fallback
+        value = contribution.facts.get(fact_key)
+        return str(value) if value else fallback

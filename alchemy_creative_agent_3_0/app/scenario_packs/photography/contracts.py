@@ -242,6 +242,7 @@ class PhotographyPackOutput(V3BaseModel):
     profile_binding: PhotographerProfileBinding
     brief: PhotographyBrief
     technique_contributions: list[CapabilityContribution] = Field(default_factory=list)
+    scene_contributions: list[CapabilityContribution] = Field(default_factory=list)
     shot_specs: list[PhotoShotSpec] = Field(default_factory=list)
     review: PhotographyReviewReport
     warnings: list[str] = Field(default_factory=list)

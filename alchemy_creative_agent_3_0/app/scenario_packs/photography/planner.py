@@ -12,6 +12,7 @@ from .contracts import (
 )
 from .profile_catalog import PhotographerProfileCatalog
 from .review import PhotographyProfessionalReviewer
+from .scene_directors import FirstWavePhotographySceneDirectorRouter
 from .shot_list_director import PhotographyShotListDirector
 from .technique_modules.general import GeneralPhotographyTechniqueDirector
 
@@ -24,6 +25,7 @@ class PhotographyScenarioPackPlanner:
         *,
         profile_catalog: PhotographerProfileCatalog | None = None,
         brief_director: PhotographyBriefDirector | None = None,
+        scene_director_router: FirstWavePhotographySceneDirectorRouter | None = None,
         technique_director: GeneralPhotographyTechniqueDirector | None = None,
         shot_list_director: PhotographyShotListDirector | None = None,
         reviewer: PhotographyProfessionalReviewer | None = None,
@@ -31,6 +33,9 @@ class PhotographyScenarioPackPlanner:
     ) -> None:
         self.profile_catalog = profile_catalog or PhotographerProfileCatalog()
         self.brief_director = brief_director or PhotographyBriefDirector()
+        self.scene_director_router = (
+            scene_director_router or FirstWavePhotographySceneDirectorRouter()
+        )
         self.technique_director = technique_director or GeneralPhotographyTechniqueDirector()
         self.shot_list_director = shot_list_director or PhotographyShotListDirector()
         self.reviewer = reviewer or PhotographyProfessionalReviewer()
@@ -70,17 +75,23 @@ class PhotographyScenarioPackPlanner:
             profile_binding=profile_binding,
             activation_plan_id=activation_plan_id,
         )
+        scene_contributions = self.scene_director_router.build_contributions(
+            brief=brief,
+            profile_binding=profile_binding,
+            activation_plan_id=activation_plan_id,
+        )
+        planning_contributions = [*contributions, *scene_contributions]
         shot_specs = self.shot_list_director.plan(
             brief=brief,
             controls=controls_model,
-            contributions=contributions,
+            contributions=planning_contributions,
             job_key=job_key,
         )
         review = self.reviewer.review(
             brief=brief,
             profile_binding=profile_binding,
             shot_specs=shot_specs,
-            contributions=contributions,
+            contributions=planning_contributions,
             job_key=job_key,
         )
         warnings = list(
@@ -95,6 +106,7 @@ class PhotographyScenarioPackPlanner:
             profile_binding=profile_binding,
             brief=brief,
             technique_contributions=contributions,
+            scene_contributions=scene_contributions,
             shot_specs=shot_specs,
             review=review,
             warnings=warnings,
@@ -102,7 +114,7 @@ class PhotographyScenarioPackPlanner:
                 "source": "PhotographyScenarioPackPlanner",
                 "scenario_id": "photography",
                 "template_id": "photography_template",
-                "phase": "P3_shadow_general_runtime",
+                "phase": "P4_shadow_scene_directors",
                 "planning_only": True,
                 "production_activation_ready": False,
                 "registered_in_default_scenario_registry": False,
