@@ -28,6 +28,7 @@ from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPac
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
+from ..shared_capabilities.text_pixel import CopyRenderPlan, TextPixelDeliveryRuntime
 from ..shared_capabilities.visual_cluster import (
     HumanPhotorealismLayer,
     ModeAwareRoleDirector,
@@ -298,6 +299,7 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "ecommerce_suite_role_mismatch",
     "format_layout_collapse",
     "selection_candidate_distance_risk",
+    "text_background_readability_failure",
 }
 
 DELIVERY_IDENTITY_HARD_GATE_ISSUES = {
@@ -467,6 +469,7 @@ class V3ProductApiService:
         mode_role_director: ModeAwareRoleDirector | None = None,
         photographer_profile_catalog: PhotographerProfileCatalog | None = None,
         photographer_profile_region_resolver: Callable[[], str | None] | None = None,
+        text_pixel_delivery_runtime: TextPixelDeliveryRuntime | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -486,6 +489,7 @@ class V3ProductApiService:
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
         self.photographer_profile_catalog = photographer_profile_catalog or default_photographer_profile_catalog()
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
+        self.text_pixel_delivery_runtime = text_pixel_delivery_runtime or TextPixelDeliveryRuntime(self.output_store)
 
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
@@ -518,6 +522,7 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        self._bind_internal_copy_render_plan(create_request)
         self._seed_ecommerce_slot_root_lineage(create_request, job_id)
         record = ProductJobRecord(
             request=create_request,
@@ -689,6 +694,7 @@ class V3ProductApiService:
             return self._status_from_record(record)
         generation_result = generation_runtime_result.generation_result
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        generation_result = self._apply_text_pixel_delivery(record, generation_result)
         generation_result = self._run_visual_auto_retries(
             record=record,
             generate_request=generate_request,
@@ -1036,6 +1042,135 @@ class V3ProductApiService:
         )
         return payloads
 
+    def _apply_text_pixel_delivery(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+    ) -> PlanningResult:
+        """Run the shared post-generation stage only for an internal frozen plan.
+
+        The envelope is intentionally not a public request control.  A future
+        template maps approved copy intent into it before the activation plan is
+        frozen; this shared path has no E-Commerce vocabulary or provider call.
+        """
+
+        envelope = record.request.metadata.get("text_pixel_delivery_internal")
+        raw_plan = envelope.get("copy_render_plan") if isinstance(envelope, dict) else None
+        if not isinstance(raw_plan, dict):
+            return generation_result
+        try:
+            copy_plan = CopyRenderPlan.model_validate(raw_plan)
+        except Exception as exc:
+            delivery = {
+                "status": "blocked",
+                "rendered": False,
+                "review_passed": False,
+                "issue_codes": ["copy_render_plan_invalid"],
+                "user_visible_summary": ["Text delivery plan needs correction."],
+                "metadata": {"error": str(exc)[:240], "append_only": True},
+            }
+            return self._with_text_pixel_delivery_metadata(generation_result, delivery)
+
+        target_assets = list(generation_result.asset_pack.assets)
+        if copy_plan.source_lineage.source_asset_id:
+            matching_assets = [asset for asset in target_assets if asset.asset_id == copy_plan.source_lineage.source_asset_id]
+            if matching_assets:
+                target_assets = matching_assets
+        if copy_plan.source_lineage.source_output_id:
+            target_assets = [
+                asset
+                for asset in target_assets
+                if self._asset_output_id(asset) == copy_plan.source_lineage.source_output_id
+            ] or target_assets
+        if len(target_assets) != 1:
+            delivery = {
+                "status": "blocked",
+                "rendered": False,
+                "review_passed": False,
+                "issue_codes": ["source_asset_ambiguous"],
+                "user_visible_summary": ["Text delivery needs one declared generated asset."],
+                "metadata": {"append_only": True},
+            }
+            return self._with_text_pixel_delivery_metadata(generation_result, delivery)
+
+        asset = target_assets[0]
+        source_output_id = self._asset_output_id(asset)
+        source_output = self.output_store.get_output(source_output_id) if source_output_id else None
+        frozen_plan = self._activation_plan_from_result(generation_result)
+        candidate_id = str(asset.metadata.get("selected_candidate_id") or "")
+        delivery_result = self.text_pixel_delivery_runtime.deliver(
+            plan=copy_plan,
+            frozen_activation_plan=frozen_plan,
+            source_output=source_output,
+            candidate_id=candidate_id or source_output_id or asset.asset_id,
+            asset_id=asset.asset_id,
+        )
+        delivery = delivery_result.model_dump(mode="json")
+        current_output = self.output_store.get_output(delivery_result.current_output_id or "")
+        updated_assets: list[PackagedAsset] = []
+        for item in generation_result.asset_pack.assets:
+            if item.asset_id != asset.asset_id or current_output is None:
+                updated_assets.append(item)
+                continue
+            metadata = dict(item.metadata)
+            candidate_metadata = dict(metadata.get("candidate_metadata") or {})
+            candidate_metadata.update(
+                {
+                    "output_id": current_output.output_id,
+                    "download_url": current_output.download_url,
+                    "preview_url": current_output.preview_url,
+                    "thumbnail_url": current_output.thumbnail_url,
+                    "file_path": current_output.file_path,
+                    "text_pixel_source_output_id": source_output_id,
+                    "text_pixel_delivery": delivery,
+                }
+            )
+            metadata.update(
+                {
+                    "output_id": current_output.output_id,
+                    "text_pixel_source_output_id": source_output_id,
+                    "text_pixel_delivery": delivery,
+                    "candidate_metadata": candidate_metadata,
+                }
+            )
+            updated_assets.append(
+                item.model_copy(
+                    update={
+                        "file_path": current_output.file_path,
+                        "uri": current_output.download_url,
+                        "metadata": metadata,
+                    }
+                )
+            )
+        asset_pack = generation_result.asset_pack.model_copy(
+            update={
+                "assets": updated_assets,
+                "manifest": {**dict(generation_result.asset_pack.manifest), "text_pixel_delivery": delivery},
+                "metadata": {**dict(generation_result.asset_pack.metadata), "text_pixel_delivery": delivery},
+            }
+        )
+        return generation_result.model_copy(
+            update={
+                "asset_pack": asset_pack,
+                "metadata": {**dict(generation_result.metadata), "text_pixel_delivery": delivery},
+            }
+        )
+
+    def _with_text_pixel_delivery_metadata(self, result: PlanningResult, delivery: dict[str, Any]) -> PlanningResult:
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "manifest": {**dict(result.asset_pack.manifest), "text_pixel_delivery": delivery},
+                "metadata": {**dict(result.asset_pack.metadata), "text_pixel_delivery": delivery},
+            }
+        )
+        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), "text_pixel_delivery": delivery}})
+
+    def _asset_output_id(self, asset: PackagedAsset) -> str | None:
+        metadata = dict(asset.metadata or {})
+        candidate_metadata = metadata.get("candidate_metadata") if isinstance(metadata.get("candidate_metadata"), dict) else {}
+        value = candidate_metadata.get("output_id") or metadata.get("output_id")
+        return str(value) if value else None
+
     def _run_visual_auto_retries(
         self,
         *,
@@ -1125,6 +1260,7 @@ class V3ProductApiService:
                 retry_runtime_result.generation_result,
                 generate_request,
             )
+            reviewed_retry_result = self._apply_text_pixel_delivery(record, reviewed_retry_result)
             retry_result = self._mark_retry_generation_result(
                 reviewed_retry_result,
                 attempt_index=attempt_index,
@@ -1552,6 +1688,18 @@ class V3ProductApiService:
                 "request_metadata",
             )
 
+        text_delivery = result.metadata.get("text_pixel_delivery") if isinstance(result.metadata, dict) else None
+        if isinstance(text_delivery, dict):
+            recovery = text_delivery.get("recovery")
+            generation_retry = recovery.get("generation_retry") if isinstance(recovery, dict) else None
+            if isinstance(generation_retry, dict) and bool(generation_retry.get("eligible")):
+                return self._activation_filtered_retry_signal(
+                    result,
+                    self._dedupe_strings(generation_retry.get("reason_codes")),
+                    dict(generation_retry.get("retry_patch") or {}),
+                    "text_pixel_delivery",
+                )
+
         cluster = self._visual_cluster_metadata_from_result(result)
         real_signal = self._real_review_signal_package_from_cluster(cluster)
         if real_signal:
@@ -1648,6 +1796,8 @@ class V3ProductApiService:
             return "scene_continuity"
         if any(token in code for token in ("typography", "text_accuracy", "layout_", "crop_safety")):
             return "typography_layout"
+        if "text_background_readability" in code:
+            return "text_pixel_delivery"
         if any(token in code for token in ("role_", "suite_", "batch_duplication", "same_pose_repetition")):
             return "suite_direction"
         if any(
@@ -2275,6 +2425,7 @@ class V3ProductApiService:
             retry_result,
             max_attempts=max_attempts,
         )
+        text_delivery = self._merge_text_pixel_delivery_chain(base_result, retry_result)
         asset_pack = base_result.asset_pack.model_copy(
             update={
                 "assets": [*base_result.asset_pack.assets, *retry_result.asset_pack.assets],
@@ -2282,11 +2433,13 @@ class V3ProductApiService:
                     **dict(base_result.asset_pack.manifest),
                     **dict(review_updates.get("asset_pack_manifest") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
                 },
                 "metadata": {
                     **dict(base_result.asset_pack.metadata),
                     **dict(review_updates.get("asset_pack_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
                 },
             }
         )
@@ -2302,6 +2455,7 @@ class V3ProductApiService:
                     **dict(base_result.metadata),
                     **dict(review_updates.get("result_metadata") or {}),
                     "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+                    **({"text_pixel_delivery": text_delivery} if text_delivery else {}),
                     "retry_generation_result_ids": self._dedupe_strings(
                         [
                             *self._string_list(base_result.metadata.get("retry_generation_result_ids")),
@@ -2311,6 +2465,50 @@ class V3ProductApiService:
                 },
             }
         )
+
+    def _merge_text_pixel_delivery_chain(
+        self,
+        base_result: PlanningResult,
+        retry_result: PlanningResult,
+    ) -> dict[str, Any]:
+        """Keep deterministic composition/review records append-only across retries."""
+
+        base = base_result.metadata.get("text_pixel_delivery") if isinstance(base_result.metadata, dict) else None
+        retry = retry_result.metadata.get("text_pixel_delivery") if isinstance(retry_result.metadata, dict) else None
+        if not isinstance(base, dict):
+            return dict(retry) if isinstance(retry, dict) else {}
+        if not isinstance(retry, dict):
+            return dict(base)
+        base_passed = base.get("status") == "passed" and bool(base.get("current_output_id"))
+        retry_passed = retry.get("status") == "passed" and bool(retry.get("current_output_id"))
+        selected = retry if retry_passed or not base_passed else base
+        attempts = [
+            *[dict(item) for item in base.get("attempts", []) if isinstance(item, dict)],
+            *[dict(item) for item in retry.get("attempts", []) if isinstance(item, dict)],
+        ]
+        prior_output_ids = self._dedupe_strings(
+            [
+                base.get("source_output_id"),
+                base.get("current_output_id"),
+                retry.get("source_output_id"),
+                retry.get("current_output_id"),
+            ]
+        )
+        return {
+            **dict(selected),
+            "attempts": attempts,
+            "recovery": {
+                **dict(selected.get("recovery") or {}),
+                "append_only": True,
+                "prior_output_ids": prior_output_ids,
+                "retry_delivery_preserved_previous": base_passed and not retry_passed,
+            },
+            "metadata": {
+                **dict(selected.get("metadata") or {}),
+                "append_only": True,
+                "merged_retry_delivery_history": True,
+            },
+        }
 
     def _merge_post_generation_review_chain(
         self,
@@ -3141,6 +3339,7 @@ class V3ProductApiService:
                 "shared_capabilities": result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run),
                 "visual_auto_retry": result.metadata.get("visual_auto_retry", {}),
                 "post_generation_review": result.metadata.get("post_generation_review_package", {}),
+                "text_pixel_delivery": result.metadata.get("text_pixel_delivery", {}),
                 "exposes_product_concepts_only": True,
                 "lifecycle": self._lifecycle_summary(record),
                 **self._workflow_artifacts_metadata(record, result),
@@ -4380,6 +4579,31 @@ class V3ProductApiService:
             "product_profile": dict(request.product_profile),
             "metadata": dict(request.metadata),
         }
+
+    def _bind_internal_copy_render_plan(self, request: CreateCreativeJobRequest) -> None:
+        """Bind template-provided copy intent after the capability plan freezes."""
+
+        metadata = dict(request.metadata or {})
+        envelope = metadata.get("text_pixel_delivery_internal")
+        raw_plan = envelope.get("copy_render_plan") if isinstance(envelope, dict) else None
+        frozen_plan_id = str(metadata.get("capability_activation_plan_id") or "").strip()
+        if not isinstance(raw_plan, dict) or not frozen_plan_id:
+            return
+        try:
+            bound = CopyRenderPlan.model_validate(raw_plan).bind_to_frozen_plan(frozen_plan_id)
+        except Exception as exc:
+            metadata["text_pixel_delivery_internal"] = {
+                **dict(envelope),
+                "copy_render_plan_binding_error": str(exc)[:240],
+            }
+            request.metadata = metadata
+            return
+        metadata["text_pixel_delivery_internal"] = {
+            **dict(envelope),
+            "copy_render_plan": bound.model_dump(mode="json"),
+            "bound_to_frozen_activation_plan_id": frozen_plan_id,
+        }
+        request.metadata = metadata
 
     def _seed_ecommerce_slot_root_lineage(self, request: CreateCreativeJobRequest, job_id: str) -> None:
         metadata = dict(request.metadata or {})

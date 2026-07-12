@@ -11,6 +11,7 @@ from .product_identity import ProductIdentityPlugin
 from .reference_channel_policy import ReferenceChannelPolicyPlugin
 from .scene_continuity import SceneContinuityPlugin
 from .suite_direction import SuiteDirectionPlugin
+from .text_pixel_delivery import TextPixelDeliveryPlugin
 from .typography_layout import TypographyLayoutPlugin
 from .universal_visual_quality import CommercialQualityPlugin, UniversalVisualQualityPlugin, VisualGrammarPlugin
 
@@ -30,6 +31,7 @@ class VisualClusterPluginRegistry:
             ProductIdentityPlugin(),
             SceneContinuityPlugin(),
             TypographyLayoutPlugin(),
+            TextPixelDeliveryPlugin(),
             SuiteDirectionPlugin(),
             CommercialQualityPlugin(),
         ]

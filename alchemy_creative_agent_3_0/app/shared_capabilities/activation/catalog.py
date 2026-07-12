@@ -205,6 +205,16 @@ def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
         manifest("product_identity", "Product identity", VISUAL_CLUSTER_EXECUTOR, entities=["product", "generic_object", "food", "vehicle"], dependencies=["universal_visual_quality"], optional_dependencies=["reference_channel_policy"], evidence=["product_intent", "product_reference"], threshold=0.5, profiles=["described_concept", "reference_truth"]),
         manifest("scene_continuity", "Scene continuity", VISUAL_CLUSTER_EXECUTOR, entities=["scene", "building", "interior_space"], dependencies=["reference_channel_policy", "universal_visual_quality"], evidence=["scene_reference", "scene_preservation"], threshold=0.6),
         manifest("typography_layout", "Typography and layout", VISUAL_CLUSTER_EXECUTOR, entities=["text_layout", "brand_asset"], dependencies=["universal_visual_quality"], evidence=["target_text", "layout_intent"], threshold=0.55),
+        manifest(
+            "text_pixel_delivery",
+            "Deterministic text-pixel delivery",
+            VISUAL_CLUSTER_EXECUTOR,
+            entities=["text_layout"],
+            dependencies=["universal_visual_quality"],
+            evidence=["copy_render_plan"],
+            stages=["post_generation_review", "retry_patch", "deterministic_composition"],
+            threshold=0.8,
+        ),
         manifest("suite_direction", "Suite direction", VISUAL_CLUSTER_EXECUTOR, dependencies=["universal_visual_quality"], evidence=["multiple_outputs", "continuation_mode"], threshold=0.4),
         manifest("commercial_quality", "Delivery quality", "output_review", dependencies=["universal_visual_quality"], stages=["post_generation_review", "export_validation"], threshold=0.0, profiles=["balanced", "commercial_strict"]),
     ]

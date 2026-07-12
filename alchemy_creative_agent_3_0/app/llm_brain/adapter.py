@@ -128,6 +128,13 @@ class V3LLMBrainAdapter:
                 "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
                 "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
                 "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
+                # Only a boolean crosses the Brain boundary.  The approved
+                # copy itself stays in the internal runtime envelope and is
+                # bound to the frozen plan by Product API before generation.
+                "internal_copy_render_plan_present": bool(
+                    isinstance(metadata.get("text_pixel_delivery_internal"), dict)
+                    and isinstance(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plan"), dict)
+                ),
             },
             capability_catalog=dict(capability_catalog or {}),
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),
