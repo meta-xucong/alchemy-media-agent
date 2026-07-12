@@ -2233,6 +2233,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             for part in str(request.prompt_compilation.negative_prompt or "").replace("，", ",").split(",")
             if part.strip()
         ]
+        approved_literals = self._provider_native_text_literals(request)
         framework_negative: list[str] = []
         priority_markers = (
             "identity",
@@ -2250,6 +2251,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "clutter",
         )
         for value in compiled_negative:
+            value = self._text_safe_negative_constraint(value, approved_literals)
             if any(marker in value.lower() for marker in priority_markers):
                 framework_negative.append(value)
             if len(framework_negative) >= 18:
@@ -2926,7 +2928,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if keep:
             lines.append("Keep: " + "; ".join(keep[:3]))
         if avoid:
-            lines.append("Do not: " + "; ".join(avoid[:3]))
+            approved_literals = self._provider_native_text_literals(request)
+            lines.append(
+                "Do not: "
+                + "; ".join(
+                    self._text_safe_negative_constraint(value, approved_literals)
+                    for value in avoid[:3]
+                )
+            )
         return [line for line in lines if str(line or "").strip()]
 
     def _role_prompt_pressure_for_provider(self, value: str) -> str:
@@ -2950,6 +2959,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _negative_constraints(self, request: GenerationRequest) -> list[str]:
         allow_product_language = self._product_language_allowed(request, [])
+        approved_literals = self._provider_native_text_literals(request)
         values = [
             "new visible text",
             "invented captions",
@@ -3004,7 +3014,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             values.extend(
                 self._string_list(self._composed_visual_contribution(request).get("negative_additions"))
             )
-        return list(dict.fromkeys(values))
+        return list(
+            dict.fromkeys(
+                self._text_safe_negative_constraint(value, approved_literals)
+                for value in values
+                if value
+            )
+        )
 
     def _retry_prompt_guidance(self, request: GenerationRequest) -> list[str]:
         retry_patch = self._retry_patch(request)
@@ -3058,9 +3074,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         notes = request.prompt_compilation.provider_notes
         policy = str(notes.get("provider_native_text_policy") or request.prompt_compilation.text_policy or "")
-        raw_text = notes.get("provider_native_text")
-        values = raw_text if isinstance(raw_text, list) else [raw_text]
-        approved = [str(value).strip() for value in values if str(value or "").strip()]
+        approved = self._provider_native_text_literals(request)
         if policy == "provider_native_text_forbidden" or bool(notes.get("model_text_forbidden")):
             reference_text_clause = (
                 "Existing product-label evidence may remain only when supplied by the reference."
@@ -3093,6 +3107,30 @@ class ProductionImageGenerationProvider(GenerationProvider):
             f"Do not invent {prohibited}. If the user explicitly requests in-image text, "
             "render it directly in this complete provider-generated image rather than using a local overlay."
         )
+
+    def _provider_native_text_literals(self, request: GenerationRequest) -> list[str]:
+        notes = request.prompt_compilation.provider_notes
+        raw_text = notes.get("provider_native_text")
+        values = raw_text if isinstance(raw_text, list) else [raw_text]
+        return list(dict.fromkeys(str(value).strip() for value in values if str(value or "").strip()))
+
+    def _text_safe_negative_constraint(self, value: str, approved_literals: list[str]) -> str:
+        """Keep generic no-text safeguards from negating approved literal copy."""
+
+        text = str(value or "").strip()
+        if not text or not approved_literals:
+            return text
+        normalized = " ".join(text.lower().replace("-", " ").split())
+        conflicting = {
+            "new visible text",
+            "visible text",
+            "do not add visible text",
+            "do not add any visible text",
+            "unintended generated text",
+        }
+        if normalized in conflicting:
+            return "extra generated text beyond the approved literal"
+        return text
 
     def _looks_like_human_photo_request(self, request: GenerationRequest) -> bool:
         if self._activation_enforced(request):

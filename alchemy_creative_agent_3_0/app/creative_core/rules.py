@@ -525,6 +525,7 @@ def is_poster_like(asset_type: AssetType | str) -> bool:
 class ExplicitText:
     headline: str | None = None
     cta: str | None = None
+    text_forbidden: bool = False
 
 
 def extract_explicit_chinese_text(raw_input: str) -> ExplicitText:
@@ -533,4 +534,39 @@ def extract_explicit_chinese_text(raw_input: str) -> ExplicitText:
     return ExplicitText(
         headline=title_match.group(1) if title_match else None,
         cta=cta_match.group(1) if cta_match else None,
+    )
+
+
+def extract_explicit_provider_native_text(raw_input: str) -> ExplicitText:
+    """Extract only user-declared literal copy, independent of UI language.
+
+    This is deliberately conservative: quoted strings become provider-native copy
+    only when the surrounding words explicitly describe them as text/copy to
+    render. An arbitrary quoted style reference must not become image text.
+    """
+
+    legacy = extract_explicit_chinese_text(raw_input)
+    literals = [value for value in (legacy.headline, legacy.cta) if value]
+    literal_pattern = re.compile(
+        r"(?:render|write|display|show|print|include|place|use)\s+(?:this\s+)?(?:exact(?:ly)?\s+)?"
+        r"(?:user[-\s]?approved\s+)?(?:in[-\s]?image\s+)?(?:text|copy|headline|caption|words?|phrase)"
+        r"[^\"“\n]{0,100}[\"“]([^\"”]{1,180})[\"”]",
+        re.IGNORECASE,
+    )
+    literals.extend(match.group(1).strip() for match in literal_pattern.finditer(raw_input) if match.group(1).strip())
+    unique_literals = list(dict.fromkeys(literals))
+    text_forbidden = bool(
+        re.search(
+            r"(?:do not|don't|without|no|avoid)\s+(?:add|include|render|generate|show|use)?\s*"
+            r"(?:(?:any|all)\s+)?(?:(?:visible|in[-\s]?image|generated)\s+)?(?:text|copy|caption|headline|words?)\b"
+            r"|\btext[-\s]?free\b|不要(?:添加)?(?:任何)?文字|无文字|不添加文字"
+            r"|без\s+(?:любого\s+)?текста",
+            raw_input,
+            re.IGNORECASE,
+        )
+    )
+    return ExplicitText(
+        headline=unique_literals[0] if unique_literals else None,
+        cta=unique_literals[1] if len(unique_literals) > 1 else None,
+        text_forbidden=text_forbidden,
     )

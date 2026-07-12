@@ -371,6 +371,8 @@ class PromptCompilerAgent(BaseAgent):
             if isinstance(copy, str) and copy.strip():
                 return [copy.strip()], "provider_native_text_requested"
             return [], "provider_native_text_optional"
+        if bool(layout_plan.metadata.get("provider_native_text_forbidden")):
+            return [], "provider_native_text_forbidden"
         raw = layout_plan.metadata.get("provider_native_literal_text")
         values = raw if isinstance(raw, list) else [raw]
         text = [str(value).strip() for value in values if str(value or "").strip()]

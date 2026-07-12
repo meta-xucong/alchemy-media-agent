@@ -128,6 +128,52 @@ def test_general_template_final_prompt_stays_subject_focused_not_product_ad() ->
     assert "multi-panel layout" in (prompt.negative_prompt or "").lower()
 
 
+def test_general_explicit_multilingual_literal_copy_is_frozen_and_does_not_conflict_with_no_text_guards() -> None:
+    result = run_creative_planning(
+        'Create one editorial still-life card image. Render this exact user-approved in-image text once, centered on the card: "CLEAR DAY". Add no other visible text.',
+        optional_template_id="general_template",
+        runtime_metadata={"template_id": "general_template", "scenario_id": "general_creative"},
+    )
+
+    layout = result.layout_plans[0]
+    prompt = result.prompt_compilations[0]
+    final_provider_prompt = _provider_prompt_for_planning_result(result)
+
+    assert layout.metadata["provider_native_literal_text"] == ["CLEAR DAY"]
+    assert layout.metadata["provider_native_text_forbidden"] is False
+    assert prompt.text_policy == "provider_native_text_requested"
+    assert '"CLEAR DAY"' in final_provider_prompt
+    assert "No literal copy is preselected" not in final_provider_prompt
+    assert "Do not: do not add visible text" not in final_provider_prompt
+    assert "new visible text" not in final_provider_prompt
+    assert "extra generated text" in final_provider_prompt
+
+    russian = run_creative_planning(
+        'Create one editorial card image. Render this exact user-approved in-image text once: "ЧИСТЫЙ ДЕНЬ".',
+        optional_template_id="general_template",
+        runtime_metadata={"template_id": "general_template", "scenario_id": "general_creative"},
+    )
+    assert russian.layout_plans[0].metadata["provider_native_literal_text"] == ["ЧИСТЫЙ ДЕНЬ"]
+    assert russian.prompt_compilations[0].text_policy == "provider_native_text_requested"
+
+
+def test_general_explicit_no_text_becomes_a_provider_native_final_pixel_constraint() -> None:
+    result = run_creative_planning(
+        "Create a clean still-life scene without any visible text, logo, watermark, badge, or signature.",
+        optional_template_id="general_template",
+        runtime_metadata={"template_id": "general_template", "scenario_id": "general_creative"},
+    )
+
+    layout = result.layout_plans[0]
+    prompt = result.prompt_compilations[0]
+    final_provider_prompt = _provider_prompt_for_planning_result(result)
+
+    assert layout.metadata["provider_native_literal_text"] == []
+    assert layout.metadata["provider_native_text_forbidden"] is True
+    assert prompt.text_policy == "provider_native_text_forbidden"
+    assert "must contain no added visible text" in final_provider_prompt
+
+
 def test_general_landscape_prompt_does_not_misclassify_surface_as_a_human_face() -> None:
     user_input = (
         "Create a quiet alpine lake at sunrise with mountain ridges, mist above the water, "

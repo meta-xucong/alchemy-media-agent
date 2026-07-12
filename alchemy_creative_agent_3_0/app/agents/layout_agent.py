@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .base import AgentResult, BaseAgent
 from ..creative_core.prompt_language import product_language_allowed
-from ..creative_core.rules import RULE_VERSION, extract_explicit_chinese_text, stable_id
+from ..creative_core.rules import RULE_VERSION, extract_explicit_provider_native_text, stable_id
 from ..schemas import AssetSpec, BrandProfile, CommercialBrief, CreativeJob, CreativePlan, LayoutPlan, LayoutRegion, TextRenderingMode
 
 
@@ -28,8 +28,9 @@ class LayoutAgent(BaseAgent):
             user_input=job.raw_user_input,
             metadata={**brief.metadata, **job.metadata, **asset.metadata},
         )
-        explicit_text = extract_explicit_chinese_text(job.raw_user_input)
+        explicit_text = extract_explicit_provider_native_text(job.raw_user_input)
         native_text = [value for value in [explicit_text.headline, explicit_text.cta] if value]
+        text_forbidden = bool(explicit_text.text_forbidden and not native_text)
         product_area = LayoutRegion(
             name="product_area" if allow_product_language else "subject_area",
             position="provider_directed",
@@ -50,6 +51,7 @@ class LayoutAgent(BaseAgent):
                 rules_version=RULE_VERSION,
                 provider_native_text_requested=bool(native_text),
                 provider_native_literal_text=native_text,
+                provider_native_text_forbidden=text_forbidden,
                 layout_preference_used=brand_profile.layout_preference,
                 product_language_allowed=allow_product_language,
                 asset_metadata=dict(asset.metadata),
