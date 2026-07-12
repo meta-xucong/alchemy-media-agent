@@ -1565,23 +1565,13 @@ def _lower_right_mark_risk(path: Path) -> tuple[bool, dict[str, Any]]:
             strong_edge_ratio = _threshold_ratio(edges, 65, pixel_count)
             local_std = float(ImageStat.Stat(strip).stddev[0])
             horizontal_band_ratio = _horizontal_text_band_ratio(edges)
-            compact_mark_score = (strong_edge_ratio * 0.55) + (horizontal_band_ratio * 0.45)
-            # Generated marks usually appear as compact semi-transparent text
-            # or a small logo in the lower-right corner. Flower edges, fabric
-            # folds, rock texture, and architectural detail may create much
-            # denser edge fields. A compact mark should therefore be neither
-            # too sparse nor a high-detail scene region before it can trigger
-            # automatic retry.
-            text_like_edge = edge_ratio >= 0.145 and strong_edge_ratio >= 0.12
-            band_like_edge = strong_edge_ratio >= 0.095 and horizontal_band_ratio >= 0.17
             compact_edge_density = edge_ratio <= 0.22
-            risk = (
-                edge_ratio >= 0.145
-                and compact_edge_density
-                and strong_edge_ratio >= 0.095
-                and (text_like_edge or band_like_edge)
-                and 8.0 <= local_std <= 48.0
-                and (text_like_edge or compact_mark_score >= 0.125)
+            risk = _lower_right_mark_decision(
+                edge_ratio=edge_ratio,
+                strong_edge_ratio=strong_edge_ratio,
+                horizontal_band_ratio=horizontal_band_ratio,
+                local_std=local_std,
+                compact_edge_density=compact_edge_density,
             )
             confidence = "high" if risk else "low"
             return risk, {
@@ -1596,6 +1586,47 @@ def _lower_right_mark_risk(path: Path) -> tuple[bool, dict[str, Any]]:
             }
     except Exception:
         return False, {"lower_right_mark_scan": "unavailable"}
+
+
+def _lower_right_mark_decision(
+    *,
+    edge_ratio: float,
+    strong_edge_ratio: float,
+    horizontal_band_ratio: float,
+    local_std: float,
+    compact_edge_density: bool,
+) -> bool:
+    """Return whether lower-right edge evidence merits one bounded retry.
+
+    Most generated badges are compact text or a small logo.  A low-opacity
+    source watermark copied by an image model can be slightly weaker than
+    conventional text, however, and its fine detail may prevent a horizontal
+    text-band signal.  Treat that narrow compact signature as retryable while
+    keeping dense scene detail (architecture, foliage, fabric) out of scope.
+    """
+    if not compact_edge_density or not 8.0 <= local_std <= 48.0:
+        return False
+    text_like_edge = edge_ratio >= 0.145 and strong_edge_ratio >= 0.12
+    band_like_edge = strong_edge_ratio >= 0.095 and horizontal_band_ratio >= 0.17
+    compact_mark_score = (strong_edge_ratio * 0.55) + (horizontal_band_ratio * 0.45)
+    conventional_mark = (
+        edge_ratio >= 0.145
+        and strong_edge_ratio >= 0.095
+        and (text_like_edge or band_like_edge)
+        and (text_like_edge or compact_mark_score >= 0.125)
+    )
+    # Gate C regression: a small, semi-transparent lower-right watermark copied
+    # from an otherwise valid product reference measured 0.2068 / 0.1050 / 0.02
+    # for edge / strong-edge / horizontal-band density.  It is too weak for the
+    # conventional text path but is neither sparse background nor dense scene
+    # detail.  This remains deliberately narrow because a false positive costs
+    # one real generation attempt.
+    subtle_compact_mark = (
+        0.18 <= edge_ratio <= 0.22
+        and 0.10 <= strong_edge_ratio < 0.12
+        and horizontal_band_ratio <= 0.07
+    )
+    return conventional_mark or subtle_compact_mark
 
 
 def _threshold_ratio(image: Any, threshold: int, pixel_count: int) -> float:

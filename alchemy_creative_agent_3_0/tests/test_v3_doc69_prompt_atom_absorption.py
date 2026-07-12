@@ -341,3 +341,30 @@ def test_doc104_local_inspector_does_not_retry_dense_architectural_corner_detail
     assert evidence["lower_right_edge_ratio"] > 0.22
     assert evidence["lower_right_compact_edge_density"] is False
     assert "lower_right_mark_artifact" not in [issue["code"] for issue in report.detected_issues]
+
+
+def test_doc104_lower_right_inspector_flags_subtle_compact_watermark_signature() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import (
+        _lower_right_mark_decision,
+    )
+
+    # Recorded from a real Gate C product-lifestyle result that preserved its
+    # uploaded source's semi-transparent lower-right watermark.  The prior
+    # detector missed it because it did not form a conventional text band.
+    assert _lower_right_mark_decision(
+        edge_ratio=0.2068,
+        strong_edge_ratio=0.1050,
+        horizontal_band_ratio=0.02,
+        local_std=29.29,
+        compact_edge_density=True,
+    ) is True
+
+    # Keep the rescue path narrow: a dense architectural edge field remains a
+    # scene detail, not a generated-mark retry signal.
+    assert _lower_right_mark_decision(
+        edge_ratio=0.2879,
+        strong_edge_ratio=0.1412,
+        horizontal_band_ratio=0.2432,
+        local_std=15.2,
+        compact_edge_density=False,
+    ) is False
