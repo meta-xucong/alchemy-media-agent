@@ -1,8 +1,8 @@
 # 105 V3 E-Commerce Slot Continuation And Text Pixel Delivery Contract
 
-Status: accepted mainline contract. It freezes the shared interface and
-acceptance boundary; no slot-continuation route or final-text renderer is
-implemented by this document.
+Status: slot-continuation runtime implemented on the mainline; text-pixel
+delivery remains a shared non-production gate until deterministic composition,
+OCR, and live-provider Gate C evidence are accepted.
 
 ## 1. Purpose And Ownership
 
@@ -17,7 +17,7 @@ Template.
 
 ## 2. Slot Continuation Public Contract
 
-The future Project Mode action is namespaced and separate from selection,
+The implemented Project Mode action is namespaced and separate from selection,
 deletion, and internal retry:
 
 ```text
@@ -39,6 +39,17 @@ The endpoint creates a planned child continuation job. Generation then uses
 the existing, ordinary project-job generation endpoint for that child. The
 endpoint must never synchronously replace a parent output or invoke a private
 provider/retry API.
+
+The lifecycle resolver is also public and read-only:
+
+```text
+GET /api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}
+    /ecommerce-slots/{slot_id}/delivery
+```
+
+It returns append-only attempts and exactly one `current_delivery`, if a
+successful root or child result exists. A planned, failed, or blocked child
+does not erase the prior successful delivery.
 
 Validation rules:
 
@@ -210,7 +221,40 @@ this contract's tests, and its own template activation gate all pass.
 - Existing select/delete endpoints retain their meanings and must not proxy a
   slot continuation.
 - Internal retry endpoints remain private implementation details.
-- The implementation adds route, schema, lifecycle, resolver, capability, and
-  browser tests before revealing the UI control.
+- The slot-continuation implementation includes schema, route, lifecycle,
+  persistent lineage/reload, resolver, General-isolation, and frontend
+  contract tests. The E-Commerce UI control remains owned by its worktree and
+  must still wait for its own integration tests.
 - E-Commerce documentation E04 and E09 must cross-reference this contract
   when the E-Commerce worktree implements its side of the interface.
+
+## 10. Implemented Slot Continuation Integration Example
+
+Create a child only; then use the ordinary project-job generation endpoint:
+
+```json
+POST /api/v3/creative-agent/projects/project_demo/jobs/job_parent/ecommerce-slots/feature_image_1/continuations
+{
+  "correction_note": "Show the adjustable shade more clearly.",
+  "new_evidence_asset_ids": ["asset_new_product_angle"],
+  "metadata": {"source": "ecommerce_workspace"}
+}
+```
+
+The stable response contains `child_job_id`, the immutable `lineage`, a
+`generation_route`, and the current folded delivery resolver. The child uses
+the parent's exact frozen plan unless authorized new evidence changes the
+planner's active capability set while
+`V3_CAPABILITY_PLAN_AMENDMENT_ENABLED=true`. That amendment is recorded and a
+second amendment for the same root/slot lineage is rejected.
+
+The E-Commerce worktree must call:
+
+```text
+POST .../continuations
+POST /api/v3/creative-agent/projects/{project_id}/jobs/{child_job_id}/generate
+GET  .../delivery
+```
+
+It must not expose the control on General Template, call a provider directly,
+or relabel an internal automatic retry as a user continuation.

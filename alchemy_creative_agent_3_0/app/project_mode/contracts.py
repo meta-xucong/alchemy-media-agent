@@ -421,6 +421,27 @@ class CreateProjectJobRequest(ProjectModeBase):
         return {key: bool(value[key]) for key in allowed if key in value}
 
 
+class EcommerceSlotContinuationRequest(ProjectModeBase):
+    """User-directed continuation of one declared E-Commerce suite role."""
+
+    correction_note: str | None = Field(default=None, max_length=1200)
+    new_evidence_asset_ids: list[str] = Field(default_factory=list, max_length=12)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("correction_note")
+    @classmethod
+    def clean_correction_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("new_evidence_asset_ids")
+    @classmethod
+    def clean_new_evidence_asset_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if str(item).strip()))
+
+
 class ProjectReferenceRequest(ProjectModeBase):
     asset_ref_id: str
     source_type: ProjectReferenceSourceType = ProjectReferenceSourceType.UPLOADED
@@ -618,4 +639,64 @@ class ProjectBrandMemoryConfirmResponse(V3BaseModel):
     plain_summary: str
     proposal: ProjectBrandMemoryProposal
     project: ProjectRecord
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EcommerceSlotLineage(V3BaseModel):
+    schema_version: str = "ecommerce_slot_lineage_v1"
+    root_job_id: str
+    parent_job_id: str | None = None
+    parent_slot_id: str | None = None
+    continuation_kind: str
+    continuation_correction_note: str | None = None
+    new_evidence_asset_ids: list[str] = Field(default_factory=list)
+    capability_activation_plan_id: str
+    plan_amendment_id: str | None = None
+    created_at: str
+
+
+class EcommerceSlotAttemptSummary(V3BaseModel):
+    job_id: str
+    parent_job_id: str | None = None
+    status: str
+    candidate_ids: list[str] = Field(default_factory=list)
+    output_ids: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    is_current_delivery: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EcommerceSlotCurrentDelivery(V3BaseModel):
+    root_job_id: str
+    slot_id: str
+    job_id: str
+    candidate_id: str
+    asset_id: str | None = None
+    output_id: str | None = None
+    preview_url: str | None = None
+    download_url: str | None = None
+    resolved_at: str
+
+
+class EcommerceSlotDeliveryResponse(V3BaseModel):
+    api_namespace: str
+    route: str
+    project_id: str
+    root_job_id: str
+    slot_id: str
+    current_delivery: EcommerceSlotCurrentDelivery | None = None
+    attempts: list[EcommerceSlotAttemptSummary] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EcommerceSlotContinuationResponse(V3BaseModel):
+    api_namespace: str
+    route: str
+    project_id: str
+    parent_job_id: str
+    slot_id: str
+    child_job_id: str
+    child_status: str
+    lineage: EcommerceSlotLineage
+    delivery: EcommerceSlotDeliveryResponse
     metadata: dict[str, Any] = Field(default_factory=dict)

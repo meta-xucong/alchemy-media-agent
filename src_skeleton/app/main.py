@@ -257,6 +257,12 @@ def _run_v3_handler(handler, *args):
     except TemplateActivationError as exc:
         raise HTTPException(status_code=400, detail=exc.to_detail())
     except ValueError as exc:
+        code = getattr(exc, "code", None)
+        if code:
+            raise HTTPException(
+                status_code=int(getattr(exc, "v3_status_code", 400)),
+                detail={"code": str(code), "message": str(exc)},
+            )
         raise HTTPException(
             status_code=400,
             detail={"code": "invalid_v3_request", "message": str(exc)},
@@ -467,6 +473,42 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
         started = _start_v3_project_generation_background(project_id, response["job_id"], generate_payload)
         return _mark_v3_background_generation_response(response, started=started)
     return response
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{parent_job_id}/ecommerce-slots/{slot_id}/continuations")
+async def v3_create_ecommerce_slot_continuation_endpoint(
+    project_id: str,
+    parent_job_id: str,
+    slot_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    payload = _v3_payload_with_veyra_owner(await _v3_json_payload(request), user_id)
+    return _run_v3_handler(
+        v3_route_handlers.post_project_ecommerce_slot_continuation,
+        project_id,
+        parent_job_id,
+        slot_id,
+        payload,
+    )
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}/ecommerce-slots/{slot_id}/delivery")
+def v3_get_ecommerce_slot_delivery_endpoint(
+    project_id: str,
+    root_job_id: str,
+    slot_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(
+        v3_route_handlers.get_project_ecommerce_slot_delivery,
+        project_id,
+        root_job_id,
+        slot_id,
+    )
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/generate")

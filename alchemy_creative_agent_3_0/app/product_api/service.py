@@ -498,6 +498,7 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        self._seed_ecommerce_slot_root_lineage(create_request, job_id)
         record = ProductJobRecord(
             request=create_request,
             status=status,
@@ -514,6 +515,35 @@ class V3ProductApiService:
 
     def create_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         return self.create_creative_job(request)
+
+    def get_job_record(self, job_id: str) -> ProductJobRecord | None:
+        """Internal Project Mode lookup; no new public low-level API is exposed."""
+
+        return self.job_store.get(job_id)
+
+    def preview_capability_activation(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+    ) -> dict[str, Any]:
+        """Plan a possible evidence amendment without creating a job or provider call."""
+
+        create_request = self._coerce_create_job_request(request)
+        runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
+        plan = runtime_result.metadata.get("capability_activation_plan")
+        if not isinstance(plan, dict) or not plan.get("plan_id"):
+            raise ValueError("capability activation amendment could not be planned")
+        return {
+            key: runtime_result.metadata[key]
+            for key in (
+                "capability_activation_plan",
+                "capability_activation_plan_id",
+                "visual_task_profile",
+                "capability_activation_intent",
+                "capability_catalog_version",
+                "capability_activation_mode",
+            )
+            if key in runtime_result.metadata
+        }
 
     def create_uploaded_asset(self, request: V3AssetUploadCreateRequest | dict[str, Any]) -> V3UploadedAssetRecord:
         return self.asset_store.create_upload(request)
@@ -3086,6 +3116,12 @@ class V3ProductApiService:
             "commerce_profile_present",
             "ecommerce_text_to_image_fallback",
             "has_product_reference",
+            "ecommerce_slot_lineage",
+            "capability_plan_amendment",
+            "continuation_evidence_asset_ids",
+            "capability_activation_plan_id",
+            "capability_catalog_version",
+            "capability_activation_mode",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
         }
@@ -4208,6 +4244,27 @@ class V3ProductApiService:
             "product_profile": dict(request.product_profile),
             "metadata": dict(request.metadata),
         }
+
+    def _seed_ecommerce_slot_root_lineage(self, request: CreateCreativeJobRequest, job_id: str) -> None:
+        metadata = dict(request.metadata or {})
+        if not metadata.get("ecommerce_slot_lineage_seed") or isinstance(metadata.get("ecommerce_slot_lineage"), dict):
+            return
+        plan_id = str(metadata.get("capability_activation_plan_id") or "").strip()
+        if not plan_id:
+            return
+        metadata["ecommerce_slot_lineage"] = {
+            "schema_version": "ecommerce_slot_lineage_v1",
+            "root_job_id": job_id,
+            "parent_job_id": None,
+            "parent_slot_id": None,
+            "continuation_kind": "ecommerce_root",
+            "continuation_correction_note": None,
+            "new_evidence_asset_ids": [],
+            "capability_activation_plan_id": plan_id,
+            "plan_amendment_id": None,
+            "created_at": _utc_now_iso(),
+        }
+        request.metadata = metadata
 
     def _empty_balance_estimate(self) -> dict[str, Any]:
         return self._balance_estimate_to_dict(

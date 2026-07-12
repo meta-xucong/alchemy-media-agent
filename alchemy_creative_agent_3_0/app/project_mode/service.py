@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -18,12 +19,19 @@ from ..product_api.contracts import (
     V3UploadedAssetRecord,
 )
 from ..schemas import BrandProfile, ReferenceAsset
+from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
 from .contracts import (
     ECOMMERCE_TEMPLATE_ID,
     GENERAL_TEMPLATE_ID,
     CreateProjectJobRequest,
     CreateProjectRequest,
+    EcommerceSlotAttemptSummary,
+    EcommerceSlotContinuationRequest,
+    EcommerceSlotContinuationResponse,
+    EcommerceSlotCurrentDelivery,
+    EcommerceSlotDeliveryResponse,
+    EcommerceSlotLineage,
     OutputRef,
     ProjectBrandMemoryConfirmRequest,
     ProjectBrandMemoryConfirmResponse,
@@ -67,6 +75,15 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
+
+
+class EcommerceSlotContinuationError(ValueError):
+    """Structured public failure for the namespaced slot-continuation route."""
+
+    def __init__(self, code: str, message: str, *, status_code: int = 409) -> None:
+        super().__init__(message)
+        self.code = code
+        self.v3_status_code = status_code
 
 
 class V3ProjectModeService:
@@ -742,6 +759,7 @@ class V3ProjectModeService:
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
+                "ecommerce_slot_lineage_seed": template_manifest.template_id == ECOMMERCE_TEMPLATE_ID,
             },
         }
         status = self.product_service.create_job(create_payload)
@@ -763,9 +781,12 @@ class V3ProjectModeService:
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
+                "ecommerce_slot_lineage": status.metadata.get("ecommerce_slot_lineage"),
             }
         )
         self._link_job(project, status.job_id, context)
+        if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
+            self._persist_ecommerce_slot_anchor(project, status)
         self._append_timeline(
             project.project_id,
             TimelineItemType.JOB_CREATED,
@@ -781,9 +802,198 @@ class V3ProjectModeService:
                 "commerce_profile_present": commerce_profile is not None,
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
+                "ecommerce_slot_lineage": status.metadata.get("ecommerce_slot_lineage"),
             },
         )
         return status
+
+    def create_ecommerce_slot_continuation(
+        self,
+        project_id: str,
+        parent_job_id: str,
+        slot_id: str,
+        request: EcommerceSlotContinuationRequest | dict[str, Any],
+    ) -> EcommerceSlotContinuationResponse:
+        """Create one append-only E-Commerce slot child; generation stays separate."""
+
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, parent_job_id)
+        continuation_request = self._coerce_ecommerce_slot_continuation_request(request)
+        clean_slot_id = str(slot_id or "").strip()
+        anchor = self._require_ecommerce_slot_anchor(project, parent_job_id)
+        parent_lineage = EcommerceSlotLineage.model_validate(anchor["lineage"])
+        if parent_lineage.parent_slot_id and parent_lineage.parent_slot_id != clean_slot_id:
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "A child continuation can only continue its own E-Commerce slot.",
+            )
+        root_anchor = self._require_ecommerce_slot_anchor(project, parent_lineage.root_job_id)
+        declared_slots = [str(item).strip() for item in root_anchor.get("declared_slot_ids") or [] if str(item).strip()]
+        if not clean_slot_id or clean_slot_id not in declared_slots:
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "This E-Commerce slot is not declared by the parent job's frozen suite.",
+            )
+        evidence_ids = list(continuation_request.new_evidence_asset_ids)
+        self._validate_continuation_evidence(project, evidence_ids)
+        self._validate_new_continuation_evidence(anchor, evidence_ids)
+        parent_plan = CapabilityActivationPlan.model_validate(anchor["frozen_capability_activation_plan"])
+        frozen_plan, amendment, amendment_metadata = self._resolve_ecommerce_slot_plan(
+            project=project,
+            root_job_id=parent_lineage.root_job_id,
+            slot_id=clean_slot_id,
+            parent_anchor=anchor,
+            parent_plan=parent_plan,
+            evidence_ids=evidence_ids,
+        )
+        lineage_payload = EcommerceSlotLineage(
+            root_job_id=parent_lineage.root_job_id,
+            parent_job_id=parent_job_id,
+            parent_slot_id=clean_slot_id,
+            continuation_kind="ecommerce_slot",
+            continuation_correction_note=continuation_request.correction_note,
+            new_evidence_asset_ids=evidence_ids,
+            capability_activation_plan_id=frozen_plan.plan_id,
+            plan_amendment_id=amendment.amendment_id if amendment else None,
+            created_at=_utc_now_iso(),
+        )
+        source = self._continuation_source(continuation_request.metadata)
+        child_metadata = {
+            "source": source,
+            "ecommerce_slot_lineage": lineage_payload.model_dump(mode="json"),
+            "capability_activation_plan": frozen_plan.model_dump(mode="json"),
+            "capability_activation_plan_id": frozen_plan.plan_id,
+            "continuation_evidence_asset_ids": evidence_ids,
+            **amendment_metadata,
+        }
+        owner_user_id = self._positive_owner_id(dict(continuation_request.metadata or {}).get("veyra_user_id"))
+        if owner_user_id is not None:
+            child_metadata["veyra_user_id"] = owner_user_id
+        if amendment is not None:
+            child_metadata["capability_plan_amendment"] = amendment.model_dump(mode="json")
+        child = self.create_project_job(
+            project_id,
+            {
+                "template_id": ECOMMERCE_TEMPLATE_ID,
+                "user_input": self._slot_continuation_instruction(
+                    str(anchor["planning_request"].get("user_input") or project.user_goal),
+                    clean_slot_id,
+                    continuation_request.correction_note,
+                ),
+                "uploaded_asset_ids": self._continuation_product_evidence_ids(project, evidence_ids),
+                "suite_slot_request": [clean_slot_id],
+                "metadata": child_metadata,
+            },
+        )
+        child_anchor = self._require_ecommerce_slot_anchor(project, child.job_id)
+        child_lineage = EcommerceSlotLineage.model_validate(child_anchor["lineage"])
+        delivery = self.resolve_ecommerce_slot_delivery(project_id, parent_lineage.root_job_id, clean_slot_id)
+        route = self._ecommerce_slot_continuation_route(project_id, parent_job_id, clean_slot_id)
+        return EcommerceSlotContinuationResponse(
+            api_namespace=API_NAMESPACE,
+            route=route,
+            project_id=project_id,
+            parent_job_id=parent_job_id,
+            slot_id=clean_slot_id,
+            child_job_id=child.job_id,
+            child_status=str(child.status),
+            lineage=child_lineage,
+            delivery=delivery,
+            metadata={
+                "source": PROJECT_API_SOURCE,
+                "generation_route": f"{API_NAMESPACE}/projects/{project_id}/jobs/{child.job_id}/generate",
+                "append_only": True,
+                "uses_shared_generation_review_retry": True,
+                "plan_amendment_applied": amendment is not None,
+                "plan_amendment_enabled": self._capability_plan_amendment_enabled(),
+            },
+        )
+
+    def get_ecommerce_slot_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        slot_id: str,
+    ) -> EcommerceSlotDeliveryResponse:
+        return self.resolve_ecommerce_slot_delivery(project_id, root_job_id, slot_id)
+
+    def resolve_ecommerce_slot_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        slot_id: str,
+    ) -> EcommerceSlotDeliveryResponse:
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, root_job_id)
+        root_anchor = self._require_ecommerce_slot_anchor(project, root_job_id)
+        root_lineage = EcommerceSlotLineage.model_validate(root_anchor["lineage"])
+        clean_slot_id = str(slot_id or "").strip()
+        declared_slots = [str(item).strip() for item in root_anchor.get("declared_slot_ids") or [] if str(item).strip()]
+        if root_lineage.root_job_id != root_job_id or not clean_slot_id or clean_slot_id not in declared_slots:
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "This job and slot do not expose an E-Commerce continuation delivery lineage.",
+            )
+        attempts: list[EcommerceSlotAttemptSummary] = []
+        current_delivery: EcommerceSlotCurrentDelivery | None = None
+        for job_id in project.job_ids:
+            anchor = self._ecommerce_slot_anchor(project, job_id)
+            if anchor is None:
+                continue
+            lineage = EcommerceSlotLineage.model_validate(anchor["lineage"])
+            is_root_attempt = job_id == root_job_id
+            if not is_root_attempt and (
+                lineage.root_job_id != root_job_id or lineage.parent_slot_id != clean_slot_id
+            ):
+                continue
+            status = self.product_service.get_job(job_id)
+            candidates = self._slot_candidates(status, clean_slot_id, is_root_attempt=is_root_attempt)
+            candidate_ids = [str(item.get("candidate_id") or "") for item in candidates if item.get("candidate_id")]
+            output_ids = [str(item.get("output_id") or "") for item in candidates if item.get("output_id")]
+            attempt = EcommerceSlotAttemptSummary(
+                job_id=job_id,
+                parent_job_id=lineage.parent_job_id,
+                status=str(status.status),
+                candidate_ids=candidate_ids,
+                output_ids=output_ids,
+                created_at=str(anchor.get("created_at") or "") or None,
+                metadata={
+                    "continuation_kind": lineage.continuation_kind,
+                    "plan_amendment_id": lineage.plan_amendment_id,
+                },
+            )
+            attempts.append(attempt)
+            if status.status == ProductJobStatusValue.GENERATED and candidates:
+                candidate = candidates[0]
+                current_delivery = EcommerceSlotCurrentDelivery(
+                    root_job_id=root_job_id,
+                    slot_id=clean_slot_id,
+                    job_id=job_id,
+                    candidate_id=str(candidate["candidate_id"]),
+                    asset_id=str(candidate.get("asset_id") or "") or None,
+                    output_id=str(candidate.get("output_id") or "") or None,
+                    preview_url=str(candidate.get("preview_url") or candidate.get("preview_uri") or "") or None,
+                    download_url=str(candidate.get("download_url") or "") or None,
+                    resolved_at=_utc_now_iso(),
+                )
+        if current_delivery is not None:
+            for attempt in attempts:
+                attempt.is_current_delivery = attempt.job_id == current_delivery.job_id
+        route = self._ecommerce_slot_delivery_route(project_id, root_job_id, clean_slot_id)
+        return EcommerceSlotDeliveryResponse(
+            api_namespace=API_NAMESPACE,
+            route=route,
+            project_id=project_id,
+            root_job_id=root_job_id,
+            slot_id=clean_slot_id,
+            current_delivery=current_delivery,
+            attempts=attempts,
+            metadata={
+                "source": PROJECT_API_SOURCE,
+                "append_only_history": True,
+                "failed_or_blocked_children_preserve_previous_delivery": True,
+            },
+        )
 
     def generate_project_job(self, project_id: str, job_id: str, request: dict[str, Any] | None = None) -> ProductJobStatus:
         project = self._require_project(project_id)
@@ -995,6 +1205,263 @@ class V3ProjectModeService:
 
     def template_cards(self) -> list[TemplateCard]:
         return self.template_registry.list_cards()
+
+    def _coerce_ecommerce_slot_continuation_request(
+        self,
+        request: EcommerceSlotContinuationRequest | dict[str, Any],
+    ) -> EcommerceSlotContinuationRequest:
+        if isinstance(request, EcommerceSlotContinuationRequest):
+            return request
+        return EcommerceSlotContinuationRequest.model_validate(request)
+
+    def _persist_ecommerce_slot_anchor(self, project: ProjectRecord, status: ProductJobStatus) -> None:
+        record = self.product_service.get_job_record(status.job_id)
+        if record is None:
+            return
+        request_metadata = dict(record.request.metadata or {})
+        lineage = request_metadata.get("ecommerce_slot_lineage")
+        plan = request_metadata.get("capability_activation_plan")
+        if not isinstance(lineage, dict) or not isinstance(plan, dict):
+            return
+        parsed_lineage = EcommerceSlotLineage.model_validate(lineage)
+        CapabilityActivationPlan.model_validate(plan)
+        anchors = self._ecommerce_slot_anchors(project)
+        declared_slots = self._declared_ecommerce_slots(status)
+        if parsed_lineage.root_job_id != status.job_id:
+            root_anchor = anchors.get(parsed_lineage.root_job_id) or {}
+            declared_slots = [
+                str(item).strip()
+                for item in root_anchor.get("declared_slot_ids") or []
+                if str(item).strip()
+            ]
+        anchors[status.job_id] = {
+            "lineage": parsed_lineage.model_dump(mode="json"),
+            "frozen_capability_activation_plan": plan,
+            "planning_request": record.request.model_dump(mode="json"),
+            "declared_slot_ids": declared_slots,
+            "created_at": record.created_at,
+        }
+        project.metadata = {
+            **dict(project.metadata or {}),
+            "ecommerce_slot_lineage_records": anchors,
+        }
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+
+    def _ecommerce_slot_anchors(self, project: ProjectRecord) -> dict[str, dict[str, Any]]:
+        raw = dict(project.metadata or {}).get("ecommerce_slot_lineage_records")
+        if not isinstance(raw, dict):
+            return {}
+        anchors: dict[str, dict[str, Any]] = {}
+        for job_id, payload in raw.items():
+            if isinstance(payload, dict):
+                anchors[str(job_id)] = dict(payload)
+        return anchors
+
+    def _ecommerce_slot_anchor(self, project: ProjectRecord, job_id: str) -> dict[str, Any] | None:
+        return self._ecommerce_slot_anchors(project).get(job_id)
+
+    def _require_ecommerce_slot_anchor(self, project: ProjectRecord, job_id: str) -> dict[str, Any]:
+        anchor = self._ecommerce_slot_anchor(project, job_id)
+        if anchor is None:
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "This historical or non-E-Commerce job has no readable slot-continuation lineage.",
+            )
+        if not isinstance(anchor.get("lineage"), dict) or not isinstance(anchor.get("frozen_capability_activation_plan"), dict):
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "This E-Commerce job has incomplete slot-continuation lineage.",
+            )
+        if not isinstance(anchor.get("planning_request"), dict):
+            raise EcommerceSlotContinuationError(
+                "slot_continuation_not_supported",
+                "This E-Commerce job cannot safely reconstruct its continuation request.",
+            )
+        return anchor
+
+    def _declared_ecommerce_slots(self, status: ProductJobStatus) -> list[str]:
+        ecommerce = status.ecommerce
+        recipes = ecommerce.image_recipes if ecommerce is not None else []
+        return list(
+            dict.fromkeys(
+                str(recipe.get("slot") or "").strip()
+                for recipe in recipes
+                if isinstance(recipe, dict) and str(recipe.get("slot") or "").strip()
+            )
+        )
+
+    def _validate_continuation_evidence(self, project: ProjectRecord, evidence_ids: list[str]) -> None:
+        authorized = set(self._project_asset_ids(project)) | set(self._project_output_reference_ids(project))
+        unknown = [item for item in evidence_ids if item not in authorized]
+        if unknown:
+            raise EcommerceSlotContinuationError(
+                "invalid_slot_continuation_evidence",
+                "New evidence must already be an authorized project asset or selected output.",
+                status_code=400,
+            )
+
+    def _validate_new_continuation_evidence(self, parent_anchor: dict[str, Any], evidence_ids: list[str]) -> None:
+        if not evidence_ids:
+            return
+        planning_request = dict(parent_anchor.get("planning_request") or {})
+        metadata = dict(planning_request.get("metadata") or {})
+        parent_evidence = {
+            str(item).strip()
+            for item in [
+                *list(planning_request.get("uploaded_asset_ids") or []),
+                *list(metadata.get("continuation_evidence_asset_ids") or []),
+            ]
+            if str(item).strip()
+        }
+        if any(item in parent_evidence for item in evidence_ids):
+            raise EcommerceSlotContinuationError(
+                "invalid_slot_continuation_evidence",
+                "A plan amendment requires evidence that was not already present in the parent continuation anchor.",
+                status_code=400,
+            )
+
+    def _continuation_product_evidence_ids(self, project: ProjectRecord, evidence_ids: list[str]) -> list[str]:
+        return [asset_id for asset_id in evidence_ids if self._is_ready_product_upload(asset_id)]
+
+    def _capability_plan_amendment_enabled(self) -> bool:
+        return os.getenv("V3_CAPABILITY_PLAN_AMENDMENT_ENABLED", "false").strip().lower() == "true"
+
+    def _resolve_ecommerce_slot_plan(
+        self,
+        *,
+        project: ProjectRecord,
+        root_job_id: str,
+        slot_id: str,
+        parent_anchor: dict[str, Any],
+        parent_plan: CapabilityActivationPlan,
+        evidence_ids: list[str],
+    ) -> tuple[CapabilityActivationPlan, CapabilityPlanAmendment | None, dict[str, Any]]:
+        if not evidence_ids or not self._capability_plan_amendment_enabled():
+            return parent_plan, None, {}
+        if self._slot_has_plan_amendment(project, root_job_id, slot_id):
+            raise EcommerceSlotContinuationError(
+                "slot_plan_amendment_exhausted",
+                "This root-job and slot lineage already contains its one allowed capability-plan amendment.",
+            )
+        preview_payload = dict(parent_anchor["planning_request"])
+        preview_metadata = dict(preview_payload.get("metadata") or {})
+        for key in (
+            "capability_activation_plan",
+            "capability_activation_plan_id",
+            "capability_catalog_version",
+            "capability_activation_mode",
+            "capability_plan_amendment",
+            "ecommerce_slot_lineage",
+        ):
+            preview_metadata.pop(key, None)
+        preview_metadata["continuation_new_evidence_asset_ids"] = list(evidence_ids)
+        preview_payload["metadata"] = preview_metadata
+        preview_payload["uploaded_asset_ids"] = list(
+            dict.fromkeys(
+                [
+                    *list(preview_payload.get("uploaded_asset_ids") or []),
+                    *self._continuation_product_evidence_ids(project, evidence_ids),
+                ]
+            )
+        )
+        try:
+            preview = self.product_service.preview_capability_activation(preview_payload)
+            candidate_plan = CapabilityActivationPlan.model_validate(preview["capability_activation_plan"])
+        except Exception as exc:
+            raise EcommerceSlotContinuationError(
+                "slot_plan_amendment_unavailable",
+                f"The new evidence could not be safely evaluated for a capability-plan amendment: {str(exc)[:160]}",
+            ) from exc
+        if candidate_plan.template_id != parent_plan.template_id or candidate_plan.scenario_id != parent_plan.scenario_id:
+            raise EcommerceSlotContinuationError(
+                "slot_plan_amendment_invalid",
+                "The proposed capability plan does not match the parent template and scenario.",
+            )
+        if candidate_plan.dependency_order == parent_plan.dependency_order:
+            return parent_plan, None, {}
+        amendment = CapabilityPlanAmendment(
+            amendment_id=stable_id(
+                "ecommerce_slot_plan_amendment",
+                root_job_id,
+                slot_id,
+                parent_plan.plan_id,
+                candidate_plan.plan_id,
+                evidence_ids,
+            ),
+            original_plan_id=parent_plan.plan_id,
+            amended_plan_id=candidate_plan.plan_id,
+            evidence_ids=evidence_ids,
+            reason_code="new_authorized_evidence_changed_capability_plan",
+        )
+        return candidate_plan, amendment, {
+            key: preview[key]
+            for key in (
+                "visual_task_profile",
+                "capability_activation_intent",
+                "capability_catalog_version",
+                "capability_activation_mode",
+            )
+            if key in preview
+        }
+
+    def _slot_has_plan_amendment(self, project: ProjectRecord, root_job_id: str, slot_id: str) -> bool:
+        for anchor in self._ecommerce_slot_anchors(project).values():
+            lineage = anchor.get("lineage")
+            if not isinstance(lineage, dict):
+                continue
+            if (
+                lineage.get("root_job_id") == root_job_id
+                and lineage.get("parent_slot_id") == slot_id
+                and lineage.get("plan_amendment_id")
+            ):
+                return True
+        return False
+
+    def _continuation_source(self, metadata: dict[str, Any]) -> str:
+        source = str(dict(metadata or {}).get("source") or "ecommerce_workspace").strip()
+        return source[:120] or "ecommerce_workspace"
+
+    def _slot_continuation_instruction(self, parent_instruction: str, slot_id: str, correction_note: str | None) -> str:
+        correction = f" User correction: {correction_note}" if correction_note else ""
+        return (
+            f"{parent_instruction}\n\n"
+            f"E-Commerce slot continuation: regenerate only the declared '{slot_id}' role."
+            f" Preserve the parent product facts, frozen capability plan, and suite identity.{correction}"
+        )
+
+    def _slot_candidates(
+        self,
+        status: ProductJobStatus,
+        slot_id: str,
+        *,
+        is_root_attempt: bool,
+    ) -> list[dict[str, Any]]:
+        asset_metadata_by_candidate = {
+            asset.selected_candidate_id: dict(asset.metadata or {})
+            for asset in status.asset_series
+            if asset.selected_candidate_id
+        }
+        candidates = [candidate.model_dump(mode="json") for candidate in status.candidates]
+        matched = [
+            candidate
+            for candidate in candidates
+            if str(
+                dict(candidate.get("metadata") or {}).get("ecommerce_slot")
+                or asset_metadata_by_candidate.get(candidate.get("candidate_id"), {}).get("ecommerce_slot")
+                or ""
+            ).strip()
+            == slot_id
+        ]
+        if matched or is_root_attempt:
+            return matched
+        return candidates
+
+    def _ecommerce_slot_continuation_route(self, project_id: str, parent_job_id: str, slot_id: str) -> str:
+        return f"{API_NAMESPACE}/projects/{project_id}/jobs/{parent_job_id}/ecommerce-slots/{slot_id}/continuations"
+
+    def _ecommerce_slot_delivery_route(self, project_id: str, root_job_id: str, slot_id: str) -> str:
+        return f"{API_NAMESPACE}/projects/{project_id}/jobs/{root_job_id}/ecommerce-slots/{slot_id}/delivery"
 
     def _coerce_create_project_request(self, request: CreateProjectRequest | dict[str, Any]) -> CreateProjectRequest:
         if isinstance(request, CreateProjectRequest):

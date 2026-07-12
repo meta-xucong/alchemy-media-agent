@@ -120,6 +120,32 @@ class V3ProductRouteHandlers:
     def post_project_job(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.create_project_job(project_id, payload).model_dump(mode="json")
 
+    def post_project_ecommerce_slot_continuation(
+        self,
+        project_id: str,
+        parent_job_id: str,
+        slot_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.project_service.create_ecommerce_slot_continuation(
+            project_id,
+            parent_job_id,
+            slot_id,
+            payload,
+        ).model_dump(mode="json")
+
+    def get_project_ecommerce_slot_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        slot_id: str,
+    ) -> dict[str, Any]:
+        return self.project_service.get_ecommerce_slot_delivery(
+            project_id,
+            root_job_id,
+            slot_id,
+        ).model_dump(mode="json")
+
     def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.generate_project_job(project_id, job_id, payload or {}).model_dump(mode="json")
 
