@@ -119,6 +119,17 @@ def test_ecommerce_workspace_exposes_price_positioning_without_a_price_claim() -
     assert "画面定位：${escapeHtml(positioningLabel)}" in script
 
 
+def test_ecommerce_workspace_exposes_platform_visual_intent_as_a_template_only_label() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+
+    assert "function v3EcommercePlatformVisualIntentLabel(intentId)" in script
+    assert "amazon_white_background_primary" in script
+    assert "ozon_mobile_scene_led" in script
+    assert "taobao_detail_story" in script
+    assert 'recipe?.metadata?.platform_visual_intent_id' in script
+    assert "平台画面方向：${escapeHtml(platformVisualIntentLabel)}" in script
+
+
 def test_ecommerce_workspace_exposes_copy_locale_and_slot_safe_overlay_copy_controls() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     html = INDEX_HTML.read_text(encoding="utf-8")

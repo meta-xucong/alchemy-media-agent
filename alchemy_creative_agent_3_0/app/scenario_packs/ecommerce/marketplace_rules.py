@@ -42,6 +42,91 @@ PLATFORM_ALIASES = {
 }
 
 
+def platform_visual_intent_for_slot(platform: str, slot: str) -> dict[str, str]:
+    """Return versioned internal visual grammar for one marketplace suite role."""
+
+    normalized_platform = str(platform or "generic").strip().lower()
+    primary_slot = slot in {"main_image", "hero_image"}
+    traffic_slot = slot in {"ad_cover", "benefit_hook", "store_banner", "collection_cover"}
+    if normalized_platform == "amazon":
+        if primary_slot:
+            return {
+                "id": "amazon_white_background_primary",
+                "direction": (
+                    "Use a clean pure-white, product-first listing main image: show the complete product clearly with "
+                    "minimal distraction; no props, people, badges, borders, or rendered text."
+                ),
+            }
+        return {
+            "id": "amazon_narrative_secondary",
+            "direction": (
+                "Use a conversion-oriented secondary image that proves one supplied benefit through clear detail, "
+                "scale, compatibility, or realistic use context without unsupported claims."
+            ),
+        }
+    if normalized_platform == "ozon":
+        return {
+            "id": "ozon_mobile_scene_led",
+            "direction": (
+                "Use a mobile-readable, scene-led commerce composition with an immediately recognizable product, "
+                "believable scale, and one clear real-use idea rather than an empty studio-only frame."
+            ),
+        }
+    if normalized_platform == "taobao":
+        if primary_slot:
+            return {
+                "id": "taobao_high_impact_primary",
+                "direction": (
+                    "Use a high-impact product-first hero with polished lighting, clear silhouette, and a strong first "
+                    "impression while keeping the actual product identity central."
+                ),
+            }
+        return {
+            "id": "taobao_detail_story",
+            "direction": (
+                "Use rich detail-page storytelling: one focused feature proof, material or scale evidence, and an "
+                "intentionally layered but readable commercial composition."
+            ),
+        }
+    if normalized_platform == "jd":
+        return {
+            "id": "jd_parameter_confidence",
+            "direction": (
+                "Use a clear, quality-confidence composition that makes the product, supplied parameters, material "
+                "detail, and real-use evidence easy to compare without adding unsupported service claims."
+            ),
+        }
+    if normalized_platform == "pinduoduo":
+        return {
+            "id": "pinduoduo_fast_comprehension",
+            "direction": (
+                "Make product type, supplied quantity or scale, and practical function immediately understandable; "
+                "do not introduce price, discount, savings, or promotion claims."
+            ),
+        }
+    if normalized_platform == "tiktok_shop":
+        return {
+            "id": "tiktok_real_use_hook" if traffic_slot else "tiktok_creator_real_use",
+            "direction": (
+                "Use a scroll-stopping but truthful real-use composition with a clear product identity, natural human "
+                "scale when relevant, and one memorable visual hook without fabricated performance claims."
+            ),
+        }
+    if normalized_platform == "shopify":
+        return {
+            "id": "shopify_brand_story",
+            "direction": (
+                "Use a brand-consistent product story with coherent lighting, material detail, and lifestyle context "
+                "that can extend from a product page into a campaign without inventing brand facts."
+            ),
+        }
+    return {
+        "id": "generic_product_first",
+        "direction": (
+            "Use a clear product-first commercial composition with one evidence-backed visual purpose and no "
+            "unsupported claims."
+        ),
+}
 class MarketplaceRuleEngine:
     """Return stable first-pass platform guidance without pretending it is live policy."""
 

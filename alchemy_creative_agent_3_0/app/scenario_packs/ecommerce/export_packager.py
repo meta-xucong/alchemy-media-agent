@@ -54,6 +54,7 @@ class EcommerceExportPackager:
                     "slot": recipe.slot,
                     "filename": filename,
                     "dimension_hint": dimension_hint,
+                    "platform_visual_intent_id": recipe.metadata.get("platform_visual_intent_id"),
                     "format": export_rules.get("format", "png"),
                     "business_goal": recipe.business_goal,
                     "review_status": "needs_pixel_review",
@@ -94,6 +95,11 @@ class EcommerceExportPackager:
                 "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
                 "category_ids": category_ids,
                 "category_profile_versions": category_profile_versions,
+                "platform_visual_intent_ids": {
+                    recipe.slot: recipe.metadata.get("platform_visual_intent_id")
+                    for recipe in recipes
+                    if recipe.metadata.get("platform_visual_intent_id")
+                },
                 "publish_checks": publish_checks,
                 "publish_summary": self._publish_summary(files, publish_checks),
             },

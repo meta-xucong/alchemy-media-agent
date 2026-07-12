@@ -4946,6 +4946,23 @@ function v3EcommercePricePositioningLabel(positioning) {
   return labels[positioning] || "";
 }
 
+function v3EcommercePlatformVisualIntentLabel(intentId) {
+  const labels = {
+    amazon_white_background_primary: "Amazon 白底商品主图",
+    amazon_narrative_secondary: "Amazon 叙事型副图",
+    ozon_mobile_scene_led: "Ozon 移动端场景图",
+    taobao_high_impact_primary: "淘宝/天猫高冲击主图",
+    taobao_detail_story: "淘宝/天猫详情叙事图",
+    jd_parameter_confidence: "京东参数与品质证明图",
+    pinduoduo_fast_comprehension: "拼多多快速理解图",
+    tiktok_real_use_hook: "TikTok Shop 真实使用钩子图",
+    tiktok_creator_real_use: "TikTok Shop 创作者使用图",
+    shopify_brand_story: "独立站品牌故事图",
+    generic_product_first: "商品优先展示图",
+  };
+  return labels[intentId] || "";
+}
+
 function v3EcommerceSuiteScopeLabel(scopeId, presetId = v3State.selectedPreset) {
   const labels = {
     listing_core: "基础上架图",
@@ -5850,11 +5867,14 @@ function renderV3EcommercePlanList(summary) {
     const positioningId = String(recipe?.metadata?.price_positioning || "").trim();
     const positioningLabel = v3EcommercePricePositioningLabel(positioningId)
       || String(recipe?.metadata?.price_positioning_label || "").trim();
+    const platformVisualIntentId = String(recipe?.metadata?.platform_visual_intent_id || "").trim();
+    const platformVisualIntentLabel = v3EcommercePlatformVisualIntentLabel(platformVisualIntentId);
     row.innerHTML = `
       <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
       ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
       ${positioningLabel ? `<small>画面定位：${escapeHtml(positioningLabel)}</small>` : ""}
+      ${platformVisualIntentLabel ? `<small>平台画面方向：${escapeHtml(platformVisualIntentLabel)}</small>` : ""}
     `;
     els.v3EcommercePlanList.appendChild(row);
   });

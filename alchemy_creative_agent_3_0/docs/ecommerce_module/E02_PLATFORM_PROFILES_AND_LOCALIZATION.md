@@ -13,7 +13,7 @@ profiles degrade to a generic commerce profile and emit a review warning.
 
 | Profile family | Default visual strategy | Typical roles |
 | --- | --- | --- |
-| Amazon | compliant product-first sequence with narrative secondary images | main, benefit, detail, use, size/compatibility, trust/A+ |
+| Amazon | clean white-background product-first main image with narrative secondary images | main, benefit, detail, use, size/compatibility, trust/A+ |
 | Ozon | mobile-readable scene-led commerce images with concise Russian copy when needed | scene hero, benefit, detail, size, use, trust |
 | Taobao/Tmall | high-impact first impression plus rich detail-page storytelling | hero, angle, detail, benefit, scene, size, service/trust |
 | JD | clear product, parameters, quality and service confidence | main, function, specification, detail, scene, trust |
@@ -23,6 +23,13 @@ profiles degrade to a generic commerce profile and emit a review warning.
 
 These are planning defaults. Actual platform policies must be imported or
 maintained as versioned data and reviewed before production use.
+
+The active internal planning profile also resolves one named visual direction
+per suite role. For example, Amazon distinguishes a white-background main
+image from narrative benefit/detail/use images; Ozon prioritizes mobile-readable
+scene-led product storytelling; Taobao/Tmall separates a high-impact first
+impression from richer detail-page proof. These are art-direction defaults, not
+claims of current marketplace compliance or approval.
 
 ## Profile contract
 

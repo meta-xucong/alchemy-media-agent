@@ -89,6 +89,11 @@ user request + uploaded refs
     It may guide composition, feature proof, material detail, and lighting,
     but it must not create price, discount, savings, award, certification, or
     provenance claims.
+11. Platform visual intent is a versioned internal E-Commerce art-direction
+    default per suite role. It may distinguish Amazon white-background primary
+    images, Ozon scene-led compositions, and Taobao/Tmall detail storytelling,
+    but it must never be presented as live marketplace-policy verification,
+    approval, or legal compliance.
 
 ## Compatibility rule
 

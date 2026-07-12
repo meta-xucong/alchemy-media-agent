@@ -365,6 +365,36 @@ Integration dependency: this is a Doc104 Section 9 public interface and
 shared retry/append-only-history coordination item. It requires the mainline
 foundation owner before implementation or production activation.
 
+## E22 — platform-specific slot visual grammar
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added one versioned internal art-direction intent per platform/slot to the
+  E-Commerce planner and export metadata. It actively distinguishes an Amazon
+  white-background main image from narrative secondary roles, Ozon's
+  mobile-readable scene-led direction, and Taobao/Tmall's hero/detail-story
+  split; additional platform families receive their matching planning grammar.
+- The selected visual intent is appended to the E-Commerce recipe direction,
+  so it enters the existing vertical prompt path without a provider-local
+  branch. The workspace translates it into simple Chinese plan labels.
+- The metadata remains explicitly `internal_draft` planning guidance. It makes
+  no current policy, legal-compliance, publication, or approval promise, and
+  it does not alter General Template or shared V3 capabilities.
+
+Verification:
+
+```text
+focused E-Commerce platform/UI tests: 30 passed
+full V3 tests: 531 passed
+commercial frontend shell + provider contract tests: 50 passed
+JavaScript syntax, Python compile, and diff checks: passed
+```
+
+Integration dependency: none beyond normal rebase before integration. Profile
+research/review and real-provider acceptance remain activation-gate work.
+
 ## E20 — product visual-positioning planning control
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

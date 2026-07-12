@@ -67,6 +67,9 @@ folded history and do not occupy the final delivery board.
 
 - Generated images remain visually primary.
 - Every card explains its purpose in one short sentence.
+- Planned suite rows use beginner-facing platform direction labels such as
+  “Amazon 白底商品主图” or “Ozon 移动端场景图”; they do not claim current
+  platform approval.
 - A slot can be regenerated without recreating the whole suite.
 - Platform/category choices are visible in the run summary.
 - Locked or unavailable features cannot appear executable.

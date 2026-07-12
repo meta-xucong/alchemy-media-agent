@@ -21,6 +21,8 @@
 - selected explicit slots are not silently expanded;
 - product visual positioning reaches every selected recipe without creating a
   price, discount, award, certification, or provenance claim;
+- each platform profile maps primary and secondary slots to its versioned visual
+  grammar without presenting that grammar as live policy compliance;
 - General Template does not receive commerce suite metadata.
 
 ## Isolation tests
@@ -48,6 +50,7 @@
 - beginner can upload product, select platform/category, and generate;
 - advanced fields are hidden initially;
 - suite cards show image, slot label, purpose, and action;
+- planned suite rows expose a plain-language platform visual-direction label;
 - one slot can be regenerated;
 - selected references persist after refresh;
 - rejected direction is carried forward;

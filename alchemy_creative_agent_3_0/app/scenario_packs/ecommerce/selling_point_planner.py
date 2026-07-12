@@ -6,6 +6,7 @@ from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, Marketpl
 from .category_profiles import CategoryProfile, evidence_for_slot
 from .copy_bridge import EcommerceCopyBridge
 from .localization import resolve_localization
+from .marketplace_rules import platform_visual_intent_for_slot
 
 
 SLOT_GOALS = {
@@ -79,6 +80,7 @@ class SellingPointToImagePlanner:
                 text_forbidden_slots=text_forbidden_slots,
             )
             provider_native_text = copy_plan["text"]
+            platform_visual_intent = platform_visual_intent_for_slot(marketplace_profile.platform, slot)
             visual_scene, lifestyle_metadata = self._visual_scene(
                 slot=slot,
                 default_scene=scene,
@@ -86,6 +88,7 @@ class SellingPointToImagePlanner:
                 brief=brief,
                 marketplace_profile=marketplace_profile,
             )
+            visual_scene = f"{visual_scene} {platform_visual_intent['direction']}"
             if price_positioning_direction:
                 visual_scene = f"{visual_scene} {price_positioning_direction}"
             recipes.append(
@@ -113,6 +116,8 @@ class SellingPointToImagePlanner:
                         **(category_profile.metadata() if category_profile else {}),
                         "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
                         "copy_plan": copy_plan,
+                        "platform_visual_intent_id": platform_visual_intent["id"],
+                        "platform_visual_intent_direction": platform_visual_intent["direction"],
                         **price_positioning_metadata,
                         **lifestyle_metadata,
                     },
