@@ -313,6 +313,7 @@ const v3State = {
   projectOutputs: [],
   resultItems: [],
   selectedResult: null,
+  pendingNegativeFeedbackOutputId: "",
   brandMemoryProposal: null,
   history: [],
   historyLoaded: false,
@@ -1623,6 +1624,7 @@ function openV3Home({ silent = false } = {}) {
   v3State.currentProject = null;
   v3State.currentJob = null;
   v3State.selectedResult = null;
+  v3State.pendingNegativeFeedbackOutputId = "";
   v3State.projectTimeline = [];
   v3State.activeProjectStep = "compose";
   v3State.files = [];
@@ -3319,6 +3321,7 @@ function renderV3UsefulReferences() {
     const urls = v3ReferenceImageCandidates(ref);
     const outputId = ref.created_from_output_id || ref.asset_ref_id || ref.reference_id || "";
     const isGeneratedReference = ref.source_type === "generated_selected";
+    const isCollectingNegativeFeedback = isGeneratedReference && outputId === v3State.pendingNegativeFeedbackOutputId;
     const tile = document.createElement("article");
     tile.className = "v3-useful-reference-tile";
     tile.innerHTML = `
@@ -3330,10 +3333,23 @@ function renderV3UsefulReferences() {
       <div>
         <strong>${escapeHtml(ref.label || (ref.source_type === "uploaded" ? "上传参考" : "继续参考"))}</strong>
         <p>${escapeHtml(v3ShortText(ref.user_note || ref._legacyOutputRef?.selection_reason || "这张图会作为本项目后续参考。", 52))}</p>
-        <div class="v3-reference-actions">
-          <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">移出参考</button>
-          <button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}" ${isGeneratedReference ? "" : "disabled"}>不喜欢这个方向</button>
-        </div>
+        ${
+          isCollectingNegativeFeedback
+            ? `<div class="v3-reference-feedback-form">
+                <label>
+                  <span>告诉 V3 要避开什么</span>
+                  <textarea data-v3-negative-feedback-input placeholder="例如：避免当前的近景角度，保留主体和光线"></textarea>
+                </label>
+                <div class="v3-reference-actions">
+                  <button type="button" data-v3-reference-action="confirm_reject" data-v3-output-id="${escapeHtml(outputId)}">确认避开</button>
+                  <button type="button" data-v3-reference-action="cancel_reject">取消</button>
+                </div>
+              </div>`
+            : `<div class="v3-reference-actions">
+                <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">移出参考</button>
+                <button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}" ${isGeneratedReference ? "" : "disabled"}>不喜欢这个方向</button>
+              </div>`
+        }
       </div>
     `;
     const image = tile.querySelector("img");
@@ -3352,7 +3368,15 @@ async function handleV3ReferenceBoardClick(event) {
   if (action === "remove") {
     await removeV3ProjectReference(referenceId, outputId, sourceType);
   } else if (action === "reject") {
-    await rejectV3ProjectReference(outputId);
+    if (!outputId) return;
+    v3State.pendingNegativeFeedbackOutputId = outputId;
+    renderV3UsefulReferences();
+  } else if (action === "cancel_reject") {
+    v3State.pendingNegativeFeedbackOutputId = "";
+    renderV3UsefulReferences();
+  } else if (action === "confirm_reject") {
+    const input = button.closest("article")?.querySelector("[data-v3-negative-feedback-input]");
+    await rejectV3ProjectReference(outputId, input?.value || "");
   }
 }
 
@@ -3387,10 +3411,9 @@ async function removeV3ProjectReference(referenceId, outputId, sourceType = "") 
   }
 }
 
-async function rejectV3ProjectReference(outputId) {
+async function rejectV3ProjectReference(outputId, plainText) {
   const projectId = v3State.currentProject?.project_id;
   if (!projectId || !outputId) return;
-  const plainText = window.prompt("哪里不喜欢？例如：不要暗色背景，避免杂乱，产品不够突出");
   if (!plainText || !plainText.trim()) return;
   try {
     setV3Busy(true, "记录反馈中...");
@@ -3404,6 +3427,7 @@ async function rejectV3ProjectReference(outputId) {
     });
     if (payload.project) v3State.currentProject = payload.project;
     syncV3ProjectOutputsFromPayload(payload);
+    v3State.pendingNegativeFeedbackOutputId = "";
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     renderV3ProjectDetail();
@@ -4448,6 +4472,7 @@ async function openV3Project(projectId) {
   if (v3State.projectOpening) return;
   v3State.view = "workspace";
   v3State.projectOpening = true;
+  v3State.pendingNegativeFeedbackOutputId = "";
   if (els.v3WorkspaceView) els.v3WorkspaceView.dataset.v3Opening = "true";
   setV3PageLoading(true, "正在进入项目", "正在读取项目图片、记录和上下文。");
   closeV3ProjectSubpage({ silent: true });

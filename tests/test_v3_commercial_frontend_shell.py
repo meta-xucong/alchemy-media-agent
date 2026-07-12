@@ -469,6 +469,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "/remove" in script.text
     assert "/unselect" in script.text
     assert "/reject" in script.text
+    assert "pendingNegativeFeedbackOutputId" in script.text
+    assert "data-v3-negative-feedback-input" in script.text
+    assert 'data-v3-reference-action="confirm_reject"' in script.text
+    assert "window.prompt(\"哪里不喜欢？" not in script.text
     assert "/brand-memory/proposal" in script.text
     assert "/brand-memory/confirm" in script.text
     assert "function renderV3GeneralSummary" in script.text

@@ -8462,6 +8462,31 @@ body.v3-page-loading-active {
   cursor: not-allowed;
 }
 
+.v3-reference-feedback-form {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.v3-reference-feedback-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.v3-reference-feedback-form textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid rgba(91, 70, 51, 0.16);
+  border-radius: 8px;
+  padding: 7px 8px;
+  color: rgba(68, 55, 45, 0.92);
+  background: rgba(255, 255, 255, 0.8);
+  font: inherit;
+}
+
 .v3-useful-reference-tile {
   min-width: 0;
   display: grid;
