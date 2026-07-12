@@ -24,17 +24,18 @@ reuse E-Commerce suite ownership.
 
 > Update: `PHOTOGRAPHY-MAINLINE-001` and `-002` are on mainline, and
 > `PHOTOGRAPHY-MAINLINE-003` is implemented as a deployment-gated shared
-> runtime seam.  The deployment gate is off by default; real-provider P6
-> acceptance remains required before it may be enabled outside controlled
-> verification.  See `P08_MAINLINE_003_PRODUCTION_ACTIVATION_HANDOFF.md`.
+> runtime seam. P6 module-owned professional-set and continuation planning is
+> implemented, but production set execution requires
+> `PHOTOGRAPHY-MAINLINE-004`. The deployment gate stays off by default and
+> real-provider P6 acceptance remains required. See P08 and P09.
 
 ```text
 planning approval: accepted
 foundation rules: accepted for module development
 master development specification: accepted for phased implementation
 named-photographer governance: drafted
-implementation: P1-P3 complete; P4 first-wave scene shadow planning verified
-mainline contract requests: PHOTOGRAPHY-MAINLINE-001 and -002 open
+implementation: P1-P5 complete; P6 module-owned set/continuation planning implemented
+mainline contracts: 001-003 landed; 004 requested for set execution/continuation
 activation status: inactive
 merge readiness: not ready
 ```
@@ -73,8 +74,9 @@ P4 scope: module-local Portrait, Landscape, Still Life and Animal scene contribu
 P4 verification: 28 Photography focused, 132 isolation regression and 553 full V3 tests passed
 P4 publication: implementation milestone 507a9b3
 real-output acceptance: paused until shared production hooks exist
-P5 status: blocked on trusted profile selection/frontend/persistence mainline contract
-specific-animal identity: blocked on shared foundation capability review
+P5 status: complete on landed trusted profile selection contract
+specific-animal identity: consumes landed shared nonhuman_subject_identity capability
+P6 status: module-owned planning implemented; shared production execution requested
 ```
 
 ## 3. Authority Order
@@ -104,9 +106,12 @@ contract wins and Photography work pauses for an explicit design decision.
 | P04 | Roadmap, tests, acceptance and mainline coordination | Active |
 | P05 | P2 mainline integration audit and P3 shadow boundary | Active |
 | P06 | P4 first-wave scene director implementation audit | Active |
+| P07 | P5 named-profile implementation audit | Active |
 | PX Mainline 001 | Trusted photographer profile selection contract request | Landed on mainline |
 | PX Mainline 002 | Non-human subject identity foundation request | Landed on mainline |
 | P08 | Mainline-003 gated central-runtime activation handoff | Implemented; real-provider acceptance pending |
+| P09 | P6 professional-set and continuation implementation audit | Module planning implemented; shared execution blocked |
+| PX Mainline 004 | Photography set execution and continuation contract | Requested |
 
 Future documents must remain in this directory and use the `Pxx_` number
 family. Do not continue the root V3 document number sequence for Photography.

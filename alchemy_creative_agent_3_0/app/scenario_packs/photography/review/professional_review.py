@@ -97,13 +97,29 @@ class PhotographyProfessionalReviewer:
                 "Exactly the evidenced Photography scene director contributes; General stays neutral.",
             )
         )
-        checks.append(
-            self._check(
-                "single_hero_scope",
-                len(shot_specs) == 1 and shot_specs[0].role == "hero_photograph",
-                "P3 shadow runtime creates exactly one hero photograph spec.",
+        professional_set_roles = ["session_hero", "environmental_context", "detail_or_moment"]
+        if brief.delivery_roles == professional_set_roles:
+            set_ready = (
+                [shot.role for shot in shot_specs] == professional_set_roles
+                and all(len(shot.metadata.get("differentiated_dimensions") or []) >= 2 for shot in shot_specs)
+                and len({shot.palette_and_tone_curve for shot in shot_specs}) == 1
+                and len({tuple(shot.immutable_reference_truth) for shot in shot_specs}) == 1
             )
-        )
+            checks.append(
+                self._check(
+                    "professional_set_scope",
+                    set_ready,
+                    "P6 creates three differentiated Photography roles with frozen color and reference coherence.",
+                )
+            )
+        else:
+            checks.append(
+                self._check(
+                    "single_hero_scope",
+                    len(shot_specs) == 1 and shot_specs[0].role == "hero_photograph",
+                    "Single-hero planning creates exactly one hero photograph spec.",
+                )
+            )
         required_contribution_ids = {
             "photography_camera_optics",
             "photography_lighting_direction",
@@ -161,7 +177,13 @@ class PhotographyProfessionalReviewer:
             metadata={
                 "source": "PhotographyProfessionalReviewer",
                 "metadata_only_review": True,
-                "phase": "P5_named_profile_shadow_runtime" if profile_binding.binding_mode == "named" else "P4_shadow_scene_directors",
+                "phase": (
+                    "P6_professional_set_planning"
+                    if brief.delivery_roles == professional_set_roles
+                    else "P5_named_profile_shadow_runtime"
+                    if profile_binding.binding_mode == "named"
+                    else "P4_shadow_scene_directors"
+                ),
                 "scene_domain": brief.scene_domain.value,
                 "profile_id": profile_binding.profile_id,
                 "real_output_review_status": "not_run_until_production_activation",

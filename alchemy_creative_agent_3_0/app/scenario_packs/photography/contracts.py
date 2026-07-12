@@ -236,6 +236,67 @@ class PhotographyReviewReport(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PhotographyProfessionalSetPlan(V3BaseModel):
+    """Photography-owned role/coherence contract; shared runtime owns pixels."""
+
+    set_id: str
+    role_order: list[str] = Field(default_factory=list)
+    shot_ids_by_role: dict[str, str] = Field(default_factory=dict)
+    profile_binding_snapshot: dict[str, Any] = Field(default_factory=dict)
+    coherence_contract: dict[str, Any] = Field(default_factory=dict)
+    selection_contract: dict[str, Any] = Field(default_factory=dict)
+    delivery_package: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PhotographySetContinuationRequest(V3BaseModel):
+    """Module-local continuation intent before a shared Project Mode route exists."""
+
+    parent_shot_id: str
+    target_role: str
+    correction_note: str | None = None
+    new_reference_asset_ids: list[str] = Field(default_factory=list)
+    reconfirmed_profile_id: str | None = None
+    reconfirmed_profile_version: str | None = None
+    reconfirmed_technique_package_checksum: str | None = None
+    profile_selection_source: PhotographerProfileSelectionSource | None = None
+
+    @field_validator(
+        "parent_shot_id",
+        "target_role",
+        "correction_note",
+        "reconfirmed_profile_id",
+        "reconfirmed_profile_version",
+        "reconfirmed_technique_package_checksum",
+    )
+    @classmethod
+    def clean_continuation_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("new_reference_asset_ids")
+    @classmethod
+    def clean_reference_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if str(item).strip()))
+
+
+class PhotographySetContinuationPlan(V3BaseModel):
+    """Frozen Photography intent for one role-level append-only continuation."""
+
+    continuation_id: str
+    root_set_id: str
+    parent_shot_id: str
+    target_role: str
+    correction_note: str | None = None
+    new_reference_asset_ids: list[str] = Field(default_factory=list)
+    profile_binding_snapshot: dict[str, Any] = Field(default_factory=dict)
+    immutable_reference_truth: list[str] = Field(default_factory=list)
+    coherence_contract: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PhotographyPackOutput(V3BaseModel):
     """Planning-only Photography output before production registration exists."""
 
@@ -244,6 +305,7 @@ class PhotographyPackOutput(V3BaseModel):
     technique_contributions: list[CapabilityContribution] = Field(default_factory=list)
     scene_contributions: list[CapabilityContribution] = Field(default_factory=list)
     shot_specs: list[PhotoShotSpec] = Field(default_factory=list)
+    professional_set_plan: PhotographyProfessionalSetPlan | None = None
     review: PhotographyReviewReport
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -44,7 +44,7 @@ def photography_manifest(*, enabled: bool | None = None) -> ScenarioPackManifest
         },
         metadata={
             "current_stage": "photography_production_activation" if active else "photography_p5_gated",
-            "document_family": "docs/photography_module/P00-P07",
+            "document_family": "docs/photography_module/P00-P09",
             "activation_ready": active,
             "registered_in_default_scenario_registry": active,
             "deployment_gate": PHOTOGRAPHY_PRODUCTION_GATE,

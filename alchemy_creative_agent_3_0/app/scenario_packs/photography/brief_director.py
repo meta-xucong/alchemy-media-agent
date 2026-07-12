@@ -89,6 +89,7 @@ class PhotographyBriefDirector:
                 "profile_id": profile_binding.profile_id,
                 "profile_version": profile_binding.profile_version,
                 "catalog_version": profile_binding.catalog_version,
+                "technique_package_checksum": profile_binding.technique_package_checksum,
                 "named_profile_active": profile_binding.binding_mode == "named",
                 "selection_source": (
                     getattr(profile_binding.selection_source, "value", profile_binding.selection_source)

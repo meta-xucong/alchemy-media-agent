@@ -24,9 +24,101 @@ class PhotographyShotListDirector:
         contributions: list[CapabilityContribution],
         job_key: str,
     ) -> list[PhotoShotSpec]:
-        if controls.delivery_mode != PhotographyDeliveryMode.SINGLE_HERO:
-            raise ValueError("p3_shadow_runtime_supports_single_hero_only")
-        return [self._single_hero(brief=brief, contributions=contributions, job_key=job_key)]
+        hero = self._single_hero(brief=brief, contributions=contributions, job_key=job_key)
+        if controls.delivery_mode == PhotographyDeliveryMode.SINGLE_HERO:
+            return [hero]
+        return self._professional_set(brief=brief, hero=hero, job_key=job_key)
+
+    def _professional_set(
+        self,
+        *,
+        brief: PhotographyBrief,
+        hero: PhotoShotSpec,
+        job_key: str,
+    ) -> list[PhotoShotSpec]:
+        checksum = str(brief.profile_binding_summary.get("technique_package_checksum") or "")
+        common_metadata = {
+            **hero.metadata,
+            "phase": "P6_professional_set_planning",
+            "single_hero_only": False,
+            "professional_set": True,
+            "profile_binding_checksum": checksum,
+            "color_and_finish_coherence": "locked_across_set",
+            "reference_truth_coherence": "locked_across_set",
+        }
+        session_hero = hero.model_copy(
+            update={
+                "shot_id": stable_id("photo_shot", job_key, brief.brief_id, "session_hero"),
+                "role": "session_hero",
+                "metadata": {
+                    **common_metadata,
+                    "set_role": "session_hero",
+                    "differentiated_dimensions": ["framing", "subject_action", "narrative_purpose"],
+                },
+            }
+        )
+        environmental = hero.model_copy(
+            update={
+                "shot_id": stable_id("photo_shot", job_key, brief.brief_id, "environmental_context"),
+                "role": "environmental_context",
+                "sequence_index": 2,
+                "subject_and_decisive_moment": (
+                    "show the subject acting within the environment so place and commission context become legible"
+                ),
+                "framing_and_crop": (
+                    "use a wider environmental frame with deliberate spatial context and a clear subject anchor"
+                ),
+                "camera_position_and_perspective_effect": (
+                    "step back or broaden the camera relation to reveal subject-to-environment scale and depth"
+                ),
+                "depth_and_focus_behavior": (
+                    "hold enough contextual detail to explain the location while preserving a decisive focus anchor"
+                ),
+                "metadata": {
+                    **common_metadata,
+                    "set_role": "environmental_context",
+                    "differentiated_dimensions": [
+                        "framing",
+                        "camera_relation",
+                        "environmental_context",
+                        "narrative_purpose",
+                    ],
+                },
+            }
+        )
+        detail = hero.model_copy(
+            update={
+                "shot_id": stable_id("photo_shot", job_key, brief.brief_id, "detail_or_moment"),
+                "role": "detail_or_moment",
+                "sequence_index": 3,
+                "subject_and_decisive_moment": (
+                    "isolate one revealing gesture, material detail, expression, behavior, or transient moment"
+                ),
+                "framing_and_crop": (
+                    "move to an intentional close or detail frame that adds information rather than recropping the hero"
+                ),
+                "camera_position_and_perspective_effect": (
+                    "change camera distance and angle to make the selected detail physically and narratively specific"
+                ),
+                "depth_and_focus_behavior": (
+                    "use selective focus around the detail or moment while retaining believable spatial falloff"
+                ),
+                "motion_behavior": (
+                    "time gesture or material motion deliberately; still details remain visibly intentional"
+                ),
+                "metadata": {
+                    **common_metadata,
+                    "set_role": "detail_or_moment",
+                    "differentiated_dimensions": [
+                        "framing",
+                        "camera_relation",
+                        "depth_and_focus",
+                        "subject_action",
+                    ],
+                },
+            }
+        )
+        return [session_hero, environmental, detail]
 
     def _single_hero(
         self,

@@ -9,8 +9,13 @@ from .brief_director import PhotographyBriefDirector
 from .contracts import (
     PhotographerProfileBinding,
     PhotographyPackOutput,
+    PhotographySetContinuationPlan,
+    PhotographySetContinuationRequest,
+    PhotographyDeliveryMode,
     PhotographyUserControls,
 )
+from .continuation import PhotographySetContinuationDirector
+from .professional_set import PhotographyProfessionalSetDirector
 from .profile_catalog import PhotographerProfileCatalog
 from .review import PhotographyProfessionalReviewer
 from .scene_directors import FirstWavePhotographySceneDirectorRouter
@@ -32,6 +37,8 @@ class PhotographyScenarioPackPlanner:
         named_profile_compiler: NamedPhotographerTechniqueCompiler | None = None,
         shot_list_director: PhotographyShotListDirector | None = None,
         reviewer: PhotographyProfessionalReviewer | None = None,
+        professional_set_director: PhotographyProfessionalSetDirector | None = None,
+        continuation_director: PhotographySetContinuationDirector | None = None,
         named_profiles_enabled: bool = False,
     ) -> None:
         self.profile_catalog = profile_catalog or PhotographerProfileCatalog()
@@ -43,6 +50,8 @@ class PhotographyScenarioPackPlanner:
         self.named_profile_compiler = named_profile_compiler or NamedPhotographerTechniqueCompiler()
         self.shot_list_director = shot_list_director or PhotographyShotListDirector()
         self.reviewer = reviewer or PhotographyProfessionalReviewer()
+        self.professional_set_director = professional_set_director or PhotographyProfessionalSetDirector()
+        self.continuation_director = continuation_director or PhotographySetContinuationDirector()
         self.named_profiles_enabled = named_profiles_enabled
 
     def plan(
@@ -157,6 +166,14 @@ class PhotographyScenarioPackPlanner:
             contributions=planning_contributions,
             job_key=job_key,
         )
+        professional_set_plan = None
+        if controls.delivery_mode == PhotographyDeliveryMode.PROFESSIONAL_SET:
+            professional_set_plan = self.professional_set_director.build(
+                brief=brief,
+                profile_binding=profile_binding,
+                shot_specs=shot_specs,
+                job_key=job_key,
+            )
         warnings = list(
             dict.fromkeys(
                 [
@@ -171,13 +188,20 @@ class PhotographyScenarioPackPlanner:
             technique_contributions=[*contributions, *named_contributions],
             scene_contributions=scene_contributions,
             shot_specs=shot_specs,
+            professional_set_plan=professional_set_plan,
             review=review,
             warnings=warnings,
             metadata={
                 "source": "PhotographyScenarioPackPlanner",
                 "scenario_id": "photography",
                 "template_id": "photography_template",
-                "phase": "P5_named_profile_shadow_runtime" if profile_binding.binding_mode == "named" else "P4_shadow_scene_directors",
+                "phase": (
+                    "P6_professional_set_planning"
+                    if professional_set_plan is not None
+                    else "P5_named_profile_shadow_runtime"
+                    if profile_binding.binding_mode == "named"
+                    else "P4_shadow_scene_directors"
+                ),
                 "planning_only": True,
                 "production_activation_ready": False,
                 "registered_in_default_scenario_registry": False,
@@ -189,6 +213,25 @@ class PhotographyScenarioPackPlanner:
                 "catalog_version": profile_binding.catalog_version,
                 "profile_binding_source": binding_source,
             },
+        )
+
+    def plan_set_continuation(
+        self,
+        *,
+        parent_output: PhotographyPackOutput,
+        request: PhotographySetContinuationRequest | dict[str, Any],
+        job_key: str = "photography_set_continuation",
+    ) -> PhotographySetContinuationPlan:
+        request_model = (
+            request
+            if isinstance(request, PhotographySetContinuationRequest)
+            else PhotographySetContinuationRequest.model_validate(request)
+        )
+        return self.continuation_director.plan(
+            parent_output=parent_output,
+            profile_binding=parent_output.profile_binding,
+            request=request_model,
+            job_key=job_key,
         )
 
     def _controls(self, controls: PhotographyUserControls | dict[str, Any] | None) -> PhotographyUserControls:
