@@ -24,17 +24,30 @@ reuse E-Commerce suite ownership.
 
 ```text
 planning approval: accepted
-foundation rules: drafted
-master development specification: drafted
+foundation rules: accepted for module development
+master development specification: accepted for phased implementation
 named-photographer governance: drafted
-implementation: not started
+implementation: P1 inactive module skeleton complete
 mainline contract requests: none submitted yet
 activation status: inactive
 merge readiness: not ready
 ```
 
-This milestone is documentation-only. It does not authorize runtime, schema,
-provider, frontend, or shared-registry changes.
+P0 was documentation-only. P1 adds module-local contracts, an inactive Scenario
+Pack, an inactive profile catalog, inactive scene/technique descriptors and an
+unregistered vertical-agent skeleton. It does not change production runtime,
+public schemas, providers, frontend behavior or shared registries.
+
+P1 verification:
+
+```text
+Photography focused tests: 11 passed
+Scenario Pack / vertical / E-Commerce regressions: 29 passed
+full V3 suite: 530 passed
+root suite: 144 passed, 1 unrelated pre-existing Alchemy Lab failure
+shared file changes: none
+production registration: none
+```
 
 ## 3. Authority Order
 
