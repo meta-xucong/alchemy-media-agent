@@ -1852,6 +1852,8 @@ class V3ProjectModeService:
             "keywords": list(profile.keywords),
             "competitor_notes": list(profile.competitor_notes),
             "suite_slots_requested": list(profile.suite_slots_requested or request.suite_slot_request),
+            "unverified_visual_facts": list(profile.metadata.get("unverified_visual_facts") or []),
+            "product_fact_confirmations": profile.metadata.get("product_fact_confirmations") or {},
             "has_product_reference": bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
             "text_to_image_fallback": not bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
         }

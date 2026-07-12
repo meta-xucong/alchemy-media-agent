@@ -188,7 +188,7 @@ schema, General Template, provider, or continuation route changed.
 
 ### D4 — workspace fact and suite review
 
-Status: follows D3.
+Status: in progress; persisted fact-decision backend is implemented.
 
 Expose only beginner-useful controls and warnings:
 
@@ -202,6 +202,13 @@ disabled cosmetic actions.
 
 Acceptance: browser/UI tests covering confirmation persistence, role clarity,
 scope selection, historical job readability, and mobile image-first layout.
+
+Current increment: E-Commerce profile metadata can persist a `confirmed` or
+`removed` decision by fact ID or normalized fact value. On a later plan,
+confirmation promotes only a pending fact to `user_confirmed`; removal
+withholds it. The remaining D4 work is the beginner-facing, clickable review
+surface that writes these existing metadata decisions without exposing prompts
+or provider controls.
 
 ### D5 — owner-approved real-output fixture harness
 

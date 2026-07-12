@@ -51,6 +51,10 @@ class ProductTruthLockBuilder:
             visible_attributes=legacy_visible_attributes,
             unverified_visual_facts=unverified_visual_facts,
         )
+        fact_ledger, confirmed_fact_ids, removed_fact_ids = self._apply_fact_confirmation_states(
+            fact_ledger,
+            self._fact_confirmation_states(product_profile),
+        )
         blocked_facts = [fact for fact in fact_ledger if fact.verification == "blocked"]
         confirmation_facts = [fact for fact in fact_ledger if fact.verification == "requires_confirmation"]
         visible_attributes = unique_preserve_order(
@@ -81,8 +85,8 @@ class ProductTruthLockBuilder:
         ]
         warnings = [f"Claim needs evidence before visual use: {claim}" for claim in unsupported_claims]
         warnings.extend(
-            f"Visual fact needs final-image confirmation before delivery: {fact}"
-            for fact in unverified_visual_facts
+            f"Visual fact needs final-image confirmation before delivery: {fact.value}"
+            for fact in confirmation_facts
         )
         warnings.extend(
             f"Product fact is blocked from prompts, copy, and export: {fact.value}"
@@ -131,9 +135,11 @@ class ProductTruthLockBuilder:
             metadata={
                 "source": "ProductTruthLockBuilder",
                 "unsupported_claims": unsupported_claims,
-                "unverified_visual_facts": unverified_visual_facts,
+                "unverified_visual_facts": [fact.value for fact in confirmation_facts],
                 "fact_ledger_version": FACT_LEDGER_VERSION,
                 "confirmation_fact_ids": [fact.fact_id for fact in confirmation_facts],
+                "confirmed_fact_ids": confirmed_fact_ids,
+                "removed_fact_ids": removed_fact_ids,
                 "blocked_fact_ids": [fact.fact_id for fact in blocked_facts],
                 "blocked_fact_values": [fact.value for fact in blocked_facts],
                 "uploaded_asset_count": len(uploaded_asset_ids),
@@ -189,6 +195,51 @@ class ProductTruthLockBuilder:
                 records.append(record)
                 seen_values.add(record.value.lower())
         return records
+
+    def _fact_confirmation_states(self, profile: dict[str, Any]) -> dict[str, str]:
+        raw = profile.get("product_fact_confirmations") or {}
+        states: dict[str, str] = {}
+        if isinstance(raw, dict):
+            values = raw.items()
+        elif isinstance(raw, list):
+            values = [
+                (item.get("fact_id") or item.get("value"), item.get("status") or item.get("state"))
+                for item in raw
+                if isinstance(item, dict)
+            ]
+        else:
+            values = []
+        for key, value in values:
+            normalized_key = clean_text(key).lower()
+            normalized_state = clean_text(value).lower()
+            if normalized_key and normalized_state in {"confirmed", "removed"}:
+                states[normalized_key] = normalized_state
+        return states
+
+    def _apply_fact_confirmation_states(
+        self,
+        records: list[ProductFactRecord],
+        states: dict[str, str],
+    ) -> tuple[list[ProductFactRecord], list[str], list[str]]:
+        active: list[ProductFactRecord] = []
+        confirmed_ids: list[str] = []
+        removed_ids: list[str] = []
+        for fact in records:
+            state = states.get(fact.fact_id.lower()) or states.get(fact.value.lower())
+            if state == "removed":
+                removed_ids.append(fact.fact_id)
+                continue
+            if state == "confirmed" and fact.verification == "requires_confirmation":
+                fact = fact.model_copy(
+                    update={
+                        "source_type": "user_confirmed",
+                        "verification": "verified",
+                        "review_requirement": "none",
+                    }
+                )
+                confirmed_ids.append(fact.fact_id)
+            active.append(fact)
+        return active, confirmed_ids, removed_ids
 
     def _structured_fact_inputs(self, profile: dict[str, Any]) -> list[dict[str, Any]]:
         raw = profile.get("fact_ledger") or profile.get("product_fact_ledger") or []

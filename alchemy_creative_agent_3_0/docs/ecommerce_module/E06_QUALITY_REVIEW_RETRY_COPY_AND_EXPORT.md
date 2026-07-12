@@ -54,6 +54,9 @@ capability after review without an auditable plan amendment.
 - Export records retain the E-Commerce category role, plain-language purpose,
   fact-channel intent, review checks, and differentiation key for each slot.
   These are planning/audit metadata, not a claim of pixel-level verification.
+- Owner fact decisions are preserved as E-Commerce profile metadata. A confirmed
+  supplier fact becomes user-confirmed on the next plan; a removed fact is
+  withheld. Fact confirmation does not approve a marketing claim.
 - Main-image text is forbidden by the E-Commerce module's conservative default.
   A verified platform restriction may strengthen that default, but the default
   itself is not represented as universal marketplace policy.

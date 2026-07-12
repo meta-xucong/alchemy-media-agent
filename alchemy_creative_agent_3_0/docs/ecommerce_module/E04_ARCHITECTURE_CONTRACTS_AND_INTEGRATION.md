@@ -117,6 +117,12 @@ user request + uploaded refs
     listing-only delivery. A+, content, and storefront roles use distinct slot
     IDs and cannot silently reuse listing roles. A+ and storefront planning
     require explicit placement, product-category, and market context.
+17. Product-fact owner decisions are additive E-Commerce profile metadata:
+    a pending fact may be `confirmed` or `removed` by stable fact ID or
+    normalized fact value. Confirmation promotes only a
+    `requires_confirmation` fact to `user_confirmed`; removal withholds it
+    from recipes and exports. Neither action bypasses claim review or alters a
+    shared project schema.
 
 ## Compatibility rule
 

@@ -504,6 +504,31 @@ full V3 + commercial frontend + provider contract regression: 604 passed
 Python compile, JavaScript syntax, and diff checks: passed
 ```
 
+## E29 — persisted product-fact review backend
+
+Status: implemented as the first D4 increment on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Added additive E-Commerce profile metadata for owner `confirmed` / `removed`
+  decisions keyed by fact ID or normalized value.
+- A confirmation promotes only a pending supplier fact to `user_confirmed`;
+  removal withholds it from fact bindings, recipe facts, warnings, and export
+  attention. It never makes an unsupported marketing claim safe.
+- Project Mode forwards the existing E-Commerce metadata into the next plan;
+  no Project Mode public schema changed.
+
+Remaining D4 scope: the user-facing fact-review controls and plain-language
+per-slot proof display. No slot continuation control is added.
+
+Verification:
+
+```text
+focused D4 / D1 / Project Mode tests: 68 passed
+full V3 + commercial frontend + provider contract regression: 607 passed
+Python compile, JavaScript syntax, and diff checks: passed
+```
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.
