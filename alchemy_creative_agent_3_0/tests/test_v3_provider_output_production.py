@@ -253,8 +253,10 @@ def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request
 
     old_key = settings.openai_api_key
     old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
     settings.openai_api_key = "test-key"
     settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = False
     calls = []
 
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
@@ -282,6 +284,7 @@ def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request
     finally:
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
 
     assert len(calls) == 2
     assert response.candidates
@@ -342,8 +345,10 @@ def test_production_provider_retries_generic_reference_upstream_400_once(tmp_pat
 
     old_key = settings.openai_api_key
     old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
     settings.openai_api_key = "test-key"
     settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = False
     calls = []
 
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
@@ -385,6 +390,7 @@ def test_production_provider_retries_generic_reference_upstream_400_once(tmp_pat
     finally:
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
 
     assert len(calls) == 2
     assert response.candidates
