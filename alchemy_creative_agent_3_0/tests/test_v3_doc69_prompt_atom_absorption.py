@@ -304,3 +304,40 @@ def test_doc83_local_inspector_does_not_retry_ambiguous_lower_right_texture(tmp_
     assert report.retryable is False
     assert "lower_right_mark_artifact" not in issue_codes
     assert "ai_generated_badge_trace" not in issue_codes
+
+
+def test_doc104_local_inspector_does_not_retry_dense_architectural_corner_detail(tmp_path) -> None:
+    from PIL import Image, ImageDraw
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import (
+        _lower_right_mark_risk,
+    )
+
+    architectural = tmp_path / "architectural_corner.png"
+    image = Image.new("RGB", (512, 512), (236, 245, 248))
+    draw = ImageDraw.Draw(image)
+    for index in range(11):
+        draw.line((360, 430 + index * 7, 512, 430 + index * 7), fill=(150, 150, 150), width=3)
+    for index in range(12):
+        draw.line((365 + index * 13, 425, 365 + index * 13, 505), fill=(180, 180, 180), width=2)
+    image.save(architectural)
+    risk, evidence = _lower_right_mark_risk(architectural)
+
+    report = VisionOutputInspector().inspect(
+        GeneratedOutputResolution(
+            resolution_id="resolution_doc104_architecture",
+            job_id="job_doc104_architecture",
+            output_id="output_doc104_architecture",
+            file_path=str(architectural),
+            status="ready",
+            provider="openai_gpt_image",
+            model="gpt-image-2",
+        ),
+        metadata={"vision_inspection_mode": "local_image_heuristic"},
+    )
+
+    assert report.status == "pass"
+    assert report.retryable is False
+    assert risk is False
+    assert evidence["lower_right_edge_ratio"] > 0.22
+    assert evidence["lower_right_compact_edge_density"] is False
+    assert "lower_right_mark_artifact" not in [issue["code"] for issue in report.detected_issues]

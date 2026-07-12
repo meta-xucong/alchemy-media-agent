@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ...creative_core.prompt_language import product_language_allowed
@@ -1436,7 +1437,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         allow_product_language: bool,
     ) -> dict[str, Any]:
         text = f"{template_id} {scenario_id} {user_input}".lower()
-        portrait_like = any(token in text for token in ["portrait", "woman", "girl", "person", "model", "face"]) or any(
+        # Character identity is expensive and must have positive evidence.  In
+        # particular, do not let terms such as ``fair-faced concrete`` or
+        # ``atmospheric perspective`` promote an otherwise non-person General
+        # request into the portrait execution path.
+        portrait_like = _contains_latin_terms(text, ["portrait", "woman", "girl", "person", "model", "face"]) or any(
             token in user_input for token in ["人像", "写真", "美女", "人物", "脸", "发型"]
         )
         if allow_product_language or "ecommerce" in text:
@@ -1447,7 +1452,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "identity_lock_default": "product",
                 "review_focus": ["product_identity_drift", "unrelated_product_or_object", "visible_text_artifact"],
             }
-        if "photographer" in text or portrait_like:
+        if _contains_latin_terms(text, ["photographer"]) or portrait_like:
             return {
                 "policy_id": "portrait_identity",
                 "primary_priority": "character_identity",
@@ -2270,18 +2275,23 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         reference_policy_package: ResolvedReferencePolicyPackage | None = None,
     ) -> StrictVisualReviewPolicy:
         applies = bool(role_specific_plan.role_recipes)
+        portrait_identity_applies = any(
+            item is not None and item.applies
+            for item in (
+                identity_hero_plan,
+                subject_identity_card,
+                portrait_bone_lock,
+                styling_delta_policy,
+                portrait_reference_policy,
+            )
+        )
+        human_subject_applies = subject_type == "character" or bool(
+            human_photorealism and human_photorealism.applies
+        )
         retryable = [
-            "identity_drift",
-            "hair_or_outfit_drift",
-            "camera_distance_drift",
             "mode_role_duplication",
             "delivery_suite_role_collapse",
             "role_collapse",
-            "same_expression_repetition",
-            "same_head_angle_repetition",
-            "same_pose_repetition",
-            "bad_hands_or_body",
-            "face_artifact",
             "low_commercial_finish",
             "weak_aesthetic_finish",
             "generic_stock_photo_finish",
@@ -2295,21 +2305,6 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "overprocessed_hdr_finish",
             "uncanny_micro_detail",
             "low_resolution_output",
-            "identity_card_missing",
-            "identity_card_not_applied",
-            "identity_feature_drift",
-            "eyebrow_shape_drift",
-            "eye_shape_or_spacing_drift",
-            "nose_mouth_relationship_drift",
-            "jaw_chin_direction_drift",
-            "unflattering_feature_degradation",
-            "beautiful_realism_balance_failure",
-            "realism_made_subject_less_attractive",
-            "pretty_but_too_ai_filtered",
-            "real_but_unflattering",
-            "skin_texture_beauty_balance_failure",
-            *sorted(DOC86_IDENTITY_ISSUE_CODES),
-            *sorted(DOC87_REFERENCE_BOUNDARY_ISSUE_CODES),
             *(
                 sorted(REFERENCE_CHANNEL_ISSUE_CODES)
                 if reference_policy_package and reference_policy_package.applies
@@ -2317,17 +2312,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             ),
         ]
         prompt_additions = [
-            "Strict visual review closure: do not accept outputs that look like generic AI beauty, repeated clones, role-collapsed frames, or weak direct-use photography.",
-            "Every output must pass three checks: identity continuity, role usefulness, and real-camera direct-use finish.",
+            "Strict visual review closure: do not accept outputs that look generic, role-collapsed, weakly composed, or unsuitable for direct use.",
+            "Every output must pass subject truth when evidence is present, role usefulness, and a real-camera or intentionally art-directed finish.",
             "Foundation aesthetic stability: keep one clear subject, intentional framing, balanced exposure, stable color grade, natural contrast, believable depth, and direct-use polish.",
-            "Beautiful realism rule: the reference person's own attractiveness is identity-owned; render it through real texture, prompt-owned styling, camera, and light without facial optimization or degradation.",
-            "Facial-feature integrity: preserve attractive eyes, eyebrow shape/arc, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance.",
             "Reject technically valid but weak images when they look generic, flat, washed out, muddy, overprocessed, or visually accidental.",
-            "If a result has AI face, watermarks, bad anatomy, identity drift, or duplicated role duty, prepare a bounded retry instead of treating it as final.",
-            "Doc86 portrait identity rule: makeup, wardrobe, styling, lighting, pose, expression, and scene may change, but bone structure and facial-feature relationships must still read as the same person when a portrait reference exists.",
+            "If a result has visible marks, incorrect geometry or anatomy when relevant, reference-truth drift, or duplicated role duty, prepare a bounded retry instead of treating it as final.",
         ]
         negative_additions = [
-            "generic AI beauty identity",
             "generic stock photo finish",
             "weak aesthetic finish",
             "flat low-contrast image",
@@ -2339,33 +2330,6 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "accidental composition balance",
             "overprocessed HDR finish",
             "synthetic micro detail",
-            "ugly realism",
-            "realism made face less attractive",
-            "ugly eyebrow shape",
-            "drooping or mismatched brows",
-            "random eyebrow thickness drift",
-            "sleepy or dull eye expression",
-            "unflattering nose or mouth drift",
-            "jaw or chin direction drift",
-            "facial feature degradation",
-            "role-collapsed portrait set",
-            "same exact expression repeated",
-            "same exact head angle repeated",
-            "same exact pose repeated",
-            "poreless glass-like skin",
-            "oily shiny face",
-            "nose-tip highlight",
-            "silicone face",
-            "over-smoothed skin",
-            "heavy makeup",
-            "plastic texture",
-            "distorted fingers",
-            "wrong dress structure",
-            "distorted human proportions",
-            "same type but different person",
-            "style changed face geometry",
-            "archetype overrode reference identity",
-            "age impression drift",
             "strong HDR",
             "over-sharpening",
             "anime",
@@ -2373,6 +2337,62 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "CG",
             "3D render",
         ]
+        if portrait_identity_applies:
+            retryable.extend(
+                [
+                    "identity_drift",
+                    "hair_or_outfit_drift",
+                    "camera_distance_drift",
+                    "identity_card_missing",
+                    "identity_card_not_applied",
+                    "identity_feature_drift",
+                    "eyebrow_shape_drift",
+                    "eye_shape_or_spacing_drift",
+                    "nose_mouth_relationship_drift",
+                    "jaw_chin_direction_drift",
+                    "unflattering_feature_degradation",
+                    "beautiful_realism_balance_failure",
+                    "realism_made_subject_less_attractive",
+                    "pretty_but_too_ai_filtered",
+                    "real_but_unflattering",
+                    "skin_texture_beauty_balance_failure",
+                    *sorted(DOC86_IDENTITY_ISSUE_CODES),
+                    *sorted(DOC87_REFERENCE_BOUNDARY_ISSUE_CODES),
+                ]
+            )
+            prompt_additions.extend(
+                [
+                    "Beautiful realism rule: the reference person's own attractiveness is identity-owned; render it through real texture, prompt-owned styling, camera, and light without facial optimization or degradation.",
+                    "Facial-feature integrity: preserve attractive eyes, eyebrow shape/arc, eyelid direction, nose-mouth relationship, jaw/chin direction, cheek volume, face ratio, and neck/shoulder balance.",
+                    "Doc86 portrait identity rule: makeup, wardrobe, styling, lighting, pose, expression, and scene may change, but bone structure and facial-feature relationships must still read as the same person when a portrait reference exists.",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "generic AI beauty identity",
+                    "ugly realism",
+                    "realism made face less attractive",
+                    "ugly eyebrow shape",
+                    "drooping or mismatched brows",
+                    "random eyebrow thickness drift",
+                    "sleepy or dull eye expression",
+                    "unflattering nose or mouth drift",
+                    "jaw or chin direction drift",
+                    "facial feature degradation",
+                    "same type but different person",
+                    "style changed face geometry",
+                    "archetype overrode reference identity",
+                    "age impression drift",
+                ]
+            )
+        if human_subject_applies:
+            retryable.extend(["bad_hands_or_body", "face_artifact"])
+            negative_additions.extend(
+                [
+                    "distorted fingers",
+                    "distorted human proportions",
+                ]
+            )
         if subject_type == "character":
             retryable.extend(
                 [
@@ -2405,6 +2425,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "unflattering_skin_color_cast",
                     "age_identity_drift",
                     "age_inappropriate_rendering",
+                    "same_expression_repetition",
+                    "same_head_angle_repetition",
+                    "same_pose_repetition",
                 ]
             )
             prompt_additions.extend(
@@ -2413,6 +2436,25 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "Preserve the reference or explicitly requested complexion and age direction; exposure, color grading, and commercial polish must not impose demographic lightness, tanning, age drift, or beauty-template geometry.",
                 ]
             )
+            # The retry assembler retains the first strict negatives. Keep the
+            # human-only high-signal terms first, but only inside the explicit
+            # character branch so generic scenes receive none of them.
+            negative_additions = [
+                "generic AI beauty identity",
+                "poreless glass-like skin",
+                "oily shiny face",
+                "nose-tip highlight",
+                "silicone face",
+                "over-smoothed skin",
+                "role-collapsed portrait set",
+                "same exact expression repeated",
+                "same exact head angle repeated",
+                "same exact pose repeated",
+                "heavy makeup",
+                "plastic texture",
+                "wrong dress structure",
+                *negative_additions,
+            ]
         if identity_hero_plan and identity_hero_plan.applies:
             prompt_additions.extend(identity_hero_plan.review_checks[:3])
         if subject_identity_card and subject_identity_card.applies:
@@ -2483,21 +2525,56 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             )
             prompt_additions.append("Doc90 scene priority check: referenced background and space continuity must not be replaced.")
             negative_additions.extend(["scene identity drift", "background space drift", "camera mood drift", "reference scene replaced"])
+        review_focus = [
+            "suite role separation",
+            "artifact cleanliness",
+            "aesthetic stability",
+            "direct-use finish",
+        ]
+        user_visible_summary = [
+            "V3 will preserve a clear usable visual direction.",
+            "V3 will reject visible marks, weak finish, or repeated roles.",
+        ]
+        if portrait_identity_applies:
+            review_focus.extend(
+                [
+                    "identity master selection",
+                    "long-term identity continuity",
+                    "facial-feature aesthetic integrity",
+                    "portrait bone-structure identity",
+                    "beautiful realism balance",
+                ]
+            )
+            user_visible_summary[0] = "V3 will preserve the selected identity direction."
+        if human_subject_applies:
+            review_focus.append("real-camera human realism")
+        if subject_type == "character":
+            user_visible_summary[1] = "V3 will reject obvious AI-face, repeated clones, or weak suite roles."
         pass_conditions = [
-            "identity master exists or user reference is respected",
+            "declared reference truth is respected when reference evidence exists",
             "suite roles are visually distinguishable for the selected mode",
             "one clear subject reads immediately with intentional framing",
             "exposure, color grade, contrast, depth, and texture feel stable and directed",
-            "identity-critical facial feature relationships remain consistent and attractive",
-            "portrait reference outputs preserve the same underlying bone structure while allowing styling changes",
-            "portrait references provide identity truth but do not override prompt-owned lighting, color, scene, camera, wardrobe, or art direction",
             "each reference influences only the visual channels assigned by the resolved reference policy",
-            "artifact cleanup cannot replace the face with a cleaner but less recognizable person",
-            "realism improves skin, light, hair, fabric, and camera texture without degrading beauty",
             "no visible AI mark, watermark, random text, or fake label",
-            "human subjects avoid plastic skin, beauty-app geometry, and cloned expressions",
             "outputs remain directly usable as a polished creative visual set",
         ]
+        if portrait_identity_applies:
+            pass_conditions.extend(
+                [
+                    "identity-critical facial feature relationships remain consistent and attractive",
+                    "portrait reference outputs preserve the same underlying bone structure while allowing styling changes",
+                    "portrait references provide identity truth but do not override prompt-owned lighting, color, scene, camera, wardrobe, or art direction",
+                    "artifact cleanup cannot replace the face with a cleaner but less recognizable person",
+                ]
+            )
+        if human_subject_applies:
+            pass_conditions.extend(
+                [
+                    "realism improves skin, light, hair, fabric, and camera texture without degrading beauty",
+                    "human subjects avoid plastic skin, beauty-app geometry, and cloned expressions",
+                ]
+            )
         if advanced_reference_controls.get("preserve_person_identity"):
             pass_conditions.append("prompt face archetypes guide styling only and do not replace uploaded facial geometry")
         if advanced_reference_controls.get("preserve_product_appearance"):
@@ -2515,22 +2592,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             pass_conditions=pass_conditions,
             prompt_additions=_dedupe(prompt_additions)[:24],
             negative_additions=_dedupe(negative_additions)[:60],
-            review_focus=[
-                "identity master selection",
-                "suite role separation",
-                "real-camera human realism",
-                "long-term identity continuity",
-                "facial-feature aesthetic integrity",
-                "portrait bone-structure identity",
-                "beautiful realism balance",
-                "artifact cleanliness",
-                "aesthetic stability",
-                "direct-use finish",
-            ],
-            user_visible_summary=[
-                "V3 will pick a clear identity direction.",
-                "V3 will reject obvious AI-face, repeated clones, or weak suite roles.",
-            ],
+            review_focus=_dedupe(review_focus),
+            user_visible_summary=_dedupe(user_visible_summary),
             metadata={
                 "doc": "77",
                 "extends": ["53", "58", "59", "64", "65", "73", "74", "75", "76", "77", "78", "90", "93"],
@@ -4330,7 +4393,25 @@ def _looks_like_human_prompt(value: str) -> bool:
         "\u5973\u5b69",
         "\u8138",
     )
-    return any(term in text for term in english_terms) or any(term in value for term in chinese_terms)
+    return _contains_latin_terms(text, english_terms) or any(term in value for term in chinese_terms)
+
+
+def _contains_latin_terms(text: str, terms: tuple[str, ...] | list[str]) -> bool:
+    """Match Latin intent terms as words, without changing CJK matching rules.
+
+    The General foundation uses intent classification to decide whether
+    character-only suite, identity, and review behavior may run.  A raw
+    substring match made ordinary architecture language (for example,
+    ``fair-faced concrete``) look like an explicit human-face request.  Keep
+    multi-word terms usable while requiring non-alphanumeric boundaries.
+    """
+
+    lowered = str(text or "").lower()
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(str(term).lower())}(?![a-z0-9])", lowered)
+        for term in terms
+        if str(term).strip()
+    )
 
 
 def _sanitize_general_visual_terms(values: list[str], *, allow_product_language: bool) -> list[str]:

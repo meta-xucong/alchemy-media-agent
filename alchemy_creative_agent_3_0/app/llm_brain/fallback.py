@@ -698,7 +698,7 @@ def _variation_mode_rules(mode: str) -> dict[str, list[str] | str]:
     rules: dict[str, dict[str, list[str] | str]] = {
         "selection_candidates": {
             "set_goal": "Create close alternatives under the same visual direction",
-            "prompt_addon": "Generate near-neighbor options: same subject, same style, small differences in pose, expression, framing, or styling.",
+            "prompt_addon": "Generate near-neighbor options: same core subject, same style, small differences in framing, viewpoint, lighting, or scene depth.",
             "composition_rules": ["keep variation small and easy to compare"],
             "quality_bar": ["alternatives should feel like one selectable batch"],
             "hard_constraints": ["Do not change the core subject identity, product identity, or overall style direction."],

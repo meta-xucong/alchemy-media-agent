@@ -84,8 +84,7 @@ class StrongReferenceClosureBuilder:
         allowed_variations = _dedupe(
             [
                 *[rule for anchor in anchors for rule in anchor.allowed_variations],
-                "change expression, gaze, pose, head angle, crop, and camera distance naturally",
-                "change hand placement, body turn, micro-expression, and small hair movement when this improves a real shoot sequence",
+                *self._default_allowed_variations(subject_type),
                 "change scene depth or layout when the selected mode requires it",
                 *_string_list(casebook_rules.get("allowed_variations")),
             ]
@@ -94,9 +93,7 @@ class StrongReferenceClosureBuilder:
             [
                 *[rule for lock in identity_locks for rule in lock.forbidden_drift],
                 *[rule for anchor in anchors for rule in anchor.forbidden_drift],
-                "do not change the core person, product, or brand identity",
-                "do not copy the exact same still, expression, pose, crop, or face angle",
-                "do not preserve reference artifacts such as AI badges, watermarks, plastic skin, or synthetic highlights",
+                *self._default_forbidden_drift(subject_type),
                 *_string_list(casebook_rules.get("forbidden_drift")),
             ]
         )[:12]
@@ -168,6 +165,37 @@ class StrongReferenceClosureBuilder:
             },
         )
 
+    def _default_allowed_variations(self, subject_type: str) -> list[str]:
+        if subject_type == "character":
+            return [
+                "change expression, gaze, pose, head angle, crop, and camera distance naturally",
+                "change hand placement, body turn, micro-expression, and small hair movement when this improves a real shoot sequence",
+            ]
+        if subject_type == "product":
+            return [
+                "change camera angle, crop, lighting, surrounding context, and scene depth while preserving the product truth",
+            ]
+        return [
+            "change framing, viewpoint, lighting detail, scene depth, or layout while preserving the selected visual direction",
+        ]
+
+    def _default_forbidden_drift(self, subject_type: str) -> list[str]:
+        if subject_type == "character":
+            return [
+                "do not change the core person identity",
+                "do not copy the exact same still, expression, pose, crop, or face angle",
+                "do not preserve reference artifacts such as AI badges, watermarks, plastic skin, or synthetic highlights",
+            ]
+        if subject_type == "product":
+            return [
+                "do not change the core product identity",
+                "do not replace the referenced product with a generic object or preserve reference watermarks and AI marks",
+            ]
+        return [
+            "do not change the core visual direction, composition language, or selected subject direction",
+            "do not copy the exact same frame or preserve reference watermarks, AI badges, or synthetic artifacts",
+        ]
+
     def _provider_rules(
         self,
         *,
@@ -196,10 +224,14 @@ class StrongReferenceClosureBuilder:
         elif subject_type == "character":
             lead = "Use selected references as person identity truth only; preserve recognizable face geometry and body identity while the current prompt controls styling, lighting, scene, camera, and style unless a channel is explicitly assigned to a reference."
         else:
-            lead = "Use selected references as visual truth: preserve the selected style world, composition language, lighting, and subject direction."
+            lead = "Use selected references as visual direction: preserve the selected style world, composition language, lighting, and subject direction."
         rules = [
             lead,
-            "Preserve identity through stable traits; do not clone the exact source frame.",
+            (
+                "Preserve identity through stable traits; do not clone the exact source frame."
+                if subject_type in {"character", "product"}
+                else "Preserve stable visual anchors; do not clone the exact source frame."
+            ),
             "Allowed variation: " + "; ".join(allowed_variations[:5]) if allowed_variations else "",
             "Do not drift: " + "; ".join(forbidden_drift[:5]) if forbidden_drift else "",
             "Keep: " + "; ".join(_dedupe([*identity_keep_rules, *style_keep_rules])[:6]) if identity_keep_rules or style_keep_rules else "",
@@ -224,9 +256,10 @@ class ModeQualityProfileBuilder:
 
     def build(self, *, project_id: str | None, job_id: str | None, mode: str, subject_type: str) -> ModeQualityProfile:
         key = _canonical_mode(str(mode or "delivery_suite").strip() or "delivery_suite")
-        data = _MODE_DATA.get(key, _MODE_DATA["delivery_suite"])
+        normalized_subject_type = str(subject_type or "generic").strip().lower() or "generic"
+        data = _mode_data_for_subject(key, normalized_subject_type)
         return ModeQualityProfile(
-            profile_id=stable_id("mode_quality_profile", project_id, job_id, key, subject_type),
+            profile_id=stable_id("mode_quality_profile", project_id, job_id, key, normalized_subject_type),
             mode=key,
             user_visible_label=data["label"],
             review_priorities=list(data["review_priorities"]),
@@ -234,7 +267,7 @@ class ModeQualityProfileBuilder:
             retry_triggers=list(data["retry_triggers"]),
             prompt_guidance=list(data["prompt_guidance"]),
             negative_guidance=list(data["negative_guidance"]),
-            metadata={"doc": "66", "module_id": self.module_id, "subject_type": subject_type},
+            metadata={"doc": "66", "module_id": self.module_id, "subject_type": normalized_subject_type},
         )
 
 
@@ -272,6 +305,52 @@ _MODE_DATA: dict[str, dict[str, list[str] | str]] = {
         "negative_guidance": ["bad crop", "subject cut off", "no usable negative space"],
     },
 }
+
+
+def _mode_data_for_subject(mode: str, subject_type: str) -> dict[str, list[str] | str]:
+    """Keep general mode semantics neutral unless a character capability is active."""
+
+    key = mode if mode in _MODE_DATA else "delivery_suite"
+    data = _MODE_DATA[key]
+    if subject_type == "character":
+        return data
+    if key == "selection_candidates":
+        if subject_type == "product":
+            return {
+                "label": "Similar alternatives",
+                "review_priorities": ["same product truth", "small framing/camera/light differences", "no duplicate-like repetition"],
+                "pass_conditions": ["outputs feel comparable but not identical", "product identity remains stable"],
+                "retry_triggers": ["selection_candidate_distance_risk", "product_identity_drift", "mode_role_duplication"],
+                "prompt_guidance": ["create close alternatives for choosing the best image; keep the same product direction while varying framing, camera angle, lighting, or surrounding context"],
+                "negative_guidance": ["generic product replacement", "same exact still repeated", "unrelated style jump"],
+            }
+        return {
+            "label": "Similar alternatives",
+            "review_priorities": ["same visual direction", "small framing/camera/light/scene-depth differences", "no duplicate-like repetition"],
+            "pass_conditions": ["outputs feel comparable but not identical", "core subject and style direction remain stable"],
+            "retry_triggers": ["selection_candidate_distance_risk", "mode_role_duplication"],
+            "prompt_guidance": ["create close alternatives for choosing the best image; keep the same visual direction while varying framing, viewpoint, camera, lighting, or scene depth"],
+            "negative_guidance": ["wildly different core subject or scene", "same exact still repeated", "unrelated style jump"],
+        }
+    if key == "delivery_suite":
+        return {
+            "label": "Creative suite",
+            "review_priorities": ["clear role separation", "context/detail/composition usefulness", "polished finish", "natural role-to-role variation"],
+            "pass_conditions": ["each output has a distinct purpose", "the set keeps one directed visual world"],
+            "retry_triggers": ["delivery_suite_role_collapse", "mode_role_duplication", "low_commercial_finish"],
+            "prompt_guidance": ["make each image serve a different creative role while keeping one visual world; vary framing, viewpoint, scale, lighting, or scene depth according to role"],
+            "negative_guidance": ["same image duty repeated", "same crop for every output", "unclear role separation"],
+        }
+    if key == "creative_exploration" and subject_type == "generic":
+        return {
+            "label": "Creative exploration",
+            "review_priorities": ["meaningful creative distance", "core visual direction", "usable finish"],
+            "pass_conditions": ["visual direction changes are intentional", "core subject and style direction remain recognizable"],
+            "retry_triggers": ["creative_distance_missing", "subject_direction_drift"],
+            "prompt_guidance": ["explore a stronger scene, mood, or art direction while preserving the core visual direction"],
+            "negative_guidance": ["no creative change", "lost core direction", "uncontrolled style drift"],
+        }
+    return data
 
 
 def _canonical_mode(value: str) -> str:

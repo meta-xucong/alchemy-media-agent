@@ -273,8 +273,8 @@ class PromptCompilerAgent(BaseAgent):
         if not is_complex:
             return []
         return [
-            "Preserve the user's detailed scene literally: action, pose, hand interaction, wardrobe, hair/accessories, environment, camera angle, lens style, color mood, air/water atmosphere, and aspect ratio must remain visible.",
-            "Do not simplify a detailed cinematic portrait request into a generic beauty portrait, studio portrait, fashion poster, or unrelated close-up.",
+            "Preserve the user's detailed scene literally: required subject or object, action or interaction, environment, camera angle, lens style, color mood, air or water atmosphere, and aspect ratio must remain visible.",
+            "Do not simplify a detailed visual request into a generic stock image, unrelated studio setup, fashion poster, or arbitrary close-up.",
             "Treat the explicit negative prompt section only as things to avoid, never as desired image content.",
         ]
 

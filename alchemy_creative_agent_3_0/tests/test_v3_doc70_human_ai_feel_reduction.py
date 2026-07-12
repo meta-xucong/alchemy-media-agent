@@ -232,6 +232,7 @@ def test_doc70_stylized_requests_remain_exempt() -> None:
 
 def test_doc70_human_style_signals_reinterpret_premium_as_real_camera() -> None:
     assert _looks_like_human_prompt("高级清爽东方美女写真") is True
+    assert _looks_like_human_prompt("fair-faced concrete with architectural texture") is False
 
     module = VisualCapabilityClusterModule()
     signals = module._style_signals(  # noqa: SLF001

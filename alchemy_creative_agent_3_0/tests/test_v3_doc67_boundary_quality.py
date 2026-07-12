@@ -109,6 +109,55 @@ def test_doc67_mode_quality_profiles_penalize_over_cloned_portrait_batches() -> 
     assert any("micro-expression" in item for item in selection.prompt_guidance)
 
 
+def test_doc67_generic_continuation_and_mode_profile_stay_subject_neutral() -> None:
+    closure = StrongReferenceClosureBuilder().build(
+        project_id="project",
+        job_id="job",
+        subject_type="generic",
+        continuation_plan=StrongReferenceContinuationPlan(
+            plan_id="plan",
+            provider_required_reference_ids=["selected_architecture"],
+            lock_targets=["visual_direction"],
+            prompt_additions=["keep the concrete, oak, and late-afternoon architectural direction"],
+        ),
+        anchors=[
+            ProjectIdentityAnchor(
+                anchor_id="anchor",
+                subject_type="generic",
+                style_keep_rules=["same restrained architecture palette"],
+                allowed_variations=["change skylight framing"],
+                forbidden_drift=["unrelated visual genre"],
+            )
+        ],
+        identity_locks=[],
+        human_photorealism=None,
+    )
+    profile = ModeQualityProfileBuilder().build(
+        project_id="project",
+        job_id="job",
+        mode="selection_candidates",
+        subject_type="generic",
+    )
+
+    generic_text = " ".join(
+        [
+            *closure.allowed_variations,
+            *closure.forbidden_drift,
+            *closure.provider_prompt_rules,
+            *closure.negative_prompt_rules,
+            *profile.review_priorities,
+            *profile.pass_conditions,
+            *profile.retry_triggers,
+            *profile.prompt_guidance,
+            *profile.negative_guidance,
+        ]
+    ).lower()
+    for person_only_term in ("gaze", "hand placement", "micro-expression", "face angle", "plastic skin", "same_ai_face"):
+        assert person_only_term not in generic_text
+    assert "same visual direction" in profile.review_priorities
+    assert "framing, viewpoint, camera, lighting, or scene depth" in profile.prompt_guidance[0]
+
+
 def test_doc67_strong_reference_closure_preserves_identity_without_copying_artifacts() -> None:
     closure = StrongReferenceClosureBuilder().build(
         project_id="project",

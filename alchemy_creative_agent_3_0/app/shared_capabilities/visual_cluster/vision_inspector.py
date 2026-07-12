@@ -1568,13 +1568,16 @@ def _lower_right_mark_risk(path: Path) -> tuple[bool, dict[str, Any]]:
             compact_mark_score = (strong_edge_ratio * 0.55) + (horizontal_band_ratio * 0.45)
             # Generated marks usually appear as compact semi-transparent text
             # or a small logo in the lower-right corner. Flower edges, fabric
-            # folds and bokeh can be busy but rarely form repeated horizontal
-            # text-like bands, so only high-confidence evidence may trigger
+            # folds, rock texture, and architectural detail may create much
+            # denser edge fields. A compact mark should therefore be neither
+            # too sparse nor a high-detail scene region before it can trigger
             # automatic retry.
             text_like_edge = edge_ratio >= 0.145 and strong_edge_ratio >= 0.12
             band_like_edge = strong_edge_ratio >= 0.095 and horizontal_band_ratio >= 0.17
+            compact_edge_density = edge_ratio <= 0.22
             risk = (
                 edge_ratio >= 0.145
+                and compact_edge_density
                 and strong_edge_ratio >= 0.095
                 and (text_like_edge or band_like_edge)
                 and 8.0 <= local_std <= 48.0
@@ -1588,6 +1591,7 @@ def _lower_right_mark_risk(path: Path) -> tuple[bool, dict[str, Any]]:
                 "lower_right_horizontal_band_ratio": round(horizontal_band_ratio, 4),
                 "lower_right_mark_confidence": confidence,
                 "lower_right_mark_evidence_type": "compact_text_or_logo_like" if risk else "ambiguous_texture",
+                "lower_right_compact_edge_density": compact_edge_density,
                 "lower_right_luma_std": round(local_std, 2),
             }
     except Exception:

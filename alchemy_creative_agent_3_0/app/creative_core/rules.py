@@ -33,7 +33,27 @@ def normalize_input(value: str) -> str:
 
 
 def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
-    return any(keyword.lower() in text for keyword in keywords)
+    """Match CJK phrases directly but keep Latin keywords at word boundaries.
+
+    Industry and platform terms include short Latin tokens such as ``spa``.
+    A raw substring match classified ``atmospheric perspective`` as a spa
+    service because its word boundary contains ``" spa"``.  Chinese terms do
+    not use whitespace boundaries, so retain direct matching for all
+    non-Latin keyword forms.
+    """
+
+    lowered = str(text or "").lower()
+    for keyword in keywords:
+        candidate = str(keyword or "").strip().lower()
+        if not candidate:
+            continue
+        if re.fullmatch(r"[a-z0-9]+(?:[ _-][a-z0-9]+)*", candidate):
+            if re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", lowered):
+                return True
+            continue
+        if candidate in lowered:
+            return True
+    return False
 
 
 PORTRAIT_BEAUTY_CONTEXT_TERMS: tuple[str, ...] = (

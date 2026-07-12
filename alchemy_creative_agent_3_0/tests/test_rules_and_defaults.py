@@ -33,6 +33,16 @@ def test_beauty_portrait_does_not_become_local_service() -> None:
     )
 
 
+def test_short_latin_industry_keyword_does_not_match_inside_atmospheric_scene_text() -> None:
+    atmospheric_landscape = (
+        "Create a remote alpine lake with natural atmospheric perspective, "
+        "wet foreground rocks, and no buildings or text."
+    )
+
+    assert detect_industry(normalize_input(atmospheric_landscape)) == IndustryCategory.UNKNOWN
+    assert detect_industry(normalize_input("Quiet spa treatment room with a booking counter")) == IndustryCategory.LOCAL_SERVICE_BEAUTY
+
+
 def test_portrait_manicure_detail_does_not_inject_local_service_defaults() -> None:
     result = run_creative_planning(
         "国风写实人像摄影，一位年轻女性单手轻抚下巴，淡雅修长美甲，银白色古装，梨花背景"

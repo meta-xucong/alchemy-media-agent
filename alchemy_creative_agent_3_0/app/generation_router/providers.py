@@ -2787,6 +2787,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "silicone face",
                         "over-smoothed skin",
                         "plastic texture",
+                        "generic AI beauty identity",
                         "same type but different person",
                         "style changed face geometry",
                         "3D render",
