@@ -388,6 +388,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         provider_reference_image_count = int(provider_input_plan.get("reference_image_count") or 0)
         reference_truth_package = provider_input_plan.get("reference_truth_package") if isinstance(provider_input_plan.get("reference_truth_package"), dict) else {}
         provider_reference_assets = self._provider_reference_asset_summary(asset_plan)
+        provider_reference_resolution_audit = asset_plan.get("provider_reference_resolution_audit", {})
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
@@ -451,6 +452,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_input_plan": provider_input_plan,
                     "reference_truth_package": reference_truth_package,
                     "provider_reference_assets": provider_reference_assets,
+                    "provider_reference_resolution_audit": provider_reference_resolution_audit,
                     "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                     "final_provider_prompt": final_provider_prompt,
                     "final_provider_prompt_chars": len(final_provider_prompt),
@@ -528,6 +530,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_input_plan": provider_input_plan,
                         "reference_truth_package": reference_truth_package,
                         "provider_reference_assets": provider_reference_assets,
+                        "provider_reference_resolution_audit": provider_reference_resolution_audit,
                         "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                         "final_provider_prompt": final_provider_prompt,
                         "final_provider_prompt_chars": len(final_provider_prompt),
@@ -592,6 +595,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "provider_input_plan": provider_input_plan,
                 "reference_truth_package": reference_truth_package,
                 "provider_reference_assets": provider_reference_assets,
+                "provider_reference_resolution_audit": provider_reference_resolution_audit,
                 "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
                 "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                 "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
@@ -819,6 +823,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         reference_assets = self._reference_assets(request)
         asset_plan = self._asset_plan(request, reference_assets)
+        asset_plan["provider_reference_resolution_audit"] = dict(
+            request.metadata.get("provider_reference_resolution_audit") or {}
+        )
         self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
         provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
@@ -963,22 +970,70 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not isinstance(raw_project_refs, list):
             raw_project_refs = request.generation_plan.metadata.get("reference_assets", [])
         combined_assets = [
-            *(raw_assets if isinstance(raw_assets, list) else []),
             *(raw_project_refs if isinstance(raw_project_refs, list) else []),
+            *(raw_assets if isinstance(raw_assets, list) else []),
         ]
         combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
         assets: list[dict[str, Any]] = []
         seen_evidence: dict[tuple[str, str], int] = {}
+        resolution_audit: dict[str, Any] = {
+            "retained": [],
+            "suppressed": [],
+            "unresolved": [],
+        }
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             path = data.get("file_path")
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            source_type = str(data.get("source_type") or metadata.get("source_type") or "")
+            source_id = str(
+                data.get("output_id")
+                or data.get("asset_id")
+                or data.get("asset_ref_id")
+                or data.get("reference_id")
+                or ""
+            )
+            is_selected_generated = source_type in {"selected_output", "generated_selected"}
+            requires_canonical_binding = bool(
+                is_selected_generated
+                and (
+                    request.metadata.get("project_id")
+                    or data.get("provider_input_required")
+                    or metadata.get("selected_project_anchor")
+                )
+            )
+            selected_file_is_materialized = False
+            if path:
+                try:
+                    selected_file_is_materialized = Path(str(path)).is_file()
+                except TypeError:
+                    selected_file_is_materialized = False
+            has_canonical_binding = bool(
+                data.get("output_id")
+                and path
+                and (metadata.get("canonical_output_binding") or data.get("source_integrity_id") or metadata.get("source_integrity_id"))
+                and selected_file_is_materialized
+            )
+            if requires_canonical_binding and not has_canonical_binding:
+                resolution_audit["unresolved"].append(
+                    {
+                        "source_id": source_id,
+                        "reason": "selected_generated_output_not_materialized"
+                        if path and not selected_file_is_materialized
+                        else "selected_generated_output_not_canonical",
+                    }
+                )
+                continue
             if not path:
+                resolution_audit["suppressed"].append({"source_id": source_id, "reason": "missing_file_path"})
                 continue
             try:
                 file_path = Path(str(path))
             except TypeError:
+                resolution_audit["suppressed"].append({"source_id": source_id, "reason": "invalid_file_path"})
                 continue
             if not file_path.exists() or not file_path.is_file():
+                resolution_audit["suppressed"].append({"source_id": source_id, "reason": "file_not_available"})
                 continue
             resolved_path = str(file_path.resolve())
             role = str(data.get("role") or data.get("use_policy") or "unknown_reference")
@@ -994,7 +1049,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 existing["lock_targets"] = sorted(set(existing.get("lock_targets", [])) | set(lock_targets))
                 if not existing.get("use_policy") and use_policy:
                     existing["use_policy"] = use_policy
-                source_type = str(data.get("source_type") or (data.get("metadata") or {}).get("source_type") or "")
                 if not existing.get("source_type") and source_type:
                     existing["source_type"] = source_type
                 existing["provider_input_required"] = bool(
@@ -1008,6 +1062,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 metadata["deduplicated_source_asset_ids"] = _dedupe(duplicate_ids)
                 metadata["doc93_content_role_deduplicated"] = True
                 existing["metadata"] = metadata
+                resolution_audit["suppressed"].append(
+                    {"source_id": source_id, "reason": "duplicate_source_content", "retained_source_id": existing.get("asset_id")}
+                )
                 continue
             seen_evidence[evidence_key] = len(assets)
             assets.append(
@@ -1029,6 +1086,23 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
                 }
             )
+            resolution_audit["retained"].append(
+                {
+                    "source_id": source_id or str(data.get("asset_id") or file_path.stem),
+                    "source_integrity_id": data.get("source_integrity_id") or metadata.get("source_integrity_id") or content_fingerprint,
+                    "output_id": data.get("output_id"),
+                }
+            )
+        required_unresolved = [
+            entry
+            for entry in resolution_audit["unresolved"]
+            if entry.get("source_id")
+        ]
+        resolution_audit["no_substitution"] = True
+        resolution_audit["required_reference_unresolved"] = bool(required_unresolved)
+        request.metadata["provider_reference_resolution_audit"] = resolution_audit
+        if required_unresolved:
+            raise ValueError("A required selected generated reference is not materialized; no substitute provider input is allowed.")
         return assets[:6]
 
     def _apply_adaptive_reference_selection(

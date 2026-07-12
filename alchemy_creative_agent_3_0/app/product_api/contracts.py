@@ -27,6 +27,8 @@ class ProductApiBase(V3BaseModel):
 
 class ProductJobStatusValue(StrEnum):
     PLANNED = "planned"
+    GENERATING = "generating"
+    FINALIZING = "finalizing"
     GENERATED = "generated"
     SELECTED = "selected"
     NOT_FOUND = "not_found"

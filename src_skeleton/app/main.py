@@ -294,7 +294,17 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
         if key in _v3_background_generation_jobs:
             return False
         _v3_background_generation_jobs.add(key)
-    _v3_generation_executor.submit(_run_v3_project_generation_background, project_id, job_id, payload)
+    try:
+        _run_v3_handler(v3_route_handlers.mark_project_job_generating, project_id, job_id)
+    except Exception:
+        with _v3_background_generation_jobs_lock:
+            _v3_background_generation_jobs.discard(key)
+        raise
+    worker_payload = {
+        **dict(payload or {}),
+        "metadata": {**dict((payload or {}).get("metadata") or {}), "_v3_background_worker_claim": True},
+    }
+    _v3_generation_executor.submit(_run_v3_project_generation_background, project_id, job_id, worker_payload)
     return True
 
 

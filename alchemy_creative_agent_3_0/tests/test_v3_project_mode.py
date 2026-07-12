@@ -1480,12 +1480,13 @@ def test_project_outputs_mark_retry_superseded_and_final_delivery_group(tmp_path
     final_outputs = [item for item in outputs if item["delivery_state"] == "final_delivery"]
     superseded_outputs = [item for item in outputs if item["delivery_state"] == "superseded"]
 
-    assert len(outputs) == 8
+    # The project board is delivery-only.  Superseded retry attempts remain
+    # append-only in the output store/audit metadata, not on the user board.
+    assert len(outputs) == 4
     assert {item["output_id"] for item in final_outputs} == set(retry_ids)
-    assert {item["output_id"] for item in superseded_outputs} == set(original_ids)
+    assert superseded_outputs == []
     assert {item["metadata"]["delivery_requested_image_count"] for item in outputs} == {4}
     assert all(item["metadata"]["delivery_final_attempt_index"] == 1 for item in outputs)
-    assert all(item["metadata"]["retry_superseded"] is True for item in superseded_outputs)
     assert all(item["metadata"]["retry_superseded"] is False for item in final_outputs)
 
 
@@ -1524,7 +1525,7 @@ def test_project_outputs_keep_complete_original_when_retry_is_incomplete(tmp_pat
     process_outputs = [item for item in outputs if item["delivery_state"] == "process_only"]
 
     assert {item["output_id"] for item in final_outputs} == set(original_ids)
-    assert [item["output_id"] for item in process_outputs] == [retry_record.output_id]
+    assert process_outputs == []
     assert all(item["metadata"]["delivery_final_attempt_index"] == 0 for item in outputs)
 
 
@@ -1562,7 +1563,7 @@ def test_doc95_project_outputs_honor_reviewed_original_over_worse_complete_retry
     superseded_ids = {item["output_id"] for item in outputs if item["delivery_state"] == "superseded"}
 
     assert final_ids == set(original_ids)
-    assert superseded_ids == set(retry_ids)
+    assert superseded_ids == set()
     assert all(item["metadata"]["reviewed_best_attempt"] is True for item in outputs)
 
 

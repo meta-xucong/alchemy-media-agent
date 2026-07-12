@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import os
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -1093,6 +1095,13 @@ class V3ProjectModeService:
             )
         return status
 
+    def mark_project_job_generating(self, project_id: str, job_id: str) -> ProductJobStatus:
+        """Mark a queued project job before the web layer releases its worker."""
+
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, job_id)
+        return self.product_service.mark_job_generating(job_id)
+
     def _blocked_generation_summary(self, status: ProductJobStatus) -> str:
         warnings = [str(item).strip() for item in (status.warnings or []) if str(item).strip()]
         joined = " ".join(warnings).lower()
@@ -1116,14 +1125,45 @@ class V3ProjectModeService:
         metadata = dict(payload.get("metadata") or {})
         metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
         payload["metadata"] = metadata
+        current_status = self.product_service.get_job(job_id)
+        if current_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            return self._selection_hold_response(
+                project,
+                template_id=template_id,
+                status=current_status,
+                reason="finalization_pending",
+                message="图片仍在完成审查和交付收尾，暂时不能选作后续参考。",
+            )
+        preflight_refs, unresolved_refs = self._resolved_output_refs_for_status(
+            project,
+            current_status,
+            selected_candidate_id=str(payload.get("selected_candidate_id") or "").strip() or None,
+            selected_asset_id=str(payload.get("selected_asset_id") or "").strip() or None,
+        )
+        if not preflight_refs:
+            return self._selection_hold_response(
+                project,
+                template_id=template_id,
+                status=current_status,
+                reason="output_unavailable",
+                message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
+                unresolved_refs=unresolved_refs,
+            )
         selected = self.product_service.select_result(job_id, payload)
         if selected.status == ProductJobStatusValue.NOT_FOUND:
             restored_status = self.product_service.get_job(job_id)
             if restored_status.status == ProductJobStatusValue.GENERATED:
                 selected = self._selection_from_restored_status(restored_status, payload)
-        refs = self._output_refs_from_selection(project, selected)
+        refs, unresolved_refs = self._output_refs_from_selection(project, selected)
         if not refs:
-            raise ValueError("No generated project image was available to select")
+            return self._selection_hold_response(
+                project,
+                template_id=template_id,
+                status=selected.job_status,
+                reason="output_unavailable",
+                message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
+                unresolved_refs=unresolved_refs,
+            )
         existing_ref_ids = {ref.output_ref_id for ref in project.selected_output_refs}
         project.selected_output_refs.extend([ref for ref in refs if ref.output_ref_id not in existing_ref_ids])
         now = _utc_now_iso()
@@ -1152,6 +1192,7 @@ class V3ProjectModeService:
                 "template_id": template_id,
                 "project_mode": True,
                 "brand_memory_auto_applied": False,
+                "continuation_available": True,
                 "project_outputs": self._project_output_items(project, limit=60),
             },
         }
@@ -1259,6 +1300,43 @@ class V3ProjectModeService:
         project.updated_at = _utc_now_iso()
         self.project_store.save_project(project)
 
+    def _selection_hold_response(
+        self,
+        project: ProjectRecord,
+        *,
+        template_id: str,
+        status: ProductJobStatus,
+        reason: str,
+        message: str,
+        unresolved_refs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Return an explicit hold rather than silently substituting a reference."""
+
+        context = self._refresh_project_context(project)
+        return {
+            "job_id": status.job_id,
+            "status": status.status.value if hasattr(status.status, "value") else str(status.status),
+            "selected_result": {
+                "selected_candidate_ids": [],
+                "selected_asset_ids": [],
+                "metadata": {"selection_status": "selection_held", "hold_reason": reason},
+            },
+            "job_status": status.model_dump(mode="json"),
+            "warnings": [message],
+            "project": project.model_dump(mode="json"),
+            "context": context.model_dump(mode="json"),
+            "metadata": {
+                "source": PROJECT_API_SOURCE,
+                "project_id": project.project_id,
+                "template_id": template_id,
+                "project_mode": True,
+                "selection_held": True,
+                "continuation_available": False,
+                "hold_reason": reason,
+                "unresolved_selected_outputs": list(unresolved_refs or []),
+                "project_outputs": self._project_output_items(project, limit=60),
+            },
+        }
     def _ecommerce_slot_anchors(self, project: ProjectRecord) -> dict[str, dict[str, Any]]:
         raw = dict(project.metadata or {}).get("ecommerce_slot_lineage_records")
         if not isinstance(raw, dict):
@@ -2156,6 +2234,11 @@ class V3ProjectModeService:
         }
         changed = False
         for job_id in list(dict.fromkeys(project.job_ids)):
+            job_status = self.product_service.get_job(job_id)
+            if job_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+                # An output file can appear before shared review/retry settles
+                # delivery.  Never create a completed timeline entry from it.
+                continue
             try:
                 records = list(output_store.list_by_job(job_id))
             except Exception:
@@ -2378,6 +2461,8 @@ class V3ProjectModeService:
                 "output_ref_id": ref.output_ref_id,
                 "candidate_id": ref.candidate_id,
                 "asset_id": ref.asset_id,
+                "canonical_output_binding": bool(ref.metadata.get("canonical_output_binding")),
+                "source_integrity_id": ref.metadata.get("source_integrity_id"),
             },
         )
 
@@ -2703,6 +2788,7 @@ class V3ProjectModeService:
             "mime_type": record.mime_type,
             "output_id": record.output_id,
             "candidate_id": record.candidate_id,
+            "source_integrity_id": self._output_source_integrity_id(record),
         }
 
     def _state_change_response(
@@ -2738,13 +2824,28 @@ class V3ProjectModeService:
         effective_commerce_profile = commerce_profile or project.commerce_profile
         timeline_ids = list(project.timeline_refs)
         state_map = self._selected_output_state_map(project)
-        selected_refs = [
+        selected_ref_candidates = [
             ref
             for ref in project.selected_output_refs
             if state_map.get(self._output_identity(ref), ProjectOutputSelectionStateValue.SELECTED)
             == ProjectOutputSelectionStateValue.SELECTED
         ]
-        selected_refs = [self._enrich_selected_output_ref(ref) for ref in selected_refs]
+        selected_refs: list[OutputRef] = []
+        unresolved_selected_outputs: list[dict[str, Any]] = []
+        for ref in selected_ref_candidates:
+            canonical = self._canonical_selected_output_ref(project, ref)
+            if canonical is None:
+                unresolved_selected_outputs.append(
+                    {
+                        "job_id": ref.job_id,
+                        "candidate_id": ref.candidate_id,
+                        "asset_id": ref.asset_id,
+                        "output_id": ref.output_id,
+                        "reason": "legacy_or_unavailable_materialized_output",
+                    }
+                )
+                continue
+            selected_refs.append(canonical)
         active_references = self._active_references(project)
         active_uploaded_references = [
             self._reference_context_dict(reference)
@@ -2767,11 +2868,23 @@ class V3ProjectModeService:
             if str(item.get("asset_id") or "").strip() not in inactive_asset_ids
             and str(item.get("reference_id") or "").strip() not in inactive_reference_ids
         ]
-        active_generated_references = [
-            self._reference_context_dict(reference)
-            for reference in active_references
-            if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED
-        ]
+        active_generated_references: list[dict[str, Any]] = []
+        unresolved_generated_references: list[dict[str, Any]] = []
+        for reference in active_references:
+            if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
+                continue
+            payload = self._reference_context_dict(reference)
+            if payload.get("file_path") and payload.get("output_id"):
+                active_generated_references.append(payload)
+            else:
+                unresolved_generated_references.append(
+                    {
+                        "reference_id": reference.reference_id,
+                        "asset_ref_id": reference.asset_ref_id,
+                        "created_from_output_id": reference.created_from_output_id,
+                        "reason": "legacy_or_unavailable_materialized_output",
+                    }
+                )
         active_avoid_notes = [
             feedback.plain_text
             for feedback in project.feedback_records
@@ -2797,8 +2910,19 @@ class V3ProjectModeService:
             "active_reference_count": len(active_references),
             "active_uploaded_reference_count": len(active_uploaded_references),
             "active_generated_reference_count": len(active_generated_references),
+            "suppressed_generated_reference_count": len(unresolved_generated_references),
             "active_negative_feedback_count": len(active_avoid_notes),
             "template_id": effective_template_id,
+            "reference_resolution_audit": {
+                "retained_selected_output_ids": [ref.output_id for ref in selected_refs if ref.output_id],
+                "suppressed_selected_outputs": unresolved_selected_outputs,
+                "retained_generated_reference_ids": [
+                    str(item.get("reference_id") or item.get("output_id") or "")
+                    for item in active_generated_references
+                ],
+                "suppressed_generated_references": unresolved_generated_references,
+                "no_substitution": True,
+            },
         }
         selected_visual_references = self._selected_visual_references(
             project,
@@ -2978,6 +3102,8 @@ class V3ProjectModeService:
                 "output_id": ref.output_id,
                 "asset_id": ref.asset_id,
                 "candidate_id": ref.candidate_id,
+                "file_path": ref.metadata.get("file_path"),
+                "source_integrity_id": ref.metadata.get("source_integrity_id"),
                 "preview_url": ref.preview_url,
                 "thumbnail_url": ref.thumbnail_url,
                 "download_url": ref.download_url,
@@ -2986,6 +3112,7 @@ class V3ProjectModeService:
                 "role": self._reference_role_for_policy(selected_policy),
                 "strength": "medium",
                 "lock_targets": self._lock_targets_for_policy(selected_policy),
+                "metadata": dict(ref.metadata),
             }
             payload.update({key: value for key, value in generated_payload.items() if value not in (None, "", [], {})})
             payload["source_type"] = "selected_output"
@@ -3059,6 +3186,8 @@ class V3ProjectModeService:
                     "source_id": source_id,
                     "asset_id": item.get("asset_id") or item.get("asset_ref_id") or source_id,
                     "output_id": item.get("output_id") or item.get("created_from_output_id"),
+                    "source_integrity_id": item.get("source_integrity_id")
+                    or (item.get("metadata") or {}).get("source_integrity_id"),
                     "file_path": file_path or None,
                     "preview_url": item.get("preview_url") or item.get("thumbnail_url") or item.get("uri"),
                     "role": item.get("role") or self._reference_role_for_policy(use_policy),
@@ -3072,6 +3201,11 @@ class V3ProjectModeService:
                     "user_visible_label": self._reference_user_label(use_policy),
                     "metadata": {
                         "selected_project_anchor": item.get("source_type") == "selected_output",
+                        "canonical_output_binding": bool(
+                            (item.get("metadata") or {}).get("canonical_output_binding")
+                        ),
+                        "source_integrity_id": item.get("source_integrity_id")
+                        or (item.get("metadata") or {}).get("source_integrity_id"),
                         "template_id": template_id,
                     },
                 }
@@ -3530,8 +3664,11 @@ class V3ProjectModeService:
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for item in references:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             identity = str(
-                item.get("output_id")
+                item.get("source_integrity_id")
+                or metadata.get("source_integrity_id")
+                or item.get("output_id")
                 or item.get("asset_id")
                 or item.get("asset_ref_id")
                 or item.get("reference_id")
@@ -3580,6 +3717,8 @@ class V3ProjectModeService:
             return []
         urls: list[str] = []
         for job_id in reversed(project.job_ids):
+            if not self._project_job_delivery_is_settled(job_id):
+                continue
             try:
                 records = output_store.list_by_job(job_id)
             except Exception:
@@ -3715,6 +3854,8 @@ class V3ProjectModeService:
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for job_id in reversed(project.job_ids):
+            if not self._project_job_delivery_is_settled(job_id):
+                continue
             try:
                 records = output_store.list_by_job(job_id)
             except Exception:
@@ -3728,6 +3869,9 @@ class V3ProjectModeService:
                     continue
                 seen.add(identity)
                 state = self._output_state_for_record(state_map, record)
+                delivery_entry = delivery.get(identity, {})
+                if not include_hidden and str(delivery_entry.get("delivery_state") or "final_delivery") != "final_delivery":
+                    continue
                 if (
                     not include_hidden
                     and state
@@ -3743,12 +3887,18 @@ class V3ProjectModeService:
                         record,
                         state,
                         compact=compact,
-                        delivery=delivery.get(identity),
+                        delivery=delivery_entry,
                     )
                 )
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
+
+    def _project_job_delivery_is_settled(self, job_id: str) -> bool:
+        """Known in-flight jobs must not leak process outputs onto project boards."""
+
+        status = self.product_service.get_job(job_id).status
+        return status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
         return OutputRef(
@@ -3766,6 +3916,9 @@ class V3ProjectModeService:
             selected_at=record.created_at,
             metadata={
                 "restored_from_output_store": True,
+                "canonical_output_binding": True,
+                "file_path": record.file_path,
+                "source_integrity_id": self._output_source_integrity_id(record),
                 "provider": record.provider,
                 "model": record.model,
             },
@@ -3906,10 +4059,42 @@ class V3ProjectModeService:
             return ["选中喜欢的图片", "继续生成新图", "补充参考图"]
         return ["生成第一组创意图", "上传参考图", "补充项目感觉"]
 
-    def _output_refs_from_selection(self, project: ProjectRecord, selected: SelectionResponse) -> list[OutputRef]:
-        status = selected.job_status
-        selected_candidate_ids = set(selected.selected_result.selected_candidate_ids)
-        selected_asset_ids = set(selected.selected_result.selected_asset_ids)
+    def _output_refs_from_selection(
+        self,
+        project: ProjectRecord,
+        selected: SelectionResponse,
+    ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
+        return self._resolved_output_refs_for_status(
+            project,
+            selected.job_status,
+            selected_candidate_ids=set(selected.selected_result.selected_candidate_ids),
+            selected_asset_ids=set(selected.selected_result.selected_asset_ids),
+        )
+
+    def _resolved_output_refs_for_status(
+        self,
+        project: ProjectRecord,
+        status: ProductJobStatus,
+        *,
+        selected_candidate_id: str | None = None,
+        selected_asset_id: str | None = None,
+        selected_candidate_ids: set[str] | None = None,
+        selected_asset_ids: set[str] | None = None,
+    ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
+        """Resolve a selection to exact V3 output records before it is persisted.
+
+        Candidate and asset identifiers are planning identifiers, not provider
+        inputs.  The project layer is deliberately strict here: a continuation
+        may use an exact materialized output, or it is held.  It must never
+        fall back to another candidate from the same job.
+        """
+
+        selected_candidate_ids = set(selected_candidate_ids or [])
+        selected_asset_ids = set(selected_asset_ids or [])
+        if selected_candidate_id:
+            selected_candidate_ids.add(selected_candidate_id)
+        if selected_asset_id:
+            selected_asset_ids.add(selected_asset_id)
         refs: list[OutputRef] = []
         now = _utc_now_iso()
         for candidate in status.candidates:
@@ -3934,27 +4119,127 @@ class V3ProjectModeService:
                     metadata={"recommendation": candidate.recommendation},
                 )
             )
-        if refs:
-            return refs
-        for asset in status.asset_series:
-            if selected_asset_ids and asset.asset_id not in selected_asset_ids:
-                continue
-            refs.append(
-                OutputRef(
-                    output_ref_id=stable_id("output_ref", project.project_id, status.job_id, asset.asset_id),
-                    source_type="selected_asset",
-                    project_id=project.project_id,
-                    job_id=status.job_id,
-                    asset_id=asset.asset_id,
-                    output_id=asset.output_id,
-                    preview_url=asset.preview_url or asset.preview_uri,
-                    thumbnail_url=asset.thumbnail_url,
-                    download_url=asset.download_url,
-                    selection_reason="user selected for project continuation",
-                    selected_at=now,
+        if not refs:
+            for asset in status.asset_series:
+                if selected_asset_ids and asset.asset_id not in selected_asset_ids:
+                    continue
+                refs.append(
+                    OutputRef(
+                        output_ref_id=stable_id("output_ref", project.project_id, status.job_id, asset.asset_id),
+                        source_type="selected_asset",
+                        project_id=project.project_id,
+                        job_id=status.job_id,
+                        asset_id=asset.asset_id,
+                        output_id=asset.output_id,
+                        preview_url=asset.preview_url or asset.preview_uri,
+                        thumbnail_url=asset.thumbnail_url,
+                        download_url=asset.download_url,
+                        selection_reason="user selected for project continuation",
+                        selected_at=now,
+                    )
                 )
-            )
-        return refs
+        resolved: list[OutputRef] = []
+        unresolved: list[dict[str, Any]] = []
+        for ref in refs:
+            canonical = self._canonical_selected_output_ref(project, ref)
+            if canonical is None:
+                unresolved.append(
+                    {
+                        "job_id": ref.job_id,
+                        "candidate_id": ref.candidate_id,
+                        "asset_id": ref.asset_id,
+                        "output_id": ref.output_id,
+                        "reason": "materialized_output_unavailable",
+                    }
+                )
+                continue
+            resolved.append(canonical)
+        return resolved, unresolved
+
+    def _canonical_selected_output_ref(self, project: ProjectRecord, ref: OutputRef) -> OutputRef | None:
+        """Hydrate one selected output from its immutable local output record."""
+
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None or not ref.job_id:
+            return None
+        records: list[Any] = []
+        if ref.output_id:
+            record = output_store.get_output(ref.output_id)
+            if record is not None:
+                records = [record]
+        if not records:
+            try:
+                records = list(output_store.list_by_job(ref.job_id))
+            except Exception:
+                return None
+            if ref.candidate_id:
+                records = [item for item in records if item.candidate_id == ref.candidate_id]
+            elif ref.asset_id:
+                records = [item for item in records if item.asset_id == ref.asset_id]
+            else:
+                return None
+        records = [
+            item
+            for item in records
+            if item.job_id == ref.job_id
+            and (not ref.candidate_id or item.candidate_id == ref.candidate_id)
+            and (not ref.asset_id or item.asset_id == ref.asset_id)
+        ]
+        if len(records) != 1:
+            return None
+        record = records[0]
+        if not self._output_record_is_renderable(record):
+            return None
+        source_integrity_id = self._output_source_integrity_id(record)
+        return OutputRef(
+            output_ref_id=stable_id("output_ref", project.project_id, record.job_id, record.output_id),
+            source_type="generated_output",
+            project_id=project.project_id,
+            job_id=record.job_id,
+            asset_id=record.asset_id,
+            candidate_id=record.candidate_id,
+            output_id=record.output_id,
+            preview_url=record.preview_url,
+            thumbnail_url=record.thumbnail_url,
+            download_url=record.download_url,
+            selection_reason=ref.selection_reason,
+            selected_at=ref.selected_at,
+            metadata={
+                **dict(ref.metadata),
+                "canonical_output_binding": True,
+                "file_path": record.file_path,
+                "mime_type": record.mime_type,
+                "provider": record.provider,
+                "model": record.model,
+                "source_integrity_id": source_integrity_id,
+                "v3_owned_output": True,
+            },
+        )
+
+    def _output_record_is_renderable(self, record: Any) -> bool:
+        file_path = str(getattr(record, "file_path", "") or "").strip()
+        return bool(
+            file_path
+            and Path(file_path).is_file()
+            and str(getattr(record, "preview_url", "") or "").strip()
+            and str(getattr(record, "thumbnail_url", "") or "").strip()
+            and str(getattr(record, "download_url", "") or "").strip()
+        )
+
+    def _output_source_integrity_id(self, record: Any) -> str:
+        file_path = Path(str(getattr(record, "file_path", "") or ""))
+        digest = self._file_content_fingerprint(file_path)
+        return f"sha256:{digest}" if digest else f"output:{record.output_id}"
+
+    def _file_content_fingerprint(self, file_path: Path) -> str:
+        try:
+            digest = hashlib.sha256()
+            with file_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return ""
 
     def _project_asset_ids(self, project: ProjectRecord) -> list[str]:
         inactive_ids = {

@@ -91,6 +91,15 @@ QUALITY_MODE_TO_MOCK_PROFILE = {
     "strict": "balanced",
 }
 
+# A deterministic, local-only pixel fixture for the mock runtime.  It gives
+# contract tests a real V3 output record without pretending a provider image
+# was produced.  Interactive production requests use a non-mock provider and
+# never take this path.
+_MOCK_OUTPUT_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGOUMEhgYGBgYgAD"
+    "AAfCAKzG2dL1AAAAAElFTkSuQmCC"
+)
+
 GENERAL_CREATIVE_PUBLIC_CONTROLS = [
     "Use uploaded images as subject or style references",
     "Keep layout similar when a reference or preset is selected",
@@ -644,6 +653,24 @@ class V3ProductApiService:
             return restored or self._not_found_status(job_id)
         return self._status_from_record(record)
 
+    def mark_job_generating(self, job_id: str) -> ProductJobStatus:
+        """Persist the public pre-render state before a background worker starts.
+
+        A generated output file is not a user delivery while shared review and
+        bounded retry are still running.  Persisting this state before the
+        worker is submitted prevents project polling from treating a partially
+        written output store as a completed job.
+        """
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            return self._not_found_status(job_id)
+        if record.status == ProductJobStatusValue.PLANNED:
+            record.status = ProductJobStatusValue.GENERATING
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+        return self._status_from_record(record)
+
     def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
         records = self.job_store.list_recent(bounded_limit)
@@ -680,6 +707,11 @@ class V3ProductApiService:
             return self._not_found_status(job_id)
         generate_request = self._coerce_generate_request(request or {})
         self._assert_photographer_profile_binding_immutable(record, generate_request)
+        worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
+        if record.status == ProductJobStatusValue.FINALIZING:
+            return self._status_from_record(record)
+        if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
+            return self._status_from_record(record)
         if not self.balance_adapter.has_available_credits(record.balance_estimate.get("credits_required", 0)):
             record.status = ProductJobStatusValue.BLOCKED
             record.warnings.append("Insufficient V3 balance adapter credits for this operation.")
@@ -694,6 +726,9 @@ class V3ProductApiService:
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         if generate_request.metadata:
             record.request.metadata = {**dict(record.request.metadata), **dict(generate_request.metadata)}
+        record.status = ProductJobStatusValue.GENERATING
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
         try:
             generation_runtime_result = self.scenario_runtime.generate_job(
                 self._runtime_request_payload(record.request),
@@ -724,6 +759,17 @@ class V3ProductApiService:
             self.job_store.save(record)
             return self._status_from_record(record)
         generation_result = generation_runtime_result.generation_result
+        if provider_strategy == ProviderStrategy.MOCK_GENERATION:
+            generation_result = self._materialize_mock_output_records(record, generation_result)
+        # Outputs may already be in the local store at this point.  They remain
+        # process artifacts until review, optional text delivery, and bounded
+        # visual retry decide the final delivery set.
+        record.generation_result = generation_result
+        record.scenario_resolution = generation_runtime_result.scenario_resolution
+        record.capability_run = generation_runtime_result.capability_run
+        record.status = ProductJobStatusValue.FINALIZING
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
         generation_result = self._apply_text_pixel_delivery(record, generation_result)
         generation_result = self._run_visual_auto_retries(
@@ -741,6 +787,94 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    def _materialize_mock_output_records(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+    ) -> PlanningResult:
+        """Give mock-only contract runs the same immutable output shape as production.
+
+        This is intentionally a local test fixture, marked in output metadata.
+        It prevents Project Mode tests from relying on an asset-only reference,
+        while preserving the production rule that visual delivery comes from
+        provider pixels.
+        """
+
+        updated_assets: list[PackagedAsset] = []
+        changed = False
+        for asset in generation_result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = dict(metadata.get("candidate_metadata") or {})
+            candidate_id = str(metadata.get("selected_candidate_id") or "").strip()
+            existing_output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            existing = self.output_store.get_output(existing_output_id) if existing_output_id else None
+            if existing is None and candidate_id:
+                existing = self.output_store.save_base64_output(
+                    job_id=record.job_id,
+                    candidate_id=candidate_id,
+                    asset_id=asset.asset_id,
+                    provider="v3_mock_contract_fixture",
+                    model="deterministic-2px",
+                    encoded_image=_MOCK_OUTPUT_PNG_BASE64,
+                    mime_type="image/png",
+                    output_format="png",
+                    metadata={
+                        "mock_contract_fixture": True,
+                        "not_a_provider_delivery": True,
+                        "project_id": record.request.metadata.get("project_id"),
+                        "template_id": record.request.metadata.get("template_id"),
+                        "requested_image_count": len(generation_result.asset_pack.assets),
+                    },
+                )
+            if existing is None:
+                updated_assets.append(asset)
+                continue
+            changed = True
+            candidate_metadata.update(
+                {
+                    "output_id": existing.output_id,
+                    "url": existing.download_url,
+                    "download_url": existing.download_url,
+                    "preview_url": existing.preview_url,
+                    "thumbnail_url": existing.thumbnail_url,
+                    "mime_type": existing.mime_type,
+                    "format": existing.output_format,
+                    "width": existing.width,
+                    "height": existing.height,
+                    "mock_contract_fixture": True,
+                }
+            )
+            metadata.update(
+                {
+                    "candidate_metadata": candidate_metadata,
+                    "output_id": existing.output_id,
+                    "mock_contract_fixture": True,
+                }
+            )
+            updated_assets.append(
+                asset.model_copy(
+                    update={
+                        "file_path": existing.file_path,
+                        "uri": existing.thumbnail_url,
+                        "metadata": metadata,
+                    }
+                )
+            )
+        if not changed:
+            return generation_result
+        asset_pack = generation_result.asset_pack.model_copy(
+            update={
+                "assets": updated_assets,
+                "metadata": {**dict(generation_result.asset_pack.metadata), "mock_output_records_materialized": True},
+            }
+        )
+        return generation_result.model_copy(
+            update={
+                "asset_pack": asset_pack,
+                "metadata": {**dict(generation_result.metadata), "mock_output_records_materialized": True},
+            }
+        )
 
     def generate_job(
         self,
@@ -3277,6 +3411,21 @@ class V3ProductApiService:
                 metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
             )
         select_request = self._coerce_select_request(request or {})
+        if record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            selected = SelectedResult(metadata={"selection_status": "finalization_pending"})
+            return SelectionResponse(
+                job_id=job_id,
+                status=record.status,
+                selected_result=selected,
+                job_status=self._status_from_record(record),
+                warnings=["Creative job finalization is still in progress; its outputs cannot be selected yet."],
+                metadata={
+                    "source": "V3ProductApiService",
+                    "rules_version": RULE_VERSION,
+                    "selection_held": True,
+                    "hold_reason": "finalization_pending",
+                },
+            )
         result = record.generation_result or record.planning_result
         if result is None:
             record.status = (
@@ -3463,6 +3612,7 @@ class V3ProductApiService:
             return self._empty_status_from_record(record)
         asset_pack = result.asset_pack
         nav = get_navigation_entry()
+        delivery_settling = record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -3474,8 +3624,8 @@ class V3ProductApiService:
             asset_pack_id=asset_pack.asset_pack_id,
             scenario=self._scenario_summary(record),
             campaign=self._campaign_summary(record, result),
-            asset_series=self._asset_series(result, record.status),
-            candidates=self._candidate_summaries(result),
+            asset_series=[] if delivery_settling else self._asset_series(result, record.status),
+            candidates=[] if delivery_settling else self._candidate_summaries(result),
             style_continuation=self._style_continuation_summary(record, result),
             general_creative=self._general_creative_summary(record),
             ecommerce=self._ecommerce_summary(record),
@@ -3497,6 +3647,8 @@ class V3ProductApiService:
                 "text_pixel_delivery_batch": result.metadata.get("text_pixel_delivery_batch", {}),
                 "exposes_product_concepts_only": True,
                 "lifecycle": self._lifecycle_summary(record),
+                "delivery_settling": delivery_settling,
+                "continuation_available": not delivery_settling,
                 **self._workflow_artifacts_metadata(record, result),
                 **self._project_mode_status_metadata(record),
             },

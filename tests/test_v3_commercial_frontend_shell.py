@@ -312,12 +312,17 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "async function loadV3ProjectOutputs" in script.text
     assert "project_id=${encodeURIComponent(scopedProjectId)}" in script.text
     assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
-    assert "loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })" in script.text
     assert "loadV3ProjectOutputs({ silent: true, force: true, limit: 80 })" in script.text
+    assert "projectOutputsRequest" in script.text
+    assert "if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;" in script.text
     assert "/api/lab/history?limit=1000" not in script.text
     assert "function v3RecoveredLatestVisibleProjectOutputs" in script.text
     assert "recovered_without_exact_job_match" in script.text
     assert "function v3JobHasExpectedVisibleImages" in script.text
+    assert "function v3JobDeliverySettled" in script.text
+    assert "if (!v3JobDeliverySettled(job)) return [];" in script.text
+    assert "if (baseJob && !v3JobDeliverySettled(baseJob)) return null;" in script.text
+    assert 'finalizing: "交付收尾中"' in script.text
     assert "function syncV3CurrentJobFromProjectOutputs" in script.text
     assert "function setV3PageLoading" in script.text
     assert "function waitForV3Paint" in script.text
@@ -430,7 +435,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3HistoryOutputVisible" in script.text
     assert "function v3OutputDeliveryState" in script.text
     assert "function v3DeliveryDisplayItems" in script.text
-    assert 'v3OutputDeliveryState(item) !== "superseded"' in script.text
+    assert 'v3OutputDeliveryState(item) !== "final_delivery"' in script.text
     assert "const finals = list.filter((item) => v3OutputDeliveryState(item) === \"final_delivery\")" in script.text
     assert "function openV3ProjectHistoryModal" in script.text
     assert "function renderV3ProjectHistoryGrid" in script.text

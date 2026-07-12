@@ -2,7 +2,10 @@
 
 ## Status
 
-**Required corrective specification.**
+**Required corrective specification. Slices A and B, plus Slice C's
+deterministic review/activation contract, are implemented on mainline pending
+full regression. The live Gate D rerun remains open and is the only acceptance
+authority for real browser and real-pixel evidence.**
 
 This document turns the failed 2026-07-12 Doc104 Gate D live General-project
 run into a bounded mainline implementation plan. It is not an E-Commerce,
@@ -380,3 +383,28 @@ This corrective phase is complete only when:
 
 Until then, V3 foundation is improving but not fully closed for specialized
 production activation.
+
+## 9. 2026-07-13 Mainline Implementation Record
+
+This record describes the implemented contract, not a production-readiness
+claim. Doc104 Gate D remains failed until the real browser and live-pixel
+rerun in Section 6 passes.
+
+| Area | Implemented mainline behavior | Remaining evidence |
+| --- | --- | --- |
+| Canonical selected output | Selection now resolves an exact materialized V3 output record before writing a positive project reference. The persisted binding carries the output ID, all media URIs, file path, and a SHA-256 source identity. Missing or ambiguous records return an explicit held state; they cannot fall back to another candidate or an upload. | Live continuation request audit with a rights-clear source. |
+| Provider input | Project continuations put project references ahead of duplicate upload paths, deduplicate by content and role, and retain a provider-resolution audit with retained, suppressed, and unresolved sources. A required project selected-output source that is not canonical/materialized blocks the request. | Inspect the frozen record from the Gate D continuation. |
+| Lifecycle and delivery | Background generation is persisted as `generating`; rendered candidates are `finalizing` while shared review/retry settles; only then may the job become `generated`. In-flight jobs expose no selectable cards and Project Mode holds selection. | Browser timing observation across a real review/retry run. |
+| Project result surfaces | Project-output APIs and desktop/mobile boards expose final-delivery media only. Retry/process artifacts stay append-only in storage/audit rather than being counted or rendered as delivery cards. Legacy asset-only records remain readable but are suppressed from continuation context. | Manual reopening and count verification in Gate D. |
+| Refresh behavior | The desktop output request has one in-flight coordinator and opening a project performs one authoritative output refresh rather than a short/long overlapping pair. Recovery does not promote a known `generating` or `finalizing` job from a local output URL. | Browser open/switch/leave polling observation. |
+| Pixel-review truthfulness | Reference-conditioned real generation requests a live vision route. `metadata_only` now returns non-certifying `manual_review` with explicit unverifiable dimensions. When the user has rejected a visual direction, live review must return a feedback verdict and, when a selected generated reference is attached, a distinct/near-duplicate verdict; a missing verdict is held for manual review rather than reported as a pass. | A live provider response and final pixels showing feedback compliance and meaningful distinction. |
+
+Focused regression coverage is in
+`test_v3_doc109_project_delivery_closure.py`, together with the amended
+Project Mode and commercial-shell tests. The coverage proves the deterministic
+contract above, including exact candidate resolution, no substitution,
+content deduplication, legacy suppression, finalization holds,
+final-delivery-only rendering, metadata-only non-certification, active-plan
+isolation, and bounded feedback/near-duplicate review verdicts. It does not
+replace the live-pixel feedback/near-duplicate acceptance evidence required by
+Gate D.

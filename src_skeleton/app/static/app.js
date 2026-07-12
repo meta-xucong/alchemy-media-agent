@@ -325,6 +325,7 @@ const v3State = {
   imageHistory: [],
   imageHistoryLoaded: false,
   imageHistoryLoading: false,
+  projectOutputsRequest: null,
   activeHistoryProjectId: "",
   uploadFingerprints: {},
   progressStartedAt: null,
@@ -2281,15 +2282,11 @@ async function loadV3History(options = {}) {
 
 async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24, projectId = "" } = {}) {
   const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
-  if (v3State.imageHistoryLoading && force) {
-    syncV3ProjectOutputsFromList(v3State.imageHistory || [], v3State.currentProject?.project_id);
-    renderV3ProjectOutputBoard();
-    renderV3ProjectSnapshot();
-    renderV3StepCards();
-    renderV3ProjectNextActions();
+  if (v3State.imageHistoryLoading) {
+    if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;
     return;
   }
-  if (v3State.imageHistoryLoading || (v3State.imageHistoryLoaded && !force)) {
+  if (v3State.imageHistoryLoaded && !force) {
     if (scopedProjectId && Array.isArray(v3State.imageHistory)) {
       syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
     }
@@ -2307,7 +2304,9 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24,
     const cacheBust = force ? `&t=${Date.now()}` : "";
     const boundedLimit = Math.max(12, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
     const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
-    const payload = await request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
+    const requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
+    v3State.projectOutputsRequest = requestPromise;
+    const payload = await requestPromise;
     const items = Array.isArray(payload.items) ? payload.items : [];
     if (!scopedProjectId) v3State.imageHistory = items;
     v3State.imageHistoryLoaded = true;
@@ -2327,6 +2326,7 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24,
     if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
   } finally {
     v3State.imageHistoryLoading = false;
+    v3State.projectOutputsRequest = null;
     if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
   }
 }
@@ -2955,7 +2955,7 @@ function v3ReferenceImageCandidates(ref) {
 }
 
 function v3CurrentJobImageItems(job = v3State.currentJob) {
-  if (!job || job.status === "blocked") return [];
+  if (!v3JobDeliverySettled(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const source = candidates.length ? candidates : assets;
@@ -2964,6 +2964,11 @@ function v3CurrentJobImageItems(job = v3State.currentJob) {
     .filter((item) => v3OutputVisibleInProject(item) && (v3OutputImageCandidates(item).length || job.status === "generated"))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
   return v3DeliveryDisplayItems(visible);
+}
+
+function v3JobDeliverySettled(job) {
+  const status = String(job?.status || "");
+  return status === "generated" || status === "selected";
 }
 
 function v3CurrentJobRealImageItems(job = v3State.currentJob) {
@@ -3020,6 +3025,7 @@ function v3ProjectOutputsForJob(jobId, project = v3State.currentProject) {
 }
 
 function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
+  if (baseJob && !v3JobDeliverySettled(baseJob)) return null;
   const outputs = v3ProjectOutputsForJob(jobId);
   if (!outputs.length) return null;
   return {
@@ -3037,6 +3043,7 @@ function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
 }
 
 function v3RecoveredLatestVisibleProjectOutputs(project = v3State.currentProject, baseJob = v3State.currentJob) {
+  if (baseJob && !v3JobDeliverySettled(baseJob)) return null;
   const visibleOutputs = v3StoredProjectOutputItems(project).filter((item) => v3OutputVisibleInProject(item, project));
   const latestJobId = v3LatestProjectJobId(project) || baseJob?.job_id || "";
   const latestJobOutputs = latestJobId
@@ -3085,7 +3092,7 @@ function syncV3CurrentJobFromProjectOutputs({ preferLatest = false } = {}) {
 function v3OutputVisibleInProject(item, project = v3State.currentProject) {
   const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
   if (state === "unselected" || state === "rejected") return false;
-  if (["superseded", "process_only"].includes(v3OutputDeliveryState(item))) return false;
+  if (v3OutputDeliveryState(item) !== "final_delivery") return false;
   const identity = v3OutputItemIdentity(item);
   return !v3ReviewOutputIdSet("hidden_output_ids").has(identity);
 }
@@ -3098,9 +3105,7 @@ function v3OutputDeliveryState(item) {
 function v3DeliveryDisplayItems(items) {
   const list = Array.isArray(items) ? items : [];
   const finals = list.filter((item) => v3OutputDeliveryState(item) === "final_delivery");
-  if (finals.length) return finals;
-  const usable = list.filter((item) => v3OutputDeliveryState(item) !== "superseded");
-  return usable.length ? usable : list;
+  return finals;
 }
 
 function v3PostGenerationReview(job = v3State.currentJob) {
@@ -3188,7 +3193,9 @@ function renderV3ProjectOutputBoard() {
   if (!els.v3ProjectOutputBoard) return;
   const project = v3State.currentProject;
   const items = v3AllProjectImageItems(project);
-  const processItems = v3ProcessProjectImageItems(project);
+  // Retry/superseded artifacts stay in append-only backend audit history.
+  // The beginner-facing board is intentionally final-delivery-only.
+  const processItems = [];
   v3State.projectOutputItems = items;
   v3State.projectProcessOutputItems = processItems;
   els.v3ProjectOutputBoard.innerHTML = "";
@@ -4542,23 +4549,15 @@ function v3JobHasVisibleImages(job) {
 async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true } = {}) {
   const jobId = v3LatestProjectJobId(project);
   if (!jobId) return null;
-  if (v3State.currentJob?.job_id === jobId && v3JobHasVisibleImages(v3State.currentJob)) {
+  if (v3State.currentJob?.job_id === jobId && v3JobDeliverySettled(v3State.currentJob) && v3JobHasVisibleImages(v3State.currentJob)) {
     return v3State.currentJob;
-  }
-  const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
-  if (recoveredFromOutputs) {
-    v3State.currentJob = recoveredFromOutputs;
-    v3State.selectedResult = null;
-    return recoveredFromOutputs;
-  }
-  const recoveredLatestOutputs = v3RecoveredLatestVisibleProjectOutputs(project, v3State.currentJob);
-  if (recoveredLatestOutputs) {
-    v3State.currentJob = recoveredLatestOutputs;
-    v3State.selectedResult = null;
-    return recoveredLatestOutputs;
   }
   try {
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    if (!v3JobDeliverySettled(job)) {
+      v3State.currentJob = job;
+      return null;
+    }
     if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
       v3State.currentJob = job;
       v3State.selectedResult = null;
@@ -4606,13 +4605,7 @@ async function openV3Project(projectId) {
     v3State.activeProjectStep = "compose";
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
-    loadV3ProjectOutputs({ silent: true, force: true, limit: 18 })
-      .then(() => {
-        window.setTimeout(() => {
-          loadV3ProjectOutputs({ silent: true, force: true, limit: 80 }).catch(() => {});
-        }, 800);
-      })
-      .catch(() => {});
+    await loadV3ProjectOutputs({ silent: true, force: true, limit: 80 });
     await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
@@ -5352,18 +5345,6 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
     try {
-      await refreshV3CurrentProject({ silent: true });
-      await loadV3ProjectTimeline(projectId, { silent: true });
-      await loadV3ProjectOutputs({ silent: true, force: true });
-      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
-      if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) {
-        v3State.currentJob = recoveredFromOutputs;
-        return recoveredFromOutputs;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-    try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
         return job;
@@ -5387,8 +5368,6 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     }
     try {
       await refreshV3CurrentProject({ silent: true });
-      await loadV3ProjectTimeline(projectId, { silent: true });
-      await loadV3ProjectOutputs({ silent: true, force: true });
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
       if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) {
         v3State.currentJob = recoveredFromOutputs;
@@ -5407,8 +5386,6 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
   }
   try {
     await refreshV3CurrentProject({ silent: true });
-    await loadV3ProjectTimeline(projectId, { silent: true });
-    await loadV3ProjectOutputs({ silent: true, force: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
   } catch (error) {
@@ -5473,6 +5450,15 @@ async function selectV3Job() {
       method: "POST",
       body: { apply_memory_update: false, metadata: { frontend_surface: "commercial_v3_project_mode" } },
     });
+    if (selected?.metadata?.selection_held) {
+      if (selected.job_status) v3State.currentJob = selected.job_status;
+      if (selected.project) v3State.currentProject = selected.project;
+      syncV3ProjectOutputsFromPayload(selected);
+      renderV3Job(v3State.currentJob);
+      renderV3ProjectDetail();
+      updateV3Notice(selected.warnings?.[0] || "这张图暂时还不能安全作为后续参考。", "warning");
+      return;
+    }
     v3State.selectedResult = selected;
     v3State.activeProjectStep = "compose";
     if (selected.project) v3State.currentProject = selected.project;
@@ -6019,6 +6005,14 @@ function renderV3ResultBoard(job) {
     els.v3ResultBoard.textContent = copy.emptyResult;
     return;
   }
+  if (!v3JobDeliverySettled(job)) {
+    v3State.resultItems = [];
+    els.v3ResultBoard.classList.add("empty-v3-board");
+    els.v3ResultBoard.textContent = job.status === "finalizing"
+      ? "图片正在完成质量检查和最终交付，请稍候。"
+      : "图片正在生成中，请稍候。";
+    return;
+  }
   const rawItems = candidates.length ? candidates : recipes.length ? recipes : assets;
   const visibleItems = rawItems
     .filter((item) => v3OutputVisibleInProject(item))
@@ -6249,6 +6243,8 @@ function v3CommercePurposeLabel(goal) {
 
 function v3StatusLabel(status) {
   const labels = {
+    generating: "生成中",
+    finalizing: "交付收尾中",
     planned: "已规划",
     generated: "已生成",
     selected: "已选择",

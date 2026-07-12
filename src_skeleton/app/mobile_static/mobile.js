@@ -3636,15 +3636,14 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
   let lastJob = initialJob || {};
   for (let attempt = 1; attempt <= 120; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 1200 : 2500));
-    const outputs = await loadMobileV3ProjectOutputs(projectId, { limit: 120 });
-    const visible = mobileV3FinalOutputsForProject(projectId).filter((item) => {
-      const metadata = item?.metadata || {};
-      return item?.job_id === jobId || metadata.job_id === jobId || item?.related_job_id === jobId;
-    });
-    if (visible.length >= expectedCount) return { ...(lastJob || {}), job_id: jobId, status: "generated", metadata: { ...(lastJob?.metadata || {}), project_outputs: outputs } };
     try {
       lastJob = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+      if (["generating", "finalizing", "planned"].includes(lastJob?.status)) {
+        setMobileV3Progress("recovering", `后台正在生成或完成交付收尾，已刷新 ${attempt} 次`);
+        continue;
+      }
       mobileV3MergeProjectOutputs(projectId, lastJob?.metadata?.project_outputs || []);
+      await loadMobileV3ProjectOutputs(projectId, { limit: 120 });
       const jobOutputs = mobileV3FinalOutputsForProject(projectId).filter((item) => item?.job_id === jobId || item?.metadata?.job_id === jobId);
       if (jobOutputs.length >= expectedCount) return { ...lastJob, metadata: { ...(lastJob?.metadata || {}), project_outputs: jobOutputs } };
       if (["blocked", "failed", "not_found"].includes(lastJob?.status)) return lastJob;
@@ -3818,7 +3817,6 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   grid.classList.toggle("empty-v2-list", outputs.length === 0);
   if (!outputs.length) {
     grid.textContent = "还没有图片，点“继续项目”生成第一组。";
-    renderMobileV3ProcessOutputs(project);
     return;
   }
   outputs.forEach((item, index) => {
@@ -3837,7 +3835,6 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     `;
     grid.appendChild(card);
   });
-  renderMobileV3ProcessOutputs(project);
 }
 
 function renderMobileV3ProcessOutputs(project = mobileV3State.currentProject) {
@@ -4015,9 +4012,7 @@ function mobileV3OutputDeliveryState(item) {
 
 function mobileV3FinalOutputsForProject(projectId) {
   const outputs = mobileV3OutputsForProject(projectId);
-  const finals = outputs.filter((item) => mobileV3OutputDeliveryState(item) === "final_delivery");
-  if (finals.length) return finals;
-  return outputs.filter((item) => !["superseded", "process_only"].includes(mobileV3OutputDeliveryState(item)));
+  return outputs.filter((item) => mobileV3OutputDeliveryState(item) === "final_delivery");
 }
 
 function mobileV3ProcessOutputsForProject(projectId) {

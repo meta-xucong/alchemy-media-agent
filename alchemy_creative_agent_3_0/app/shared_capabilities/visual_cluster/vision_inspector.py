@@ -16,6 +16,7 @@ from .vision_provider import (
     create_default_vision_provider,
     active_review_contract,
     inspection_reference_paths,
+    review_feedback_contract,
 )
 from .identity_metric import create_default_identity_metric_provider
 from .reference_channel_policy import reference_channel_retry_patch
@@ -78,6 +79,8 @@ _DOC86_PORTRAIT_IDENTITY_ISSUES = {
     "identity_reference_underweighted",
     "identity_metric_below_commercial_target",
     "identity_metric_low",
+    "feedback_direction_not_resolved",
+    "near_duplicate_risk",
 }
 
 _DOC87_REFERENCE_BOUNDARY_ISSUES = {
@@ -256,6 +259,8 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "vision_provider_unavailable",
     "low_confidence_review",
     "provider_error",
+    "metadata_only_non_certifying",
+    "feedback_or_similarity_not_verifiable",
 }
 
 
@@ -366,6 +371,11 @@ class VisionOutputInspector:
     ) -> VisualInspectionReport:
         issue_codes = _provider_issue_codes(payload)
         review_contract = active_review_contract(metadata)
+        feedback_evidence, feedback_issue_codes = _feedback_review_evidence(
+            payload,
+            review_feedback_contract(metadata),
+        )
+        issue_codes = _dedupe([*issue_codes, *feedback_issue_codes])
         ignored_out_of_scope_issue_codes: list[str] = []
         if review_contract.get("enforced"):
             allowed = set(review_contract.get("issue_codes") or [])
@@ -398,6 +408,9 @@ class VisionOutputInspector:
                 issue_codes = _dedupe([*issue_codes, "identity_metric_below_commercial_target"])
         if confidence < self.min_confidence:
             issue_codes = _dedupe([*issue_codes, "low_confidence_review"])
+            status = "manual_review"
+            retryable = False
+        elif any(code in MANUAL_REVIEW_ISSUE_CODES for code in issue_codes):
             status = "manual_review"
             retryable = False
         else:
@@ -441,6 +454,7 @@ class VisionOutputInspector:
                 "active_capability_ids": review_contract.get("active_capability_ids", []),
                 "review_capability_sources": review_contract.get("review_capability_sources", []),
                 "ignored_out_of_scope_issue_codes": ignored_out_of_scope_issue_codes,
+                "feedback_review": feedback_evidence,
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},
@@ -496,23 +510,31 @@ class VisionOutputInspector:
         resolution: GeneratedOutputResolution,
         metadata: dict[str, Any],
     ) -> VisualInspectionReport:
-        return VisualInspectionReport(
-            inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, "metadata"),
-            project_id=resolution.project_id,
-            job_id=resolution.job_id,
-            candidate_id=resolution.candidate_id,
-            asset_id=resolution.asset_id,
-            output_id=resolution.output_id,
+        """Return structural facts without representing them as visual approval.
+
+        Metadata can prove that a record exists, but cannot prove reference
+        fidelity, feedback compliance, or pixel-level quality.  Returning a
+        passing review here previously let a delivery look verified even when
+        no image inspection route had received the final pixels.
+        """
+        return self._manual_report(
+            resolution,
+            "metadata_only_non_certifying",
+            metadata,
             mode="metadata_only",
-            status="pass",
-            confidence=0.55,
-            score_card=_score_card("pass"),
-            detected_issues=[],
-            preserved_elements=["generated output metadata"],
-            retryable=False,
-            evidence={"resolution_status": resolution.status, "file_path": resolution.file_path},
-            user_visible_summary=["V3 confirmed the generated image record is usable."],
-            metadata={"doc": "55", **_public_metadata(metadata)},
+            evidence_extra={
+                "provenance": "metadata_only",
+                "structural_facts": {
+                    "resolution_status": resolution.status,
+                    "file_path": resolution.file_path,
+                },
+                "not_verifiable": [
+                    "visual_quality",
+                    "reference_fidelity",
+                    "near_duplicate_or_role_collapse",
+                    "feedback_compliance",
+                ],
+            },
         )
 
     def _local_report(
@@ -923,6 +945,10 @@ def _issue_message(code: str) -> str:
         "file_missing": "Generated image file could not be found.",
         "file_unreadable": "Generated image file could not be read.",
         "vision_provider_unavailable": "Vision inspection provider is unavailable.",
+        "metadata_only_non_certifying": "Metadata-only review cannot certify visual quality.",
+        "feedback_direction_not_resolved": "The image may still follow a direction you marked as unwanted.",
+        "near_duplicate_risk": "The result may be too similar to the selected reference image.",
+        "feedback_or_similarity_not_verifiable": "The review could not verify feedback compliance or image distinction.",
         "low_confidence_review": "Review confidence is too low for automatic retry.",
         "policy_or_safety_block": "The image may need safety review.",
         "provider_error": "Vision inspection provider failed.",
@@ -1177,6 +1203,14 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
             prompt_additions.append("separate the image roles clearly and use a different scene duty, camera distance, surface, or prop language for this output")
             composition_repair.append("avoid repeating the same concept, prop, crop, or image duty across the whole set")
             negative_additions.extend(["repeated concept", "same prop repeated", "same image role repeated"])
+        elif code in {"feedback_direction_not_resolved", "near_duplicate_risk"}:
+            prompt_additions.append(
+                "resolve the user's rejected visual direction through a visibly different exposure, composition, or scene treatment while preserving only the reference channels explicitly assigned by policy"
+            )
+            composition_repair.append(
+                "do not repeat the selected reference frame's dominant lighting, crop, or composition when the user has rejected that direction"
+            )
+            negative_additions.extend(["rejected visual direction", "near-duplicate reference composition"])
         elif code in {"unrelated_object", "unrelated_product"}:
             object_removal_instruction.append("remove unrelated objects or props that were not requested")
             negative_additions.extend(["unrelated object", "unrequested prop"])
@@ -1506,6 +1540,52 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _feedback_review_evidence(
+    payload: dict[str, Any],
+    contract: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Translate explicit pixel-review verdicts into bounded shared issues."""
+    if not contract.get("applies"):
+        return {"applies": False, "status": "not_requested"}, []
+
+    feedback = payload.get("feedback_verdict")
+    feedback = dict(feedback) if isinstance(feedback, dict) else {}
+    feedback_status = str(feedback.get("status") or "").strip().lower()
+    violated_directions = _string_list(feedback.get("violated_directions"))
+    similarity = payload.get("similarity_verdict")
+    similarity = dict(similarity) if isinstance(similarity, dict) else {}
+    similarity_status = str(similarity.get("status") or "").strip().lower()
+    compared_output_ids = _string_list(similarity.get("compared_reference_output_ids"))
+
+    issue_codes: list[str] = []
+    if feedback_status in {"violation", "violates", "failed", "fail"}:
+        issue_codes.append("feedback_direction_not_resolved")
+    elif feedback_status not in {"pass", "passes", "resolved", "compliant"}:
+        issue_codes.append("feedback_or_similarity_not_verifiable")
+
+    if contract.get("reference_comparison_required"):
+        if similarity_status in {"near_duplicate", "duplicate", "too_similar"}:
+            issue_codes.append("near_duplicate_risk")
+        elif similarity_status not in {"distinct", "different"}:
+            issue_codes.append("feedback_or_similarity_not_verifiable")
+
+    return (
+        {
+            "applies": True,
+            "rejected_directions": list(contract.get("rejected_directions") or []),
+            "reference_comparison_required": bool(contract.get("reference_comparison_required")),
+            "selected_reference_output_ids": list(contract.get("selected_reference_output_ids") or []),
+            "feedback_verdict_status": feedback_status or "not_verifiable",
+            "violated_directions": violated_directions,
+            "similarity_verdict_status": similarity_status or (
+                "not_verifiable" if contract.get("reference_comparison_required") else "not_requested"
+            ),
+            "compared_reference_output_ids": compared_output_ids,
+        },
+        _dedupe(issue_codes),
+    )
 
 
 def _provider_issue_codes(payload: dict[str, Any]) -> list[str]:

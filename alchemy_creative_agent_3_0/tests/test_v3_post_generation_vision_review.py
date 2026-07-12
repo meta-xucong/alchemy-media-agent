@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Pla
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     VisionInspectionProviderError,
+    _inspection_prompt,
     _is_timeout_error,
 )
 
@@ -315,6 +316,25 @@ def test_vision_inspector_unreadable_file_becomes_manual_review(tmp_path) -> Non
     assert report.detected_issues[0]["code"] == "file_unreadable"
 
 
+def test_metadata_only_review_is_non_certifying_and_reports_unverifiable_dimensions(tmp_path) -> None:
+    report = VisionOutputInspector().inspect(
+        _ready_resolution(tmp_path),
+        metadata={"vision_inspection_mode": "metadata_only"},
+    )
+
+    assert report.mode == "metadata_only"
+    assert report.status == "manual_review"
+    assert report.retryable is False
+    assert report.detected_issues[0]["code"] == "metadata_only_non_certifying"
+    assert report.evidence["provenance"] == "metadata_only"
+    assert report.evidence["not_verifiable"] == [
+        "visual_quality",
+        "reference_fidelity",
+        "near_duplicate_or_role_collapse",
+        "feedback_compliance",
+    ]
+
+
 def test_vision_inspector_fake_provider_error_does_not_retry(tmp_path) -> None:
     inspector = VisionOutputInspector()
 
@@ -347,6 +367,69 @@ def test_vision_inspector_calls_injected_real_provider_for_ready_file(tmp_path) 
     assert report.status == "fail_retryable"
     assert report.retryable is True
     assert "watermark" in " ".join(report.retry_patch["negative_additions"])
+
+
+def test_live_pixel_feedback_and_similarity_verdicts_are_bounded_review_signals(tmp_path) -> None:
+    provider = _StaticVisionProvider(
+        {
+            "status": "pass",
+            "confidence": 0.92,
+            "issue_codes": [],
+            "feedback_verdict": {"status": "violation", "violated_directions": ["too dark"]},
+            "similarity_verdict": {
+                "status": "near_duplicate",
+                "compared_reference_output_ids": ["output_selected_dark"],
+            },
+        }
+    )
+    metadata = {
+        "vision_inspection_mode": "vision_model",
+        "capability_activation_plan": {
+            "plan_id": "plan_doc109_feedback",
+            "activation_mode": "enforced",
+            "dependency_order": ["visual_grammar", "universal_visual_quality"],
+        },
+        "project_context_snapshot": {
+            "negative_direction_notes": ["too dark"],
+            "selected_visual_references": [
+                {"source_type": "selected_output", "output_id": "output_selected_dark"}
+            ],
+        },
+    }
+    inspector = VisionOutputInspector(vision_provider=provider)
+
+    report = inspector.inspect(_ready_resolution(tmp_path), metadata=metadata)
+    prompt = _inspection_prompt(metadata)
+
+    assert report.status == "fail_retryable"
+    assert report.retryable is True
+    assert {issue["code"] for issue in report.detected_issues} >= {
+        "feedback_direction_not_resolved",
+        "near_duplicate_risk",
+    }
+    assert report.evidence["feedback_review"]["feedback_verdict_status"] == "violation"
+    assert report.evidence["feedback_review"]["similarity_verdict_status"] == "near_duplicate"
+    assert "too dark" in prompt
+    assert "Feedback acceptance contract:" in prompt
+
+
+def test_live_pixel_feedback_review_is_manual_when_the_provider_cannot_verdict(tmp_path) -> None:
+    metadata = {
+        "vision_inspection_mode": "vision_model",
+        "project_context_snapshot": {
+            "negative_direction_notes": ["avoid the dark lighting"],
+            "selected_visual_references": [
+                {"source_type": "selected_output", "output_id": "output_selected_dark"}
+            ],
+        },
+    }
+    report = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider({"status": "pass", "confidence": 0.92, "issue_codes": []})
+    ).inspect(_ready_resolution(tmp_path), metadata=metadata)
+
+    assert report.status == "manual_review"
+    assert report.retryable is False
+    assert any(issue["code"] == "feedback_or_similarity_not_verifiable" for issue in report.detected_issues)
 
 
 def test_vision_inspector_provider_unavailable_becomes_manual_review(tmp_path) -> None:
