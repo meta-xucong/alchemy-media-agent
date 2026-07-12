@@ -132,6 +132,47 @@ def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) ->
     assert "human identity and natural variation balanced" in result.prompt_review.checks
 
 
+def test_brain_request_reduces_internal_multi_plan_to_an_opaque_boolean() -> None:
+    adapter = V3LLMBrainAdapter()
+    request = adapter.build_request(
+        user_input="Create one neutral creative image.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={
+            "text_pixel_delivery_internal": {
+                "copy_render_plans": [
+                    {
+                        "expected_copy": "Private approved headline",
+                        "locale": "zh-CN",
+                        "source_lineage": {"source_asset_id": "asset_private"},
+                        "metadata": {"slot": "private-template-role", "platform": "private-platform"},
+                    }
+                ]
+            }
+        },
+    )
+
+    assert request.metadata["internal_copy_render_plan_present"] is True
+    assert "text_pixel_delivery_internal" not in request.metadata
+    assert "copy_render_plan" not in request.metadata
+    assert "Private approved headline" not in str(request.metadata)
+    assert "private-template-role" not in str(request.metadata)
+    assert "private-platform" not in str(request.metadata)
+
+
+def test_brain_request_requires_a_boolean_opaque_marker() -> None:
+    request = V3LLMBrainAdapter().build_request(
+        user_input="Create one neutral creative image.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={"internal_copy_render_plan_present": "false"},
+    )
+
+    assert request.metadata["internal_copy_render_plan_present"] is False
+
+
 def test_general_brain_uses_doc58_suite_roles_and_strong_anchor(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     adapter = V3LLMBrainAdapter()

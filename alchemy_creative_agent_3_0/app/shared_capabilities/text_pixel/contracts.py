@@ -132,6 +132,47 @@ class CopyRenderPlan(V3BaseModel):
         return CopyRenderPlan.model_validate(payload)
 
 
+class CopyRenderPlanBatch(V3BaseModel):
+    """An ordered, independently bound set of scenario-neutral copy plans.
+
+    This contract deliberately uses only source asset/output lineage.  It has
+    no template, role, platform, or marketplace vocabulary, so a template
+    cannot turn its own deliverable map into shared-runtime semantics.
+    """
+
+    schema_version: str = "v3_copy_render_plan_batch_v1"
+    batch_id: str = ""
+    plans: list[CopyRenderPlan] = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_independent_lineage(self) -> "CopyRenderPlanBatch":
+        plan_ids = [plan.plan_id for plan in self.plans]
+        if len(set(plan_ids)) != len(plan_ids):
+            raise ValueError("CopyRenderPlanBatch plans must have unique plan_id values")
+        lineage_keys: list[str] = []
+        for plan in self.plans:
+            lineage = plan.source_lineage
+            if lineage.source_output_id:
+                lineage_key = f"output:{lineage.source_output_id}"
+            elif lineage.source_asset_id:
+                lineage_key = f"asset:{lineage.source_asset_id}"
+            else:
+                raise ValueError("CopyRenderPlanBatch plans require source_asset_id or source_output_id lineage")
+            lineage_keys.append(lineage_key)
+        if len(set(lineage_keys)) != len(lineage_keys):
+            raise ValueError("CopyRenderPlanBatch plans must have unique source asset/output lineage")
+        if not self.batch_id:
+            self.batch_id = stable_id("copy_render_plan_batch", *plan_ids)
+        return self
+
+    def bind_to_frozen_plan(self, activation_plan_id: str) -> "CopyRenderPlanBatch":
+        payload = self.model_dump(mode="json")
+        payload["plans"] = [plan.bind_to_frozen_plan(activation_plan_id).model_dump(mode="json") for plan in self.plans]
+        payload["batch_id"] = ""
+        return CopyRenderPlanBatch.model_validate(payload)
+
+
 class TextPixelDeliveryAttempt(V3BaseModel):
     """One append-only composition, review, or recovery record."""
 
@@ -173,3 +214,29 @@ class TextPixelDelivery(V3BaseModel):
     user_visible_summary: list[str] = Field(default_factory=list)
     gate_c_eligible: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TextPixelDeliveryBatch(V3BaseModel):
+    """Append-only delivery results for an independently bound plan batch."""
+
+    schema_version: str = "v3_text_pixel_delivery_batch_v1"
+    batch_id: str
+    deliveries: list[TextPixelDelivery] = Field(default_factory=list)
+    source_asset_ids_by_plan: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_deliveries(self) -> "TextPixelDeliveryBatch":
+        plan_ids = [delivery.copy_render_plan_id for delivery in self.deliveries if delivery.copy_render_plan_id]
+        if len(set(plan_ids)) != len(plan_ids):
+            raise ValueError("TextPixelDeliveryBatch deliveries must have unique copy_render_plan_id values")
+        if set(self.source_asset_ids_by_plan).difference(plan_ids):
+            raise ValueError("TextPixelDeliveryBatch source asset mapping must reference included plans")
+        return self
+
+    def delivery_for_source_asset(self, asset_id: str) -> TextPixelDelivery | None:
+        for plan_id, mapped_asset_id in self.source_asset_ids_by_plan.items():
+            if mapped_asset_id != asset_id:
+                continue
+            return next((item for item in self.deliveries if item.copy_render_plan_id == plan_id), None)
+        return None

@@ -7,9 +7,11 @@ composition, review, repair, and lineage are handled here.
 
 from .contracts import (
     CopyRenderPlan,
+    CopyRenderPlanBatch,
     CopyRenderSourceLineage,
     NormalizedSafeArea,
     TextPixelDelivery,
+    TextPixelDeliveryBatch,
     TextPixelDeliveryAttempt,
 )
 from .runtime import (
@@ -24,6 +26,7 @@ from .runtime import (
 
 __all__ = [
     "CopyRenderPlan",
+    "CopyRenderPlanBatch",
     "CopyRenderSourceLineage",
     "FontRegistry",
     "LicensedFont",
@@ -31,6 +34,7 @@ __all__ = [
     "OcrResult",
     "StaticOcrEngine",
     "TextPixelDelivery",
+    "TextPixelDeliveryBatch",
     "TextPixelDeliveryAttempt",
     "TextPixelDeliveryRuntime",
     "TextPixelRuntimeSettings",

@@ -100,6 +100,20 @@ class V3LLMBrainAdapter:
         capability_hints = scenario_parameters.get("capabilities")
         if not isinstance(capability_hints, list):
             capability_hints = []
+        internal_copy_envelope = metadata.get("text_pixel_delivery_internal")
+        internal_copy_plan_present = bool(
+            metadata.get("internal_copy_render_plan_present") is True
+            or (
+                isinstance(internal_copy_envelope, dict)
+                and (
+                    isinstance(internal_copy_envelope.get("copy_render_plan"), dict)
+                    or (
+                        isinstance(internal_copy_envelope.get("copy_render_plans"), list)
+                        and bool(internal_copy_envelope.get("copy_render_plans"))
+                    )
+                )
+            )
+        )
         return BrainRunRequest(
             user_input=user_input,
             stage=stage,
@@ -131,10 +145,7 @@ class V3LLMBrainAdapter:
                 # Only a boolean crosses the Brain boundary.  The approved
                 # copy itself stays in the internal runtime envelope and is
                 # bound to the frozen plan by Product API before generation.
-                "internal_copy_render_plan_present": bool(
-                    isinstance(metadata.get("text_pixel_delivery_internal"), dict)
-                    and isinstance(metadata.get("text_pixel_delivery_internal", {}).get("copy_render_plan"), dict)
-                ),
+                "internal_copy_render_plan_present": internal_copy_plan_present,
             },
             capability_catalog=dict(capability_catalog or {}),
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),
