@@ -119,15 +119,31 @@ def test_ecommerce_workspace_exposes_price_positioning_without_a_price_claim() -
     assert "画面定位：${escapeHtml(positioningLabel)}" in script
 
 
-def test_ecommerce_workspace_exposes_platform_visual_intent_as_a_template_only_label() -> None:
+def test_ecommerce_workspace_exposes_evidence_and_optional_creative_strategy_without_claiming_platform_policy() -> None:
     script = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
 
+    assert 'id="v3EcommerceCreativeStrategyInput"' in html
+    assert 'option value="evidence_first"' in html
+    assert 'option value="scene_story"' in html
+    assert 'option value="content_hook"' in html
+    assert "不会覆盖已验证的主图约束，也不等同于平台审核规则" in html
+    assert 'v3EcommerceCreativeStrategyInput: document.querySelector("#v3EcommerceCreativeStrategyInput")' in script
+    assert "function v3EcommerceCreativeStrategyValue()" in script
+    assert "function v3EcommerceEvidenceIntentLabel(intentId)" in script
+    assert "function v3EcommerceComplianceIntentLabel(intentId)" in script
+    assert "creative_strategy: creativeStrategy" in script
+    assert 'els.v3EcommerceCreativeStrategyInput.value = "evidence_first"' in script
+    assert 'recipe?.metadata?.evidence_intent_id' in script
+    assert 'recipe?.metadata?.platform_compliance_intent_id' in script
+    assert 'recipe?.metadata?.creative_strategy_id' in script
+    assert 'recipe?.metadata?.creative_strategy_applied' in script
+    assert "本图证明：${escapeHtml(evidenceIntentLabel)}" in script
+    assert "表达方式：${escapeHtml(creativeStrategyLabel)}" in script
+    assert "平台主图约束：${escapeHtml(complianceIntentLabel)}" in script
     assert "function v3EcommercePlatformVisualIntentLabel(intentId)" in script
     assert "amazon_white_background_primary" in script
-    assert "ozon_mobile_scene_led" in script
-    assert "taobao_detail_story" in script
     assert 'recipe?.metadata?.platform_visual_intent_id' in script
-    assert "平台画面方向：${escapeHtml(platformVisualIntentLabel)}" in script
 
 
 def test_ecommerce_workspace_exposes_copy_locale_and_slot_safe_overlay_copy_controls() -> None:

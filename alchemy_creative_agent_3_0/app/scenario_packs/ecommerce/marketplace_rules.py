@@ -9,18 +9,18 @@ from .localization import resolve_localization
 from .utils import clean_text
 
 
-PROFILE_VERSION = "v3_ecommerce_rules_2026_06_28"
-PROFILE_UPDATED_AT = "2026-06-28"
+PROFILE_VERSION = "v3_ecommerce_rules_2026_07_12"
+PROFILE_UPDATED_AT = "2026-07-12"
 PROFILE_STATUS = "internal_draft"
 
 PROFILE_SOURCE_NOTES = {
-    "amazon": "Internal strategic draft; confirm current Seller Central requirements before publishing.",
-    "ozon": "Internal strategic draft; confirm current Ozon seller requirements before publishing.",
-    "taobao": "Internal strategic draft; confirm current Taobao/Tmall requirements before publishing.",
-    "jd": "Internal strategic draft; confirm current JD requirements before publishing.",
-    "pinduoduo": "Internal strategic draft; confirm current Pinduoduo requirements before publishing.",
-    "tiktok_shop": "Internal strategic draft; confirm current TikTok Shop requirements before publishing.",
-    "shopify": "Internal store-design profile, not a third-party marketplace policy.",
+    "amazon": "Verified main-image baseline is recorded separately; confirm category and regional exceptions in Seller Central before publishing.",
+    "ozon": "Photo ordering, review, and media capabilities are documented; scene-led styling remains an optional internal strategy.",
+    "taobao": "Current category, campaign, and placement image rules require seller-side verification; no universal style is asserted here.",
+    "jd": "Truthful product information is a baseline; category and placement image styling requires seller-side verification.",
+    "pinduoduo": "Current category and placement image rules require seller-side verification; no price-led visual claim is inferred.",
+    "tiktok_shop": "Listing-detail evidence and creator/content presentation are separate modes; verify market-specific rules before publishing.",
+    "shopify": "Storefront presentation is theme and merchant-configured, not a third-party marketplace policy.",
     "generic": "Internal generic commerce profile; no marketplace policy is implied.",
 }
 
@@ -42,91 +42,104 @@ PLATFORM_ALIASES = {
 }
 
 
-def platform_visual_intent_for_slot(platform: str, slot: str) -> dict[str, str]:
-    """Return versioned internal visual grammar for one marketplace suite role."""
+CREATIVE_STRATEGY_ALIASES = {
+    "": "evidence_first",
+    "evidence_first": "evidence_first",
+    "scene_story": "scene_story",
+    "information_rich": "information_rich",
+    "content_hook": "content_hook",
+    "brand_story": "brand_story",
+}
 
-    normalized_platform = str(platform or "generic").strip().lower()
-    primary_slot = slot in {"main_image", "hero_image"}
-    traffic_slot = slot in {"ad_cover", "benefit_hook", "store_banner", "collection_cover"}
-    if normalized_platform == "amazon":
-        if primary_slot:
-            return {
-                "id": "amazon_white_background_primary",
-                "direction": (
-                    "Use a clean pure-white, product-first listing main image: show the complete product clearly with "
-                    "minimal distraction; no props, people, badges, borders, or rendered text."
-                ),
-            }
+
+def resolve_creative_strategy(value: object) -> str:
+    return CREATIVE_STRATEGY_ALIASES.get(clean_text(value).lower(), "evidence_first")
+
+
+def evidence_intent_for_slot(slot: str) -> dict[str, str]:
+    """Define what a listing role must prove, independent of platform aesthetics."""
+
+    if slot in {"main_image", "hero_image"}:
         return {
-            "id": "amazon_narrative_secondary",
-            "direction": (
-                "Use a conversion-oriented secondary image that proves one supplied benefit through clear detail, "
-                "scale, compatibility, or realistic use context without unsupported claims."
-            ),
+            "id": "primary_product_truth",
+            "direction": "Show the actual product as sold in one unambiguous, complete, clearly recognizable primary view.",
         }
-    if normalized_platform == "ozon":
+    if slot in {"feature_image_1", "feature_image_2", "benefit_image", "benefit_hook"}:
         return {
-            "id": "ozon_mobile_scene_led",
-            "direction": (
-                "Use a mobile-readable, scene-led commerce composition with an immediately recognizable product, "
-                "believable scale, and one clear real-use idea rather than an empty studio-only frame."
-            ),
+            "id": "single_feature_proof",
+            "direction": "Prove one supplied function or benefit with visible product evidence; do not invent performance results.",
         }
-    if normalized_platform == "taobao":
-        if primary_slot:
-            return {
-                "id": "taobao_high_impact_primary",
-                "direction": (
-                    "Use a high-impact product-first hero with polished lighting, clear silhouette, and a strong first "
-                    "impression while keeping the actual product identity central."
-                ),
-            }
+    if slot == "detail_image":
         return {
-            "id": "taobao_detail_story",
-            "direction": (
-                "Use rich detail-page storytelling: one focused feature proof, material or scale evidence, and an "
-                "intentionally layered but readable commercial composition."
-            ),
+            "id": "material_or_component_detail",
+            "direction": "Show material, finish, controls, ports, or another visible component without inventing hidden internals.",
         }
-    if normalized_platform == "jd":
+    if slot == "scenario_image":
         return {
-            "id": "jd_parameter_confidence",
-            "direction": (
-                "Use a clear, quality-confidence composition that makes the product, supplied parameters, material "
-                "detail, and real-use evidence easy to compare without adding unsupported service claims."
-            ),
+            "id": "verified_use_context",
+            "direction": "Show a believable use context and human scale only when it remains consistent with the supplied product facts.",
         }
-    if normalized_platform == "pinduoduo":
+    if slot == "size_spec_image":
         return {
-            "id": "pinduoduo_fast_comprehension",
-            "direction": (
-                "Make product type, supplied quantity or scale, and practical function immediately understandable; "
-                "do not introduce price, discount, savings, or promotion claims."
-            ),
+            "id": "scale_or_quantity_clarity",
+            "direction": "Clarify supplied dimensions, compatibility, package count, or relative scale; never invent measurements.",
         }
-    if normalized_platform == "tiktok_shop":
+    if slot in {"trust_image", "trust_comparison_image"}:
         return {
-            "id": "tiktok_real_use_hook" if traffic_slot else "tiktok_creator_real_use",
-            "direction": (
-                "Use a scroll-stopping but truthful real-use composition with a clear product identity, natural human "
-                "scale when relevant, and one memorable visual hook without fabricated performance claims."
-            ),
+            "id": "evidence_backed_trust",
+            "direction": "Use only supplied facts to support quality, included items, or comparison clarity; do not fabricate certificates or awards.",
         }
-    if normalized_platform == "shopify":
+    return {
+        "id": "content_or_collection_context",
+        "direction": "Keep the actual product recognizable and make one evidence-backed commercial purpose clear.",
+    }
+
+
+def platform_compliance_intent_for_slot(platform: str, market: str, slot: str) -> dict[str, str]:
+    """Return only verified platform-specific visual constraints, never styling assumptions."""
+
+    if str(platform).lower() == "amazon" and slot in {"main_image", "hero_image"}:
         return {
-            "id": "shopify_brand_story",
+            "id": "amazon_main_image_verified_baseline",
+            "evidence_tier": "verified_requirement",
             "direction": (
-                "Use a brand-consistent product story with coherent lighting, material detail, and lifestyle context "
-                "that can extend from a product page into a campaign without inventing brand facts."
+                "Amazon main-image baseline: use the actual product as sold on a pure-white background; keep it fully "
+                "visible and clear, with no unrelated props, badges, borders, watermarks, or added text. Apply category "
+                "and regional exceptions only after current Seller Central verification."
             ),
         }
     return {
-        "id": "generic_product_first",
-        "direction": (
-            "Use a clear product-first commercial composition with one evidence-backed visual purpose and no "
-            "unsupported claims."
-        ),
-}
+        "id": "no_verified_platform_visual_override",
+        "evidence_tier": "no_verified_visual_override",
+        "direction": "",
+    }
+
+
+def creative_strategy_for_slot(strategy: object, slot: str) -> dict[str, str]:
+    """Apply an explicit seller choice without overriding evidence or compliance intent."""
+
+    strategy_id = resolve_creative_strategy(strategy)
+    if strategy_id == "scene_story" and slot in {"scenario_image", "ad_cover", "collection_cover", "store_banner"}:
+        return {
+            "id": strategy_id,
+            "direction": "Use a restrained, believable scene to connect the product to its intended use while keeping it identifiable.",
+        }
+    if strategy_id == "information_rich" and slot not in {"main_image", "hero_image"}:
+        return {
+            "id": strategy_id,
+            "direction": "Organize one proof point with clear visual hierarchy and reserve uncluttered space for a future approved text layer.",
+        }
+    if strategy_id == "content_hook" and slot in {"ad_cover", "benefit_hook", "collection_cover", "store_banner"}:
+        return {
+            "id": strategy_id,
+            "direction": "Use one truthful, immediately understandable visual hook for content placement without obscuring the product.",
+        }
+    if strategy_id == "brand_story" and slot not in {"main_image", "hero_image"}:
+        return {
+            "id": strategy_id,
+            "direction": "Use consistent lighting, material treatment, and setting that can support a merchant-defined brand story without inventing brand facts.",
+        }
+    return {"id": strategy_id, "direction": ""}
 class MarketplaceRuleEngine:
     """Return stable first-pass platform guidance without pretending it is live policy."""
 
@@ -148,9 +161,9 @@ class MarketplaceRuleEngine:
         platform, default_market = PLATFORM_ALIASES.get(raw_platform, (raw_platform or "generic", "global"))
         market = clean_text(parameters.get("market") or product_profile.get("market") or default_market) or default_market
         image_slots = self._slots_for(platform)
-        canvas_rules = self._canvas_rules(platform)
+        canvas_rules = self._canvas_rules(parameters)
         content_rules = self._content_rules(platform)
-        export_rules = self._export_rules(platform)
+        export_rules = self._export_rules(platform, parameters)
         text_policy = self._text_policy(platform, image_slots)
         localization = resolve_localization(
             platform=platform,
@@ -175,6 +188,7 @@ class MarketplaceRuleEngine:
                 "profile_updated_at": PROFILE_UPDATED_AT,
                 "profile_status": PROFILE_STATUS,
                 "profile_source_notes": PROFILE_SOURCE_NOTES.get(platform, PROFILE_SOURCE_NOTES["generic"]),
+                "profile_evidence_tier": "mixed_verified_and_internal",
                 "raw_platform_profile": raw_platform,
                 "live_policy_lookup": False,
                 "text_policy": text_policy,
@@ -226,16 +240,15 @@ class MarketplaceRuleEngine:
             "ad_cover",
         ]
 
-    def _canvas_rules(self, platform: str) -> dict[str, Any]:
-        if platform == "ozon":
-            return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "3:4", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform == "tiktok_shop":
-            return {"primary_aspect_ratio": "4:5", "secondary_aspect_ratio": "1:1", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "3:4", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform == "shopify":
-            return {"primary_aspect_ratio": "4:5", "secondary_aspect_ratio": "16:9", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "4:5", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
+    def _canvas_rules(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        requested_size = clean_text(parameters.get("requested_image_size"))
+        requested_ratio = _aspect_ratio_from_requested_size(requested_size)
+        ratio = requested_ratio or "1:1"
+        return {
+            "primary_aspect_ratio": ratio,
+            "secondary_aspect_ratio": ratio,
+            "canvas_source": "explicit_output_size" if requested_ratio else "internal_neutral_fallback",
+        }
 
     def _content_rules(self, platform: str) -> list[str]:
         rules = [
@@ -245,26 +258,23 @@ class MarketplaceRuleEngine:
             "Set uses a consistent product identity across all slots.",
         ]
         if platform == "amazon":
-            rules.insert(0, "Main image should stay product-first with minimal distractions.")
+            rules.insert(0, "Amazon main-image requirements are recorded separately and must be rechecked by category and region.")
         if platform == "ozon":
-            rules.insert(0, "Main image should make the product immediately understandable on a mobile listing.")
-            rules.append("Russian provider-native copy needs final-pixel readability review when explicitly requested.")
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            rules.append("Detail and trust images may communicate supported evidence with provider-native creative treatment when requested.")
+            rules.append("Ozon photo ordering and moderation are platform facts; scene styling remains an explicit seller strategy.")
         if platform == "tiktok_shop":
-            rules.append("Ad cover should communicate one hook within thumbnail viewing distance.")
+            rules.append("Listing-detail proof and creator/content presentation are separate deliverable modes.")
+        if platform == "shopify":
+            rules.append("Storefront media presentation depends on the merchant theme, page placement, and variant configuration.")
         return rules
 
-    def _export_rules(self, platform: str) -> dict[str, Any]:
-        if platform == "ozon":
-            return {"format": "png", "naming": "{slot}_{index}_ozon.png", "dimension_hint": "1200x1200"}
-        if platform == "tiktok_shop":
-            return {"format": "png", "naming": "{slot}_{index}_tiktok_shop.png", "dimension_hint": "1080x1350"}
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            return {"format": "png", "naming": "{slot}_{index}_{platform}.png", "dimension_hint": "1200x1200"}
-        if platform == "shopify":
-            return {"format": "png", "naming": "{slot}_{index}_shopify.png", "dimension_hint": "1600x2000"}
-        return {"format": "png", "naming": "{slot}_{index}_{platform}.png", "dimension_hint": "1200x1200"}
+    def _export_rules(self, platform: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        requested_size = clean_text(parameters.get("requested_image_size"))
+        return {
+            "format": "png",
+            "naming": "{slot}_{index}_{platform}.png",
+            "dimension_hint": requested_size or "seller placement configuration required",
+            "dimension_source": "explicit_output_size" if _aspect_ratio_from_requested_size(requested_size) else "seller_configuration_required",
+        }
 
     def _text_policy(self, platform: str, image_slots: list[str]) -> dict[str, list[str]]:
         forbidden = [slot for slot in image_slots if slot in {"main_image", "hero_image"}]
@@ -273,3 +283,23 @@ class MarketplaceRuleEngine:
             "text_enabled_slots": [slot for slot in image_slots if slot not in forbidden],
             "policy_owner": f"ecommerce_{platform}_profile",
         }
+
+
+def _aspect_ratio_from_requested_size(value: str) -> str | None:
+    parts = value.lower().split("x")
+    if len(parts) != 2:
+        return None
+    try:
+        width, height = (int(part.strip()) for part in parts)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    divisor = _greatest_common_divisor(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def _greatest_common_divisor(left: int, right: int) -> int:
+    while right:
+        left, right = right, left % right
+    return left

@@ -1755,6 +1755,9 @@ class V3ProjectModeService:
             copy_locale = str(commerce_metadata.get("copy_locale") or "").strip()
             if copy_locale:
                 parameters["copy_locale"] = copy_locale
+            creative_strategy = str(commerce_metadata.get("creative_strategy") or "").strip()
+            if creative_strategy:
+                parameters["creative_strategy"] = creative_strategy
             raw_overlay_copy = commerce_metadata.get("overlay_copy")
             if isinstance(raw_overlay_copy, dict):
                 overlay_copy = {

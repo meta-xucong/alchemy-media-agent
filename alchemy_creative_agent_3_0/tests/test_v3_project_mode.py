@@ -622,6 +622,7 @@ def test_project_mode_forwards_ecommerce_copy_metadata_to_existing_slot_safe_pla
                 "metadata": {
                     "copy_locale": "en-US",
                     "overlay_copy": {"feature_image_1": "Adjustable angle"},
+                    "creative_strategy": "information_rich",
                 },
             },
             "suite_slot_request": ["main_image", "feature_image_1"],
@@ -630,10 +631,12 @@ def test_project_mode_forwards_ecommerce_copy_metadata_to_existing_slot_safe_pla
 
     assert job["metadata"]["scenario_parameters"]["copy_locale"] == "en-US"
     assert job["metadata"]["scenario_parameters"]["overlay_copy"] == {"feature_image_1": "Adjustable angle"}
+    assert job["metadata"]["scenario_parameters"]["creative_strategy"] == "information_rich"
     recipes = {recipe["slot"]: recipe for recipe in job["ecommerce"]["image_recipes"]}
     assert recipes["main_image"]["overlay_text"] is None
     assert recipes["feature_image_1"]["overlay_text"] is None
     assert recipes["feature_image_1"]["provider_native_text"] == "Adjustable angle"
+    assert recipes["feature_image_1"]["metadata"]["creative_strategy_id"] == "information_rich"
 
 
 def test_selected_ecommerce_output_enters_project_context_without_brand_memory_auto_write(tmp_path) -> None:

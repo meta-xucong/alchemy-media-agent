@@ -21,8 +21,13 @@
 - selected explicit slots are not silently expanded;
 - product visual positioning reaches every selected recipe without creating a
   price, discount, award, certification, or provenance claim;
-- each platform profile maps primary and secondary slots to its versioned visual
-  grammar without presenting that grammar as live policy compliance;
+- Amazon main-image recipes apply the verified primary-image baseline, while
+  secondary recipes retain evidence roles without an invented policy override;
+- Ozon and other profiles do not gain a scene-led or fixed-ratio rule by
+  default; an optional seller-selected strategy applies only to compatible
+  roles and remains separately auditable;
+- historical `platform_visual_intent_id` jobs remain readable while new jobs
+  use evidence/compliance/strategy metadata.
 - General Template does not receive commerce suite metadata.
 
 ## Isolation tests
@@ -39,8 +44,13 @@
 
 - product drift is caught for product jobs;
 - fake claims, fake certificates, and invented specs are warnings/failures;
-- main-image text policy is enforced per profile;
-- final-pixel OCR/vision issues trigger only bounded provider-native revisions;
+- conservative main-image text default is enforced, and any verified platform
+  restriction is recorded separately from that default;
+- approved literal copy is carried only in provider-native complete-image
+  requests; no local OCR, composition, safe-area, or private text retry path
+  is introduced;
+- historical local-text inputs return `provider_native_required`, and no
+  production text-suite claim is allowed before Doc111 Provider Gate C/D;
 - retry-superseded outputs stay folded from delivery;
 - best-reviewed candidate wins over newest candidate;
 - out-of-scope review issues do not trigger commerce retries.
@@ -50,7 +60,8 @@
 - beginner can upload product, select platform/category, and generate;
 - advanced fields are hidden initially;
 - suite cards show image, slot label, purpose, and action;
-- planned suite rows expose a plain-language platform visual-direction label;
+- planned suite rows expose separate plain-language evidence, strategy, and
+  verified-platform-restriction labels where applicable;
 - one slot can be regenerated;
 - selected references persist after refresh;
 - rejected direction is carried forward;
@@ -75,7 +86,8 @@ Each run must inspect:
 - human hands/models when present;
 - scene realism;
 - slot differentiation;
-- platform-specific main-image and text policy;
+- verified primary-image restrictions, conservative text default, and the
+  source of each placement/canvas decision;
 - final file resolution and export names;
 - retry history and delivery count.
 

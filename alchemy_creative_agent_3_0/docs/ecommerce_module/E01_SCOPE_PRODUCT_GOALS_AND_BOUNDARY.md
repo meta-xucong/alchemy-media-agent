@@ -38,6 +38,7 @@ restarting the entire project.
 | General Template | neutral single images and simple product scenes | listing suites, A+ roles, platform assumptions |
 | E-Commerce Template | platform/category suite roles and export | generic human/product rendering implementation |
 | Platform profile | market expectations, slots, text/export policy evidence | product facts, typography coordinates, or generation provider choice |
+| Platform profile | verified placement constraints, seller-configured placement, locale/export hints | product facts, unsupported style claims, typography coordinates, or generation provider choice |
 | Category pack | buyer evidence and category slots | marketplace policy truth |
 | Product truth | confirmed facts and unknowns | invented claims or unsupported specs |
 
@@ -47,15 +48,18 @@ The planner computes:
 
 ```text
 product_truth
-× marketplace_profile
-× category_suite_profile
+× marketplace compliance evidence
+× category evidence suite
 × user_request
 × requested_count
 × localization_profile
+× seller-selected creative strategy
 ```
 
-The result is a list of independent `EcommerceAssetRecipe` records. Platform
-and category defaults are ranked recommendations, not irreversible assumptions.
+The result is a list of independent `EcommerceAssetRecipe` records. Verified
+constraints, evidence needs, and creative strategy remain separately auditable.
+Only verified constraints may be described as a marketplace rule; creative
+strategy is an opt-in seller choice.
 
 ## Non-negotiable product rules
 

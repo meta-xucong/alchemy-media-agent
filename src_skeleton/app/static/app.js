@@ -603,6 +603,7 @@ const els = {
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
   v3EcommercePricePositioningInput: document.querySelector("#v3EcommercePricePositioningInput"),
+  v3EcommerceCreativeStrategyInput: document.querySelector("#v3EcommerceCreativeStrategyInput"),
   v3EcommerceCopyLocaleInput: document.querySelector("#v3EcommerceCopyLocaleInput"),
   v3EcommerceOverlayCopyInput: document.querySelector("#v3EcommerceOverlayCopyInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
@@ -4946,6 +4947,44 @@ function v3EcommercePricePositioningLabel(positioning) {
   return labels[positioning] || "";
 }
 
+function v3EcommerceCreativeStrategyValue() {
+  const value = (els.v3EcommerceCreativeStrategyInput?.value || "evidence_first").trim();
+  return ["evidence_first", "scene_story", "information_rich", "content_hook", "brand_story"].includes(value)
+    ? value
+    : "evidence_first";
+}
+
+function v3EcommerceCreativeStrategyLabel(strategyId) {
+  const labels = {
+    evidence_first: "事实证明",
+    scene_story: "场景叙事",
+    information_rich: "信息说明",
+    content_hook: "内容钩子",
+    brand_story: "品牌故事",
+  };
+  return labels[strategyId] || "";
+}
+
+function v3EcommerceEvidenceIntentLabel(intentId) {
+  const labels = {
+    primary_product_truth: "商品主体与实物一致",
+    single_feature_proof: "单一卖点证明",
+    material_or_component_detail: "材质或组件细节",
+    verified_use_context: "真实使用场景",
+    scale_or_quantity_clarity: "尺寸、数量或尺度说明",
+    evidence_backed_trust: "有依据的信任信息",
+    content_or_collection_context: "内容或系列展示",
+  };
+  return labels[intentId] || "";
+}
+
+function v3EcommerceComplianceIntentLabel(intentId) {
+  const labels = {
+    amazon_main_image_verified_baseline: "Amazon 主图：白底、实物、无叠加营销元素",
+  };
+  return labels[intentId] || "";
+}
+
 function v3EcommercePlatformVisualIntentLabel(intentId) {
   const labels = {
     amazon_white_background_primary: "Amazon 白底商品主图",
@@ -5024,6 +5063,7 @@ function v3EcommerceProfilePatch() {
   const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
   const suiteScope = v3EcommerceSuiteScopeValue();
   const copyLocale = v3EcommerceCopyLocaleValue();
+  const creativeStrategy = v3EcommerceCreativeStrategyValue();
   const overlayCopy = (els.v3EcommerceOverlayCopyInput?.value || "").trim();
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
@@ -5042,6 +5082,7 @@ function v3EcommerceProfilePatch() {
     metadata: {
       suite_scope: suiteScope,
       suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
+      creative_strategy: creativeStrategy,
       copy_locale: copyLocale || null,
       overlay_copy: overlayCopy || null,
     },
@@ -5494,6 +5535,7 @@ function resetV3Workspace() {
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
   if (els.v3EcommercePricePositioningInput) els.v3EcommercePricePositioningInput.value = "";
+  if (els.v3EcommerceCreativeStrategyInput) els.v3EcommerceCreativeStrategyInput.value = "evidence_first";
   if (els.v3EcommerceCopyLocaleInput) els.v3EcommerceCopyLocaleInput.value = "";
   if (els.v3EcommerceOverlayCopyInput) els.v3EcommerceOverlayCopyInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
@@ -5867,14 +5909,26 @@ function renderV3EcommercePlanList(summary) {
     const positioningId = String(recipe?.metadata?.price_positioning || "").trim();
     const positioningLabel = v3EcommercePricePositioningLabel(positioningId)
       || String(recipe?.metadata?.price_positioning_label || "").trim();
-    const platformVisualIntentId = String(recipe?.metadata?.platform_visual_intent_id || "").trim();
-    const platformVisualIntentLabel = v3EcommercePlatformVisualIntentLabel(platformVisualIntentId);
+    const evidenceIntentId = String(recipe?.metadata?.evidence_intent_id || "").trim();
+    const evidenceIntentLabel = v3EcommerceEvidenceIntentLabel(evidenceIntentId);
+    const complianceIntentId = String(recipe?.metadata?.platform_compliance_intent_id || "").trim();
+    const legacyVisualIntentId = String(recipe?.metadata?.platform_visual_intent_id || "").trim();
+    const complianceIntentLabel = v3EcommerceComplianceIntentLabel(complianceIntentId)
+      || v3EcommercePlatformVisualIntentLabel(legacyVisualIntentId);
+    const creativeStrategyId = String(recipe?.metadata?.creative_strategy_id || "").trim();
+    const creativeStrategyApplied = Boolean(recipe?.metadata?.creative_strategy_applied)
+      || Boolean(String(recipe?.metadata?.creative_strategy_direction || "").trim());
+    const creativeStrategyLabel = creativeStrategyApplied
+      ? v3EcommerceCreativeStrategyLabel(creativeStrategyId)
+      : "";
     row.innerHTML = `
       <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
       ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
+      ${evidenceIntentLabel ? `<small>本图证明：${escapeHtml(evidenceIntentLabel)}</small>` : ""}
       ${positioningLabel ? `<small>画面定位：${escapeHtml(positioningLabel)}</small>` : ""}
-      ${platformVisualIntentLabel ? `<small>平台画面方向：${escapeHtml(platformVisualIntentLabel)}</small>` : ""}
+      ${creativeStrategyLabel ? `<small>表达方式：${escapeHtml(creativeStrategyLabel)}</small>` : ""}
+      ${complianceIntentLabel ? `<small>平台主图约束：${escapeHtml(complianceIntentLabel)}</small>` : ""}
     `;
     els.v3EcommercePlanList.appendChild(row);
   });

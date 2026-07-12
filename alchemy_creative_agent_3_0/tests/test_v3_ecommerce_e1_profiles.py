@@ -30,7 +30,7 @@ def test_category_resolution_uses_product_category_and_aliases() -> None:
     assert resolve_category("unclassified object") is None
 
 
-def test_ozon_profile_is_versioned_and_has_scene_led_slots() -> None:
+def test_ozon_profile_is_versioned_and_uses_evidence_slots_without_fixed_export_size() -> None:
     profile = MarketplaceRuleEngine().profile(
         platform_profile="ozon",
         parameters={},
@@ -41,7 +41,8 @@ def test_ozon_profile_is_versioned_and_has_scene_led_slots() -> None:
     assert profile.market == "RU"
     assert profile.image_slots[:2] == ["main_image", "scenario_image"]
     assert profile.metadata["live_policy_lookup"] is False
-    assert profile.export_rules["naming"].endswith("_ozon.png")
+    assert profile.export_rules["naming"] == "{slot}_{index}_{platform}.png"
+    assert profile.export_rules["dimension_hint"] == "seller placement configuration required"
 
 
 def test_category_profile_is_attached_without_changing_public_recipe_shape() -> None:

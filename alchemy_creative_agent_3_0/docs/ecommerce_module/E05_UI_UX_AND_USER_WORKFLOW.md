@@ -50,6 +50,8 @@ generate. Advanced controls may expose:
 - exact copy;
 - language and units;
 - requested aspect ratio.
+- suite expression strategy: evidence first (default), scene story,
+  information-rich, content hook, or brand story.
 
 ## Beginner-facing language
 
@@ -67,9 +69,12 @@ folded history and do not occupy the final delivery board.
 
 - Generated images remain visually primary.
 - Every card explains its purpose in one short sentence.
-- Planned suite rows use beginner-facing platform direction labels such as
-  “Amazon 白底商品主图” or “Ozon 移动端场景图”; they do not claim current
-  platform approval.
+- Planned suite rows separately explain “本图证明” (buyer evidence), optional
+  “表达方式” (seller-selected strategy), and a platform primary-image
+  restriction only when verified. A scene label is never shown as an Ozon or
+  other marketplace policy claim.
+- The expression-strategy control is advanced and defaults to evidence-first.
+  Its hint explains that it cannot override verified main-image rules.
 - A slot can be regenerated without recreating the whole suite.
 - Platform/category choices are visible in the run summary.
 - Locked or unavailable features cannot appear executable.

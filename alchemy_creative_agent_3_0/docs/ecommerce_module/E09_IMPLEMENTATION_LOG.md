@@ -15,7 +15,8 @@ Delivered:
 - Versioned category profiles for apparel, beauty, electronics, home/kitchen,
   and food/beverage.
 - Category aliases and evidence/review metadata.
-- Ozon marketplace profile with a mobile-readable, scene-led default suite.
+- Ozon marketplace profile with a product-evidence default suite. Later source
+  review explicitly removed the unsupported scene-led platform default.
 - Category-priority selection when a requested image count constrains a suite.
 
 Boundary:
@@ -365,23 +366,16 @@ Integration dependency: this is a Doc104 Section 9 public interface and
 shared retry/append-only-history coordination item. It requires the mainline
 foundation owner before implementation or production activation.
 
-## E22 — platform-specific slot visual grammar
+## E22 — initial platform-specific slot visual grammar (superseded)
 
-Status: implemented and verified on `codex/ecommerce-module-docs`.
+Status: superseded by E23 source-evidence correction.
 
-Delivered:
-
-- Added one versioned internal art-direction intent per platform/slot to the
-  E-Commerce planner and export metadata. It actively distinguishes an Amazon
-  white-background main image from narrative secondary roles, Ozon's
-  mobile-readable scene-led direction, and Taobao/Tmall's hero/detail-story
-  split; additional platform families receive their matching planning grammar.
-- The selected visual intent is appended to the E-Commerce recipe direction,
-  so it enters the existing vertical prompt path without a provider-local
-  branch. The workspace translates it into simple Chinese plan labels.
-- The metadata remains explicitly `internal_draft` planning guidance. It makes
-  no current policy, legal-compliance, publication, or approval promise, and
-  it does not alter General Template or shared V3 capabilities.
+E22 introduced a versioned internal visual-intent field and the corresponding
+workspace display. It incorrectly allowed platform-level defaults to imply that
+Ozon universally preferred scene-led images and that other marketplace visual
+grammars were stable across placements. Those values must not be used as
+platform-policy evidence. Historical E22 jobs remain readable through the
+legacy field; new jobs use the three-layer E23 model below.
 
 Verification:
 
@@ -395,6 +389,37 @@ JavaScript syntax, Python compile, and diff checks: passed
 Integration dependency: none beyond normal rebase before integration. Profile
 research/review and real-provider acceptance remain activation-gate work.
 
+## E23 — evidence-led marketplace profile correction
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Replaced platform-wide art-direction assumptions with separately recorded
+  buyer evidence, verified platform compliance intent, and explicit
+  seller-selected creative strategy.
+- Recorded Amazon primary-image constraints as verified baseline evidence;
+  retained no visual-policy override for Ozon, Taobao/Tmall, JD, PDD, TikTok
+  Shop, and Shopify unless future primary-source review establishes one.
+- Added a backward-compatible workspace control for the optional strategy and
+  labels that keep evidence, strategy, and verified constraints distinct; a
+  strategy label appears on a slot only when that strategy actually applies.
+- Added contract/planner/UI tests for Amazon primary compliance, optional Ozon
+  scene story, TikTok content-hook scope, Project Mode metadata forwarding,
+  and historical job readability.
+
+Verification:
+
+```text
+focused E-Commerce / Project Mode / workspace tests: 88 passed
+full V3 tests: 532 passed
+commercial frontend shell + provider contract tests: 50 passed
+JavaScript syntax, Python compile, and diff checks: passed
+```
+
+Evidence sources and profile update policy are maintained in E02. This
+milestone does not claim marketplace approval, text-pixel delivery, or
+real-provider activation acceptance.
 ## E20 — product visual-positioning planning control
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

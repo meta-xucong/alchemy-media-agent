@@ -47,10 +47,16 @@ capability after review without an auditable plan amendment.
 
 - Product names, trademarks, numbers, and confirmed claims are protected.
 - Unconfirmed claims become warnings or are omitted.
-- Main-image text is forbidden by default where the profile requires it.
-- Requested text must be generated as part of the provider image, then checked
-  from final pixels; a failure requests a provider-native revision and never a
-  local font/overlay repair.
+- Main-image text is forbidden by the E-Commerce module's conservative default.
+  A verified platform restriction may strengthen that default, but the default
+  itself is not represented as universal marketplace policy.
+- A text-enabled slot may pass approved literal copy and locale only as part of
+  a provider-native complete-image request. The E-Commerce module never uses
+  local fonts, OCR, composition, coordinates, safe areas, or a private retry
+  loop to create or repair text pixels.
+- Historical local-text inputs are readable only as `provider_native_required`.
+  A production text suite remains unavailable until Doc111 Provider Gate C/D
+  has real authorized-material evidence.
 - Translation must not change product facts or claim strength.
 
 ## Export manifest
@@ -66,6 +72,11 @@ category_version
 selected_slot_ids
 delivery_files
 copy_locale
+evidence_intent_id
+platform_compliance_intent_id
+platform_compliance_evidence_tier
+creative_strategy_id
+creative_strategy_applied
 review_summary
 publish_checklist
 generated_at
@@ -79,3 +90,7 @@ The export package must distinguish:
 - warnings requiring user review.
 
 It must never claim guaranteed approval or guaranteed performance.
+
+An export may preserve a seller-selected creative strategy for traceability,
+but that value is never evidence that a marketplace requires or approves the
+chosen visual style.

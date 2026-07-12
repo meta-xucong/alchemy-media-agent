@@ -67,7 +67,7 @@ Default count is category/platform dependent, but user-requested count wins.
 When count is smaller than the default, select the highest-value roles using:
 
 ```text
-platform necessity
+verified placement constraint
 → product evidence coverage
 → buyer uncertainty reduction
 → visual differentiation

@@ -6,7 +6,12 @@ from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, Marketpl
 from .category_profiles import CategoryProfile, evidence_for_slot
 from .copy_bridge import EcommerceCopyBridge
 from .localization import resolve_localization
-from .marketplace_rules import platform_visual_intent_for_slot
+from .marketplace_rules import (
+    creative_strategy_for_slot,
+    evidence_intent_for_slot,
+    platform_compliance_intent_for_slot,
+    resolve_creative_strategy,
+)
 
 
 SLOT_GOALS = {
@@ -44,6 +49,7 @@ class SellingPointToImagePlanner:
         scenario_parameters: dict | None = None,
     ) -> list[EcommerceAssetRecipe]:
         scenario_parameters = scenario_parameters or {}
+        creative_strategy = resolve_creative_strategy(scenario_parameters.get("creative_strategy"))
         brief_metadata = dict(brief.metadata or {})
         price_positioning = str(brief_metadata.get("price_positioning") or "").strip()
         price_positioning_label = str(brief_metadata.get("price_positioning_label") or "").strip()
@@ -80,7 +86,13 @@ class SellingPointToImagePlanner:
                 text_forbidden_slots=text_forbidden_slots,
             )
             provider_native_text = copy_plan["text"]
-            platform_visual_intent = platform_visual_intent_for_slot(marketplace_profile.platform, slot)
+            evidence_intent = evidence_intent_for_slot(slot)
+            platform_compliance_intent = platform_compliance_intent_for_slot(
+                marketplace_profile.platform,
+                marketplace_profile.market,
+                slot,
+            )
+            creative_intent = creative_strategy_for_slot(creative_strategy, slot)
             visual_scene, lifestyle_metadata = self._visual_scene(
                 slot=slot,
                 default_scene=scene,
@@ -88,7 +100,11 @@ class SellingPointToImagePlanner:
                 brief=brief,
                 marketplace_profile=marketplace_profile,
             )
-            visual_scene = f"{visual_scene} {platform_visual_intent['direction']}"
+            visual_scene = f"{visual_scene} {evidence_intent['direction']}"
+            if platform_compliance_intent["direction"]:
+                visual_scene = f"{visual_scene} {platform_compliance_intent['direction']}"
+            if creative_intent["direction"]:
+                visual_scene = f"{visual_scene} {creative_intent['direction']}"
             if price_positioning_direction:
                 visual_scene = f"{visual_scene} {price_positioning_direction}"
             recipes.append(
@@ -116,8 +132,13 @@ class SellingPointToImagePlanner:
                         **(category_profile.metadata() if category_profile else {}),
                         "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
                         "copy_plan": copy_plan,
-                        "platform_visual_intent_id": platform_visual_intent["id"],
-                        "platform_visual_intent_direction": platform_visual_intent["direction"],
+                        "evidence_intent_id": evidence_intent["id"],
+                        "evidence_intent_direction": evidence_intent["direction"],
+                        "platform_compliance_intent_id": platform_compliance_intent["id"],
+                        "platform_compliance_evidence_tier": platform_compliance_intent["evidence_tier"],
+                        "creative_strategy_id": creative_intent["id"],
+                        "creative_strategy_direction": creative_intent["direction"],
+                        "creative_strategy_applied": bool(creative_intent["direction"]),
                         **price_positioning_metadata,
                         **lifestyle_metadata,
                     },

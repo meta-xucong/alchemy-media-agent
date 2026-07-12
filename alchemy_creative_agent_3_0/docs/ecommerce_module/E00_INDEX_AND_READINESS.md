@@ -1,7 +1,7 @@
 # E-Commerce Module Documentation Set
 
 Status: development preparation baseline with provider-native text correction
-Document family: `E00-E11`, corrected by V3 Doc111
+Document family: `E00-E16`, corrected by V3 Doc111
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -45,7 +45,7 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | V3 foundation | baseline accepted for specialized work | consume, do not fork |
 | General Template | active and broad | may support light product visuals only |
 | E-Commerce Scenario Pack | existing skeleton | needs professional suite expansion |
-| Platform profiles | partial | require versioned policy/config records |
+| Platform profiles | evidence-led baseline | separate verified constraints, seller configuration, and internal strategy |
 | Category packs | partial | need first five category definitions |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
@@ -73,3 +73,4 @@ Before implementation starts, the team must have accepted:
 6. E06 review/retry/export rules.
 7. E07 milestones and commit boundaries.
 8. E08 test and acceptance matrix.
+9. E09 implementation record, including superseded assumptions.

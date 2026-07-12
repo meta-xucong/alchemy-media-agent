@@ -89,11 +89,17 @@ user request + uploaded refs
     It may guide composition, feature proof, material detail, and lighting,
     but it must not create price, discount, savings, award, certification, or
     provenance claims.
-11. Platform visual intent is a versioned internal E-Commerce art-direction
-    default per suite role. It may distinguish Amazon white-background primary
-    images, Ozon scene-led compositions, and Taobao/Tmall detail storytelling,
-    but it must never be presented as live marketplace-policy verification,
-    approval, or legal compliance.
+11. Each recipe keeps three distinct inputs: `platform_compliance_intent`,
+    `evidence_intent`, and `creative_strategy`. A platform constraint may be
+    called a marketplace rule only when its source/evidence tier supports that
+    statement. In the current baseline, Amazon's primary-image constraints are
+    verified; most other platform visual direction remains non-policy guidance.
+12. Optional `commerce_profile.metadata.creative_strategy` is an
+    E-Commerce-only seller choice (`evidence_first`, `scene_story`,
+    `information_rich`, `content_hook`, or `brand_story`). It may affect only
+    compatible secondary roles and can never override a verified primary-image
+    restriction, product truth, review, retry, provider, or General Template
+    contract.
 
 ## Compatibility rule
 
