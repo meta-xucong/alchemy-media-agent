@@ -80,4 +80,3 @@ When count is larger, add optional roles without duplicating the same scene.
 Within one suite, two images fail differentiation when they share the same
 purpose, camera relationship, scene logic, and selling point without a clear
 reason. Variation means useful evidence variation, not random decoration.
-

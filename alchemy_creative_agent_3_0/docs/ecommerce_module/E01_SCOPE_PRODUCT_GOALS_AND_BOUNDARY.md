@@ -69,4 +69,3 @@ and category defaults are ranked recommendations, not irreversible assumptions.
 5. Retry outputs remain append-only internally; delivery surfaces show only the
    final requested count.
 6. Every slot has one primary business purpose.
-

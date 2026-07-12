@@ -66,4 +66,3 @@ Before implementation starts, the team must have accepted:
 6. E06 review/retry/export rules.
 7. E07 milestones and commit boundaries.
 8. E08 test and acceptance matrix.
-

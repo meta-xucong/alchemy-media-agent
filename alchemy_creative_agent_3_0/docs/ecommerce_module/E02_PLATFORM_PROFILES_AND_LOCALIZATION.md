@@ -85,4 +85,3 @@ mandatory.
 - New profile versions affect only new jobs unless explicitly migrated.
 - A profile change requires focused tests and at least three materially
   different product/category fixtures.
-

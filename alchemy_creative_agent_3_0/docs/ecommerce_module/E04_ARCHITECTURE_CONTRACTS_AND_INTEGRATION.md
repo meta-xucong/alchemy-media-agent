@@ -88,4 +88,3 @@ Template semantics.
 - category-specific rules inside Human Realism or Product Identity plugins;
 - frontend-only activation of a locked or unavailable template;
 - rewriting historical project records in place.
-

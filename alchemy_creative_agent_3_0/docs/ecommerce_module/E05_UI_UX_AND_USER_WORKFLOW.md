@@ -70,4 +70,3 @@ folded history and do not occupy the final delivery board.
 - Platform/category choices are visible in the run summary.
 - Locked or unavailable features cannot appear executable.
 - Mobile layout keeps images and next actions above dense metadata.
-

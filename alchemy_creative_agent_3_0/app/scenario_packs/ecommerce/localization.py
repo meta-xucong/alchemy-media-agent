@@ -56,4 +56,3 @@ def resolve_localization(*, platform: str, market: str, requested_locale: str | 
             locale = "en-US"
     language = locale.split("-", 1)[0].lower()
     return LocalizationProfile(locale=locale, language=language, market=market, max_characters_by_slot=dict(_DEFAULT_LIMITS))
-

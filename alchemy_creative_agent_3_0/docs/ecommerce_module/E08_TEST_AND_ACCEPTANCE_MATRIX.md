@@ -96,4 +96,3 @@ python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_
 node --check src_skeleton/app/static/app.js
 git diff --check
 ```
-

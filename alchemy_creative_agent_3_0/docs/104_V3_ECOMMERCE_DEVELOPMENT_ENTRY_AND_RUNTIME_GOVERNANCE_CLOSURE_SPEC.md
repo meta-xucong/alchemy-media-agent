@@ -4,6 +4,10 @@ Status: accepted development-entry specification; foundation Gates A and B are
 implemented and regression-tested. Live-provider and browser acceptance remain
 separate recorded gates.
 
+Doc105 freezes the shared E-Commerce slot-continuation and final text-pixel
+delivery contract. It does not activate either interface before the associated
+runtime and live-acceptance gates pass.
+
 This document defines the short foundation-closure phase that must run in
 parallel with E-Commerce Template development. It does not redesign E-Commerce
 deliverables, weaken General Template boundaries, or replace Doc101/102.
@@ -66,6 +70,7 @@ Doc95   portrait evidence and reviewed-best-result closure
 Doc96   high-fidelity identity execution
 Doc101  extensible capability activation and hot plug governance
 Doc102  runtime migration and capability isolation implementation order
+Doc105  E-Commerce slot continuation and text-pixel delivery contract
 ```
 
 It also governs the entry criteria for the active E-Commerce Template.
@@ -283,6 +288,17 @@ Any change to a shared schema, manifest contract, provider parameter, review
 issue vocabulary, retry contract, public component interface, dependency, or
 lock file requires coordination between the two workstreams before merge.
 
+Doc105 further freezes the only future per-slot continuation interface. It
+creates an append-only E-Commerce child job, inherits the parent frozen plan
+by default, and uses shared generation/review/retry. It is not implemented by
+selection, deletion, or automatic retry, and no slot-redo control may appear
+before that route, lifecycle, resolver, and browser tests exist.
+
+Doc105 also separates E-Commerce copy planning from final text pixels. Platform
+profiles may plan allowed copy and safe areas, while deterministic typography,
+OCR, overflow/spelling/claim checks, and bounded recovery remain shared-runtime
+work required for live activation.
+
 ## 10. Activation Gates
 
 ### Gate A: Doc102 Enforced Runtime
@@ -319,7 +335,10 @@ suite-direction capability or marketplace deliverable vocabulary.
 
 Pass only when every case in Section 7 has an evidence record, manual visual
 acceptance, bounded terminal behavior, and no provider-parameter incompatibility
-left unexplained.
+left unexplained. Where a selected E-Commerce delivery role requires final
+text pixels, the Doc105 deterministic layout, OCR, safe-area, locale, and
+bounded-recovery acceptance matrix is also mandatory; copy planning alone is
+not sufficient evidence.
 
 ### Gate D: General Browser Continuation
 
@@ -339,7 +358,9 @@ they require a real provider output rather than a fabricated browser fixture.
 The E-Commerce Template may be presented as production-ready only when Gates A
 through D pass and its own template activation gate validates its declared
 capability policy, required product evidence, professional suite ownership, and
-E-Commerce-specific acceptance tests.
+E-Commerce-specific acceptance tests. This includes the Doc105 slot
+continuation and text-pixel contract tests whenever those public capabilities
+are implemented.
 
 ## 11. Completion Definition
 
