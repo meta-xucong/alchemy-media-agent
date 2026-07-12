@@ -188,8 +188,11 @@ class Settings(BaseModel):
     openai_image_gateway_managed_failover: bool = os.getenv(
         "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER", "false"
     ).lower() in {"1", "true", "yes", "on"}
+    # This is the end-to-end client budget, not a single upstream-line timeout.
+    # It must leave room for the gateway to move an unfinished request to later
+    # eligible lines after an earlier line's own timeout.
     openai_image_gateway_managed_failover_timeout_seconds: float = _float_env(
-        "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER_TIMEOUT_SECONDS", 240.0
+        "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER_TIMEOUT_SECONDS", 600.0
     )
     openai_image_edit_transient_cooldown_seconds: float = _float_env("OPENAI_IMAGE_EDIT_TRANSIENT_COOLDOWN_SECONDS", 12.0)
     openai_image_reference_max_upload_bytes: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_UPLOAD_BYTES", 1_200_000)

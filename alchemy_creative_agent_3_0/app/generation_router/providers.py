@@ -2938,7 +2938,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 else app_settings.openai_image_request_timeout_seconds
             )
             if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
-                value = min(value, app_settings.openai_image_gateway_managed_failover_timeout_seconds)
+                # This is an end-to-end request budget. A router may consume
+                # one line's timeout before it transfers the same request to
+                # another eligible line, so do not constrain it to the old
+                # single-line image timeout.
+                value = app_settings.openai_image_gateway_managed_failover_timeout_seconds
                 return max(30.0, float(value))
         except Exception:
             value = 240.0

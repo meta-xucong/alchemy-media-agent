@@ -303,7 +303,7 @@ def test_production_provider_gateway_managed_failover_does_not_replay_terminal_f
     settings.openai_api_key = "test-key"
     settings.default_image_provider = "openai_gpt_image"
     settings.openai_image_gateway_managed_failover = True
-    settings.openai_image_gateway_managed_failover_timeout_seconds = 240.0
+    settings.openai_image_gateway_managed_failover_timeout_seconds = 600.0
     calls = []
 
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
@@ -333,7 +333,7 @@ def test_production_provider_gateway_managed_failover_does_not_replay_terminal_f
     summary = error.value.provider_failure_retry
     assert summary["max_attempts"] == 1
     assert summary["fresh_upstream_requests"] == 1
-    assert managed_timeout == 240.0
+    assert managed_timeout == 600.0
     assert managed_attempts == 1
 
 

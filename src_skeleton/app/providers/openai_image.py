@@ -1036,7 +1036,11 @@ class OpenAIGPTImageProvider:
             else settings.openai_image_request_timeout_seconds
         )
         if self._uses_gateway_managed_failover():
-            value = min(value, settings.openai_image_gateway_managed_failover_timeout_seconds)
+            # The managed budget covers every line transition the gateway may
+            # perform for this one request. Do not cap it with the historical
+            # per-line client timeout or a later line will be canceled before
+            # it receives its own bounded attempt.
+            value = settings.openai_image_gateway_managed_failover_timeout_seconds
             return max(30.0, float(value) - self._GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS)
         return max(30.0, float(value))
 

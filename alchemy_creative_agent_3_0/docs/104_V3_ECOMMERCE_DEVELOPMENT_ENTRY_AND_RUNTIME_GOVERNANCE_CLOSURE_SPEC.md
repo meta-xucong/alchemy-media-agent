@@ -305,10 +305,11 @@ backoff for an individual image request, the foundation owner may enable
 mode, not an E-Commerce feature: each logical output keeps one request in
 flight, the gateway receives its full bounded opportunity to select a line, and
 the V3 outer runtime records its terminal result instead of replaying the same
-request. The effective client budget is capped at the configured managed
-failover timeout (240 seconds by default), with a small local finalization
-margin; direct providers retain their normal retry behavior unless explicitly
-opted in.
+request. The managed timeout is an end-to-end budget across gateway line
+switches, not a single-line timeout: it defaults to 600 seconds so a gateway
+can spend up to 180 seconds on multiple eligible lines and still return a
+bounded terminal result. A small local finalization margin is reserved; direct
+providers retain their normal retry behavior unless explicitly opted in.
 
 ## 10. Activation Gates
 
