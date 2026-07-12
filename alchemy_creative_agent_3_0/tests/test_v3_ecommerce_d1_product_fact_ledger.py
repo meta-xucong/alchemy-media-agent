@@ -1,4 +1,5 @@
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.contracts import ProductTruthLock
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.commerce_critic import CommerceCritic
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.pack import EcommerceScenarioPackPlanner
 
 
@@ -111,6 +112,37 @@ def test_historical_product_truth_without_a_ledger_remains_readable() -> None:
     )
 
     assert truth.fact_ledger == []
+
+
+def test_critic_detects_a_blocked_fact_if_it_reaches_provider_native_copy() -> None:
+    blocked_fact = "clinically proven thermal protection"
+    output = _plan(
+        {
+            "product_category": "shirt",
+            "fact_ledger": [
+                {
+                    "fact_id": "blocked_thermal_claim",
+                    "label": "Unsupported thermal claim",
+                    "value": blocked_fact,
+                    "source_type": "derived_blocked",
+                    "verification": "verified",
+                    "visual_channels": ["copy"],
+                    "claim_eligible": True,
+                }
+            ],
+        }
+    )
+    leaking_recipe = output.recipes[1].model_copy(update={"provider_native_text": blocked_fact})
+    recipes = [output.recipes[0], leaking_recipe, *output.recipes[2:]]
+
+    report = CommerceCritic().review(
+        truth=output.product_truth,
+        brief=output.commerce_brief,
+        marketplace_profile=output.marketplace_profile,
+        recipes=recipes,
+    )
+
+    assert report.metadata["blocked_fact_leak_slots"] == [leaking_recipe.slot]
 
 
 def test_relevant_global_facts_are_not_arbitrarily_truncated() -> None:

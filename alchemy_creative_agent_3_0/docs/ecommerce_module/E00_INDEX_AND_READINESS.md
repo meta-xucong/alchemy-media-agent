@@ -1,7 +1,7 @@
 # E-Commerce Module Documentation Set
 
 Status: development preparation baseline with provider-native text correction
-Document family: `E00-E16`, corrected by V3 Doc111
+Active document family: `E00-E11`, corrected by V3 Doc111
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -57,10 +57,10 @@ module work, while reserving frozen capability-plan runtime closure, live
 provider acceptance, General browser continuation, and production template
 activation for the shared foundation integration gates.
 
-The historical E12-E16 handoffs on the documentation branch must not merge
-unchanged: their deterministic compositor, font, safe-area, and multi-plan
-contracts are superseded for new work by Doc111. Product facts, platform
-evidence, output lineage, and final-pixel review remain valid inputs.
+The historical E12-E16 handoffs are intentionally absent from this branch:
+their deterministic compositor, font, safe-area, and multi-plan contracts are
+superseded for forward work by Doc111. Product facts, platform evidence,
+output lineage, and final-pixel review remain valid inputs.
 
 ## Definition of preparation complete
 

@@ -116,7 +116,7 @@ Score each selected output pass/fail, not by pixel similarity:
 
 An output fails the fixture if any hard product-fidelity, primary-image, or
 unverified-construction gate fails. A visually attractive image never offsets
-a product-truth or text-pixel failure.
+a product-truth or provider-native literal-copy acceptance failure.
 
 ## Integration boundary
 

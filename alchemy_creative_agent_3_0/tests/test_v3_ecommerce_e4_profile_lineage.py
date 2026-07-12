@@ -43,8 +43,9 @@ def test_export_manifest_carries_platform_category_and_locale_lineage() -> None:
     assert len(export.metadata["category_profile_versions"]) == 1
     assert export.metadata["copy_locale"] == "ru-RU"
     assert all(file["marketplace_profile_version"] == PROFILE_VERSION for file in export.files)
-    assert all(file["canvas_source"] == "internal_neutral_fallback" for file in export.files)
+    assert all("canvas_source" not in file for file in export.files)
     assert export.metadata["evidence_intent_ids"]
-    assert "platform_visual_intent_ids" in export.metadata
+    assert export.metadata["platform_compliance_intent_ids"]
+    assert "platform_visual_intent_ids" not in export.metadata
     assert all("creative_strategy_applied" in file for file in export.files)
     assert any(check["id"] == "platform_profile_lineage" and check["status"] == "done" for check in output.critic.checks)

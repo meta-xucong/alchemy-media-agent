@@ -139,7 +139,15 @@ class CommerceCritic:
             recipe.slot
             for recipe in recipes
             if any(
-                fact.lower() in " ".join([*recipe.required_product_facts, recipe.visual_scene, recipe.overlay_text or ""]).lower()
+                fact.lower()
+                in " ".join(
+                    [
+                        *recipe.required_product_facts,
+                        recipe.visual_scene,
+                        recipe.provider_native_text or "",
+                        recipe.overlay_text or "",
+                    ]
+                ).lower()
                 for fact in blocked_fact_values
             )
         ]
@@ -152,7 +160,7 @@ class CommerceCritic:
             self._check(
                 "blocked_product_fact_leakage",
                 not blocked_fact_leaks,
-                "Facts marked blocked do not appear in product prompts, overlay copy, or export bindings.",
+                "Facts marked blocked do not appear in product prompts, provider-native copy, or export bindings.",
             )
         )
         if truth.warnings:
@@ -173,7 +181,7 @@ class CommerceCritic:
             )
         if blocked_copy_slots:
             warnings.append(
-                "Overlay copy was removed because it repeated blocked product facts: " + ", ".join(blocked_copy_slots)
+                "Requested literal copy was withheld because it repeated blocked product facts: " + ", ".join(blocked_copy_slots)
             )
         if blocked_fact_leaks:
             warnings.append("Blocked product facts leaked into planned slots: " + ", ".join(blocked_fact_leaks))

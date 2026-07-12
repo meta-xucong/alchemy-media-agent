@@ -160,7 +160,7 @@ Add an E-Commerce-only, additive scope contract:
 
 ```text
 listing_only                 # default
-listing_plus_a_plus_planning # plans modules; no text-pixel delivery promise
+listing_plus_a_plus_planning # plans modules; no production text-delivery promise
 content_assets               # ad / creator / content-cover roles
 storefront_assets            # merchant/theme placement required
 ```
@@ -263,8 +263,8 @@ safe areas, or claim that an external marketplace will approve the result.
 
 ### D7 — per-slot continuation integration
 
-Status: implemented against mainline Doc105 runtime `3fab10f`; text-pixel D6
-remains independently blocked.
+Status: implemented against mainline Doc105 runtime `3fab10f`; Doc111
+provider-native text Gate C/D remains independently blocked.
 
 The E-Commerce result card renders a real “重做这张” control only when its
 generated `ecommerce_template` job has readable Doc105 lineage, a concrete
@@ -286,7 +286,7 @@ General Template, planned jobs, or historical jobs without lineage.
 | Provider materialization and shared review/retries | Shared V3 foundation | Supply facts, approved literal copy, claim/platform constraints, and creative intent only. |
 | Listing and A+ deliverable roles | E-Commerce | Own the map, explain it to users, and retain metadata. |
 | Marketplace policy verification | E-Commerce profile governance | Record source/evidence tier; avoid unsupported claims. |
-| Slot continuation lifecycle/resolver | Mainline Doc105 | Integrate only after the shared action is accepted. |
+| Slot continuation lifecycle/resolver | Mainline Doc105 | Consume the implemented shared action; never fork its lifecycle. |
 
 ## 6. Non-negotiable guardrails
 
