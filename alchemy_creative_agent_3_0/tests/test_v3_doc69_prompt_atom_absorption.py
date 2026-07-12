@@ -351,13 +351,17 @@ def test_doc104_lower_right_inspector_flags_subtle_compact_watermark_signature()
     # Recorded from a real Gate C product-lifestyle result that preserved its
     # uploaded source's semi-transparent lower-right watermark.  The prior
     # detector missed it because it did not form a conventional text band.
-    assert _lower_right_mark_decision(
-        edge_ratio=0.2068,
-        strong_edge_ratio=0.1050,
-        horizontal_band_ratio=0.02,
-        local_std=29.29,
-        compact_edge_density=True,
-    ) is True
+    for edge_ratio, strong_edge_ratio, horizontal_band_ratio, local_std in (
+        (0.2068, 0.1050, 0.02, 29.29),
+        (0.1676, 0.0852, 0.0333, 33.85),
+    ):
+        assert _lower_right_mark_decision(
+            edge_ratio=edge_ratio,
+            strong_edge_ratio=strong_edge_ratio,
+            horizontal_band_ratio=horizontal_band_ratio,
+            local_std=local_std,
+            compact_edge_density=True,
+        ) is True
 
     # Keep the rescue path narrow: a dense architectural edge field remains a
     # scene detail, not a generated-mark retry signal.

@@ -1615,15 +1615,15 @@ def _lower_right_mark_decision(
         and (text_like_edge or band_like_edge)
         and (text_like_edge or compact_mark_score >= 0.125)
     )
-    # Gate C regression: a small, semi-transparent lower-right watermark copied
-    # from an otherwise valid product reference measured 0.2068 / 0.1050 / 0.02
-    # for edge / strong-edge / horizontal-band density.  It is too weak for the
-    # conventional text path but is neither sparse background nor dense scene
-    # detail.  This remains deliberately narrow because a false positive costs
-    # one real generation attempt.
+    # Gate C regression: small, semi-transparent lower-right watermarks copied
+    # from otherwise valid product references measured 0.2068 / 0.1050 / 0.02
+    # and 0.1676 / 0.0852 / 0.0333 for edge / strong-edge / horizontal-band
+    # density.  They are too weak for the conventional text path but are
+    # neither sparse background nor dense scene detail.  This remains narrow
+    # because a false positive costs one real generation attempt.
     subtle_compact_mark = (
-        0.18 <= edge_ratio <= 0.22
-        and 0.10 <= strong_edge_ratio < 0.12
+        0.16 <= edge_ratio <= 0.22
+        and 0.08 <= strong_edge_ratio < 0.12
         and horizontal_band_ratio <= 0.07
     )
     return conventional_mark or subtle_compact_mark
