@@ -3968,8 +3968,7 @@ function handleMobileV3GalleryPreviewClick(event) {
   if (!button) return;
   event.preventDefault();
   event.stopPropagation();
-  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview)
-    || mobileV3SummaryThumbOutputs(mobileV3State.currentProject).find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
+  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
   if (!item) return;
   openMobileV3OutputLightbox(item);
 }
@@ -4012,7 +4011,14 @@ function mobileV3OutputDeliveryState(item) {
 
 function mobileV3FinalOutputsForProject(projectId) {
   const outputs = mobileV3OutputsForProject(projectId);
-  return outputs.filter((item) => mobileV3OutputDeliveryState(item) === "final_delivery");
+  return outputs.filter((item) => mobileV3CanonicalFinalDelivery(item));
+}
+
+function mobileV3CanonicalFinalDelivery(item) {
+  if (!item || mobileV3OutputDeliveryState(item) !== "final_delivery") return false;
+  const sourceType = String(item?.source_type || item?.metadata?.source_type || "").trim().toLowerCase();
+  if (sourceType === "selected_output" || sourceType === "generated_selected") return false;
+  return Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item));
 }
 
 function mobileV3ProcessOutputsForProject(projectId) {
@@ -4044,8 +4050,7 @@ function mobileV3MergeProjectOutputs(projectId, outputs = []) {
 
 function mobileV3DisplayOutputsForProject(project = mobileV3State.currentProject) {
   if (!project?.project_id) return [];
-  const outputs = mobileV3FinalOutputsForProject(project.project_id);
-  return outputs.length ? outputs : mobileV3SummaryThumbOutputs(project);
+  return mobileV3FinalOutputsForProject(project.project_id);
 }
 
 function mobileV3SummaryThumbs(project) {

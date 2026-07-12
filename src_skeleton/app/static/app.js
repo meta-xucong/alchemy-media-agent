@@ -2826,8 +2826,12 @@ function renderV3ProjectDetail() {
     const archived = project?.status === "archived";
     els.v3ProjectArchiveBtn.disabled = !project?.project_id || archived;
     els.v3ProjectArchiveBtn.textContent = archived ? "已归档" : "归档项目";
+    els.v3ProjectArchiveBtn.hidden = true;
   }
-  if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.disabled = !project?.project_id;
+  if (els.v3ProjectDeleteBtn) {
+    els.v3ProjectDeleteBtn.disabled = !project?.project_id;
+    els.v3ProjectDeleteBtn.hidden = true;
+  }
   renderV3ProjectOutputBoard();
   renderV3UsefulReferences();
   renderV3ProjectSnapshot();
@@ -2843,11 +2847,11 @@ function renderV3ProjectDetail() {
 
 function v3ProjectNextSuggestion(project = v3State.currentProject) {
   if (!project?.project_id) return "先从首页创建或打开一个项目";
-  const hasImages = Boolean(v3CurrentJobImageItems().length || v3SelectedOutputRefs(project).length);
+  const hasImages = Boolean(v3AllProjectImageItems(project).length);
   const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
-  if (!hasImages) return v3State.selectedScenario === "ecommerce" ? "打开制作页，生成第一组电商图" : "打开制作页，生成第一组图片";
+  if (!hasImages) return v3State.selectedScenario === "ecommerce" ? "打开制作页，生成第一组电商图片" : "打开制作页，生成第一张图片";
   if (!hasSelectedRefs) return "挑一张满意的图，设为后续参考";
-  return "点“继续生成套图”，沿着已选方向再做一组";
+  return "点击“继续生成”，沿着当前方向再做一张";
 }
 
 function renderV3ProjectSnapshot() {
@@ -2861,8 +2865,7 @@ function renderV3ProjectSnapshot() {
   }
   els.v3ProjectSnapshot.classList.remove("empty-v3-list");
   const refs = v3UsefulReferenceItems(project);
-  const selectedRefs = v3SelectedOutputRefs(project);
-  const generatedCount = v3AllProjectImageItems(project).length || selectedRefs.length;
+  const generatedCount = v3AllProjectImageItems(project).length;
   const jobCount = Array.isArray(project.job_ids) ? project.job_ids.length : 0;
   const items = [
     {
@@ -3092,7 +3095,7 @@ function syncV3CurrentJobFromProjectOutputs({ preferLatest = false } = {}) {
 function v3OutputVisibleInProject(item, project = v3State.currentProject) {
   const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
   if (state === "unselected" || state === "rejected") return false;
-  if (v3OutputDeliveryState(item) !== "final_delivery") return false;
+  if (!v3CanonicalFinalDelivery(item)) return false;
   const identity = v3OutputItemIdentity(item);
   return !v3ReviewOutputIdSet("hidden_output_ids").has(identity);
 }
@@ -3104,8 +3107,16 @@ function v3OutputDeliveryState(item) {
 
 function v3DeliveryDisplayItems(items) {
   const list = Array.isArray(items) ? items : [];
-  const finals = list.filter((item) => v3OutputDeliveryState(item) === "final_delivery");
+  const finals = list.filter((item) => v3CanonicalFinalDelivery(item));
   return finals;
+}
+
+function v3CanonicalFinalDelivery(item) {
+  if (!item || item?._v3Source === "selected_ref") return false;
+  const sourceType = String(item?.source_type || item?.metadata?.source_type || "").trim().toLowerCase();
+  if (sourceType === "selected_output" || sourceType === "generated_selected") return false;
+  if (v3OutputDeliveryState(item) !== "final_delivery") return false;
+  return v3OutputImageCandidates(item).length > 0;
 }
 
 function v3PostGenerationReview(job = v3State.currentJob) {
@@ -3139,27 +3150,16 @@ function v3AllProjectImageItems(project = v3State.currentProject) {
   };
   v3StoredProjectOutputItems(project).forEach((item) => push(item, "project_output"));
   v3CurrentJobImageItems().forEach((item) => push(item, "current_job"));
-  v3SelectedOutputRefs(project).forEach((ref) => push(ref, "selected_ref"));
   return v3DeliveryDisplayItems(merged).sort((a, b) => (Date.parse(b?.created_at || "") || 0) - (Date.parse(a?.created_at || "") || 0));
 }
 
-function v3ProcessProjectImageItems(project = v3State.currentProject) {
-  const items = [];
-  const seen = new Set();
-  const push = (item) => {
-    if (!item) return;
-    const state = item?.selection_state || v3ProjectOutputStateMap(project).get(v3OutputItemIdentity(item));
-    if (state === "unselected" || state === "rejected") return;
-    const delivery = v3OutputDeliveryState(item);
-    const isProcess = delivery === "superseded" || delivery === "process_only" || item?.metadata?.retry_superseded;
-    if (!isProcess) return;
-    const identity = v3OutputItemIdentity(item) || `process_${items.length}`;
-    if (seen.has(identity)) return;
-    seen.add(identity);
-    items.push({ ...item, _v3Source: "process_output", _v3Index: items.length });
-  };
-  v3StoredProjectOutputItems(project).forEach(push);
-  return items.sort((a, b) => (Date.parse(b?.created_at || "") || 0) - (Date.parse(a?.created_at || "") || 0));
+function v3ProjectOutputReason(item) {
+  const rawReason = item?.selection_reason || item?.recommendation || item?.purpose || item?.project_goal || "";
+  const text = v3ShortText(rawReason, 64);
+  if (!text || ["accept", "accepted", "approved", "pass", "passed", "ok", "true"].includes(text.toLowerCase())) {
+    return "已完成，可作为当前项目的后续方向继续使用";
+  }
+  return text;
 }
 
 function v3TimelineHasType(type) {
@@ -3193,44 +3193,31 @@ function renderV3ProjectOutputBoard() {
   if (!els.v3ProjectOutputBoard) return;
   const project = v3State.currentProject;
   const items = v3AllProjectImageItems(project);
-  // Retry/superseded artifacts stay in append-only backend audit history.
-  // The beginner-facing board is intentionally final-delivery-only.
-  const processItems = [];
   v3State.projectOutputItems = items;
-  v3State.projectProcessOutputItems = processItems;
+  v3State.projectProcessOutputItems = [];
   els.v3ProjectOutputBoard.innerHTML = "";
-  els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length && !processItems.length);
+  els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length);
   if (!project) {
     els.v3ProjectOutputBoard.textContent = "打开项目后，这里会优先展示生成图片。";
     return;
   }
-  if (!items.length && !processItems.length) {
+  if (!items.length) {
     els.v3ProjectOutputBoard.textContent = "生成一组图片后会放在这里。满意的图可以直接设为后续参考，让这个项目越做越一致。";
     return;
-  }
-  if (!items.length && processItems.length) {
-    const note = document.createElement("div");
-    note.className = "v3-process-only-note";
-    note.textContent = "最终可用图片还没准备好，下面保留了本次生成的过程记录。";
-    els.v3ProjectOutputBoard.appendChild(note);
   }
   items.slice(0, 6).forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
     const isSelected = v3IsOutputItemSelected(item, project);
     const title = isSelected ? `已确认方向 ${index + 1}` : `项目图片 ${index + 1}`;
-    const reason = item.selection_reason || item.recommendation || item.purpose || item.project_goal || "可作为这组项目继续延展的视觉方向";
+    const reason = v3ProjectOutputReason(item);
     const downloadUrl = v3OutputDownloadUrl(item) || v3OutputFullImageUrl(item) || v3OutputPreviewImageUrl(item) || "";
     const card = document.createElement("article");
     card.className = `v3-project-output-tile${isSelected ? " selected" : ""}`;
     card.innerHTML = `
-      ${
-        urls.length
-          ? `<button class="v3-project-output-preview" type="button" data-v3-project-preview="${index}" aria-label="查看项目图片"><img alt="${escapeHtml(title)}" /></button>`
-          : `<div class="v3-project-output-placeholder">图片准备中</div>`
-      }
+      <button class="v3-project-output-preview" type="button" data-v3-project-preview="${index}" aria-label="查看项目图片"><img alt="${escapeHtml(title)}" /></button>
       <div>
         <strong>${escapeHtml(title)}</strong>
-        <p>${escapeHtml(v3ShortText(reason, 64))}</p>
+        <p>${escapeHtml(reason)}</p>
       </div>
       <div class="v3-result-meta">
         <span>${isSelected ? "后续会参考" : "可继续使用"}</span>
@@ -3255,37 +3242,6 @@ function renderV3ProjectOutputBoard() {
     }
     els.v3ProjectOutputBoard.appendChild(card);
   });
-  if (processItems.length) {
-    const details = document.createElement("details");
-    details.className = "v3-process-output-details";
-    details.innerHTML = `
-      <summary>
-        <span>过程记录 ${processItems.length} 张</span>
-        <small>这些图被 V3 替换掉了，不会出现在首页最终结果里</small>
-      </summary>
-      <div class="v3-process-output-grid"></div>
-    `;
-    const grid = details.querySelector(".v3-process-output-grid");
-    processItems.slice(0, 12).forEach((item, index) => {
-      const urls = v3OutputImageCandidates(item);
-      const tile = document.createElement("button");
-      tile.className = "v3-process-output-tile";
-      tile.type = "button";
-      tile.innerHTML = urls.length
-        ? `<img alt="${escapeHtml(`过程图 ${index + 1}`)}" />`
-        : `<span>图片准备中</span>`;
-      const image = tile.querySelector("img");
-      if (image) bindImageWithFallback(image, urls, { emptyAlt: "V3 process image unavailable" });
-      tile.addEventListener("click", () => {
-        openV3OutputLightbox(item, {
-          title: `过程图 ${index + 1}`,
-          meta: "这张图已被更合适的结果替换，仅用于排查和复盘",
-        });
-      });
-      grid?.appendChild(tile);
-    });
-    els.v3ProjectOutputBoard.appendChild(details);
-  }
 }
 
 async function handleV3ProjectOutputBoardClick(event) {
@@ -3790,7 +3746,7 @@ function v3BrainPromptGuidance(metadataArtifacts = {}) {
 
 function renderV3ProductionEntry({ project, imageCount, refCount, avoidCount, isEcommerce }) {
   const hasProject = Boolean(project?.project_id);
-  const title = isEcommerce ? "继续生成电商套图" : "继续生成套图";
+  const title = isEcommerce ? "继续生成电商图片" : "继续生成图片";
   const body = refCount
     ? `沿用 ${refCount} 个已选参考继续。`
     : "先生成，再挑满意方向。";
@@ -3816,7 +3772,7 @@ function renderV3StepCards() {
   const outputItems = v3CurrentJobImageItems();
   const selectedRefs = v3UsefulReferenceItems(project);
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
-  const imageCount = outputItems.length || v3SelectedOutputRefs(project).length;
+  const imageCount = outputItems.length;
   const isEcommerce = v3State.selectedScenario === "ecommerce";
   v3State.activeProjectStep = "compose";
   els.v3StepCards.innerHTML = renderV3ProductionEntry({
@@ -3840,7 +3796,7 @@ function v3ProjectSubpageCopy(stepKey = "compose") {
   const map = {
     compose: {
       eyebrow: "继续生产",
-      title: ecommerceActive ? "继续生成电商套图" : "继续生成套图",
+      title: ecommerceActive ? "继续生成电商图片" : "继续生成图片",
       intro: ecommerceActive ? "写一句目标，可补商品图，V3 会沿用本项目风格出图。" : "写一句目标，可补参考图，V3 会沿用本项目方向出图。",
     },
     review: {
@@ -3855,8 +3811,8 @@ function v3ProjectSubpageCopy(stepKey = "compose") {
     },
     continue: {
       eyebrow: "继续优化",
-      title: "沿着已选方向继续做",
-      intro: "继续生成同一套视觉感觉。",
+      title: "沿着已选方向继续生成",
+      intro: "继续生成同一视觉方向的图片。",
     },
   };
   return map[stepKey] || map.compose;
@@ -4154,6 +4110,12 @@ function renderV3ProjectNextActions() {
 
 function renderV3BrandMemoryPanel() {
   if (!els.v3BrandMemoryPanel) return;
+  // Brand-memory management is intentionally secondary to the current
+  // project loop. It remains available through its dedicated route/modal,
+  // but does not compete with generation, selection, or continuation here.
+  els.v3BrandMemoryPanel.hidden = true;
+  els.v3BrandMemoryPanel.innerHTML = "";
+  return;
   const project = v3State.currentProject;
   const refs = v3UsefulReferenceItems(project);
   const canSave = Boolean(project?.project_id && refs.length);

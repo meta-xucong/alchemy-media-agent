@@ -83,7 +83,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "先选要做的项目类型" in index.text
     assert "项目概览" in index.text
     assert "不用选流程" in index.text
-    assert "继续生成套图" in index.text
+    assert "继续生成图片" in index.text
     assert "最近项目" in index.text
     assert "按项目展示最近生成的图片" in index.text
     assert "项目产物与记录" in index.text
@@ -280,6 +280,13 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3SummaryThumbs" in mobile_script.text
     assert "mobileV3DisplayOutputsForProject" in mobile_script.text
     assert "mobileV3ProcessOutputsForProject" in mobile_script.text
+    assert "function mobileV3CanonicalFinalDelivery" in mobile_script.text
+    assert 'sourceType === "selected_output"' in mobile_script.text
+    mobile_output_body = mobile_script.text.split("function mobileV3DisplayOutputsForProject", 1)[1].split("function mobileV3SummaryThumbs", 1)[0]
+    assert "return mobileV3FinalOutputsForProject(project.project_id);" in mobile_output_body
+    assert "mobileV3SummaryThumbOutputs" not in mobile_output_body
+    mobile_gallery_body = mobile_script.text.split("function handleMobileV3GalleryPreviewClick", 1)[1].split("function openMobileV3OutputLightbox", 1)[0]
+    assert "mobileV3SummaryThumbOutputs" not in mobile_gallery_body
     assert "generateMobileV3Job" in mobile_script.text
     assert "data-mobile-v3-mode" in mobile_script.text
     assert "data-mobile-v3-size" in mobile_script.text
@@ -348,9 +355,16 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text
-    assert "function v3ProcessProjectImageItems" in script.text
-    assert "v3State.projectProcessOutputItems = processItems" in script.text
-    assert "过程记录" in script.text
+    assert "function v3CanonicalFinalDelivery" in script.text
+    assert "function v3ProjectOutputReason" in script.text
+    assert '"accept", "accepted", "approved"' in script.text
+    assert 'item?._v3Source === "selected_ref"' in script.text
+    assert 'sourceType === "selected_output"' in script.text
+    assert "return v3OutputImageCandidates(item).length > 0;" in script.text
+    assert "v3SelectedOutputRefs(project).forEach((ref) => push(ref, \"selected_ref\"));" not in script.text
+    project_output_board = script.text.split("function renderV3ProjectOutputBoard", 1)[1].split("async function handleV3ProjectOutputBoardClick", 1)[0]
+    assert "过程记录" not in project_output_board
+    assert "图片准备中" not in project_output_board
     assert "v3ReviewRank" in script.text
     assert "hidden_output_ids" in script.text
     assert "这次生成的图片已从项目里移除。" in script.text
@@ -377,7 +391,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function renderV3StepCards" in script.text
     assert "function renderV3ProductionEntry" in script.text
     assert "v3-production-entry" in script.text
-    assert "继续生成套图" in script.text
+    assert 'const title = isEcommerce ? "继续生成电商图片" : "继续生成图片";' in script.text
     assert "function v3ProjectSubpageCopy" in script.text
     assert "function renderV3ProjectSubpageScene" in script.text
     assert "function renderV3BriefScene" in script.text
@@ -436,7 +450,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3OutputDeliveryState" in script.text
     assert "function v3DeliveryDisplayItems" in script.text
     assert 'v3OutputDeliveryState(item) !== "final_delivery"' in script.text
-    assert "const finals = list.filter((item) => v3OutputDeliveryState(item) === \"final_delivery\")" in script.text
+    assert "const finals = list.filter((item) => v3CanonicalFinalDelivery(item));" in script.text
     assert "function openV3ProjectHistoryModal" in script.text
     assert "function renderV3ProjectHistoryGrid" in script.text
     assert "function handleV3ProjectHistoryGridClick" in script.text
