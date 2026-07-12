@@ -242,6 +242,37 @@ def test_openai_image_provider_retries_html_gateway_timeout():
     assert provider._is_transient_image_edit_error(exc) is True
 
 
+def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_flight(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    calls = {"count": 0}
+
+    class FailingImages:
+        async def generate(self, **kwargs):
+            calls["count"] += 1
+            raise TimeoutError("upstream request timed out after its own failover budget")
+
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 240.0)
+    monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(settings, "openai_image_edit_request_timeout_seconds", 420.0)
+    openai_image_provider._openai_image_rate_limiter.reset()
+
+    with pytest.raises(ProviderRuntimeError) as error:
+        asyncio.run(
+            provider._generate_one(  # noqa: SLF001
+                SimpleNamespace(images=FailingImages()),
+                "single managed request",
+                ImagePromptPlan(main_subject="台灯", count=1),
+                index=0,
+            )
+        )
+
+    assert calls["count"] == 1
+    assert error.value.detail["attempts"] == 1
+    assert provider._client_timeout_seconds(image_edit=False) == 235.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=True) == 235.0  # noqa: SLF001
+
+
 def test_openai_image_provider_compresses_large_reference_png(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     source = tmp_path / "large-reference.png"

@@ -181,6 +181,16 @@ class Settings(BaseModel):
     openai_image_max_retry_after_seconds: float = _float_env("OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", 900.0)
     openai_image_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_REQUEST_TIMEOUT_SECONDS", 240.0)
     openai_image_edit_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 420.0)
+    # Some OpenAI-compatible gateways own line selection, retry and backoff for
+    # one image request.  Opt in only when a gateway documents that contract:
+    # V3 will keep exactly one request in flight per logical output instead of
+    # racing its own retries against the gateway's failover workflow.
+    openai_image_gateway_managed_failover: bool = os.getenv(
+        "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER", "false"
+    ).lower() in {"1", "true", "yes", "on"}
+    openai_image_gateway_managed_failover_timeout_seconds: float = _float_env(
+        "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER_TIMEOUT_SECONDS", 240.0
+    )
     openai_image_edit_transient_cooldown_seconds: float = _float_env("OPENAI_IMAGE_EDIT_TRANSIENT_COOLDOWN_SECONDS", 12.0)
     openai_image_reference_max_upload_bytes: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_UPLOAD_BYTES", 1_200_000)
     openai_image_reference_max_edge: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_EDGE", 1024)

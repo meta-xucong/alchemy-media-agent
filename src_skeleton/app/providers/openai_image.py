@@ -196,6 +196,7 @@ class OpenAIGPTImageProvider:
     _STANDARD_TRANSPORT_PROFILE = "openai_standard"
     _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
     _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
+    _GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS = 5.0
 
     def __init__(self, model: str | None = None):
         self.model = model
@@ -310,11 +311,15 @@ class OpenAIGPTImageProvider:
             provider=self.name,
             model=self._model(),
             outputs=outputs,
-            raw_response_summary={"output_count": len(outputs), "requests": output_count},
+            raw_response_summary={
+                "output_count": len(outputs),
+                "requests": output_count,
+                "gateway_managed_failover": self._uses_gateway_managed_failover(),
+            },
         )
 
     async def _generate_one(self, client, prompt: str, plan, *, index: int) -> list[dict]:
-        max_attempts = 6
+        max_attempts = 1 if self._uses_gateway_managed_failover() else 6
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
@@ -394,7 +399,7 @@ class OpenAIGPTImageProvider:
         index: int,
         mask_path=None,
     ) -> list[dict]:
-        max_attempts = 6
+        max_attempts = 1 if self._uses_gateway_managed_failover() else 6
         last_error: Exception | None = None
         transient_retry_count = 0
         requested_fidelity = self._requested_input_fidelity(plan)
@@ -635,6 +640,7 @@ class OpenAIGPTImageProvider:
                 "output_count": len(outputs),
                 "requests": 1,
                 "api_style": "images.edit",
+                "gateway_managed_failover": self._uses_gateway_managed_failover(),
                 "source_output_id": request.source_output_id,
                 "source_job_id": source_job_id,
                 "source_output_format": source_format,
@@ -969,10 +975,10 @@ class OpenAIGPTImageProvider:
         return any(marker in message for marker in markers)
 
     def _retry_delay_seconds(self, exc: Exception, attempt: int) -> float:
+        retry_after = self._retry_after_seconds_from_exception(exc)
+        if retry_after is not None:
+            return min(retry_after, settings.openai_image_max_retry_after_seconds)
         if self._is_image_quota_limit_error(exc):
-            retry_after = self._retry_after_seconds_from_exception(exc)
-            if retry_after is not None:
-                return min(retry_after, settings.openai_image_max_retry_after_seconds)
             return min(settings.openai_image_upstream_cooldown_seconds, settings.openai_image_max_retry_after_seconds)
         if self._is_concurrency_limit_error(exc):
             return min(12.0 * attempt, 60.0)
@@ -1029,7 +1035,13 @@ class OpenAIGPTImageProvider:
             if image_edit
             else settings.openai_image_request_timeout_seconds
         )
+        if self._uses_gateway_managed_failover():
+            value = min(value, settings.openai_image_gateway_managed_failover_timeout_seconds)
+            return max(30.0, float(value) - self._GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS)
         return max(30.0, float(value))
+
+    def _uses_gateway_managed_failover(self) -> bool:
+        return bool(getattr(settings, "openai_image_gateway_managed_failover", False))
 
     async def _call_with_timeout(self, awaitable, *, image_edit: bool, timeout_seconds: float | None = None):
         timeout = self._client_timeout_seconds(image_edit=image_edit) if timeout_seconds is None else timeout_seconds

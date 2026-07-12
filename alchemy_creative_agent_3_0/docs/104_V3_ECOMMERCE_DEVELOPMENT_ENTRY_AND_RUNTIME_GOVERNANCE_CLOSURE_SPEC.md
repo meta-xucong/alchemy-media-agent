@@ -299,6 +299,17 @@ profiles may plan allowed copy and safe areas, while deterministic typography,
 OCR, overflow/spelling/claim checks, and bounded recovery remain shared-runtime
 work required for live activation.
 
+When an OpenAI-compatible gateway explicitly owns line failover, retry, and
+backoff for an individual image request, the foundation owner may enable
+`OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER`. This is a shared provider-runtime
+mode, not an E-Commerce feature: each logical output keeps one request in
+flight, the gateway receives its full bounded opportunity to select a line, and
+the V3 outer runtime records its terminal result instead of replaying the same
+request. The effective client budget is capped at the configured managed
+failover timeout (240 seconds by default), with a small local finalization
+margin; direct providers retain their normal retry behavior unless explicitly
+opted in.
+
 ## 10. Activation Gates
 
 ### Gate A: Doc102 Enforced Runtime
@@ -338,7 +349,10 @@ acceptance, bounded terminal behavior, and no provider-parameter incompatibility
 left unexplained. Where a selected E-Commerce delivery role requires final
 text pixels, the Doc105 deterministic layout, OCR, safe-area, locale, and
 bounded-recovery acceptance matrix is also mandatory; copy planning alone is
-not sufficient evidence.
+not sufficient evidence. For a gateway-managed failover provider, the evidence
+must additionally prove that an upstream terminal failure creates no duplicate
+fresh request for the same logical output and becomes a bounded Project Mode
+job result.
 
 ### Gate D: General Browser Continuation
 

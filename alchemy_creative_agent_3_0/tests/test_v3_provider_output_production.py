@@ -293,6 +293,50 @@ def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request
     assert response.candidates[0].metadata["provider_failure_retry"]["executed_count"] == 1
 
 
+def test_production_provider_gateway_managed_failover_does_not_replay_terminal_failure(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
+    old_timeout = settings.openai_image_gateway_managed_failover_timeout_seconds
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = True
+    settings.openai_image_gateway_managed_failover_timeout_seconds = 240.0
+    calls = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        raise ProviderRuntimeError(
+            "OpenAI image generation failed after gateway-managed failover.",
+            provider="openai_gpt_image",
+            detail={"error_type": "TimeoutError", "message": "TimeoutError"},
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    managed_timeout = None
+    managed_attempts = None
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as error:
+            provider.generate(_generation_request())
+        managed_timeout = provider._app_provider_timeout_seconds([])  # noqa: SLF001
+        managed_attempts = provider._app_provider_max_attempts()  # noqa: SLF001
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
+        settings.openai_image_gateway_managed_failover_timeout_seconds = old_timeout
+
+    assert len(calls) == 1
+    summary = error.value.provider_failure_retry
+    assert summary["max_attempts"] == 1
+    assert summary["fresh_upstream_requests"] == 1
+    assert managed_timeout == 240.0
+    assert managed_attempts == 1
+
+
 def test_production_provider_retries_generic_reference_upstream_400_once(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

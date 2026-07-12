@@ -635,7 +635,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
         timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
-        max_attempts = 2
+        max_attempts = self._app_provider_max_attempts()
         attempts: list[dict[str, Any]] = []
         last_error: BaseException | None = None
         provider_prompt_chars = self._app_request_prompt_chars(app_request)
@@ -2937,9 +2937,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if reference_assets
                 else app_settings.openai_image_request_timeout_seconds
             )
+            if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
+                value = min(value, app_settings.openai_image_gateway_managed_failover_timeout_seconds)
+                return max(30.0, float(value))
         except Exception:
             value = 240.0
         return max(30.0, float(value) + 15.0)
+
+    def _app_provider_max_attempts(self) -> int:
+        try:
+            from app.config import settings as app_settings
+
+            if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
+                return 1
+        except Exception:
+            pass
+        return 2
 
     def _app_provider_transient_cooldown_seconds(self) -> float:
         try:
