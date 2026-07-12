@@ -137,7 +137,7 @@ class VisualCapabilityRegistry:
 
 
 def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
-    universal_templates = ["general_template", "ecommerce_template"]
+    universal_templates = ["general_template", "ecommerce_template", "photographer_template"]
     visual_stages = [
         "creative_strategy",
         "generation_prompt",
@@ -201,6 +201,7 @@ def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
         manifest("universal_visual_quality", "Universal visual quality", VISUAL_CLUSTER_EXECUTOR, dependencies=["visual_grammar"], threshold=0.0, profiles=["balanced", "strict"]),
         manifest("human_realism", "Human realism", VISUAL_CLUSTER_EXECUTOR, entities=["person"], dependencies=["universal_visual_quality"], evidence=["visible_person", "real_human_output"], threshold=0.55, profiles=["balanced", "strict", "child_strict"]),
         manifest("portrait_identity", "Portrait identity", VISUAL_CLUSTER_EXECUTOR, entities=["person"], dependencies=["reference_channel_policy", "universal_visual_quality"], evidence=["portrait_reference", "selected_identity_reference"], threshold=0.65, profiles=["balanced", "strong"]),
+        manifest("nonhuman_subject_identity", "Non-human subject identity", VISUAL_CLUSTER_EXECUTOR, entities=["nonhuman_subject"], dependencies=["reference_channel_policy", "universal_visual_quality"], evidence=["nonhuman_identity_reference"], threshold=0.65, profiles=["reference_truth"]),
         manifest("product_identity", "Product identity", VISUAL_CLUSTER_EXECUTOR, entities=["product", "generic_object", "food", "vehicle"], dependencies=["universal_visual_quality"], optional_dependencies=["reference_channel_policy"], evidence=["product_intent", "product_reference"], threshold=0.5, profiles=["described_concept", "reference_truth"]),
         manifest("scene_continuity", "Scene continuity", VISUAL_CLUSTER_EXECUTOR, entities=["scene", "building", "interior_space"], dependencies=["reference_channel_policy", "universal_visual_quality"], evidence=["scene_reference", "scene_preservation"], threshold=0.6),
         manifest("typography_layout", "Typography and layout", VISUAL_CLUSTER_EXECUTOR, entities=["text_layout", "brand_asset"], dependencies=["universal_visual_quality"], evidence=["target_text", "layout_intent"], threshold=0.55),

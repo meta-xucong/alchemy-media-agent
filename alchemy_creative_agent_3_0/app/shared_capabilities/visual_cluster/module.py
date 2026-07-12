@@ -138,6 +138,7 @@ HARD_REFERENCE_ROLES = {
     AssetRole.PRODUCT_REFERENCE.value,
     AssetRole.LOGO_REFERENCE.value,
     AssetRole.FACE_REFERENCE.value,
+    AssetRole.NONHUMAN_IDENTITY_REFERENCE.value,
 }
 SOFT_REFERENCE_ROLES = {
     AssetRole.STYLE_REFERENCE.value,
@@ -2645,6 +2646,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
 
     def _reference_use_policy(self, role: str, *, allow_product_language: bool, policy_lock: str) -> str:
         normalized = str(role or "").lower()
+        if "nonhuman_identity_reference" in normalized or "nonhuman_subject_identity" in normalized:
+            return "nonhuman_subject_identity"
         if allow_product_language or "product" in normalized:
             return "product_identity"
         if "logo" in normalized or "brand" in normalized:
@@ -2664,6 +2667,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     def _reference_role_for_policy(self, use_policy: str) -> str:
         return {
             "identity": "generated_identity_reference",
+            "nonhuman_subject_identity": "nonhuman_subject_identity_reference",
             "product_identity": "product_identity_reference",
             "brand_asset": "brand_asset_reference",
             "composition": "composition_reference",

@@ -472,6 +472,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_failure_retry": provider_failure_retry,
                     "api_operation": output.get("api_operation"),
                     "input_fidelity_requested": output.get("input_fidelity_requested"),
+                    "input_fidelity_required": bool(output.get("input_fidelity_required")),
                     "input_fidelity_applied": output.get("input_fidelity_applied"),
                     "input_fidelity_support_state": output.get("input_fidelity_support_state"),
                     "input_fidelity_fallback_reason": output.get("input_fidelity_fallback_reason"),
@@ -547,6 +548,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_failure_retry": provider_failure_retry,
                         "api_operation": output.get("api_operation"),
                         "input_fidelity_requested": output.get("input_fidelity_requested"),
+                        "input_fidelity_required": bool(output.get("input_fidelity_required")),
                         "input_fidelity_applied": output.get("input_fidelity_applied"),
                         "input_fidelity_support_state": output.get("input_fidelity_support_state"),
                         "input_fidelity_fallback_reason": output.get("input_fidelity_fallback_reason"),
@@ -618,6 +620,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     (output.get("input_fidelity_requested") for output in outputs if output.get("input_fidelity_requested")),
                     None,
                 ),
+                "input_fidelity_required": any(bool(output.get("input_fidelity_required")) for output in outputs),
                 "input_fidelity_applied": next(
                     (output.get("input_fidelity_applied") for output in outputs if output.get("input_fidelity_applied")),
                     None,
@@ -816,11 +819,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         reference_assets = self._reference_assets(request)
         asset_plan = self._asset_plan(request, reference_assets)
+        self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
         provider_name = self._select_provider(reference_assets)
         size = self._size_for_request(request)
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         protected_user_direction = self._provider_user_direction(request)
         prompt_audit = self._provider_prompt_audit(generation_prompt, protected_user_direction)
+        input_fidelity = self._input_fidelity_for_asset_plan(asset_plan)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
             scene=self._scene_for_request(request),
@@ -846,7 +851,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "v3_provider_strategy": request.generation_plan.provider_strategy.value,
                 "requested_image_count": self._group_count_for_request(request),
                 "requested_image_size": size,
-                "input_fidelity": self._input_fidelity_for_asset_plan(asset_plan),
+                "input_fidelity": input_fidelity,
+                "input_fidelity_required": self._input_fidelity_is_required(asset_plan),
                 "identity_repair_canvas_path": request.metadata.get("identity_repair_canvas_path"),
                 "identity_repair_mask_path": request.metadata.get("identity_repair_mask_path"),
             },
@@ -876,9 +882,53 @@ class ProductionImageGenerationProvider(GenerationProvider):
         for item in truth_layers if isinstance(truth_layers, list) else []:
             if not isinstance(item, dict):
                 continue
-            if str(item.get("truth_layer") or "") in {"portrait_identity_truth", "product_identity_truth"}:
+            if str(item.get("truth_layer") or "") in {
+                "portrait_identity_truth",
+                "product_identity_truth",
+                "nonhuman_subject_identity_truth",
+            }:
                 return "high"
         return None
+
+    def _input_fidelity_is_required(self, asset_plan: dict[str, Any]) -> bool:
+        input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else {}
+        truth_layers = input_plan.get("reference_truth_layers") if isinstance(input_plan, dict) else []
+        return any(
+            isinstance(item, dict) and str(item.get("truth_layer") or "") == "nonhuman_subject_identity_truth"
+            for item in (truth_layers if isinstance(truth_layers, list) else [])
+        )
+
+    def _assert_nonhuman_identity_reference_materialized(
+        self,
+        request: GenerationRequest,
+        asset_plan: dict[str, Any],
+    ) -> None:
+        raw_plan = request.metadata.get("capability_activation_plan")
+        plan = dict(raw_plan) if isinstance(raw_plan, dict) else {}
+        active_ids = self._string_list(plan.get("dependency_order")) if plan else []
+        raw_assets = request.metadata.get("uploaded_assets") if isinstance(request.metadata.get("uploaded_assets"), list) else []
+        raw_requires_native_reference = any(
+            self._is_nonhuman_truth_reference(
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+            )
+            for item in raw_assets
+        )
+        requires_native_reference = "nonhuman_subject_identity" in active_ids or raw_requires_native_reference
+        if not requires_native_reference:
+            return
+        if self._input_fidelity_is_required(asset_plan):
+            return
+        from app.providers.base import ProviderCapabilityMismatchError
+
+        raise ProviderCapabilityMismatchError(
+            "Non-human subject identity requires a readable typed reference image and cannot fall back to text-only conditioning.",
+            provider=self.provider_name,
+            detail={
+                "capability_id": "nonhuman_subject_identity",
+                "required_asset_role": "nonhuman_identity_reference",
+                "fallback": "blocked",
+            },
+        )
 
     def _app_provider(self, provider_name: str):
         if provider_name != "openai_gpt_image":
@@ -1118,6 +1168,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _reference_evidence_role(self, role: str, use_policy: str) -> str:
         value = f"{role} {use_policy}".lower()
+        if "nonhuman_identity_reference" in value or "nonhuman_subject_identity" in value:
+            return "nonhuman_subject_identity"
         if any(term in value for term in ("face", "portrait", "identity", "person", "character")):
             return "portrait_identity"
         if any(term in value for term in ("product", "packaging", "sku")):
@@ -1187,7 +1239,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if reference_policy
                 else [str(item) for item in asset.get("lock_targets", []) if str(item).strip()]
             )
-            if policy_rules:
+            if "nonhuman_subject_identity_truth" in truth_layers:
+                reference_constraint = self._truth_layer_constraint("nonhuman_subject_identity_truth", asset)
+            elif policy_rules:
                 reference_constraint = " ".join(policy_rules[:4])
             elif "product" in use_policy:
                 reference_constraint = (
@@ -1437,6 +1491,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             and self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
             for asset in reference_assets
         )
+        has_uploaded_nonhuman_truth = any(
+            self._is_uploaded_truth_source(asset) and self._is_nonhuman_truth_reference(asset)
+            for asset in reference_assets
+        )
         sources: dict[str, dict[str, Any]] = {}
         source_order: list[str] = []
         truth_source_ids: list[str] = []
@@ -1444,6 +1502,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
             source_order.append(asset_id)
             is_selected = self._is_selected_generated_source(asset)
+            is_nonhuman = self._is_nonhuman_truth_reference(asset)
             is_product = self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
             is_human = self._is_human_truth_reference(
                 asset,
@@ -1453,7 +1512,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if channel_policy:
+            if is_nonhuman:
+                layers = ["nonhuman_subject_identity_truth"]
+                priority_note = (
+                    "selected_nonhuman_identity_truth_source"
+                    if is_selected and not has_uploaded_nonhuman_truth
+                    else "nonhuman_subject_identity_truth_source"
+                )
+            elif channel_policy:
                 if str(channel_policy.get("product_identity") or "") in {"hard", "medium"}:
                     layers.append("product_identity_truth")
                 if str(channel_policy.get("identity_geometry") or "") in {"hard", "medium"}:
@@ -1472,7 +1538,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ):
                     layers.append("style_context_truth")
                 priority_note = "doc93_channel_policy_truth_source"
-                if is_selected and (has_uploaded_human_truth or has_uploaded_product_truth):
+                if is_selected and (has_uploaded_human_truth or has_uploaded_product_truth or has_uploaded_nonhuman_truth):
                     priority_note = "selected_output_channels_below_uploaded_truth"
             elif is_product:
                 if is_selected and has_uploaded_product_truth:
@@ -1514,7 +1580,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "truth_derivative_ids": [],
             "sources": sources,
             "priority_rules": [
-                "uploaded human or product truth remains highest for identity-critical details",
+                "uploaded human, product, or non-human subject truth remains highest for identity-critical details",
                 "selected generated outputs contribute only their resolved channels and never replace uploaded truth or a new explicit prompt",
                 "reference truth beats generic archetype wording",
             ],
@@ -1564,6 +1630,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if "product" in text or "packaging" in text or "logo" in text or "brand" in text:
             return allow_product_language or "product" in text
         return False
+
+    def _is_nonhuman_truth_reference(self, asset: dict[str, Any]) -> bool:
+        role = str(asset.get("role") or "").strip().lower()
+        use_policy = str(asset.get("use_policy") or "").strip().lower()
+        return role in {"nonhuman_identity_reference", "nonhuman_subject_identity"} or use_policy in {
+            "nonhuman_identity_reference",
+            "nonhuman_subject_identity",
+        }
 
     def _is_human_truth_reference(
         self,
@@ -1615,6 +1689,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         layer = str(truth_layer or "")
         if layer == "portrait_identity_truth":
             return "portrait_identity"
+        if layer == "nonhuman_subject_identity_truth":
+            return "subject_reference"
         if layer in {"product_identity_truth", "structured_appearance_truth"}:
             return "subject_reference"
         return _v1_reference_role(str(fallback_role or "unknown_reference"))
@@ -1624,6 +1700,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         source_bonus = 40 if self._is_uploaded_truth_source(asset) else 0
         base = {
             "portrait_identity_truth": 260,
+            "nonhuman_subject_identity_truth": 258,
             "product_identity_truth": 255,
             "structured_appearance_truth": 250,
         }.get(layer, 180)
@@ -1631,7 +1708,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _original_reference_priority(self, asset: dict[str, Any], truth_layers: list[str], index: int) -> int:
         source_bonus = 30 if self._is_uploaded_truth_source(asset) else 0
-        if any(layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"} for layer in truth_layers):
+        if any(layer in {"portrait_identity_truth", "nonhuman_subject_identity_truth", "product_identity_truth", "structured_appearance_truth"} for layer in truth_layers):
             return 170 + source_bonus - index
         return (120 if asset.get("strength") == "hard" else 100) + source_bonus - index
 
@@ -1646,6 +1723,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "jaw/chin direction, midface temperament, natural age impression, body identity direction, and natural skin-tone direction. "
                 "The prompt may change expression, gaze, pose, head angle, camera angle, crop, scene, lighting, makeup, and costume, "
                 "but must not replace the face with a narrower, sharper, larger-eyed, smaller-mouthed, V-chin, or generic AI beauty model."
+            )
+        if layer == "nonhuman_subject_identity_truth":
+            return (
+                f"Reference truth layer from {filename}: exact individual non-human subject identity truth. Preserve stable morphology, "
+                "head geometry, body proportions, distinctive markings or pattern, and visible coat, feather, scale, or surface character. "
+                "The prompt may change habitat, action, camera, lighting, color treatment, and finish, but must not replace the individual "
+                "or use the source habitat, lighting, or whole-image style as an unrequested template."
             )
         if layer == "product_identity_truth":
             return (
@@ -2078,6 +2162,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
             lines.append(
                 "Forbidden portrait drift: generic AI beauty replacement, face slimming, enlarged eyes, V-chin distortion, new age or ethnicity direction, or a merely similar model."
+            )
+        if any("nonhuman_subject_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
+            lines.append(
+                "Non-human subject identity truth: preserve the referenced individual's stable morphology, head geometry, body proportions, distinctive markings or pattern, and visible coat, feather, scale, or surface character; the current prompt owns habitat, action, camera, lighting, color treatment, and finish."
+            )
+            lines.append(
+                "Do not replace the individual with a generic subject or inherit the source habitat, lighting, or whole-image style by default."
             )
         if any("product_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
             lines.append(

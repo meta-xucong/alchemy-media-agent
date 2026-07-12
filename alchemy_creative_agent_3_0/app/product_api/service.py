@@ -212,6 +212,10 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "real_but_unflattering",
     "skin_texture_beauty_balance_failure",
     "product_identity_drift",
+    "nonhuman_subject_identity_drift",
+    "nonhuman_subject_marking_drift",
+    "nonhuman_subject_proportion_drift",
+    "nonhuman_reference_used_as_style",
     "product_silhouette_drift",
     "label_or_pattern_drift",
     "material_structure_drift",
@@ -298,6 +302,9 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
 
 DELIVERY_IDENTITY_HARD_GATE_ISSUES = {
     "identity_drift",
+    "nonhuman_subject_identity_drift",
+    "nonhuman_subject_marking_drift",
+    "nonhuman_subject_proportion_drift",
     "identity_card_missing",
     "identity_card_not_applied",
     "identity_feature_drift",
@@ -318,6 +325,7 @@ DELIVERY_IDENTITY_HARD_GATE_ISSUES = {
 }
 
 DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES = {
+    "nonhuman_reference_used_as_style",
     "prompt_owned_channel_ignored",
     "selected_anchor_overrode_current_prompt",
     "reference_used_as_style_when_identity_only",
@@ -370,6 +378,7 @@ ASSET_ROLE_PUBLIC_LABELS = {
     "style_reference": "style reference",
     "logo_reference": "logo reference",
     "face_reference": "portrait reference",
+    "nonhuman_identity_reference": "individual non-human subject reference",
     "background_reference": "background reference",
     "composition_reference": "layout reference",
     "color_reference": "color reference",
@@ -1035,7 +1044,7 @@ class V3ProductApiService:
         provider_strategy: ProviderStrategy,
         generation_result: PlanningResult,
     ) -> PlanningResult:
-        max_attempts = self._visual_auto_retry_max_attempts(generate_request)
+        max_attempts = self._visual_auto_retry_limit_for_record(record, generate_request)
         base_metadata = dict(record.request.metadata)
         records: list[dict[str, Any]] = []
         seen_issue_codes: set[str] = set()
@@ -1280,6 +1289,10 @@ class V3ProductApiService:
         reason_codes: list[str],
         post_retry_closeout: bool = False,
     ) -> dict[str, Any]:
+        plan = self._activation_plan_from_result(result)
+        active = plan.get("dependency_order") or plan.get("active_capability_ids") or []
+        if "nonhuman_subject_identity" in {str(item) for item in active if str(item).strip()}:
+            return {}
         if attempt_index != 1 and not post_retry_closeout:
             return {}
         identity_codes = {
@@ -1421,6 +1434,14 @@ class V3ProductApiService:
         if requested is None:
             return mode_limit
         return max(0, min(requested, mode_limit))
+
+    def _visual_auto_retry_limit_for_record(
+        self,
+        record: ProductJobRecord,
+        generate_request: GenerateJobRequest,
+    ) -> int:
+        limit = self._visual_auto_retry_max_attempts(generate_request)
+        return min(limit, 1) if self._record_has_active_capability(record, "nonhuman_subject_identity") else limit
 
     def _visual_retry_execution_plan(
         self,
@@ -1571,6 +1592,13 @@ class V3ProductApiService:
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
 
+    def _record_has_active_capability(self, record: ProductJobRecord, capability_id: str) -> bool:
+        plan = dict(record.request.metadata or {}).get("capability_activation_plan")
+        if not isinstance(plan, dict):
+            return False
+        active = plan.get("dependency_order") or plan.get("active_capability_ids") or []
+        return str(capability_id) in {str(item) for item in active if str(item).strip()}
+
     def _activation_filtered_retry_signal(
         self,
         result: PlanningResult,
@@ -1609,6 +1637,8 @@ class V3ProductApiService:
         code = str(issue_code or "").strip().lower()
         if not code:
             return None
+        if "nonhuman_subject" in code or "nonhuman_reference" in code:
+            return "nonhuman_subject_identity"
         if any(token in code for token in ("product", "packaging", "label", "logo_drift", "sku_")):
             return "product_identity"
         if any(
@@ -1815,6 +1845,26 @@ class V3ProductApiService:
             elif code in {"unrelated_object", "unrelated_product"}:
                 object_removal_instruction.append("remove unrelated props or objects that were not requested")
                 negative_additions.extend(["unrelated props", "unrequested objects", "random product"])
+            elif code in {
+                "nonhuman_subject_identity_drift",
+                "nonhuman_subject_marking_drift",
+                "nonhuman_subject_proportion_drift",
+                "nonhuman_reference_used_as_style",
+            }:
+                identity_reinforcement.extend(
+                    [
+                        "preserve the individual non-human subject's stable morphology, head geometry, body proportions, distinctive markings or pattern, and visible coat, feather, scale, or surface character from the typed reference",
+                        "keep habitat, action, camera, lighting, color treatment, and finish owned by the current prompt; do not recreate the source frame as a style template",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "generic replacement subject",
+                        "changed stable markings or pattern",
+                        "changed morphology or body proportions",
+                        "copied source habitat or lighting",
+                    ]
+                )
             elif code in {"identity_drift", "hair_or_outfit_drift", "camera_distance_drift"}:
                 identity_reinforcement.append(
                     "preserve the exact uploaded portrait identity truth if present: face ratio, eye shape and spacing, eyebrow arc, nose-mouth relationship, jaw/chin direction, natural age impression, body identity direction, and skin-tone direction"

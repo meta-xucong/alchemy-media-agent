@@ -16,6 +16,7 @@ class AssetRole(StrEnum):
     STYLE_REFERENCE = "style_reference"
     LOGO_REFERENCE = "logo_reference"
     FACE_REFERENCE = "face_reference"
+    NONHUMAN_IDENTITY_REFERENCE = "nonhuman_identity_reference"
     BACKGROUND_REFERENCE = "background_reference"
     COMPOSITION_REFERENCE = "composition_reference"
     COLOR_REFERENCE = "color_reference"

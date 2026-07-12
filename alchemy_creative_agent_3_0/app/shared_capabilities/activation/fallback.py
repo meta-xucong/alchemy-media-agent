@@ -90,9 +90,24 @@ def build_task_profile_and_intent(
         asset_id = str(asset.get("asset_id") or asset.get("output_id") or asset.get("reference_id") or "")
         asset_roles.setdefault(role, []).append(asset_id)
 
-    person_text = any(signal in text for signal in PERSON_SIGNALS)
+    nonhuman_assets = [
+        asset_id
+        for role, ids in asset_roles.items()
+        if role in {"nonhuman_identity_reference", "nonhuman_subject_identity"}
+        for asset_id in ids
+        if asset_id
+    ]
+    # A typed non-human identity reference is explicit subject evidence.  It
+    # wins over ambiguous photographic vocabulary such as "portrait".
+    person_text = any(signal in text for signal in PERSON_SIGNALS) and not bool(nonhuman_assets)
     stylized_person = any(signal in text for signal in STYLIZED_PERSON_SIGNALS)
-    portrait_assets = [asset_id for role, ids in asset_roles.items() if any(key in role for key in ("face", "portrait", "identity", "person")) for asset_id in ids if asset_id]
+    portrait_assets = [
+        asset_id
+        for role, ids in asset_roles.items()
+        if "nonhuman" not in role and any(key in role for key in ("face", "portrait", "identity", "person"))
+        for asset_id in ids
+        if asset_id
+    ]
     product_assets = [asset_id for role, ids in asset_roles.items() if "product" in role or "商品" in role for asset_id in ids if asset_id]
     scene_assets = [asset_id for role, ids in asset_roles.items() if any(key in role for key in ("scene", "background", "composition")) for asset_id in ids if asset_id]
     product_text = scenario_id == "ecommerce" or bool(product_profile) or any(signal in text for signal in PRODUCT_SIGNALS)
@@ -108,6 +123,30 @@ def build_task_profile_and_intent(
             portrait_evidence = add_evidence("portrait_reference", "declared_asset_role", portrait_assets, 0.95)
             preservation.append(PreservationTarget(target_id=stable_id("preserve", entity_id), target_type="person_identity", source_entity_id=entity_id, source_asset_ids=portrait_assets, level="strong", allowed_changes=["pose", "expression", "camera", "lighting", "styling"], evidence_ids=[portrait_evidence]))
             requested.append(RequestedCapability(capability_id="portrait_identity", reason_codes=["portrait_reference_present"], evidence_ids=[portrait_evidence], requested_profile="strong", confidence=0.95))
+
+    if nonhuman_assets:
+        nonhuman_evidence = add_evidence("nonhuman_identity_reference", "declared_asset_role", nonhuman_assets, 0.95)
+        entity_id = add_entity("nonhuman_subject", 0.95, nonhuman_assets, "strong")
+        preservation.append(
+            PreservationTarget(
+                target_id=stable_id("preserve", entity_id),
+                target_type="nonhuman_subject_identity",
+                source_entity_id=entity_id,
+                source_asset_ids=nonhuman_assets,
+                level="strong",
+                allowed_changes=["habitat", "action", "camera", "lighting", "color", "finish"],
+                evidence_ids=[nonhuman_evidence],
+            )
+        )
+        requested.append(
+            RequestedCapability(
+                capability_id="nonhuman_subject_identity",
+                reason_codes=["nonhuman_identity_reference_present"],
+                evidence_ids=[nonhuman_evidence],
+                requested_profile="reference_truth",
+                confidence=0.95,
+            )
+        )
 
     if product_text or product_assets:
         source = "product_reference" if product_assets else "product_intent"
@@ -164,7 +203,7 @@ def build_task_profile_and_intent(
         subject_entities=entities,
         preservation_targets=preservation,
         allowed_changes=["composition", "camera", "lighting", "background"] if preservation else [],
-        visual_intent_tags=[tag for tag, active in (("portrait", person_text), ("product", product_text), ("scene", scene_text), ("layout", layout_text)) if active],
+        visual_intent_tags=[tag for tag, active in (("portrait", person_text), ("nonhuman_subject", bool(nonhuman_assets)), ("product", product_text), ("scene", scene_text), ("layout", layout_text)) if active],
         requested_deliverable_roles=list(metadata.get("requested_deliverable_roles") or []),
         explicit_user_controls={key: metadata[key] for key in ("requested_image_count", "variation_mode", "preserve_scene") if key in metadata},
         unknown_requirements=[] if entities else ["subject_type_not_explicit"],

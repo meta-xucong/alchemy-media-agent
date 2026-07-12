@@ -729,6 +729,10 @@ def _default_profile(
             natural_complexion_direction="medium",
             hair_direction="prompt_owned",
         )
+    elif role == "nonhuman_subject_identity_reference":
+        # Individual non-human truth is governed by its own shared capability;
+        # no human appearance or source-frame style channel is inherited here.
+        pass
     elif role == "product_identity_reference":
         profile["product_identity"] = "hard"
     elif role == "structured_appearance_reference":
@@ -771,6 +775,12 @@ def _policy_provider_rules(role: str, profile: dict[str, str], source_id: str) -
             "Preserve underlying face geometry and facial-feature relationships.",
             "Follow the current prompt for hair styling, makeup, wardrobe, accessories, lighting, color, scene, camera, mood, and art direction unless the user explicitly locks one of those channels.",
             "Do not copy the reference image's original lighting, color temperature, scene, wardrobe, camera mood, or whole-image style unless the user explicitly assigns that channel to the reference.",
+        ]
+    if role == "nonhuman_subject_identity_reference":
+        return [
+            f"Reference {source_id} is individual non-human subject identity truth.",
+            "Preserve stable morphology, head geometry, body proportions, and distinctive markings or pattern.",
+            "Follow the current prompt for habitat, action, camera, lighting, color treatment, and finish; do not copy the reference frame as a style template.",
         ]
     if role == "product_identity_reference":
         return [
@@ -860,6 +870,8 @@ def _canonical_role(binding: dict[str, Any]) -> str:
             str((binding.get("metadata") or {}).get("raw_role") or ""),
         ]
     ).lower()
+    if "nonhuman_identity_reference" in value or "nonhuman_subject_identity" in value:
+        return "nonhuman_subject_identity_reference"
     if "product" in value:
         return "product_identity_reference"
     if any(token in value for token in ("appearance", "wardrobe", "garment", "outfit", "clothing")):

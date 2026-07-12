@@ -74,6 +74,7 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                 AssetRole.PRODUCT_REFERENCE,
                 AssetRole.LOGO_REFERENCE,
                 AssetRole.FACE_REFERENCE,
+                AssetRole.NONHUMAN_IDENTITY_REFERENCE,
                 AssetRole.BACKGROUND_REFERENCE,
             },
         }
@@ -185,6 +186,20 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                     source=self.module_id,
                 )
             )
+        if role == AssetRole.NONHUMAN_IDENTITY_REFERENCE.value:
+            constraints.append(
+                CapabilityConstraint(
+                    target_stage=CapabilityTargetStage.PROMPT_COMPILATION,
+                    constraint_type="nonhuman_subject_identity_preservation",
+                    strength="strong",
+                    value={
+                        "asset_id": asset_id,
+                        "requirements": analysis.get("identity_requirements", []),
+                        "provider_native_reference_required": True,
+                    },
+                    source=self.module_id,
+                )
+            )
         if role == AssetRole.NEGATIVE_REFERENCE.value:
             constraints.append(
                 CapabilityConstraint(
@@ -292,6 +307,8 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
             "portrait_identity": AssetRole.FACE_REFERENCE,
             "identity_reference": AssetRole.FACE_REFERENCE,
             "character_reference": AssetRole.FACE_REFERENCE,
+            "nonhuman_identity_reference": AssetRole.NONHUMAN_IDENTITY_REFERENCE,
+            "nonhuman_subject_identity": AssetRole.NONHUMAN_IDENTITY_REFERENCE,
             "style_reference": AssetRole.STYLE_REFERENCE,
             "logo_reference": AssetRole.LOGO_REFERENCE,
             "face_reference": AssetRole.FACE_REFERENCE,
@@ -309,6 +326,11 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
             return ["preserve logo shape", "do not invent unreadable brand text"]
         if role == AssetRole.FACE_REFERENCE:
             return ["preserve face identity cues", "avoid identity drift"]
+        if role == AssetRole.NONHUMAN_IDENTITY_REFERENCE:
+            return [
+                "preserve the individual subject's stable morphology, markings, pattern, and proportions",
+                "keep habitat, action, camera, lighting, color, and finish prompt-owned",
+            ]
         if role == AssetRole.BACKGROUND_REFERENCE:
             return ["preserve requested background environment when compatible"]
         if role == AssetRole.COMPOSITION_REFERENCE:

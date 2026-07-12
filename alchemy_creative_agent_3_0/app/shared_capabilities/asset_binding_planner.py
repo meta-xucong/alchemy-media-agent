@@ -20,6 +20,7 @@ from .utils import prior_fact, role_value
 ROLE_PRIORITY = {
     AssetRole.PRODUCT_REFERENCE.value: 90,
     AssetRole.FACE_REFERENCE.value: 82,
+    AssetRole.NONHUMAN_IDENTITY_REFERENCE.value: 86,
     AssetRole.LOGO_REFERENCE.value: 78,
     AssetRole.BACKGROUND_REFERENCE.value: 68,
     AssetRole.STYLE_REFERENCE.value: 52,
@@ -82,11 +83,12 @@ class AssetBindingPlanner(SharedCapabilityModule):
     def _binding_for(self, analysis: dict[str, Any]) -> dict[str, Any]:
         role = str(analysis.get("role") or AssetRole.UNKNOWN_REFERENCE.value)
         priority = ROLE_PRIORITY.get(role, 5)
-        strength = "strong" if role in {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value} else "medium" if priority >= 48 else "soft"
+        strength = "strong" if role in {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value, AssetRole.NONHUMAN_IDENTITY_REFERENCE.value} else "medium" if priority >= 48 else "soft"
         allowed_transformations = {
             AssetRole.PRODUCT_REFERENCE.value: ["scene change", "lighting polish", "background replacement"],
             AssetRole.LOGO_REFERENCE.value: ["placement change only when readable"],
             AssetRole.FACE_REFERENCE.value: ["lighting polish", "pose-compatible styling"],
+            AssetRole.NONHUMAN_IDENTITY_REFERENCE.value: ["habitat change", "action change", "camera change", "lighting change", "color and finish change"],
             AssetRole.BACKGROUND_REFERENCE.value: ["compatible product insertion"],
             AssetRole.STYLE_REFERENCE.value: ["palette and finish adaptation"],
             AssetRole.COMPOSITION_REFERENCE.value: ["abstract layout guidance"],
@@ -97,6 +99,7 @@ class AssetBindingPlanner(SharedCapabilityModule):
             AssetRole.PRODUCT_REFERENCE.value: ["product shape drift", "material invention", "logo removal"],
             AssetRole.LOGO_REFERENCE.value: ["logo distortion", "unreadable brand mark"],
             AssetRole.FACE_REFERENCE.value: ["identity drift"],
+            AssetRole.NONHUMAN_IDENTITY_REFERENCE.value: ["individual morphology drift", "marking or pattern drift", "body proportion drift", "reference scene overinheritance"],
             AssetRole.BACKGROUND_REFERENCE.value: ["background overriding product truth"],
             AssetRole.NEGATIVE_REFERENCE.value: ["using negative reference as positive style"],
         }.get(role, [])
@@ -119,6 +122,8 @@ class AssetBindingPlanner(SharedCapabilityModule):
             return "brand mark exactness source"
         if role == AssetRole.BACKGROUND_REFERENCE.value:
             return "background environment source"
+        if role == AssetRole.NONHUMAN_IDENTITY_REFERENCE.value:
+            return "individual non-human subject identity source"
         if role == AssetRole.COMPOSITION_REFERENCE.value:
             return "layout and camera guide"
         if role == AssetRole.NEGATIVE_REFERENCE.value:
@@ -127,7 +132,7 @@ class AssetBindingPlanner(SharedCapabilityModule):
 
     def _conflict_warnings(self, bindings: list[dict[str, Any]]) -> list[CapabilityWarning]:
         warnings: list[CapabilityWarning] = []
-        hard_roles = {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value}
+        hard_roles = {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value, AssetRole.NONHUMAN_IDENTITY_REFERENCE.value}
         for role in hard_roles:
             role_bindings = [binding for binding in bindings if binding["role"] == role]
             if len(role_bindings) > 1:

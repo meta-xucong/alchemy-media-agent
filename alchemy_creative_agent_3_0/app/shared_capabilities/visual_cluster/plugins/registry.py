@@ -5,6 +5,7 @@ from __future__ import annotations
 from ...activation import CapabilityActivationPlan, CapabilityContribution
 from .base import MetadataCapabilityPlugin, VisualCapabilityPlugin, VisualPluginContext
 from .human_realism import HumanRealismPlugin
+from .nonhuman_subject_identity import NonhumanSubjectIdentityPlugin
 from .portrait_identity import PortraitIdentityPlugin
 from .product_identity import ProductIdentityPlugin
 from .reference_channel_policy import ReferenceChannelPolicyPlugin
@@ -25,6 +26,7 @@ class VisualClusterPluginRegistry:
             UniversalVisualQualityPlugin(),
             HumanRealismPlugin(),
             PortraitIdentityPlugin(),
+            NonhumanSubjectIdentityPlugin(),
             ProductIdentityPlugin(),
             SceneContinuityPlugin(),
             TypographyLayoutPlugin(),

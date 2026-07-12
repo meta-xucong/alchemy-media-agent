@@ -34,6 +34,8 @@ _ROLE_ALIASES = {
     "portrait_identity": AssetRole.FACE_REFERENCE,
     "identity_reference": AssetRole.FACE_REFERENCE,
     "character_reference": AssetRole.FACE_REFERENCE,
+    "nonhuman_identity_reference": AssetRole.NONHUMAN_IDENTITY_REFERENCE,
+    "nonhuman_subject_identity": AssetRole.NONHUMAN_IDENTITY_REFERENCE,
     "background_reference": AssetRole.BACKGROUND_REFERENCE,
     "composition_reference": AssetRole.COMPOSITION_REFERENCE,
     "color_reference": AssetRole.COLOR_REFERENCE,

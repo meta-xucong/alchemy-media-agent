@@ -23,6 +23,7 @@ def general_capability_policy() -> TemplateCapabilityPolicy:
         optional_capabilities=[
             TemplateCapabilityBinding(capability_id="human_realism"),
             TemplateCapabilityBinding(capability_id="portrait_identity"),
+            TemplateCapabilityBinding(capability_id="nonhuman_subject_identity"),
             TemplateCapabilityBinding(capability_id="product_identity"),
             TemplateCapabilityBinding(capability_id="scene_continuity"),
             TemplateCapabilityBinding(capability_id="typography_layout"),
@@ -48,6 +49,7 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
         optional_capabilities=[
             TemplateCapabilityBinding(capability_id="human_realism"),
             TemplateCapabilityBinding(capability_id="portrait_identity"),
+            TemplateCapabilityBinding(capability_id="nonhuman_subject_identity"),
             TemplateCapabilityBinding(capability_id="scene_continuity"),
             TemplateCapabilityBinding(capability_id="typography_layout"),
         ],

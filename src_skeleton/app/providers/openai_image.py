@@ -406,10 +406,22 @@ class OpenAIGPTImageProvider:
         last_error: Exception | None = None
         transient_retry_count = 0
         requested_fidelity = self._requested_input_fidelity(plan)
+        fidelity_required = self._input_fidelity_is_required(plan)
         capability_key = self._input_fidelity_capability_key()
         support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
         applied_fidelity = requested_fidelity if support_state != "unsupported" and self._supports_input_fidelity() else None
         fidelity_fallback_reason = cached_reason if applied_fidelity is None and requested_fidelity else None
+        if fidelity_required and (support_state == "unsupported" or not self._supports_input_fidelity()):
+            raise ProviderCapabilityMismatchError(
+                "This request requires native high-fidelity reference conditioning, but the configured image transport cannot provide it.",
+                provider=self.name,
+                detail={
+                    "transport_profile": self._transport_profile(),
+                    "input_fidelity_requested": requested_fidelity,
+                    "input_fidelity_required": True,
+                    "input_fidelity_support_state": support_state,
+                },
+            )
         if requested_fidelity and not self._supports_input_fidelity():
             fidelity_fallback_reason = (
                 f"Configured OpenAI image transport profile {self._transport_profile()} does not accept input_fidelity."
@@ -464,6 +476,17 @@ class OpenAIGPTImageProvider:
                         "unsupported",
                         fidelity_fallback_reason,
                     )
+                    if fidelity_required:
+                        raise ProviderCapabilityMismatchError(
+                            "The image transport rejected required high-fidelity reference conditioning.",
+                            provider=self.name,
+                            detail={
+                                "input_fidelity_requested": requested_fidelity,
+                                "input_fidelity_required": True,
+                                "transport_profile": self._transport_profile(),
+                                "message": fidelity_fallback_reason,
+                            },
+                        ) from exc
                     applied_fidelity = None
                     continue
                 if self._is_image_quota_limit_error(exc):
@@ -539,6 +562,7 @@ class OpenAIGPTImageProvider:
             output["api_operation"] = "images.edit"
             output["image_edit_transient_retries"] = transient_retry_count
             output["input_fidelity_requested"] = requested_fidelity
+            output["input_fidelity_required"] = fidelity_required
             output["input_fidelity_applied"] = applied_fidelity
             output["input_fidelity_support_state"] = support_state
             output["input_fidelity_fallback_reason"] = fidelity_fallback_reason
@@ -550,6 +574,10 @@ class OpenAIGPTImageProvider:
         value = variables.get("input_fidelity") if isinstance(variables, dict) else None
         normalized = str(value or "").strip().lower()
         return normalized if normalized in {"high", "low"} else None
+
+    def _input_fidelity_is_required(self, plan) -> bool:
+        variables = getattr(plan, "variables", None)
+        return bool(variables.get("input_fidelity_required")) if isinstance(variables, dict) else False
 
     def _input_fidelity_capability_key(self) -> str:
         return "|".join(

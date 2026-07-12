@@ -330,7 +330,7 @@ class ScenarioRuntime:
         parameters = request.scenario_selection.parameters if request.scenario_selection else {}
         if isinstance(parameters, dict) and parameters.get("use_case_library"):
             executor_ids.extend(["case_library_retriever", "visual_grammar_lock"])
-        if any(item in plan.dependency_order for item in ("visual_grammar", "universal_visual_quality", "human_realism", "portrait_identity", "product_identity", "scene_continuity", "typography_layout", "suite_direction")):
+        if any(item in plan.dependency_order for item in ("visual_grammar", "universal_visual_quality", "human_realism", "portrait_identity", "nonhuman_subject_identity", "product_identity", "scene_continuity", "typography_layout", "suite_direction")):
             executor_ids.append("prompt_constraint_compiler")
         already_run = {result.module_id for result in pre_activation_run.results} if pre_activation_run else set()
         executor_ids = [item for item in self._dedupe_preserve_order(executor_ids) if item not in already_run]
