@@ -14,6 +14,8 @@ from .contracts import (
     PhotographyDeliveryMode,
     PhotographyInputMode,
     PhotographyPackOutput,
+    PhotographyProviderAcceptanceCase,
+    PhotographyProviderAcceptanceMatrix,
     PhotographyProfessionalSetPlan,
     PhotographyReviewReport,
     PhotographyReshootStrength,
@@ -27,6 +29,7 @@ from .manifest import PHOTOGRAPHY_MANIFEST, PHOTOGRAPHY_PRODUCTION_GATE, photogr
 from .pack import PhotographyScenarioPack
 from .planner import PhotographyScenarioPackPlanner
 from .profile_catalog import PhotographerProfileCatalog, default_photography_operator_catalog
+from .provider_acceptance import PhotographyProviderAcceptanceDirector
 
 __all__ = [
     "GENERAL_PHOTOGRAPHY_PROFILE_ID",
@@ -46,6 +49,9 @@ __all__ = [
     "PhotographyDeliveryMode",
     "PhotographyInputMode",
     "PhotographyPackOutput",
+    "PhotographyProviderAcceptanceCase",
+    "PhotographyProviderAcceptanceDirector",
+    "PhotographyProviderAcceptanceMatrix",
     "PhotographyProfessionalSetPlan",
     "PhotographyReviewReport",
     "PhotographyReshootStrength",

@@ -297,6 +297,33 @@ class PhotographySetContinuationPlan(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PhotographyProviderAcceptanceCase(V3BaseModel):
+    """One human-reviewed real-output case; this model never calls a provider."""
+
+    case_id: str
+    scene_domain: PhotographySceneDomain
+    input_mode: PhotographyInputMode
+    delivery_mode: PhotographyDeliveryMode
+    user_prompt: str
+    required_reference_role: str | None = None
+    preservation_controls: dict[str, str] = Field(default_factory=dict)
+    required_shared_capabilities: list[str] = Field(default_factory=list)
+    expected_review_dimensions: list[str] = Field(default_factory=list)
+    required_mainline_contracts: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PhotographyProviderAcceptanceMatrix(V3BaseModel):
+    """Frozen P6 real-provider acceptance plan, owned by Photography only."""
+
+    matrix_id: str
+    matrix_kind: str
+    cases: list[PhotographyProviderAcceptanceCase] = Field(default_factory=list)
+    shared_execution_contract: dict[str, Any] = Field(default_factory=dict)
+    human_review_contract: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PhotographyPackOutput(V3BaseModel):
     """Planning-only Photography output before production registration exists."""
 
