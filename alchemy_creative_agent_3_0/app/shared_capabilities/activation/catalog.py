@@ -159,6 +159,7 @@ def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
         threshold: float = 0.5,
         profiles: list[str] | None = None,
         evidence: list[str] | None = None,
+        templates: list[str] | None = None,
     ) -> tuple[VisualCapabilityManifest, str]:
         return (
             VisualCapabilityManifest(
@@ -169,7 +170,7 @@ def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
                 minimum_activation_confidence=threshold,
                 dependencies=list(dependencies or []),
                 optional_dependencies=list(optional_dependencies or []),
-                compatible_templates=universal_templates,
+                compatible_templates=list(templates or universal_templates),
                 supported_profiles=list(profiles or ["balanced"]),
                 contribution_stages=list(stages or visual_stages),
                 estimated_cost=CapabilityCost(latency=1, token=1),
@@ -214,6 +215,16 @@ def default_manifest_inventory() -> list[tuple[VisualCapabilityManifest, str]]:
             evidence=["copy_render_plan"],
             stages=["post_generation_review", "retry_patch", "deterministic_composition"],
             threshold=0.8,
+        ),
+        manifest(
+            "photography_direction",
+            "Photography planning direction",
+            VISUAL_CLUSTER_EXECUTOR,
+            dependencies=["universal_visual_quality"],
+            stages=["creative_strategy", "generation_prompt", "negative_prompt", "post_generation_review", "retry_patch"],
+            threshold=1.0,
+            profiles=["frozen_plan"],
+            templates=["photographer_template"],
         ),
         manifest("suite_direction", "Suite direction", VISUAL_CLUSTER_EXECUTOR, dependencies=["universal_visual_quality"], evidence=["multiple_outputs", "continuation_mode"], threshold=0.4),
         manifest("commercial_quality", "Delivery quality", "output_review", dependencies=["universal_visual_quality"], stages=["post_generation_review", "export_validation"], threshold=0.0, profiles=["balanced", "commercial_strict"]),

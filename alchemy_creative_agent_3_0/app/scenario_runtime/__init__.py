@@ -1,6 +1,12 @@
 """Scenario Runtime for V3 product-level scenario execution."""
 
-from .contracts import ScenarioRuntimeRequest, ScenarioRuntimeResult, ScenarioRuntimeStatus
+from .contracts import (
+    ScenarioRuntimeRequest,
+    ScenarioRuntimeResult,
+    ScenarioRuntimeStatus,
+    SpecializedScenarioPlanningContext,
+    SpecializedScenarioPlanningResult,
+)
 from .runtime import ScenarioRuntime
 
 __all__ = [
@@ -8,4 +14,6 @@ __all__ = [
     "ScenarioRuntimeRequest",
     "ScenarioRuntimeResult",
     "ScenarioRuntimeStatus",
+    "SpecializedScenarioPlanningContext",
+    "SpecializedScenarioPlanningResult",
 ]

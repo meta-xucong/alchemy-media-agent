@@ -9,6 +9,7 @@ from .contracts import (
 )
 from .ecommerce import EcommerceScenarioPack, EcommerceScenarioPackPlanner
 from .general import GeneralCreativeScenarioPack
+from .photography import PhotographyScenarioPack, photography_production_enabled
 from .placeholders import (
     BrandIPScenarioPack,
     EcommerceScenarioPackPlaceholder,
@@ -23,6 +24,7 @@ __all__ = [
     "EcommerceScenarioPackPlaceholder",
     "EcommerceScenarioPackPlanner",
     "GeneralCreativeScenarioPack",
+    "PhotographyScenarioPack",
     "NewMediaScenarioPack",
     "PrivateDomainScenarioPack",
     "ScenarioPack",
@@ -31,4 +33,5 @@ __all__ = [
     "ScenarioPackResolution",
     "ScenarioPackStatus",
     "ScenarioSelection",
+    "photography_production_enabled",
 ]

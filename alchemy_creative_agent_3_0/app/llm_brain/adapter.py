@@ -101,6 +101,8 @@ class V3LLMBrainAdapter:
         if not isinstance(capability_hints, list):
             capability_hints = []
         internal_copy_envelope = metadata.get("text_pixel_delivery_internal")
+        specialized_plan = metadata.get("specialized_scenario_plan")
+        specialized_plan_present = isinstance(specialized_plan, dict) and bool(specialized_plan.get("planning_id"))
         internal_copy_plan_present = bool(
             metadata.get("internal_copy_render_plan_present") is True
             or (
@@ -146,6 +148,10 @@ class V3LLMBrainAdapter:
                 # copy itself stays in the internal runtime envelope and is
                 # bound to the frozen plan by Product API before generation.
                 "internal_copy_render_plan_present": internal_copy_plan_present,
+                # Photography and future specialized planners remain opaque
+                # to Central Brain: only their confirmed presence crosses this
+                # boundary, while frozen direction stays in shared runtime.
+                "specialized_scenario_plan_present": specialized_plan_present,
             },
             capability_catalog=dict(capability_catalog or {}),
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),

@@ -29,7 +29,7 @@ from .contracts import (
 )
 from .fallback import build_task_profile_and_intent
 from .planner import CapabilityActivationError, CapabilityActivationPlanner
-from .template_policies import compatibility_policy, ecommerce_capability_policy, general_capability_policy
+from .template_policies import compatibility_policy, ecommerce_capability_policy, general_capability_policy, photography_capability_policy
 
 __all__ = [
     "ActivatedCapability",
@@ -65,5 +65,6 @@ __all__ = [
     "default_manifest_inventory",
     "ecommerce_capability_policy",
     "general_capability_policy",
+    "photography_capability_policy",
     "safe_activation_summary",
 ]

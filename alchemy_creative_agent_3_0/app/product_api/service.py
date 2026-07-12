@@ -477,19 +477,48 @@ class V3ProductApiService:
         self.ecommerce_planner = ecommerce_planner or EcommerceScenarioPackPlanner()
         self.asset_store = asset_store or V3UploadedAssetStore()
         self.output_store = output_store or V3GeneratedOutputStore()
-        self.scenario_runtime = scenario_runtime or ScenarioRuntime(
-            brand_profile_service=self.brand_profile_service,
-            generation_router=GenerationRouter(
-                production_provider=ProductionImageGenerationProvider(output_store=self.output_store),
-            ),
+        operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
+        self.photographer_profile_catalog = (
+            photographer_profile_catalog
+            or (operator_catalog.shared_catalog() if operator_catalog is not None else default_photographer_profile_catalog())
         )
+        self.scenario_runtime = scenario_runtime or self._default_scenario_runtime(operator_catalog)
         self.output_resolver = output_resolver or GeneratedOutputResolver(self.output_store)
         self.vision_inspector = vision_inspector or VisionOutputInspector()
         self.review_merger = review_merger or OutputQualityReviewMerger()
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
-        self.photographer_profile_catalog = photographer_profile_catalog or default_photographer_profile_catalog()
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
         self.text_pixel_delivery_runtime = text_pixel_delivery_runtime or TextPixelDeliveryRuntime(self.output_store)
+
+    def _default_scenario_runtime(self, operator_catalog=None) -> ScenarioRuntime:
+        """Compose the default runtime from one reviewed Photography catalog source."""
+
+        generation_router = GenerationRouter(
+            production_provider=ProductionImageGenerationProvider(output_store=self.output_store),
+        )
+        if operator_catalog is None:
+            return ScenarioRuntime(
+                brand_profile_service=self.brand_profile_service,
+                generation_router=generation_router,
+            )
+        from ..scenario_packs.photography import PhotographyScenarioPackPlanner
+        from ..scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
+
+        adapter = PhotographyScenarioPlanningAdapter(
+            planner=PhotographyScenarioPackPlanner(profile_catalog=operator_catalog, named_profiles_enabled=True)
+        )
+        return ScenarioRuntime(
+            brand_profile_service=self.brand_profile_service,
+            generation_router=generation_router,
+            specialized_planning_adapters=[adapter],
+        )
+
+    def _default_photography_operator_catalog(self):
+        """Return an operator catalog only while the deployment gate is open."""
+
+        from ..scenario_packs.photography import default_photography_operator_catalog, photography_production_enabled
+
+        return default_photography_operator_catalog() if photography_production_enabled() else None
 
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
@@ -517,6 +546,8 @@ class V3ProductApiService:
                 "capability_activation_plan_id",
                 "capability_catalog_version",
                 "capability_activation_mode",
+                "specialized_scenario_plan",
+                "specialized_scenario_plan_summary",
             )
             if key in runtime_result.metadata
         }
@@ -3527,6 +3558,7 @@ class V3ProductApiService:
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
             "photographer_profile_binding",
+            "specialized_scenario_plan_summary",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
         result = record.generation_result or record.planning_result
@@ -3561,6 +3593,12 @@ class V3ProductApiService:
                 "Photographer profile bindings are server-owned.",
                 status_code=409,
             )
+        if "specialized_scenario_plan" in metadata:
+            raise PhotographerProfileSelectionError(
+                "photography_runtime_metadata_server_owned",
+                "Specialized photography planning snapshots are server-owned.",
+                status_code=409,
+            )
         scenario_resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
         binding = self.photographer_profile_catalog.resolve_binding(
             scenario_id=scenario_resolution.manifest.scenario_id,
@@ -3593,6 +3631,8 @@ class V3ProductApiService:
             "photographer_profile_id",
             "photographer_profile_selection_source",
             "photographer_profile_binding",
+            "specialized_scenario_plan",
+            "specialized_scenario_plan_summary",
         }
         if forbidden.intersection(attempted):
             raise PhotographerProfileSelectionError(

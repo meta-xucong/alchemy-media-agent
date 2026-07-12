@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ...scenario_packs import ScenarioPackRegistry, ScenarioPackStatus
+from ...scenario_packs.photography import photography_production_enabled
 from ...shared_capabilities.activation import (
     TemplateCapabilityPolicy,
     ecommerce_capability_policy,
     general_capability_policy,
+    photography_capability_policy,
 )
 from ..contracts import (
     ECOMMERCE_TEMPLATE_ID,
@@ -83,7 +85,7 @@ class ProjectTemplateRegistry:
 
 
 def default_template_manifests() -> list[ProjectTemplateManifest]:
-    return [
+    manifests = [
         _general_template_manifest(),
         _ecommerce_template_manifest(),
         _future_template_manifest(
@@ -111,6 +113,83 @@ def default_template_manifests() -> list[ProjectTemplateManifest]:
             frontend_workspace="brand_ip_project_workspace",
         ),
     ]
+    if photography_production_enabled():
+        manifests[2] = _photography_template_manifest()
+    return manifests
+
+
+def _photography_template_manifest() -> ProjectTemplateManifest:
+    return ProjectTemplateManifest(
+        template_id="photographer_template",
+        display_name="\u6444\u5f71\u5e08\u6a21\u677f",
+        short_description="\u7528\u6444\u5f71\u573a\u666f\u89c4\u5212\u4e00\u5f20\u4e13\u4e1a\u6444\u5f71\u4f5c\u54c1\uff1b\u5177\u540d\u6444\u5f71\u5e08\u6863\u6848\u5fc5\u987b\u7531\u4f60\u660e\u786e\u786e\u8ba4\u3002",
+        scenario_pack_id="photography",
+        status=TemplateStatus.ACTIVE,
+        allowed_project_types=["photography_project"],
+        required_inputs=[
+            TemplateInputField(
+                field_id="user_goal",
+                label="\u60f3\u62cd\u4ec0\u4e48",
+                field_type=TemplateInputFieldType.TEXTAREA,
+                required=True,
+                beginner_copy="\u8bf4\u660e\u4e3b\u4f53\u3001\u573a\u666f\u3001\u65f6\u523b\u548c\u5e0c\u671b\u5448\u73b0\u7684\u6444\u5f71\u611f\u3002",
+            )
+        ],
+        optional_inputs=[
+            TemplateInputField(
+                field_id="reference_images",
+                label="\u53c2\u8003\u56fe",
+                field_type=TemplateInputFieldType.IMAGE_UPLOAD,
+                required=False,
+                beginner_copy="\u7528\u4e8e\u91cd\u62cd\u6216\u4fdd\u6301\u5df2\u58f0\u660e\u7684\u4e3b\u4f53\u771f\u5b9e\u4fe1\u606f\uff1b\u5ba0\u7269/\u52a8\u7269\u8eab\u4efd\u4fdd\u6301\u5fc5\u987b\u4e0a\u4f20\u5bf9\u5e94\u8eab\u4efd\u53c2\u8003\u56fe\u3002",
+            ),
+            TemplateInputField(
+                field_id="photographer_profile",
+                label="\u6444\u5f71\u5e08\u6863\u6848",
+                field_type=TemplateInputFieldType.SELECT,
+                required=False,
+                beginner_copy="\u9ed8\u8ba4\u4f7f\u7528\u901a\u7528\u6444\u5f71\u3002\u5177\u540d\u6863\u6848\u9700\u5728\u6444\u5f71\u5de5\u4f5c\u533a\u660e\u786e\u786e\u8ba4\u540e\u624d\u4f1a\u56fa\u5b9a\u5230\u4efb\u52a1\u3002",
+                metadata={"catalog_endpoint": "/api/v3/creative-agent/scenarios/photography/photographer-profiles"},
+            ),
+        ],
+        context_read_policy=TemplateContextReadPolicy(
+            reads_project_goal=True,
+            reads_selected_outputs=True,
+            reads_uploaded_references=True,
+            reads_negative_feedback=True,
+            reads_brand_memory=BrandMemoryReadMode.EXPLICIT_USER_SELECTED,
+            template_specific_fields=["photography.profile_binding"],
+        ),
+        context_write_policy=TemplateContextWritePolicy(
+            can_create_jobs=True,
+            can_select_outputs=True,
+            can_create_reference_assets=True,
+            can_create_feedback=True,
+            can_propose_brand_memory=True,
+            template_specific_project_fields=["photography"],
+        ),
+        output_summary_policy=TemplateOutputSummaryPolicy(
+            summary_sections=["photographs", "art_direction", "next_actions"],
+            image_slot_model="photography_single_hero",
+            user_visible_fields=["image", "purpose", "why_useful", "next_step"],
+            hidden_debug_fields=["provider", "job_id", "photography_plan", "manifest"],
+        ),
+        frontend_workspace="photographer_project_workspace",
+        activation_requirements=[
+            "PHOTOGRAPHY-MAINLINE-003 deployment gate enabled",
+            "server-owned photographer profile binding available",
+            "shared generation, review, retry, and result resolution available",
+        ],
+        test_requirements=[
+            "Photography gate-on planning runs through ScenarioRuntime",
+            "named profile is explicitly confirmed then immutable",
+            "non-human identity reference blocks without native high-fidelity support",
+            "General and E-Commerce isolation passes",
+        ],
+        ui_card={"label": "\u6444\u5f71\u5e08\u6a21\u677f", "icon": "camera"},
+        metadata={"maps_to_scenario_pack": "photography", "production_gate_required": True},
+        capability_policy=photography_capability_policy(),
+    )
 
 
 def _general_template_manifest() -> ProjectTemplateManifest:

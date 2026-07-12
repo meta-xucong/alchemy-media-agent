@@ -41,6 +41,13 @@ from .contracts import (
     ScenarioRuntimeRequest,
     ScenarioRuntimeResult,
     ScenarioRuntimeStatus,
+    SpecializedScenarioPlanningContext,
+    SpecializedScenarioPlanningResult,
+)
+from .specialized_planning import (
+    PhotographyScenarioPlanningAdapter,
+    SpecializedScenarioPlanningAdapter,
+    SpecializedScenarioPlanningError,
 )
 
 
@@ -54,6 +61,7 @@ class ScenarioRuntime:
         shared_capability_registry: SharedCapabilityRegistry | None = None,
         llm_brain_adapter: V3LLMBrainAdapter | None = None,
         generation_router: GenerationRouter | None = None,
+        specialized_planning_adapters: list[SpecializedScenarioPlanningAdapter] | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.scenario_registry = scenario_registry or ScenarioPackRegistry()
@@ -64,6 +72,8 @@ class ScenarioRuntime:
         self.visual_cluster_plugin_registry = VisualClusterPluginRegistry()
         self.llm_brain_adapter = llm_brain_adapter or V3LLMBrainAdapter()
         self.generation_router = generation_router
+        adapters = specialized_planning_adapters or [PhotographyScenarioPlanningAdapter()]
+        self.specialized_planning_adapters = {adapter.scenario_id: adapter for adapter in adapters}
 
     def register_visual_capability(
         self,
@@ -136,6 +146,7 @@ class ScenarioRuntime:
                 "shared_capabilities": self._capability_metadata(capability_run),
                 "llm_brain": brain_result.safe_metadata(),
                 **self._activation_metadata(preparation),
+                **self._specialized_metadata(preparation),
             },
         )
 
@@ -213,6 +224,7 @@ class ScenarioRuntime:
                 "shared_capabilities": self._capability_metadata(capability_run),
                 "llm_brain": brain_result.safe_metadata(),
                 **self._activation_metadata(preparation),
+                **self._specialized_metadata(preparation),
             },
         )
 
@@ -225,6 +237,9 @@ class ScenarioRuntime:
         quality_mode: str | None = None,
     ) -> CapabilityPreparationResult:
         mode = self._capability_activation_mode(request)
+        specialized_plan = self._prepare_specialized_scenario_plan(request, resolution)
+        if resolution.manifest.scenario_id == "photography" and mode != "enforced":
+            raise CapabilityActivationError("Photography production activation requires enforced capability execution")
         if mode == "legacy":
             capability_run = self._run_shared_capabilities(request, resolution)
             brain_result = self._run_llm_brain(
@@ -238,6 +253,7 @@ class ScenarioRuntime:
                 brain_result=brain_result,
                 combined_capability_run=capability_run,
                 activation_mode=mode,
+                specialized_scenario_plan=specialized_plan,
             )
 
         policy = self._resolve_template_capability_policy(request, resolution)
@@ -269,6 +285,7 @@ class ScenarioRuntime:
                 activation_plan=plan,
                 combined_capability_run=legacy_run,
                 activation_mode=mode,
+                specialized_scenario_plan=specialized_plan,
             )
 
         brain_result = self._run_llm_brain(
@@ -298,7 +315,91 @@ class ScenarioRuntime:
             active_capability_run=active_run,
             combined_capability_run=combined,
             activation_mode=mode,
+            specialized_scenario_plan=specialized_plan,
         )
+
+    def _prepare_specialized_scenario_plan(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+    ) -> SpecializedScenarioPlanningResult | None:
+        """Freeze one planner contribution before Central Brain and activation.
+
+        A persisted plan is verified and reused on every generation/retry.  A
+        specialized pack cannot receive raw profile-selection controls or
+        re-plan a job merely because a retry is occurring.
+        """
+
+        adapter = self.specialized_planning_adapters.get(resolution.manifest.scenario_id)
+        if adapter is None:
+            return None
+        existing = self._specialized_scenario_plan_from_metadata(request, resolution)
+        if existing is not None:
+            return existing
+        metadata = dict(request.metadata or {})
+        project_context = metadata.get("project_context_snapshot")
+        frozen = metadata.get("capability_activation_plan")
+        frozen_plan = CapabilityActivationPlan.model_validate(frozen) if isinstance(frozen, dict) and frozen.get("plan_id") else None
+        context = SpecializedScenarioPlanningContext(
+            job_key=str(
+                metadata.get("job_id")
+                or stable_id(
+                    "specialized_scenario_job",
+                    request.user_input,
+                    metadata.get("project_id"),
+                    resolution.manifest.scenario_id,
+                )
+            ),
+            user_input=request.user_input,
+            scenario_resolution=resolution,
+            selected_mode_id=resolution.selected_mode_id,
+            uploaded_assets=self._uploaded_assets(request),
+            project_context_snapshot=dict(project_context) if isinstance(project_context, dict) else {},
+            photographer_profile_binding=(
+                dict(metadata.get("photographer_profile_binding"))
+                if isinstance(metadata.get("photographer_profile_binding"), dict)
+                else None
+            ),
+            frozen_capability_activation_plan=frozen_plan,
+            metadata={
+                "scenario_parameters": dict(request.scenario_selection.parameters)
+                if request.scenario_selection is not None
+                else {},
+                "template_id": self._template_id(request, resolution),
+            },
+        )
+        try:
+            specialized = adapter.plan(context)
+        except SpecializedScenarioPlanningError as exc:
+            raise CapabilityActivationError(str(exc)) from exc
+        if specialized.scenario_id != resolution.manifest.scenario_id:
+            raise CapabilityActivationError("specialized planning scenario does not match the resolved scenario")
+        if specialized.template_id != self._template_id(request, resolution):
+            raise CapabilityActivationError("specialized planning template does not match the resolved template")
+        metadata["specialized_scenario_plan"] = specialized.model_dump(mode="json")
+        if specialized.requested_image_count is not None:
+            # P4/P5 formally activate only the single-hero contract.  This
+            # keeps an unimplemented session suite out of the shared runtime.
+            metadata["requested_image_count"] = specialized.requested_image_count
+        request.metadata = metadata
+        return specialized
+
+    def _specialized_scenario_plan_from_metadata(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+    ) -> SpecializedScenarioPlanningResult | None:
+        raw = request.metadata.get("specialized_scenario_plan")
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise CapabilityActivationError("specialized scenario plan has an invalid persisted shape")
+        specialized = SpecializedScenarioPlanningResult.model_validate(raw)
+        if specialized.scenario_id != resolution.manifest.scenario_id:
+            raise CapabilityActivationError("persisted specialized plan scenario does not match this job")
+        if specialized.template_id != self._template_id(request, resolution):
+            raise CapabilityActivationError("persisted specialized plan template does not match this job")
+        return specialized
 
     def _run_pre_activation_capabilities(self, request: ScenarioRuntimeRequest, resolution) -> CapabilityRunResult | None:
         module_ids: list[str] = []
@@ -354,12 +455,14 @@ class ScenarioRuntime:
             module_ids=executor_ids,
             required_module_ids=[item for item in required_executor_ids if item],
         )
-        return self._attach_composed_contribution(run, plan)
+        return self._attach_composed_contribution(run, plan, request, resolution)
 
     def _attach_composed_contribution(
         self,
         run: CapabilityRunResult,
         plan: CapabilityActivationPlan,
+        request: ScenarioRuntimeRequest,
+        resolution,
     ) -> CapabilityRunResult:
         cluster_result = next((item for item in run.results if item.module_id == VISUAL_CAPABILITY_CLUSTER_ID), None)
         cluster = (
@@ -367,7 +470,7 @@ class ScenarioRuntime:
             if cluster_result is not None
             else {}
         )
-        contributions = self._capability_contributions(plan, cluster)
+        contributions = self._capability_contributions(plan, cluster, request, resolution)
         composed = self.capability_contribution_composer.compose(plan, contributions)
         updated_results = []
         for result in run.results:
@@ -415,8 +518,23 @@ class ScenarioRuntime:
         self,
         plan: CapabilityActivationPlan,
         cluster: dict[str, Any],
+        request: ScenarioRuntimeRequest,
+        resolution,
     ) -> list[CapabilityContribution]:
-        return self.visual_cluster_plugin_registry.contributions(plan, cluster)
+        contributions = self.visual_cluster_plugin_registry.contributions(plan, cluster)
+        specialized = self._specialized_scenario_plan_from_metadata(request, resolution)
+        if specialized is None:
+            return contributions
+        draft = specialized.capability_contribution_draft
+        if not plan.is_active(draft.capability_id):
+            raise CapabilityActivationError(
+                f"specialized planning capability is not active in the frozen plan: {draft.capability_id}"
+            )
+        active = plan.active(draft.capability_id)
+        if active is None or active.version != draft.capability_version:
+            raise CapabilityActivationError("specialized planning contribution does not match the frozen capability version")
+        contributions.append(draft.model_copy(update={"activation_plan_id": plan.plan_id}))
+        return contributions
 
     def _build_activation_plan(
         self,
@@ -558,7 +676,13 @@ class ScenarioRuntime:
         return str(
             metadata.get("template_id")
             or metadata.get("template_manifest_id")
-            or ("ecommerce_template" if resolution.manifest.scenario_id == "ecommerce" else "general_template")
+            or (
+                "ecommerce_template"
+                if resolution.manifest.scenario_id == "ecommerce"
+                else "photographer_template"
+                if resolution.manifest.scenario_id == "photography"
+                else "general_template"
+            )
         )
 
     def _capability_activation_mode(self, request: ScenarioRuntimeRequest | None = None) -> str:
@@ -590,6 +714,17 @@ class ScenarioRuntime:
             "capability_activation_plan_id": plan.plan_id,
             "capability_catalog_version": plan.catalog_version,
             "capability_activation_mode": preparation.activation_mode,
+        }
+
+    def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
+        specialized = preparation.specialized_scenario_plan
+        if specialized is None:
+            return {}
+        return {
+            # The internal frozen contribution is persisted by Product API;
+            # public result surfaces only receive this auditable summary.
+            "specialized_scenario_plan": specialized.model_dump(mode="json"),
+            "specialized_scenario_plan_summary": dict(specialized.safe_summary),
         }
 
     def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:
@@ -691,11 +826,16 @@ class ScenarioRuntime:
         preparation: CapabilityPreparationResult,
     ) -> PlanningResult:
         activation_metadata = self._activation_metadata(preparation)
+        specialized_metadata = self._specialized_metadata(preparation)
+        public_specialized_metadata = {
+            "specialized_scenario_plan_summary": specialized_metadata["specialized_scenario_plan_summary"]
+        } if "specialized_scenario_plan_summary" in specialized_metadata else {}
         creative_job = result.creative_job.model_copy(
             update={
                 "metadata": {
                     **dict(result.creative_job.metadata),
                     **activation_metadata,
+                    **public_specialized_metadata,
                 }
             }
         )
@@ -705,6 +845,7 @@ class ScenarioRuntime:
                 "metadata": {
                     **dict(result.metadata),
                     **activation_metadata,
+                    **public_specialized_metadata,
                 },
             }
         )
@@ -848,9 +989,11 @@ class ScenarioRuntime:
     def _required_capability_ids(self, request: ScenarioRuntimeRequest) -> list[str]:
         parameters = request.scenario_selection.parameters if request.scenario_selection else {}
         required = parameters.get("required_capabilities") if isinstance(parameters, dict) else None
-        if not isinstance(required, list):
-            return []
-        return self._dedupe_preserve_order([str(item) for item in required if str(item).strip()])
+        explicit = required if isinstance(required, list) else []
+        resolution = self.scenario_registry.resolve(request.scenario_selection)
+        specialized = self._specialized_scenario_plan_from_metadata(request, resolution)
+        planned = specialized.required_capability_ids if specialized is not None else []
+        return self._dedupe_preserve_order([str(item) for item in [*explicit, *planned] if str(item).strip()])
 
     def _uploaded_assets(self, request: ScenarioRuntimeRequest) -> list[UploadedAssetInfo]:
         assets = list(request.uploaded_assets)

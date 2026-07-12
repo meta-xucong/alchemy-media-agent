@@ -10,7 +10,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..public_api_guardrails import reject_low_level_controls
 from ..scenario_packs import ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import CapabilityRunResult, UploadedAssetInfo
-from ..shared_capabilities.activation import CapabilityActivationPlan
+from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityContribution
 from ..llm_brain import BrainRunResult
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
@@ -58,6 +58,37 @@ class ScenarioRuntimeRequest(V3BaseModel):
         return cleaned
 
 
+class SpecializedScenarioPlanningContext(V3BaseModel):
+    """Mainline-owned input passed to an active specialized scenario planner.
+
+    The context contains a server-pinned profile binding but never permits the
+    specialized module to choose, replace, or mutate that binding.
+    """
+
+    job_key: str
+    user_input: str
+    scenario_resolution: ScenarioPackResolution
+    selected_mode_id: str | None = None
+    uploaded_assets: list[UploadedAssetInfo] = Field(default_factory=list)
+    project_context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    photographer_profile_binding: dict[str, Any] | None = None
+    frozen_capability_activation_plan: CapabilityActivationPlan | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpecializedScenarioPlanningResult(V3BaseModel):
+    """Frozen planning facts before shared capability composition and execution."""
+
+    planning_id: str
+    scenario_id: str
+    template_id: str
+    planner_id: str
+    capability_contribution_draft: CapabilityContribution
+    required_capability_ids: list[str] = Field(default_factory=list)
+    requested_image_count: int | None = Field(default=None, ge=1, le=4)
+    safe_summary: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
 class ScenarioRuntimeResult(V3BaseModel):
     """ScenarioRuntime output before product API response shaping."""
 
@@ -79,3 +110,4 @@ class CapabilityPreparationResult(V3BaseModel):
     active_capability_run: CapabilityRunResult | None = None
     combined_capability_run: CapabilityRunResult | None = None
     activation_mode: str = "legacy"
+    specialized_scenario_plan: SpecializedScenarioPlanningResult | None = None

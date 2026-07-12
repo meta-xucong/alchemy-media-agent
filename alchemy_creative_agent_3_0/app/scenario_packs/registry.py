@@ -6,6 +6,7 @@ from .base import ScenarioPack
 from .contracts import ScenarioPackManifest, ScenarioPackResolution, ScenarioPackStatus, ScenarioSelection
 from .ecommerce import EcommerceScenarioPack
 from .general import GeneralCreativeScenarioPack
+from .photography import PhotographyScenarioPack, photography_production_enabled
 from .placeholders import (
     BrandIPScenarioPack,
     NewMediaScenarioPack,
@@ -27,6 +28,8 @@ class ScenarioPackRegistry:
             PrivateDomainScenarioPack(),
             BrandIPScenarioPack(),
         ]
+        if photography_production_enabled():
+            default_packs.append(PhotographyScenarioPack())
         self._packs = {pack.scenario_id: pack for pack in (default_packs if packs is None else packs)}
 
     def list_packs(self, include_inactive: bool = True) -> list[ScenarioPack]:
