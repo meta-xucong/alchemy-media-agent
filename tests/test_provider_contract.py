@@ -252,7 +252,7 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
             raise TimeoutError("upstream request timed out after its own failover budget")
 
     monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
-    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 600.0)
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
     monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 240.0)
     monkeypatch.setattr(settings, "openai_image_edit_request_timeout_seconds", 420.0)
     openai_image_provider._openai_image_rate_limiter.reset()
@@ -269,8 +269,8 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
 
     assert calls["count"] == 1
     assert error.value.detail["attempts"] == 1
-    assert provider._client_timeout_seconds(image_edit=False) == 595.0  # noqa: SLF001
-    assert provider._client_timeout_seconds(image_edit=True) == 595.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=False) == 655.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=True) == 655.0  # noqa: SLF001
 
 
 def test_openai_image_provider_compresses_large_reference_png(tmp_path):

@@ -305,11 +305,12 @@ backoff for an individual image request, the foundation owner may enable
 mode, not an E-Commerce feature: each logical output keeps one request in
 flight, the gateway receives its full bounded opportunity to select a line, and
 the V3 outer runtime records its terminal result instead of replaying the same
-request. The managed timeout is an end-to-end budget across gateway line
-switches, not a single-line timeout: it defaults to 600 seconds so a gateway
-can spend up to 180 seconds on multiple eligible lines and still return a
-bounded terminal result. A small local finalization margin is reserved; direct
-providers retain their normal retry behavior unless explicitly opted in.
+request. The managed timeout is V3's end-to-end client deadline across gateway
+line switches, not a single-line timeout. For aiself's 600-second upstream
+image budget, V3 defaults to 660 seconds: the extra 60 seconds lets the
+gateway return its terminal success or failure after its last eligible line
+rather than being canceled by the client. Direct providers retain their normal
+retry behavior unless explicitly opted in.
 
 ## 10. Activation Gates
 

@@ -2938,10 +2938,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 else app_settings.openai_image_request_timeout_seconds
             )
             if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
-                # This is an end-to-end request budget. A router may consume
-                # one line's timeout before it transfers the same request to
-                # another eligible line, so do not constrain it to the old
-                # single-line image timeout.
+                # This is V3's end-to-end client deadline. It includes a
+                # finalization margin beyond the gateway's own image budget,
+                # so V3 records the gateway terminal result instead of
+                # canceling a final line switch prematurely.
                 value = app_settings.openai_image_gateway_managed_failover_timeout_seconds
                 return max(30.0, float(value))
         except Exception:

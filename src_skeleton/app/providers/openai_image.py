@@ -196,6 +196,9 @@ class OpenAIGPTImageProvider:
     _STANDARD_TRANSPORT_PROFILE = "openai_standard"
     _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
     _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
+    # Keep the OpenAI SDK deadline slightly inside the outer V3 deadline. The
+    # configured V3 deadline itself already includes the gateway's 60-second
+    # finalization margin over aiself's 600-second total image budget.
     _GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS = 5.0
 
     def __init__(self, model: str | None = None):
@@ -1036,10 +1039,10 @@ class OpenAIGPTImageProvider:
             else settings.openai_image_request_timeout_seconds
         )
         if self._uses_gateway_managed_failover():
-            # The managed budget covers every line transition the gateway may
-            # perform for this one request. Do not cap it with the historical
-            # per-line client timeout or a later line will be canceled before
-            # it receives its own bounded attempt.
+            # The managed deadline covers every line transition plus the
+            # gateway's terminal-response margin. Do not cap it with the
+            # historical per-line client timeout or a later line will be
+            # canceled before it receives its own bounded attempt.
             value = settings.openai_image_gateway_managed_failover_timeout_seconds
             return max(30.0, float(value) - self._GATEWAY_MANAGED_FAILOVER_FINALIZATION_GRACE_SECONDS)
         return max(30.0, float(value))
