@@ -48,6 +48,7 @@ class PhotographyBriefDirector:
         profile_binding: PhotographerProfileBinding,
         job_key: str,
         llm_profile_proposal: str | None = None,
+        named_profiles_enabled: bool = False,
     ) -> PhotographyBrief:
         normalized = _normalized(user_input)
         scene_domain, scene_unknown = self._resolve_scene(normalized, controls)
@@ -56,6 +57,7 @@ class PhotographyBriefDirector:
         warnings = self._profile_warnings(
             profile_binding=profile_binding,
             llm_profile_proposal=llm_profile_proposal,
+            named_profiles_enabled=named_profiles_enabled,
         )
         unknown_requirements: list[str] = []
         if scene_unknown:
@@ -89,7 +91,7 @@ class PhotographyBriefDirector:
                 "catalog_version": profile_binding.catalog_version,
                 "named_profile_active": profile_binding.binding_mode == "named",
                 "selection_source": (
-                    profile_binding.selection_source.value
+                    getattr(profile_binding.selection_source, "value", profile_binding.selection_source)
                     if profile_binding.selection_source is not None
                     else None
                 ),
@@ -152,13 +154,15 @@ class PhotographyBriefDirector:
         *,
         profile_binding: PhotographerProfileBinding,
         llm_profile_proposal: str | None,
+        named_profiles_enabled: bool,
     ) -> list[str]:
         warnings: list[str] = []
         if llm_profile_proposal:
             warnings.append("llm_profile_proposal_ignored_named_profiles_require_explicit_ui")
         if profile_binding.binding_mode == "general":
             return warnings
-        warnings.append("named_profile_binding_not_allowed_in_p3_general_runtime")
+        if not named_profiles_enabled:
+            warnings.append("named_profile_binding_not_allowed_in_p3_general_runtime")
         return warnings
 
     def _subject_entities(

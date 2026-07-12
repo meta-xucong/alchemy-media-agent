@@ -29,8 +29,6 @@ class GeneralPhotographyTechniqueDirector:
         profile_binding: PhotographerProfileBinding,
         activation_plan_id: str,
     ) -> list[CapabilityContribution]:
-        if profile_binding.binding_mode != "general":
-            raise ValueError("general_photography_technique_requires_general_profile_binding")
         return [
             self._camera(brief, activation_plan_id),
             self._lighting(brief, activation_plan_id),

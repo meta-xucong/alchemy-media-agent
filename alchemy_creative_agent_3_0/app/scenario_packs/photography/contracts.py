@@ -175,7 +175,7 @@ class PhotographerProfileBinding(V3BaseModel):
     profile_version: str
     selection_source: PhotographerProfileSelectionSource | None = None
     catalog_version: str
-    availability_decision: PhotographerProfileAvailability
+    availability_decision: str
     technique_package_checksum: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 

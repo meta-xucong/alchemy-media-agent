@@ -36,14 +36,51 @@ class PhotographyProfessionalReviewer:
     ) -> PhotographyReviewReport:
         checks: list[dict] = []
         warnings = list(brief.warnings)
-        checks.append(
-            self._check(
-                "general_profile_default",
-                profile_binding.binding_mode == "general"
-                and profile_binding.profile_id == GENERAL_PHOTOGRAPHY_PROFILE_ID,
-                "General Photography is the only active P4 shadow profile binding.",
+        named_contributions = [
+            item for item in contributions if item.capability_id == "photography_named_profile_technique"
+        ]
+        if profile_binding.binding_mode == "general":
+            checks.append(
+                self._check(
+                    "general_profile_default",
+                    profile_binding.profile_id == GENERAL_PHOTOGRAPHY_PROFILE_ID,
+                    "General Photography is the default binding when no named profile was confirmed.",
+                )
             )
-        )
+            checks.append(
+                self._check(
+                    "named_profile_review_inactive",
+                    not named_contributions,
+                    "Named-profile technique review is inactive for General Photography.",
+                )
+            )
+        else:
+            checks.extend(
+                [
+                    self._check(
+                        "named_profile_explicit_binding",
+                        str(profile_binding.selection_source) in {"user_explicit_ui", "PhotographerProfileSelectionSource.USER_EXPLICIT_UI"},
+                        "A named profile must have the mainline's explicit UI selection binding.",
+                    ),
+                    self._check(
+                        "named_profile_technique_binding",
+                        len(named_contributions) == 1
+                        and named_contributions[0].facts.get("profile_id") == profile_binding.profile_id
+                        and named_contributions[0].facts.get("profile_version") == profile_binding.profile_version
+                        and named_contributions[0].facts.get("technique_package_checksum")
+                        == profile_binding.technique_package_checksum,
+                        "Technique contribution must match the exact immutable profile binding.",
+                    ),
+                    self._check(
+                        "named_profile_reference_truth_precedence",
+                        all(
+                            item.retry_contract.get("retry_must_preserve_reference_truth") is True
+                            for item in named_contributions
+                        ),
+                        "A named technique package cannot override declared reference truth.",
+                    ),
+                ]
+            )
         scene_contributions = [
             item for item in contributions if item.facts.get("scene_owned_scope") is True
         ]
@@ -90,13 +127,6 @@ class PhotographyProfessionalReviewer:
         )
         checks.append(
             self._check(
-                "named_profile_review_inactive",
-                not any(item.review_contract.get("named_profile_fidelity_active") for item in contributions),
-                "Named-profile technique review remains inactive.",
-            )
-        )
-        checks.append(
-            self._check(
                 "reference_truth_channel_separation",
                 bool(brief.reference_policy_summary),
                 "Reference truth and prompt-owned channels are summarized separately.",
@@ -131,7 +161,7 @@ class PhotographyProfessionalReviewer:
             metadata={
                 "source": "PhotographyProfessionalReviewer",
                 "metadata_only_review": True,
-                "phase": "P4_shadow_scene_directors",
+                "phase": "P5_named_profile_shadow_runtime" if profile_binding.binding_mode == "named" else "P4_shadow_scene_directors",
                 "scene_domain": brief.scene_domain.value,
                 "profile_id": profile_binding.profile_id,
                 "real_output_review_status": "not_run_until_production_activation",

@@ -1,4 +1,9 @@
-"""Inactive, module-local photographer profile catalog."""
+"""Operator-reviewed Photography profile records and shared-catalog projection.
+
+This module owns the technique packages that a Photography release may use.
+It never becomes a second public selection authority: browser/API selection and
+immutable job binding are owned by :mod:`app.photography_profiles`.
+"""
 
 from __future__ import annotations
 
@@ -81,6 +86,52 @@ class PhotographerProfileCatalog:
             }
         ]
 
+    def shared_catalog(self):
+        """Project approved named records onto the foundation-owned API catalog.
+
+        A composition root may pass the returned catalog to
+        ``V3ProductApiService``.  The public route then remains the sole source
+        for the frontend; this method does not register a global catalog or
+        activate the Photography Scenario Pack by import side effect.
+        """
+        from ...photography_profiles import (
+            PhotographerProfileCatalog as SharedPhotographerProfileCatalog,
+            PhotographerProfileDefinition,
+        )
+
+        return SharedPhotographerProfileCatalog(
+            [
+                PhotographerProfileDefinition(
+                    profile_id=profile.profile_id,
+                    display_name=profile.public_display_name,
+                    profile_version=profile.profile_version,
+                    availability="available",
+                    allowed_regions=profile.allowed_regions,
+                    technique_package_checksum=self.technique_package_checksum(profile),
+                )
+                for profile in self.selectable_named_profiles()
+            ]
+        )
+
+    def resolve_pinned_profile(self, binding: PhotographerProfileBinding) -> PhotographerProfile:
+        """Load the exact local technique record represented by a frozen binding."""
+        profile = self.get(binding.profile_id)
+        if profile is None:
+            raise ValueError("named_profile_binding_mismatch:profile_not_in_operator_catalog")
+        if binding.binding_mode == "general":
+            if profile.profile_id != GENERAL_PHOTOGRAPHY_PROFILE_ID:
+                raise ValueError("named_profile_binding_mismatch:general_profile_id")
+            return profile
+        if profile.profile_kind != PhotographerProfileKind.NAMED_PHOTOGRAPHER:
+            raise ValueError("named_profile_binding_mismatch:not_named_profile")
+        if binding.selection_source != PhotographerProfileSelectionSource.USER_EXPLICIT_UI:
+            raise ValueError("named_profile_not_explicitly_selected")
+        if binding.profile_version != profile.profile_version:
+            raise ValueError("named_profile_binding_mismatch:version")
+        if binding.technique_package_checksum != self.technique_package_checksum(profile):
+            raise ValueError("named_profile_binding_mismatch:technique_checksum")
+        return profile
+
     def resolve_binding(self, controls: PhotographyUserControls) -> PhotographerProfileBinding:
         requested_id = controls.photographer_profile_id
         if requested_id in {None, GENERAL_PHOTOGRAPHY_PROFILE_ID}:
@@ -113,10 +164,7 @@ class PhotographerProfileCatalog:
         selection_source: PhotographerProfileSelectionSource | None,
         binding_mode: str,
     ) -> PhotographerProfileBinding:
-        technique_payload = profile.technique_package.model_dump(mode="json")
-        checksum = hashlib.sha256(
-            json.dumps(technique_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        checksum = self.technique_package_checksum(profile)
         return PhotographerProfileBinding(
             binding_mode=binding_mode,
             profile_id=profile.profile_id,
@@ -131,3 +179,10 @@ class PhotographerProfileCatalog:
                 "production_activation_ready": False,
             },
         )
+
+    def technique_package_checksum(self, profile: PhotographerProfile) -> str:
+        """Stable checksum used by both the shared binding and local compiler."""
+        technique_payload = profile.technique_package.model_dump(mode="json")
+        return hashlib.sha256(
+            json.dumps(technique_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
