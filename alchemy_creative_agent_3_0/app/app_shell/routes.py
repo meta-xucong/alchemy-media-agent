@@ -5,6 +5,7 @@ PRODUCT_API_NAMESPACE = "/v3"
 
 ROUTE_CONTRACTS = {
     "scenario_hub": f"{API_NAMESPACE}/scenarios",
+    "photographer_profiles": f"{API_NAMESPACE}/scenarios/photography/photographer-profiles",
     "history": f"{API_NAMESPACE}/history",
     "projects": f"{API_NAMESPACE}/projects",
     "get_project": f"{API_NAMESPACE}/projects/{{project_id}}",

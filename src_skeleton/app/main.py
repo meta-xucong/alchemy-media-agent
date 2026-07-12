@@ -323,6 +323,12 @@ def v3_scenarios_endpoint(request: Request, authorization: str = Header(default=
     return _run_v3_handler(v3_route_handlers.get_scenarios)
 
 
+@app.get("/api/v3/creative-agent/scenarios/photography/photographer-profiles")
+def v3_photographer_profiles_endpoint(request: Request, authorization: str = Header(default="")):
+    _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_photographer_profiles)
+
+
 @app.get("/api/v3/creative-agent/history")
 def v3_history_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)

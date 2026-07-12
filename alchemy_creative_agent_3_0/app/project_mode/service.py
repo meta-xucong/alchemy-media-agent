@@ -738,6 +738,8 @@ class V3ProjectModeService:
             "user_input": user_input,
             "brand_id": project.linked_brand_id,
             "scenario_selection": scenario_selection,
+            "photographer_profile_id": job_request.photographer_profile_id,
+            "photographer_profile_selection_source": job_request.photographer_profile_selection_source,
             "uploaded_asset_ids": uploaded_asset_ids,
             "product_profile": product_profile,
             "metadata": {
@@ -763,6 +765,12 @@ class V3ProjectModeService:
             },
         }
         status = self.product_service.create_job(create_payload)
+        bound_context_snapshot = status.metadata.get("project_context_snapshot")
+        if not isinstance(bound_context_snapshot, dict):
+            bound_context_snapshot = context_snapshot
+        photographer_profile_binding = self.product_service.photographer_profile_binding_for_job(status.job_id)
+        if photographer_profile_binding is not None:
+            project.photographer_profile_bindings[status.job_id] = photographer_profile_binding.model_dump(mode="json")
         status.metadata.update(
             {
                 "project_id": project.project_id,
@@ -774,7 +782,7 @@ class V3ProjectModeService:
                 "selected_mode_id": scenario_selection.get("mode_id"),
                 "selected_preset_id": scenario_selection.get("preset_id"),
                 "project_context_version": context.context_version,
-                "project_context_snapshot": context_snapshot,
+                "project_context_snapshot": bound_context_snapshot,
                 "project_mode": True,
                 "advanced_reference_controls": advanced_reference_controls,
                 "doc90_advanced_reference_controls": bool(advanced_reference_controls),
@@ -782,6 +790,9 @@ class V3ProjectModeService:
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
                 "ecommerce_slot_lineage": status.metadata.get("ecommerce_slot_lineage"),
+                "photographer_profile_binding": (
+                    photographer_profile_binding.model_dump(mode="json") if photographer_profile_binding is not None else None
+                ),
             }
         )
         self._link_job(project, status.job_id, context)

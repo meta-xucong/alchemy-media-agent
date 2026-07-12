@@ -55,6 +55,9 @@ class V3ProductRouteHandlers:
     def get_scenarios(self) -> dict[str, Any]:
         return get_scenario_hub_contract()
 
+    def get_photographer_profiles(self) -> dict[str, Any]:
+        return self.service.get_photographer_profiles()
+
     def get_history(self, limit: int = 20) -> dict[str, Any]:
         return self.service.list_history(limit=limit).model_dump(mode="json")
 

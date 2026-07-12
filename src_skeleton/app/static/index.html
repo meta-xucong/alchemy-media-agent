@@ -1703,6 +1703,30 @@
                       </details>
                     </div>
 
+                    <section id="v3PhotographerProfileFields" class="v3-ecommerce-fields" hidden aria-label="Photographer profile selection">
+                      <div class="panel-head section-title">
+                        <div>
+                          <p class="eyebrow">Photography</p>
+                          <h3>摄影师风格档案</h3>
+                          <p class="section-subcopy">具名摄影师档案必须由你手动确认；未确认时使用通用摄影。</p>
+                        </div>
+                      </div>
+                      <div class="v3-brand-grid">
+                        <label class="field">
+                          <span>摄影风格档案</span>
+                          <select id="v3PhotographerProfileInput">
+                            <option value="general_photography">通用摄影</option>
+                          </select>
+                          <small id="v3PhotographerProfileHint" class="v3-field-hint">具名档案仅在确认后随本次任务固定。</small>
+                        </label>
+                        <div class="field">
+                          <span>具名档案确认</span>
+                          <button id="v3ConfirmPhotographerProfileBtn" class="button compact ghost" type="button">确认使用此档案</button>
+                          <small id="v3PhotographerProfileConfirmation" class="v3-field-hint">当前使用通用摄影，不会自动选择具名档案。</small>
+                        </div>
+                      </div>
+                    </section>
+
                     <div id="v3ProgressPanel" class="run-progress-panel v3-progress-panel" aria-live="polite">
                       <div class="run-progress-head">
                         <strong id="v3SummaryTitle">生成进度</strong>

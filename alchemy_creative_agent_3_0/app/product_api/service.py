@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
@@ -18,6 +18,12 @@ from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
+from ..photography_profiles import (
+    PhotographerProfileBinding,
+    PhotographerProfileCatalog,
+    PhotographerProfileSelectionError,
+    default_photographer_profile_catalog,
+)
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
@@ -450,6 +456,8 @@ class V3ProductApiService:
         vision_inspector: VisionOutputInspector | None = None,
         review_merger: OutputQualityReviewMerger | None = None,
         mode_role_director: ModeAwareRoleDirector | None = None,
+        photographer_profile_catalog: PhotographerProfileCatalog | None = None,
+        photographer_profile_region_resolver: Callable[[], str | None] | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -467,9 +475,12 @@ class V3ProductApiService:
         self.vision_inspector = vision_inspector or VisionOutputInspector()
         self.review_merger = review_merger or OutputQualityReviewMerger()
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
+        self.photographer_profile_catalog = photographer_profile_catalog or default_photographer_profile_catalog()
+        self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
 
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
+        self._resolve_and_pin_photographer_profile(create_request)
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         planning_result = runtime_result.planning_result
         estimate = self._estimate_for_result(planning_result) if planning_result else self._empty_balance_estimate()
@@ -521,6 +532,22 @@ class V3ProductApiService:
 
         return self.job_store.get(job_id)
 
+    def get_photographer_profiles(self) -> dict[str, Any]:
+        """Return the public, read-only profile catalog for the Photography workspace."""
+
+        return self.photographer_profile_catalog.public_catalog(region=self._photographer_profile_region())
+
+    def photographer_profile_binding_for_job(self, job_id: str) -> PhotographerProfileBinding | None:
+        """Internal Project Mode lookup of the immutable server-owned job binding."""
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            return None
+        binding = dict(record.request.metadata or {}).get("photographer_profile_binding")
+        if not isinstance(binding, dict):
+            return None
+        return PhotographerProfileBinding.model_validate(binding)
+
     def preview_capability_activation(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
@@ -528,6 +555,7 @@ class V3ProductApiService:
         """Plan a possible evidence amendment without creating a job or provider call."""
 
         create_request = self._coerce_create_job_request(request)
+        self._resolve_and_pin_photographer_profile(create_request)
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         plan = runtime_result.metadata.get("capability_activation_plan")
         if not isinstance(plan, dict) or not plan.get("plan_id"):
@@ -606,6 +634,7 @@ class V3ProductApiService:
         if record is None:
             return self._not_found_status(job_id)
         generate_request = self._coerce_generate_request(request or {})
+        self._assert_photographer_profile_binding_immutable(record, generate_request)
         if not self.balance_adapter.has_available_credits(record.balance_estimate.get("credits_required", 0)):
             record.status = ProductJobStatusValue.BLOCKED
             record.warnings.append("Insufficient V3 balance adapter credits for this operation.")
@@ -3124,6 +3153,7 @@ class V3ProductApiService:
             "capability_activation_mode",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
+            "photographer_profile_binding",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
         result = record.generation_result or record.planning_result
@@ -3147,6 +3177,62 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    def _resolve_and_pin_photographer_profile(self, request: CreateCreativeJobRequest) -> None:
+        """Resolve selection before Central Brain and pin it outside prompt-owned state."""
+
+        metadata = dict(request.metadata or {})
+        if "photographer_profile_binding" in metadata:
+            raise PhotographerProfileSelectionError(
+                "photographer_profile_binding_immutable",
+                "Photographer profile bindings are server-owned.",
+                status_code=409,
+            )
+        scenario_resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
+        binding = self.photographer_profile_catalog.resolve_binding(
+            scenario_id=scenario_resolution.manifest.scenario_id,
+            profile_id=request.photographer_profile_id,
+            selection_source=request.photographer_profile_selection_source,
+            region=self._photographer_profile_region(),
+        )
+        if binding is None:
+            return
+        binding_payload = binding.model_dump(mode="json")
+        metadata["photographer_profile_binding"] = binding_payload
+        project_context = metadata.get("project_context_snapshot")
+        if isinstance(project_context, dict):
+            metadata["project_context_snapshot"] = {
+                **dict(project_context),
+                "photographer_profile_binding": binding_payload,
+            }
+        request.metadata = metadata
+
+    def _assert_photographer_profile_binding_immutable(
+        self,
+        record: ProductJobRecord,
+        request: GenerateJobRequest,
+    ) -> None:
+        binding = dict(record.request.metadata or {}).get("photographer_profile_binding")
+        if not isinstance(binding, dict):
+            return
+        attempted = dict(request.metadata or {})
+        forbidden = {
+            "photographer_profile_id",
+            "photographer_profile_selection_source",
+            "photographer_profile_binding",
+        }
+        if forbidden.intersection(attempted):
+            raise PhotographerProfileSelectionError(
+                "photographer_profile_binding_immutable",
+                "Photographer profile bindings cannot be changed after a job is created.",
+                status_code=409,
+            )
+
+    def _photographer_profile_region(self) -> str | None:
+        value = self.photographer_profile_region_resolver()
+        if value is None:
+            return None
+        return str(value).strip().upper() or None
 
     def _not_found_status(self, job_id: str) -> ProductJobStatus:
         nav = get_navigation_entry()

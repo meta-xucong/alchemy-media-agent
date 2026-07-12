@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -334,6 +334,7 @@ class ProjectRecord(V3BaseModel):
     rejected_direction_notes: list[str] = Field(default_factory=list)
     timeline_refs: list[str] = Field(default_factory=list)
     job_ids: list[str] = Field(default_factory=list)
+    photographer_profile_bindings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     latest_context: ProjectContextPackage | None = None
     reference_assets: list[ProjectReferenceAsset] = Field(default_factory=list)
     feedback_records: list[ProjectFeedbackRecord] = Field(default_factory=list)
@@ -388,6 +389,8 @@ class CreateProjectRequest(ProjectModeBase):
 class CreateProjectJobRequest(ProjectModeBase):
     user_input: str | None = None
     template_id: str = GENERAL_TEMPLATE_ID
+    photographer_profile_id: str | None = None
+    photographer_profile_selection_source: Literal["user_explicit_ui"] | None = None
     uploaded_asset_ids: list[str] = Field(default_factory=list)
     use_project_context: bool = True
     commerce_profile_patch: ProjectCommerceProfile | None = None

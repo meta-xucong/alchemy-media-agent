@@ -303,6 +303,10 @@ const v3State = {
   selectedScenario: "general_creative",
   selectedPreset: "campaign_poster",
   selectedVariationMode: "auto",
+  photographerProfiles: [],
+  photographerProfilesLoaded: false,
+  selectedPhotographerProfileId: "general_photography",
+  confirmedPhotographerProfileId: "",
   generationCount: 2,
   selectedSize: "",
   activeProjectStep: "compose",
@@ -584,6 +588,11 @@ const els = {
   v3BrandToneLabel: document.querySelector("#v3BrandToneLabel"),
   v3BrandToneInput: document.querySelector("#v3BrandToneInput"),
   v3EcommerceFields: document.querySelector("#v3EcommerceFields"),
+  v3PhotographerProfileFields: document.querySelector("#v3PhotographerProfileFields"),
+  v3PhotographerProfileInput: document.querySelector("#v3PhotographerProfileInput"),
+  v3ConfirmPhotographerProfileBtn: document.querySelector("#v3ConfirmPhotographerProfileBtn"),
+  v3PhotographerProfileHint: document.querySelector("#v3PhotographerProfileHint"),
+  v3PhotographerProfileConfirmation: document.querySelector("#v3PhotographerProfileConfirmation"),
   v3EcommerceAdvanced: document.querySelector("#v3EcommerceAdvanced"),
   v3EcommercePlatformInput: document.querySelector("#v3EcommercePlatformInput"),
   v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput"),
@@ -1161,6 +1170,8 @@ function bindControls() {
     });
   });
   if (els.v3CreateJobBtn) els.v3CreateJobBtn.addEventListener("click", createV3Job);
+  if (els.v3PhotographerProfileInput) els.v3PhotographerProfileInput.addEventListener("change", selectV3PhotographerProfile);
+  if (els.v3ConfirmPhotographerProfileBtn) els.v3ConfirmPhotographerProfileBtn.addEventListener("click", confirmV3PhotographerProfile);
   if (els.v3GenerateBtn) els.v3GenerateBtn.addEventListener("click", generateV3Job);
   if (els.v3SelectBtn) els.v3SelectBtn.addEventListener("click", selectV3Job);
   if (els.v3ResetBtn) els.v3ResetBtn.addEventListener("click", resetV3Workspace);
@@ -1701,11 +1712,13 @@ function v3ScenarioCanCreate(scenarioId) {
 
 function v3TemplateIdForScenario(scenarioId) {
   if (scenarioId === "ecommerce") return "ecommerce_template";
+  if (scenarioId === "photography") return "photographer_template";
   return "general_template";
 }
 
 function v3ScenarioForTemplate(templateId) {
   if (templateId === "ecommerce_template") return "ecommerce";
+  if (templateId === "photographer_template") return "photography";
   return "general_creative";
 }
 
@@ -1719,6 +1732,7 @@ function v3DefaultPresetForScenario(scenarioId) {
   const defaults = {
     general_creative: "campaign_poster",
     ecommerce: "one_click_product_set",
+    photography: "",
   };
   return defaults[scenarioId] || "campaign_poster";
 }
@@ -1923,10 +1937,42 @@ function v3ScenarioNotice(scenarioId) {
   if (scenarioId === "ecommerce") {
     return "电商特调已就绪：写一句需求即可生成套图；上传商品图后会更贴近实物。";
   }
+  if (scenarioId === "photography") {
+    return "摄影师工作区会在你明确确认具名档案后，才将其固定到本次任务。";
+  }
   return "通用创意已就绪：写一句需求，可选上传参考图，就能生成一组图片。";
 }
 
 function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
+  if (scenarioId === "photography") {
+    return {
+      eyebrow: "摄影创作",
+      title: "摄影师 Agent",
+      intro: "选择通用摄影，或手动确认一个可用的具名摄影师档案。",
+      promptLabel: "这次想拍什么？",
+      promptPlaceholder: "例如：在自然窗光下为同一人物拍一组安静克制的肖像",
+      promptHint: "场景、光线和构图由本次需求决定；不会因具名档案自动锁定素材风格。",
+      assetTitle: "上传主体或参考图",
+      assetEmpty: "还没有参考图",
+      assetSummaryEmpty: "可选上传人物、动物或场景参考图。",
+      assetSummaryWithCount: (count) => `${count} 张参考图已加入`,
+      brandNameLabel: "项目名称",
+      brandToneLabel: "希望的画面感觉",
+      resultTitle: "本次拍摄结果",
+      emptyResult: "生成的摄影作品会显示在这里，并同步到项目主页。",
+      pendingResult: "摄影任务正在准备，稍后会显示图片。",
+      createLabel: "生成摄影作品",
+      generateLabel: "继续生成",
+      selectLabel: "设为后续参考",
+      busyLabel: "生成摄影作品中…",
+      readyNotice: "当前是摄影师工作区。",
+      planningNotice: "V3 正在规划拍摄方向。",
+      generatedNotice: "摄影作品已生成，可选择满意结果继续创作。",
+      summaryIntro: "V3 会整理主体、场景和拍摄方向。",
+      summaryFootnote: "具名摄影师档案只在明确确认后才会进入任务绑定。",
+      summaryPill: "摄影师工作区",
+    };
+  }
   const ecommerce = scenarioId === "ecommerce";
   if (ecommerce) {
     return {
@@ -1999,6 +2045,10 @@ function setV3Scenario(scenarioId, { fromRoute = false } = {}) {
     updateV3Notice(v3ScenarioWorkspaceCopy(requested).readyNotice, "info");
     return;
   }
+  if (requested === "photography") {
+    updateV3Notice(v3ScenarioWorkspaceCopy(requested).readyNotice, "info");
+    return;
+  }
   const label = v3ScenarioLabel(requested);
   updateV3Notice(`${label} 还未开放；当前只展示入口，不会创建任务。`, fromRoute ? "warning" : "info");
 }
@@ -2048,6 +2098,8 @@ function renderV3ScenarioState() {
     if (els.v3ProgressFill) els.v3ProgressFill.style.width = "12%";
   }
   if (els.v3EcommerceFields) els.v3EcommerceFields.hidden = selected !== "ecommerce";
+  if (els.v3PhotographerProfileFields) els.v3PhotographerProfileFields.hidden = selected !== "photography";
+  if (selected === "photography") loadV3PhotographerProfiles();
   if (els.v3EcommerceAdvanced && selected !== "ecommerce") els.v3EcommerceAdvanced.open = false;
   if (els.v3CommercePanel) els.v3CommercePanel.hidden = selected !== "ecommerce";
   syncV3SharedAdvancedFieldPlacement(selected);
@@ -2075,6 +2127,69 @@ function renderV3ScenarioState() {
     }
   }
   setV3Preset(v3State.selectedPreset);
+}
+
+async function loadV3PhotographerProfiles() {
+  if (v3State.photographerProfilesLoaded) {
+    renderV3PhotographerProfiles();
+    return;
+  }
+  try {
+    const payload = await request(`${v3ApiBase}/scenarios/photography/photographer-profiles`);
+    v3State.photographerProfiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+    v3State.photographerProfilesLoaded = true;
+  } catch (_error) {
+    v3State.photographerProfiles = [];
+  }
+  renderV3PhotographerProfiles();
+}
+
+function renderV3PhotographerProfiles() {
+  if (!els.v3PhotographerProfileInput) return;
+  const profiles = v3State.photographerProfiles.length
+    ? v3State.photographerProfiles
+    : [{ profile_id: "general_photography", display_name: "通用摄影", binding_mode: "general" }];
+  const selectedId = profiles.some((profile) => profile.profile_id === v3State.selectedPhotographerProfileId)
+    ? v3State.selectedPhotographerProfileId
+    : "general_photography";
+  v3State.selectedPhotographerProfileId = selectedId;
+  els.v3PhotographerProfileInput.innerHTML = profiles.map((profile) => (
+    `<option value="${escapeHtml(profile.profile_id)}">${escapeHtml(profile.display_name || profile.profile_id)}</option>`
+  )).join("");
+  els.v3PhotographerProfileInput.value = selectedId;
+  const current = profiles.find((profile) => profile.profile_id === selectedId) || profiles[0];
+  const named = current?.binding_mode === "named";
+  if (els.v3ConfirmPhotographerProfileBtn) {
+    els.v3ConfirmPhotographerProfileBtn.hidden = !named;
+    els.v3ConfirmPhotographerProfileBtn.disabled = !named;
+  }
+  if (els.v3PhotographerProfileHint) {
+    els.v3PhotographerProfileHint.textContent = named
+      ? "具名档案需点击确认；确认会作为不可变任务绑定保存。"
+      : "通用摄影不会自动选择或模仿具名摄影师。";
+  }
+  if (els.v3PhotographerProfileConfirmation) {
+    els.v3PhotographerProfileConfirmation.textContent = named && v3State.confirmedPhotographerProfileId === selectedId
+      ? "已手动确认：该档案只会固定到本次新任务。"
+      : (named ? "尚未确认；本次不会提交该具名档案。" : "当前使用通用摄影。");
+  }
+}
+
+function selectV3PhotographerProfile() {
+  const profileId = els.v3PhotographerProfileInput?.value || "general_photography";
+  v3State.selectedPhotographerProfileId = profileId;
+  if (v3State.confirmedPhotographerProfileId !== profileId) {
+    v3State.confirmedPhotographerProfileId = "";
+  }
+  renderV3PhotographerProfiles();
+}
+
+function confirmV3PhotographerProfile() {
+  const profileId = v3State.selectedPhotographerProfileId;
+  const profile = (v3State.photographerProfiles || []).find((item) => item.profile_id === profileId);
+  if (!profile || profile.binding_mode !== "named") return;
+  v3State.confirmedPhotographerProfileId = profileId;
+  renderV3PhotographerProfiles();
 }
 
 function setV3Preset(presetId) {
@@ -5066,9 +5181,19 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const ecommerceSuiteScope = scenarioId === "ecommerce" ? v3EcommerceSuiteScopeValue() : "";
   const ecommerceCopyLocale = scenarioId === "ecommerce" ? v3EcommerceCopyLocaleValue() : "";
   const ecommerceOverlayCopy = scenarioId === "ecommerce" ? (els.v3EcommerceOverlayCopyInput?.value || "").trim() : "";
+  const photographerProfile = scenarioId === "photography"
+    ? (v3State.photographerProfiles || []).find((item) => item.profile_id === v3State.selectedPhotographerProfileId)
+    : null;
+  const namedPhotographerProfileConfirmed = photographerProfile?.binding_mode === "named"
+    && v3State.confirmedPhotographerProfileId === photographerProfile.profile_id;
+  const selectedPhotographerProfileId = namedPhotographerProfileConfirmed
+    ? photographerProfile.profile_id
+    : (photographerProfile?.binding_mode === "named" ? "general_photography" : (photographerProfile?.profile_id || "general_photography"));
   const payload = {
     user_input: userInput,
     template_id: templateId,
+    photographer_profile_id: scenarioId === "photography" ? selectedPhotographerProfileId : undefined,
+    photographer_profile_selection_source: namedPhotographerProfileConfirmed ? "user_explicit_ui" : undefined,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id),
     use_project_context: true,
     advanced_reference_controls: advancedReferenceControls,

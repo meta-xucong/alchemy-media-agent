@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -48,6 +48,8 @@ class CreateCreativeJobRequest(ProductApiBase):
     continue_style_from_brand_id: str | None = None
     campaign: CampaignRequest | None = None
     scenario_selection: ScenarioSelection | None = None
+    photographer_profile_id: str | None = None
+    photographer_profile_selection_source: Literal["user_explicit_ui"] | None = None
     uploaded_asset_ids: list[str] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -67,6 +69,14 @@ class CreateCreativeJobRequest(ProductApiBase):
         if any(not item for item in cleaned):
             raise ValueError("uploaded_asset_ids must not contain empty strings")
         return cleaned
+
+    @field_validator("photographer_profile_id")
+    @classmethod
+    def clean_photographer_profile_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
     @property
     def effective_brand_id(self) -> str | None:
