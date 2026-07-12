@@ -771,6 +771,7 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        self._clear_superseded_pre_generation_review_warning(record, generation_result)
         generation_result = self._apply_text_pixel_delivery(record, generation_result)
         generation_result = self._run_visual_auto_retries(
             record=record,
@@ -1085,6 +1086,41 @@ class V3ProductApiService:
             }
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _clear_superseded_pre_generation_review_warning(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+    ) -> None:
+        """Drop the planning-only warning after a real final-pixel review runs.
+
+        The shared planning capability correctly records that it had no pixels
+        at planning time. Once the post-generation path has actually run a
+        vision-model or hybrid inspection, keeping that warning on the public
+        Job status is stale and misleading. It remains for local-only or
+        metadata-only inspection, where it still accurately signals a missing
+        live review route.
+        """
+        package = generation_result.metadata.get("post_generation_review_package")
+        if not isinstance(package, dict):
+            return
+        reports = package.get("quality_review_reports")
+        if not isinstance(reports, list):
+            return
+        has_live_pixel_review = any(
+            isinstance(report, dict)
+            and str(report.get("review_mode") or report.get("mode") or "").strip().lower()
+            in {"vision_model", "hybrid"}
+            for report in reports
+        )
+        if not has_live_pixel_review:
+            return
+        record.warnings = [
+            warning
+            for warning in record.warnings
+            if "output_review_metadata_only" not in str(warning).lower()
+            and "output review ran without live image inspection" not in str(warning).lower()
+        ]
 
     def _reference_conditioned_real_review_required(
         self,

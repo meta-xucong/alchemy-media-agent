@@ -626,6 +626,38 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
     assert [attempt["stage"] for attempt in review["review_attempts"]] == ["initial", "final_retry"]
 
 
+def test_product_api_hides_planning_only_review_warning_after_live_pixel_review(tmp_path) -> None:
+    provider = _StaticVisionProvider(
+        {
+            "status": "pass",
+            "confidence": 0.95,
+            "issue_codes": [],
+            "summary": ["The final pixels passed live review."],
+        }
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "vision_inspection_mode": "vision_model",
+                "max_visual_retry_attempts": 0,
+            },
+        },
+    )
+
+    assert generated.status == ProductJobStatusValue.GENERATED
+    assert generated.metadata["post_generation_review"]["quality_review_reports"][0]["review_mode"] == "vision_model"
+    assert not any("output_review_metadata_only" in warning for warning in generated.warnings)
+
+
 def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_failure(tmp_path) -> None:
     provider = _SequencedVisionProvider(
         [
