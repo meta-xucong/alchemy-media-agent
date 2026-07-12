@@ -96,7 +96,11 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     service, _, _ = _service("gateway_background_timeout")
     created = service.create_job({"user_input": "Create one clean still-life image."})
 
-    pending = service.mark_job_generating(created.job_id, background_attempt_id="attempt_one")
+    pending = service.mark_job_generating(
+        created.job_id,
+        background_attempt_id="attempt_one",
+        background_timeout_seconds=675,
+    )
     stale_watchdog = service.mark_job_generation_timed_out(
         created.job_id,
         background_attempt_id="different_attempt",
@@ -118,6 +122,7 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     )
 
     assert pending.status == ProductJobStatusValue.GENERATING
+    assert pending.metadata["background_generation_watchdog"]["timeout_seconds"] == 675
     assert stale_watchdog.status == ProductJobStatusValue.GENERATING
     assert timed_out.status == ProductJobStatusValue.BLOCKED
     assert timed_out.metadata["provider_failure_retry"]["fresh_upstream_requests"] == 1

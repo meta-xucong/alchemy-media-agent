@@ -334,6 +334,7 @@ def _timeout_v3_project_generation_background(
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
     background_attempt_id = uuid4().hex
+    timeout_seconds = _v3_gateway_managed_background_timeout_seconds()
     with _v3_background_generation_jobs_lock:
         if key in _v3_background_generation_jobs:
             return False
@@ -344,6 +345,7 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             project_id,
             job_id,
             background_attempt_id=background_attempt_id,
+            background_timeout_seconds=timeout_seconds,
         )
     except Exception:
         with _v3_background_generation_jobs_lock:
@@ -358,7 +360,6 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             "_v3_background_generation_attempt_id": background_attempt_id,
         },
     }
-    timeout_seconds = _v3_gateway_managed_background_timeout_seconds()
     if timeout_seconds is not None:
         watchdog = threading.Timer(
             timeout_seconds,

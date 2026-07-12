@@ -1101,12 +1101,17 @@ class V3ProjectModeService:
         job_id: str,
         *,
         background_attempt_id: str | None = None,
+        background_timeout_seconds: float | None = None,
     ) -> ProductJobStatus:
         """Mark a queued project job before the web layer releases its worker."""
 
         project = self._require_project(project_id)
         self._ensure_project_job(project, job_id)
-        return self.product_service.mark_job_generating(job_id, background_attempt_id=background_attempt_id)
+        return self.product_service.mark_job_generating(
+            job_id,
+            background_attempt_id=background_attempt_id,
+            background_timeout_seconds=background_timeout_seconds,
+        )
 
     def mark_project_job_generation_timed_out(
         self,

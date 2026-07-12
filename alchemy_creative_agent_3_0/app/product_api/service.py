@@ -653,7 +653,13 @@ class V3ProductApiService:
             return restored or self._not_found_status(job_id)
         return self._status_from_record(record)
 
-    def mark_job_generating(self, job_id: str, *, background_attempt_id: str | None = None) -> ProductJobStatus:
+    def mark_job_generating(
+        self,
+        job_id: str,
+        *,
+        background_attempt_id: str | None = None,
+        background_timeout_seconds: float | None = None,
+    ) -> ProductJobStatus:
         """Persist the public pre-render state before a background worker starts.
 
         A generated output file is not a user delivery while shared review and
@@ -668,9 +674,16 @@ class V3ProductApiService:
         if record.status in {ProductJobStatusValue.PLANNED, ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
             record.status = ProductJobStatusValue.GENERATING
             if background_attempt_id:
+                watchdog = {
+                    "background_attempt_id": str(background_attempt_id),
+                    "enabled": background_timeout_seconds is not None,
+                }
+                if background_timeout_seconds is not None:
+                    watchdog["timeout_seconds"] = max(1, int(round(float(background_timeout_seconds))))
                 record.request.metadata = {
                     **dict(record.request.metadata),
                     "background_generation_attempt_id": str(background_attempt_id),
+                    "background_generation_watchdog": watchdog,
                 }
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
@@ -3870,6 +3883,7 @@ class V3ProductApiService:
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
             "generation_lifecycle_timeout",
+            "background_generation_watchdog",
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",
         }
