@@ -31,12 +31,17 @@
 - fact-ledger source, verification, channel, and allowed-slot bindings remain
   auditable; blocked facts cannot reach a recipe, copy plan, or export binding,
   while confirmation facts create a publish-check warning.
+- each first-wave category resolves a distinct, export-auditable slot director
+  with a purpose, fact-channel intent, review checks, and differentiation key;
+  a constrained suite chooses the category's highest-value proof roles.
 - the Amazon apparel benchmark plans a distinct primary, worn-front,
   back-or-side, detail, lifestyle, fit/size, and styling-versatility role;
   a supplier-provided visual fact that is absent from the reference remains an
   explicit export publish-check attention, not silent product truth. D4 adds
   persisted owner confirmation before final delivery.
 - General Template does not receive commerce suite metadata.
+- garment directors never leak into shoes or bags; they use accessory-specific
+  E-Commerce directors instead.
 
 ## Isolation tests
 

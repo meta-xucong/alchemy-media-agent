@@ -105,6 +105,11 @@ user request + uploaded refs
     critic and export publish-check attention today; D4 will add a persisted
     user-confirmation UI. A fact marked blocked must not enter a recipe,
     overlay copy, or export binding.
+15. Category directors are E-Commerce declarative data. They emit a
+    slot-purpose, fact-channel intent, review checks, and differentiation key
+    into E-Commerce recipe/export metadata; they must not alter shared prompt
+    ownership, Human Realism, Provider, Review/Retry, or platform-compliance
+    semantics.
 
 ## Compatibility rule
 

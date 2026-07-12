@@ -83,6 +83,11 @@ class EcommerceExportPackager:
                     "claim_review_required": copy_claim_review_required,
                     "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
                     "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
+                    "category_slot_role_id": recipe.metadata.get("category_slot_guidance_id"),
+                    "category_slot_purpose": recipe.metadata.get("category_slot_purpose"),
+                    "category_slot_fact_channels": list(recipe.metadata.get("category_slot_fact_channels") or []),
+                    "category_slot_review_checks": list(recipe.metadata.get("category_slot_review_checks") or []),
+                    "category_slot_differentiation_key": recipe.metadata.get("category_slot_differentiation_key"),
                 }
             )
         publish_checks = self._publish_checks(
@@ -114,6 +119,17 @@ class EcommerceExportPackager:
                 "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
                 "category_ids": category_ids,
                 "category_profile_versions": category_profile_versions,
+                "category_slot_directors": {
+                    recipe.slot: {
+                        "role_id": recipe.metadata.get("category_slot_guidance_id"),
+                        "purpose": recipe.metadata.get("category_slot_purpose"),
+                        "fact_channels": list(recipe.metadata.get("category_slot_fact_channels") or []),
+                        "review_checks": list(recipe.metadata.get("category_slot_review_checks") or []),
+                        "differentiation_key": recipe.metadata.get("category_slot_differentiation_key"),
+                    }
+                    for recipe in recipes
+                    if recipe.metadata.get("category_slot_guidance_id")
+                },
                 "evidence_intent_ids": {
                     recipe.slot: recipe.metadata.get("evidence_intent_id")
                     for recipe in recipes

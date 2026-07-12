@@ -51,6 +51,9 @@ capability after review without an auditable plan amendment.
 - Facts marked blocked by the E-Commerce fact ledger are omitted from recipe
   bindings and overlay copy. Facts requiring confirmation produce an export
   publish-check warning; D4 will add persisted owner confirmation.
+- Export records retain the E-Commerce category role, plain-language purpose,
+  fact-channel intent, review checks, and differentiation key for each slot.
+  These are planning/audit metadata, not a claim of pixel-level verification.
 - Main-image text is forbidden by the E-Commerce module's conservative default.
   A verified platform restriction may strengthen that default, but the default
   itself is not represented as universal marketplace policy.
@@ -73,6 +76,11 @@ market
 profile_version
 category_id
 category_version
+category_slot_role_id
+category_slot_purpose
+category_slot_fact_channels
+category_slot_review_checks
+category_slot_differentiation_key
 selected_slot_ids
 delivery_files
 copy_locale

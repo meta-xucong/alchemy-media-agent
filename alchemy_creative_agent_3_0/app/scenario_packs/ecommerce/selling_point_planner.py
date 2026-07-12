@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
-from .category_profiles import CategoryProfile, evidence_for_slot, slot_guidance_for
+from .category_profiles import CategoryProfile, category_slot_director_for
 from .copy_bridge import EcommerceCopyBridge
 from .localization import resolve_localization
 from .marketplace_rules import (
@@ -103,7 +103,7 @@ class SellingPointToImagePlanner:
             provider_native_text = copy_plan["text"]
             fact_bindings = self._fact_bindings_for_slot(truth, slot)
             evidence_intent = evidence_intent_for_slot(slot)
-            category_slot_guidance = slot_guidance_for(
+            category_slot_director = category_slot_director_for(
                 category_profile,
                 slot,
                 product_category=truth.product_category,
@@ -122,8 +122,8 @@ class SellingPointToImagePlanner:
                 marketplace_profile=marketplace_profile,
             )
             visual_scene = f"{visual_scene} {evidence_intent['direction']}"
-            if category_slot_guidance["direction"]:
-                visual_scene = f"{visual_scene} {category_slot_guidance['direction']}"
+            if category_slot_director["direction"]:
+                visual_scene = f"{visual_scene} {category_slot_director['direction']}"
             if platform_compliance_intent["direction"]:
                 visual_scene = f"{visual_scene} {platform_compliance_intent['direction']}"
             if creative_intent["direction"]:
@@ -141,21 +141,30 @@ class SellingPointToImagePlanner:
                     overlay_text=None,
                     provider_native_text=provider_native_text,
                     reference_bindings=self._reference_bindings(uploaded_asset_ids, slot),
-                    review_checks=[
-                        "product remains large and recognizable",
-                        "required product facts remain correct",
-                        "provider-native text is reviewed as final pixels when explicitly requested",
-                        "claims match supplied evidence",
-                        "slot fits marketplace profile",
-                    ],
+                    review_checks=list(
+                        dict.fromkeys(
+                            [
+                                "product remains large and recognizable",
+                                "required product facts remain correct",
+                                "provider-native literal copy is used only when explicitly approved",
+                                "claims match supplied evidence",
+                                "slot fits marketplace profile",
+                                *list(category_slot_director["review_checks"]),
+                            ]
+                        )
+                    ),
                     metadata={
                         "sequence_index": index + 1,
                         "platform": marketplace_profile.platform,
                         "market": marketplace_profile.market,
                         **(category_profile.metadata() if category_profile else {}),
-                        "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
-                        "category_slot_guidance_id": category_slot_guidance["id"],
-                        "category_slot_guidance": category_slot_guidance["direction"],
+                        "category_evidence_targets": list(category_slot_director["evidence"]),
+                        "category_slot_guidance_id": category_slot_director["id"],
+                        "category_slot_guidance": category_slot_director["direction"],
+                        "category_slot_purpose": category_slot_director["purpose"],
+                        "category_slot_fact_channels": list(category_slot_director["fact_channels"]),
+                        "category_slot_review_checks": list(category_slot_director["review_checks"]),
+                        "category_slot_differentiation_key": category_slot_director["differentiation_key"],
                         "unverified_visual_facts": unverified_visual_facts,
                         "product_fact_ledger_version": truth.metadata.get("fact_ledger_version"),
                         "product_fact_bindings": fact_bindings["records"],

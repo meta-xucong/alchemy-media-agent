@@ -121,7 +121,7 @@ readable, and no unsupported fact reaches copy, a recipe, or an export binding.
 
 ### D2 — complete first-wave category directors
 
-Status: follows D1.
+Status: implemented and verified on the E-Commerce branch.
 
 Retain the common director flow but supply data-driven evidence maps per
 category. No category receives a shared-runtime branch.
@@ -145,6 +145,12 @@ Requirements:
 
 Acceptance: one planning fixture per category, cross-category isolation tests,
 and a full E-Commerce regression matrix.
+
+Delivered: each of the five first-wave categories now has a declarative,
+E-Commerce-only slot director carrying buyer questions, human-presence policy,
+text-role intent, product-truth fields, purpose, fact-channel intent, review
+checks, and differentiation key. Recipe and export metadata retain that
+lineage. Shoes and bags use accessory directors rather than garment guidance.
 
 ### D3 — explicit delivery scopes
 

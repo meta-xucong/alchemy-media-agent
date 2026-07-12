@@ -449,6 +449,33 @@ full V3 + commercial frontend + provider contract regression: 590 passed after r
 Python compile, JavaScript syntax, and diff checks: passed
 ```
 
+## E27 — first-wave category directors
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Completed the five first-wave E-Commerce category contracts with buyer
+  questions, human-presence policy, text-role intent, product-truth fields,
+  review checks, default proof priority, and declarative slot directors.
+- Each selected slot now carries a stable role ID, plain-language purpose,
+  fact-channel intent, review checks, and differentiation key into its recipe
+  and export metadata.
+- Added accessory-specific shoe/bag directors so garment fit/model guidance
+  cannot leak into those products while their evidence coverage remains
+  auditable.
+- Preserved the existing category-profile version prefix and all E-Commerce
+  API fields; no shared Provider, Review/Retry, General Template, or platform
+  compliance behavior changed.
+
+Verification:
+
+```text
+focused D2/category/D1 regression tests: 22 passed
+full V3 + commercial frontend + provider contract regression: 598 passed
+Python compile, JavaScript syntax, and diff checks: passed
+```
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.

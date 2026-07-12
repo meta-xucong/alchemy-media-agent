@@ -77,4 +77,5 @@ def test_garment_specific_guidance_does_not_leak_to_bags_or_shoes() -> None:
     )
 
     assert output.metadata["category_id"] == "apparel"
-    assert all(recipe.metadata["category_slot_guidance_id"] == "" for recipe in output.recipes)
+    assert all(recipe.metadata["category_slot_guidance_id"].startswith("accessory_") for recipe in output.recipes)
+    assert all("garment" not in recipe.metadata["category_slot_guidance"].lower() for recipe in output.recipes)

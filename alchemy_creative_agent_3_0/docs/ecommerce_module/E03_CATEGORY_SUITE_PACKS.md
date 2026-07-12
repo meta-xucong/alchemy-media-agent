@@ -1,8 +1,8 @@
 # E03 Category Suite Packs and Evidence Maps
 
-## Target category pack contract (D2)
+## Completed D2 category pack contract
 
-The completed D2 category-pack contract will declare:
+Each first-wave category pack declares:
 
 ```text
 category_id
@@ -17,10 +17,11 @@ product_truth_fields
 review_checks
 ```
 
-The current first-wave implementation contains category ID, display name,
-required/optional evidence, default slot priority, and review checks. D2 adds
-the remaining source-aware fields below; this target contract is not a claim
-that every field is already stored today.
+Each runtime slot now resolves to a category director with a stable ID,
+plain-language purpose, evidence target, fact channels, review checks,
+differentiation key, and scene direction. Those fields are copied into recipe
+and export metadata for audit; they are not provider controls or General
+Template behavior.
 
 ## First-release category packs
 
@@ -31,6 +32,11 @@ that every field is already stored today.
 | Electronics/3C | silhouette, ports, dimensions, included items, real use | hero, angle, ports, hand-scale, desk/use, accessories, spec |
 | Home/kitchen | size, material, capacity, function, cleaning/storage | hero, space, size, material, function, capacity, use |
 | Food/beverage | package, serving, contents, portion, truthful ingredient cues | hero, serving, detail, portion, use, package, trust |
+
+For shoes and bags, the E-Commerce category retains related evidence coverage
+but uses accessory-specific form, closure, side, hardware, scale, and real-use
+directors. It must never inherit garment-on-model, garment-fit, or garment
+construction instructions.
 
 Second-wave packs may include jewelry/accessories, furniture/decor,
 sports/outdoor, pet, and baby products after the first five pass review.
@@ -107,3 +113,11 @@ When count is larger, add optional roles without duplicating the same scene.
 Within one suite, two images fail differentiation when they share the same
 purpose, camera relationship, scene logic, and selling point without a clear
 reason. Variation means useful evidence variation, not random decoration.
+
+## D2 implementation boundary
+
+The category director is declarative E-Commerce planning data only. It may
+choose what a product suite should prove, but it may not change shared Product
+Identity, Human Realism, Provider, Review/Retry, OCR, typography, or platform
+compliance rules. Human-presence policy describes the business role only; any
+real-person rendering is still governed by the shared Human Realism capability.

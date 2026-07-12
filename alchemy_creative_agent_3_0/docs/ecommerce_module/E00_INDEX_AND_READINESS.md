@@ -46,7 +46,7 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | General Template | active and broad | may support light product visuals only |
 | E-Commerce Scenario Pack | existing skeleton | needs professional suite expansion |
 | Platform profiles | evidence-led baseline | separate verified constraints, seller configuration, and internal strategy |
-| Category packs | first-wave baseline | five category definitions exist; source-aware slot directors remain phased work |
+| Category packs | first-wave director baseline | five category directors now carry buyer questions, proof roles, review checks, and export lineage; subtype expansion remains phased work |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
 | In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |
