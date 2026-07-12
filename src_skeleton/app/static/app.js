@@ -5346,6 +5346,102 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   );
 }
 
+function v3IsEcommerceJob(job = v3State.currentJob) {
+  const scenarioId = String(job?.scenario?.scenario_id || "").trim();
+  const templateId = String(job?.template_id || job?.metadata?.template_id || "").trim();
+  return scenarioId === "ecommerce" || templateId === "ecommerce_template";
+}
+
+function v3EcommerceSlotForItem(item) {
+  const metadata = item?.metadata || {};
+  const assetMetadata = metadata.asset_metadata || {};
+  const recipe = v3EcommerceRecipeForItem(item);
+  return String(item?.slot || metadata.ecommerce_slot || assetMetadata.ecommerce_slot || recipe.slot || "").trim();
+}
+
+function v3EcommerceSlotContinuationContext(item, job = v3State.currentJob) {
+  if (!v3IsEcommerceJob(job)) return null;
+  if (String(job?.status || "").trim() !== "generated") return null;
+  const projectId = String(v3State.currentProject?.project_id || "").trim();
+  const parentJobId = String(job?.job_id || "").trim();
+  const slotId = v3EcommerceSlotForItem(item);
+  const lineage = job?.metadata?.ecommerce_slot_lineage;
+  const rootJobId = String(lineage?.root_job_id || "").trim();
+  if (!projectId || !parentJobId || !slotId || !rootJobId) return null;
+  return { projectId, parentJobId, rootJobId, slotId };
+}
+
+function v3EcommerceSlotContinuationRoute(context) {
+  return `${v3ApiBase}/projects/${encodeURIComponent(context.projectId)}/jobs/${encodeURIComponent(context.parentJobId)}/ecommerce-slots/${encodeURIComponent(context.slotId)}/continuations`;
+}
+
+function v3EcommerceSlotDeliveryRoute(context) {
+  return `${v3ApiBase}/projects/${encodeURIComponent(context.projectId)}/jobs/${encodeURIComponent(context.rootJobId)}/ecommerce-slots/${encodeURIComponent(context.slotId)}/delivery`;
+}
+
+async function continueV3EcommerceSlot(item, job = v3State.currentJob) {
+  const context = v3EcommerceSlotContinuationContext(item, job);
+  if (!context) {
+    updateV3Notice("这张图片暂时没有可继续生成的电商套图记录。", "warning");
+    return;
+  }
+  const correctionNote = window.prompt("希望怎样调整这张图？可留空直接生成新的同角色版本。", "");
+  if (correctionNote === null) return;
+  try {
+    setV3Busy(true, "正在创建这张图的新版本...");
+    setV3Progress("planning", "正在保留原图，并创建这个套图角色的新版本。", "info", { forceNotice: true });
+    const continuation = await request(v3EcommerceSlotContinuationRoute(context), {
+      method: "POST",
+      body: {
+        correction_note: correctionNote.trim() || undefined,
+        metadata: {
+          frontend_surface: "commercial_v3_project_mode",
+          source: "ecommerce_workspace",
+          ecommerce_slot_id: context.slotId,
+        },
+      },
+    });
+    const childJobId = String(continuation?.child_job_id || "").trim();
+    if (!childJobId) throw new Error("slot_continuation_child_job_missing");
+    setV3Progress("generating", "正在生成这个套图角色的新版本，并沿用统一审核流程。", "info", { forceNotice: true });
+    const generated = await runV3GenerationWithRecovery({
+      projectId: context.projectId,
+      jobId: childJobId,
+      body: {
+        quality_mode: "standard",
+        metadata: {
+          frontend_surface: "commercial_v3_project_mode",
+          source: "ecommerce_workspace",
+          ecommerce_slot_continuation: true,
+          ecommerce_slot_id: context.slotId,
+        },
+      },
+      expectedCount: 1,
+    });
+    const delivery = await request(v3EcommerceSlotDeliveryRoute(context));
+    const deliveryJobId = String(delivery?.current_delivery?.job_id || childJobId).trim();
+    const deliveredJob = deliveryJobId === childJobId
+      ? generated
+      : await request(`${v3ApiBase}/jobs/${encodeURIComponent(deliveryJobId)}`);
+    v3State.currentJob = deliveredJob;
+    syncV3ProjectOutputsFromPayload(deliveredJob);
+    renderV3Job(deliveredJob);
+    await refreshV3CurrentProject({ silent: true });
+    await loadV3ProjectOutputs({ silent: true, force: true });
+    if (deliveryJobId === childJobId) {
+      updateV3Notice("已生成这个角色的新版本；旧版本保留在过程记录中。", "success");
+    } else {
+      updateV3Notice("新版本未成为交付结果，已保留原有可用图片。", "warning");
+    }
+  } catch (error) {
+    updateV3Notice(`这张图的新版本暂时未完成：${friendlyError(error)}`, "error");
+  } finally {
+    clearV3RecoverPolling();
+    clearV3ProgressTimer();
+    setV3Busy(false);
+  }
+}
+
 async function runV3GenerationWithRecovery({ projectId, jobId, body, expectedCount = null }) {
   const endpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/generate`;
   const generationBody = { ...(body || {}), async_background: true };
@@ -6128,7 +6224,7 @@ function renderV3ResultBoard(job) {
     const metadata = item.metadata || {};
     const assetMetadata = metadata.asset_metadata || {};
     const recipe = v3EcommerceRecipeForItem(item);
-    const slot = item.slot || metadata.ecommerce_slot || assetMetadata.ecommerce_slot || recipe.slot || "";
+    const slot = v3EcommerceSlotForItem(item);
     const title = v3EcommerceSlotLabel(slot) || item.asset_id || item.candidate_id || `candidate_${index + 1}`;
     const purpose = recipe.visual_scene || item.purpose || item.recommendation || "商业视觉资产";
     const cardPurpose = recipe.selling_point || assetMetadata.ecommerce_selling_point || item.selling_point || item.purpose || item.recommendation || (scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示");
@@ -6137,6 +6233,7 @@ function renderV3ResultBoard(job) {
     const imageCandidates = v3OutputImageCandidates(item);
     const downloadUrl = v3OutputDownloadUrl(item);
     const hasRealImage = imageCandidates.length > 0;
+    const continuationContext = hasRealImage ? v3EcommerceSlotContinuationContext(item, job) : null;
     card.innerHTML = `
       ${
         hasRealImage
@@ -6157,6 +6254,7 @@ function renderV3ResultBoard(job) {
       <div class="v3-output-actions">
         <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
         <button type="button" data-v3-result-action="delete" data-v3-result-index="${index}">删除这张</button>
+        ${continuationContext ? `<button type="button" data-v3-result-action="ecommerce_slot_continuation" data-v3-result-index="${index}">重做这张</button>` : ""}
       </div>
     `;
     const image = card.querySelector(".v3-result-preview img");
@@ -6176,6 +6274,7 @@ function renderV3ResultBoard(job) {
         if (!resultItem) return;
         if (button.dataset.v3ResultAction === "select") await selectV3OutputItem(resultItem);
         if (button.dataset.v3ResultAction === "delete") await deleteV3OutputItem(resultItem);
+        if (button.dataset.v3ResultAction === "ecommerce_slot_continuation") await continueV3EcommerceSlot(resultItem, job);
       });
     });
     els.v3ResultBoard.appendChild(card);

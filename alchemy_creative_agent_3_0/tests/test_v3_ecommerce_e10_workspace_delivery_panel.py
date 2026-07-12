@@ -104,7 +104,7 @@ def test_ecommerce_workspace_exposes_existing_target_audience_profile_field() ->
     assert summary_block.index("...(suiteScopeLabel") < summary_block.index("...(targetAudience.length")
 
 
-def test_ecommerce_workspace_exposes_supplier_fact_review_without_slot_redo_controls() -> None:
+def test_ecommerce_workspace_exposes_supplier_fact_review_and_defers_slot_redo_to_doc105_runtime() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     html = INDEX_HTML.read_text(encoding="utf-8")
 
@@ -117,7 +117,8 @@ def test_ecommerce_workspace_exposes_supplier_fact_review_without_slot_redo_cont
     assert 'data-v3-fact-decision="confirmed"' in script
     assert 'data-v3-fact-decision="removed"' in script
     assert "下一次生成会保存并应用" in script
-    assert "重做这张" not in script
+    assert "function v3EcommerceSlotContinuationContext(item, job = v3State.currentJob)" in script
+    assert 'data-v3-result-action="ecommerce_slot_continuation"' in script
 
 
 def test_ecommerce_workspace_exposes_price_positioning_without_a_price_claim() -> None:

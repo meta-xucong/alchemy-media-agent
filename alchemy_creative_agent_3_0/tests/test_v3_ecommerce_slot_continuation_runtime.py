@@ -190,13 +190,16 @@ def test_general_and_legacy_jobs_cannot_call_ecommerce_slot_continuation() -> No
     assert unsupported.value.code == "slot_continuation_not_supported"
 
 
-def test_public_route_is_namespaced_while_general_frontend_stays_slot_free() -> None:
+def test_public_route_is_namespaced_while_general_frontend_is_runtime_gated() -> None:
     main_source = (ROOT / "src_skeleton" / "app" / "main.py").read_text(encoding="utf-8")
     app_source = (ROOT / "src_skeleton" / "app" / "static" / "app.js").read_text(encoding="utf-8")
 
     assert "/ecommerce-slots/{slot_id}/continuations" in main_source
     assert "/ecommerce-slots/{slot_id}/delivery" in main_source
-    assert "ecommerce-slots" not in app_source
+    assert "function v3IsEcommerceJob(job = v3State.currentJob)" in app_source
+    assert 'return scenarioId === "ecommerce" || templateId === "ecommerce_template";' in app_source
+    assert "if (!v3IsEcommerceJob(job)) return null;" in app_source
+    assert 'data-v3-result-action="ecommerce_slot_continuation"' in app_source
     routes = {route.path for route in app.routes if hasattr(route, "path")}
     assert "/api/v3/creative-agent/projects/{project_id}/jobs/{parent_job_id}/ecommerce-slots/{slot_id}/continuations" in routes
     assert "/api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}/ecommerce-slots/{slot_id}/delivery" in routes

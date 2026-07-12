@@ -77,10 +77,14 @@ user request + uploaded refs
    Doc111 it is passed only as a provider-native complete-image requirement.
    It does not add General Template semantics, local overlay rendering,
    `CopyRenderPlan`, fonts, OCR, coordinates, safe areas, or template retries.
-8. A single-role replacement must use the future Doc105 namespaced child-job
-   action. It may not reuse select/delete or internal retry, must keep the
-   parent immutable, and must inherit the frozen parent plan unless authorized
-   new evidence produces the one bounded recorded amendment.
+8. A single-role replacement uses the implemented Doc105 namespaced child-job
+   action: `POST /projects/{project_id}/jobs/{parent_job_id}/ecommerce-slots/
+   {slot_id}/continuations`. The workspace sends only correction direction;
+   it may not reuse select/delete or internal retry, call a provider directly,
+   or submit capability IDs. It then uses the ordinary child-job generation
+   route and the Doc105 delivery resolver. The parent remains immutable and
+   the child inherits its frozen plan unless authorized new evidence produces
+   the one bounded recorded amendment.
 9. Historical local text-pixel inputs remain readable but must return the
    structured `provider_native_required` state. Production text delivery still
    requires real authorized-material Doc111 Provider Gate C/D evidence.
@@ -132,9 +136,13 @@ versions, recipe metadata, and export metadata without changing General
 Template semantics.
 
 Historical jobs without Doc105 lineage stay readable but are not eligible for
-per-slot continuation. The workspace must not render a slot-redo control until
-the mainline route, lifecycle, delivery resolver, and browser tests in Doc105
-exist.
+per-slot continuation. The workspace renders the runtime-backed control only
+for a generated `ecommerce_template` image with readable lineage and a declared
+slot. It creates the append-only child, generates through the ordinary project
+route, then reads the Doc105 delivery resolver for the root job and slot to
+show the current delivery or preserve the prior one. General Template, planned
+jobs, legacy jobs, and images without a real delivery record receive no
+control.
 
 ## Shared gateway-managed failover
 

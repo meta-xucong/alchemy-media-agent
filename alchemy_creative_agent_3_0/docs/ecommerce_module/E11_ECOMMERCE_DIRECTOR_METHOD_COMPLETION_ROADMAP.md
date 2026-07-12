@@ -256,13 +256,19 @@ safe areas, or claim that an external marketplace will approve the result.
 
 ### D7 — per-slot continuation integration
 
-Status: blocked on mainline Doc105 route, lifecycle, resolver, and browser
-tests.
+Status: implemented against mainline Doc105 runtime `3fab10f`; text-pixel D6
+remains independently blocked.
 
-After mainline delivers the shared append-only continuation action, E-Commerce
-adds only its namespaced request body, result-card control, and planner-aware
-correction context. It must inherit the frozen parent capability plan by
-default and reuse the shared generation/review/retry path.
+The E-Commerce result card renders a real “重做这张” control only when its
+generated `ecommerce_template` job has readable Doc105 lineage, a concrete
+slot, and a real image. The control POSTs the namespaced continuation request
+with optional correction direction, invokes the ordinary child-job generation
+route, then reads the Doc105 delivery resolver. It shows the new child only if
+it becomes current delivery; otherwise it keeps the prior successful result.
+
+The UI does not submit capability IDs or new evidence, call a provider, proxy
+select/delete, expose automatic retry, or surface any continuation control in
+General Template, planned jobs, or historical jobs without lineage.
 
 ## 5. Ownership and dependency matrix
 

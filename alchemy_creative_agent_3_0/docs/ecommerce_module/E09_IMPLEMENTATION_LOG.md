@@ -554,6 +554,29 @@ Status: fixture contract implemented on `codex/ecommerce-module-docs`.
 
 Verification: focused D5/D4/Doc105 tests: 8 passed; full regression: 611 passed.
 
+## E32 — Doc105 slot-continuation workspace integration
+
+Status: implemented on `codex/ecommerce-module-docs` after rebasing to
+mainline `3fab10f`.
+
+Delivered:
+
+- A generated E-Commerce result card with readable Doc105 lineage and a real
+  slot now exposes a real “重做这张” action. General, planned, legacy, and
+  lineage-free jobs have no visible control.
+- The action creates the namespaced append-only child with optional correction
+  direction, uses the ordinary project-job generation endpoint, and then reads
+  the shared delivery resolver. It never calls a provider, select/delete, or a
+  template-local retry path.
+- If the child becomes the current delivery, it is shown as the new version;
+  otherwise the prior successful delivery remains visible. Evidence amendment
+  stays intentionally absent from this UI until an approved evidence-selection
+  surface exists.
+
+Verification: 26 focused Doc105 runtime/contract/workspace/frontend tests,
+Python compile, JavaScript syntax, and `git diff --check` passed; full V3,
+commercial frontend-shell, and provider-contract regression passed: 617 tests.
+
 ## E25 — director-method completion roadmap
 
 Status: documented and ready for phased implementation.
