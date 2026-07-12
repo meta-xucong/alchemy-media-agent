@@ -54,9 +54,9 @@ P2/P3 continuation status:
 ```text
 P2 mainline audit: documented in P05
 P3 scope: module-local General Photography shadow planner only
-P3 verification: 19 Photography focused, 29 isolation regression and 538 full V3 tests passed
+P3 verification: 19 Photography focused, 29 isolation regression and 544 full V3 tests passed
 P3 audit repairs: keyword boundaries, general-scene fallback, domain isolation and Doc93 prompt ownership
-P3 commit/push: pending milestone rebase and publication
+P3 publication: feature-branch milestone 450137f, rebased and verified on current origin/main
 production activation: still disabled
 ```
 

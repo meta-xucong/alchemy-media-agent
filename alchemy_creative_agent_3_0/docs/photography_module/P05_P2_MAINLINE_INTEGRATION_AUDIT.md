@@ -82,7 +82,7 @@ from the owning Photography worktree before publication.
 ```text
 Photography P1/P3 focused tests: 19 passed
 Scenario Pack / vertical / E-Commerce regressions: 29 passed
-full V3 test suite: 538 passed
+full V3 test suite after rebase: 544 passed
 compile and diff checks: passed
 ```
 
