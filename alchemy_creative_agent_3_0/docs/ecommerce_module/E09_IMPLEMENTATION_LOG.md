@@ -420,6 +420,42 @@ JavaScript syntax, Python compile, and diff checks: passed
 Evidence sources and profile update policy are maintained in E02. This
 milestone does not claim marketplace approval, text-pixel delivery, or
 real-provider activation acceptance.
+
+## E24 — external Amazon apparel benchmark integration
+
+Status: implemented and verified on `codex/ecommerce-module-docs`.
+
+Delivered:
+
+- Recorded the user-supplied external Amazon apparel demonstration as a
+  repository-safe benchmark card. The source screenshots stay outside the
+  repository; the retained asset is its product-truth, slot-map, and
+  acceptance logic rather than its brand or pixels.
+- Added the apparel evidence sequence: primary silhouette, worn front,
+  back/side construction, detail, real wear context, fit/size, and truthful
+  styling versatility. Amazon's generic campaign-cover role no longer occupies
+  the default listing suite; a dedicated detail slot does.
+- Added additive `unverified_visual_facts` metadata. A supplier-confirmed but
+  reference-invisible visual detail remains prompt-bound but forces
+  product-owner confirmation before delivery instead of silently passing as
+  visually verified truth.
+- Added the E24 automated planning fixture and made an unrelated food test
+  select its scenario role by slot rather than the former Amazon sequence
+  index.
+
+Boundary: this is E-Commerce category planning and metadata-only review. It
+does not add an A+ builder, alter General Template, duplicate Human Realism,
+or claim text-pixel/real-provider acceptance.
+
+Verification:
+
+```text
+focused E-Commerce tests: 28 passed
+full V3 tests: 535 passed
+commercial frontend shell + provider contract tests: 50 passed
+JavaScript syntax, Python compile, and diff checks: passed
+```
+
 ## E20 — product visual-positioning planning control
 
 Status: implemented and verified on `codex/ecommerce-module-docs`.

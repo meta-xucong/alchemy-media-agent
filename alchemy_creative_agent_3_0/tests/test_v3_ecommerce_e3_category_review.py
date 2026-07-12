@@ -17,10 +17,11 @@ def test_full_food_suite_covers_category_evidence_with_slot_targets() -> None:
     )
 
     coverage = output.critic.metadata["category_evidence"]
+    recipes = {recipe.slot: recipe for recipe in output.recipes}
     assert coverage["category_id"] == "food_beverage"
     assert coverage["missing"] == []
-    assert output.recipes[0].metadata["category_evidence_targets"] == ["package identity"]
-    assert output.recipes[3].metadata["category_evidence_targets"] == ["consumption context"]
+    assert recipes["main_image"].metadata["category_evidence_targets"] == ["package identity"]
+    assert recipes["scenario_image"].metadata["category_evidence_targets"] == ["consumption context"]
 
 
 def test_constrained_electronics_suite_warns_about_evidence_not_shown() -> None:

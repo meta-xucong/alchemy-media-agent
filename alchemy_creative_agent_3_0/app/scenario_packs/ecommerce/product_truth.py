@@ -41,9 +41,11 @@ class ProductTruthLockBuilder:
         parameters: dict[str, Any],
     ) -> ProductTruthLock:
         category = self._category(user_input, product_profile, parameters)
+        unverified_visual_facts = as_list(product_profile.get("unverified_visual_facts"))
         visible_attributes = self._visible_attributes(product_profile, uploaded_asset_ids)
         immutable_attributes = unique_preserve_order(
             [
+                *unverified_visual_facts,
                 *as_list(product_profile.get("immutable_attributes")),
                 *visible_attributes,
                 "product shape and proportions",
@@ -60,6 +62,10 @@ class ProductTruthLockBuilder:
             if self._claim_requires_evidence(claim) and not as_list(product_profile.get("evidence") or product_profile.get("evidence_sources"))
         ]
         warnings = [f"Claim needs evidence before visual use: {claim}" for claim in unsupported_claims]
+        warnings.extend(
+            f"Visual fact needs final-image confirmation before delivery: {fact}"
+            for fact in unverified_visual_facts
+        )
         if not uploaded_asset_ids:
             warnings.append("No product image was supplied; product truth must be reviewed manually.")
 
@@ -92,11 +98,17 @@ class ProductTruthLockBuilder:
                 "Logo, label, material, color, quantity, and visible components match supplied evidence.",
                 "Unsupported claims are removed or softened before export.",
                 "Overlay text does not cover key product details.",
+                *(
+                    ["Product-owner confirmation is required for visual facts not verified by the supplied reference image."]
+                    if unverified_visual_facts
+                    else []
+                ),
             ],
             warnings=warnings,
             metadata={
                 "source": "ProductTruthLockBuilder",
                 "unsupported_claims": unsupported_claims,
+                "unverified_visual_facts": unverified_visual_facts,
                 "uploaded_asset_count": len(uploaded_asset_ids),
             },
         )

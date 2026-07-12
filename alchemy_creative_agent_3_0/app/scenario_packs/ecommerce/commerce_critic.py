@@ -102,12 +102,29 @@ class CommerceCritic:
                 "Unsupported claims require softer copy or evidence before export.",
             )
         )
+        unverified_visual_facts = [
+            str(fact)
+            for fact in truth.metadata.get("unverified_visual_facts") or []
+            if str(fact).strip()
+        ]
+        checks.append(
+            self._check(
+                "unverified_visual_fact_confirmation",
+                not unverified_visual_facts,
+                "Supplier-provided visual facts not visible in the reference require product-owner confirmation before delivery.",
+            )
+        )
         if truth.warnings:
             warnings.extend(truth.warnings)
         if marketplace_profile.warnings:
             warnings.extend(marketplace_profile.warnings)
         if brief.claim_risk_warnings:
             warnings.extend(brief.claim_risk_warnings)
+        if unverified_visual_facts:
+            warnings.append(
+                "Supplier-provided visual facts need product-owner confirmation before delivery: "
+                + ", ".join(unverified_visual_facts)
+            )
         if localization_review_slots:
             warnings.append(
                 "Provider-native copy requires native-language review before export: " + ", ".join(localization_review_slots)
@@ -135,6 +152,7 @@ class CommerceCritic:
                 "recipe_count": len(recipes),
                 "localization_review_slots": localization_review_slots,
                 "claim_review_slots": claim_review_slots,
+                "unverified_visual_facts": unverified_visual_facts,
                 "category_evidence": category_coverage,
                 "duplicate_slot_pairs": duplicate_pairs,
             },

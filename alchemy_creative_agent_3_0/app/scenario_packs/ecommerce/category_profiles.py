@@ -31,7 +31,15 @@ _PROFILES = {
         "apparel", "Apparel, shoes, and bags",
         ("fit and silhouette", "front/back/side visibility", "material or texture", "wear context"),
         ("styling combination", "size guidance"),
-        ("main_image", "feature_image_1", "scenario_image", "detail_image", "size_spec_image", "trust_image"),
+        (
+            "main_image",
+            "feature_image_1",
+            "feature_image_2",
+            "detail_image",
+            "scenario_image",
+            "size_spec_image",
+            "trust_comparison_image",
+        ),
         ("preserve garment construction", "keep human proportions natural", "show fit evidence when requested"),
     ),
     "beauty": CategoryProfile(
@@ -79,7 +87,8 @@ _ALIASES = {
 _SLOT_EVIDENCE = {
     "apparel": {
         "main_image": ("fit and silhouette",),
-        "feature_image_1": ("front/back/side visibility",),
+        "feature_image_1": ("fit and silhouette", "front/back/side visibility"),
+        "feature_image_2": ("front/back/side visibility",),
         "detail_image": ("material or texture",),
         "scenario_image": ("wear context",),
         "size_spec_image": ("size guidance",),
@@ -114,6 +123,40 @@ _SLOT_EVIDENCE = {
 }
 
 
+_SLOT_GUIDANCE = {
+    "apparel": {
+        "main_image": (
+            "apparel_primary_silhouette",
+            "Show the complete garment in its supplied reference silhouette, color, pattern scale, and construction; do not substitute a generic garment.",
+        ),
+        "feature_image_1": (
+            "apparel_worn_front_fit",
+            "Show an honest front worn view that makes fit, silhouette, and the supplied front construction clear without hiding the garment behind props.",
+        ),
+        "feature_image_2": (
+            "apparel_back_or_side_construction",
+            "Show a distinct back or side construction view when that construction is supported by supplied evidence; otherwise use a distinct truthful angle and do not invent garment details.",
+        ),
+        "detail_image": (
+            "apparel_material_or_embroidery_detail",
+            "Show a close, correctly located textile, stitching, embroidery, or hardware detail while preserving the supplied pattern scale and finish.",
+        ),
+        "scenario_image": (
+            "apparel_real_wear_context",
+            "Show a believable adult wear context with natural posture and styling, while keeping the garment visibly identifiable and fit-relevant.",
+        ),
+        "size_spec_image": (
+            "apparel_fit_or_size_evidence",
+            "Use supplied size facts only; without confirmed measurements, show fit or relative-scale evidence and do not invent a size chart.",
+        ),
+        "trust_comparison_image": (
+            "apparel_styling_versatility",
+            "Show distinct, truthful styling alternatives using the same garment; do not imply a performance, certification, or comparison claim.",
+        ),
+    },
+}
+
+
 def resolve_category(product_category: str | None, *, user_input: str = "") -> CategoryProfile | None:
     raw = " ".join([str(product_category or ""), str(user_input or "")]).strip().lower()
     normalized = raw.replace("-", "_").replace("/", " ")
@@ -134,3 +177,23 @@ def evidence_for_slot(profile: CategoryProfile | None, slot: str) -> tuple[str, 
     if profile is None:
         return ()
     return _SLOT_EVIDENCE.get(profile.category_id, {}).get(slot, ())
+
+
+def slot_guidance_for(
+    profile: CategoryProfile | None,
+    slot: str,
+    *,
+    product_category: str = "",
+) -> dict[str, str]:
+    if profile is None:
+        return {"id": "", "direction": ""}
+    if profile.category_id == "apparel" and any(
+        token in product_category.lower()
+        for token in ("shoe", "sneaker", "boot", "sandal", "bag", "handbag", "backpack", "luggage")
+    ):
+        return {"id": "", "direction": ""}
+    guidance = _SLOT_GUIDANCE.get(profile.category_id, {}).get(slot)
+    if not guidance:
+        return {"id": "", "direction": ""}
+    guidance_id, direction = guidance
+    return {"id": guidance_id, "direction": direction}

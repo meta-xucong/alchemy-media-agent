@@ -61,6 +61,28 @@ The pack must be evidence-aware. Examples:
 - If packaging text is unreadable in the source, preserve the visible design
   without fabricating legible copy.
 
+## Garment evidence sequence
+
+The apparel pack turns a garment into distinct buyer-proof roles rather than
+repeating the same model pose:
+
+```text
+primary silhouette
+→ worn front fit
+→ back or side construction
+→ textile / embroidery / hardware detail
+→ real wear context
+→ fit or size evidence
+→ truthful styling alternatives
+```
+
+This is an E-Commerce category sequence, not an Amazon policy claim. Amazon
+main-image restrictions remain a separate verified constraint; the remaining
+roles are selected to make apparel fit, construction, material, and use
+legible. It applies to garments, not automatically to shoes or bags that share
+the first-release umbrella category. The detailed external benchmark and visual
+acceptance rubric are in `E10_EXTERNAL_AMAZON_APPAREL_BENCHMARK.md`.
+
 ## Suite count behavior
 
 Default count is category/platform dependent, but user-requested count wins.

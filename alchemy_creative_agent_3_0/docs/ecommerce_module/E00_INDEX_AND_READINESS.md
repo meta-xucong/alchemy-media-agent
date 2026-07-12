@@ -74,3 +74,4 @@ Before implementation starts, the team must have accepted:
 7. E07 milestones and commit boundaries.
 8. E08 test and acceptance matrix.
 9. E09 implementation record, including superseded assumptions.
+10. E10 external Amazon apparel benchmark and visual-acceptance card.

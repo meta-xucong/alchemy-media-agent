@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .contracts import CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
-from .category_profiles import CategoryProfile, evidence_for_slot
+from .category_profiles import CategoryProfile, evidence_for_slot, slot_guidance_for
 from .copy_bridge import EcommerceCopyBridge
 from .localization import resolve_localization
 from .marketplace_rules import (
@@ -66,6 +66,12 @@ class SellingPointToImagePlanner:
         text_forbidden_slots = set(
             (marketplace_profile.metadata.get("text_policy") or {}).get("text_forbidden_slots") or []
         )
+        unverified_visual_facts = [
+            str(fact)
+            for fact in truth.metadata.get("unverified_visual_facts") or []
+            if str(fact).strip()
+        ]
+        required_product_facts = list(dict.fromkeys([*unverified_visual_facts, *truth.immutable_attributes]))[:8]
         selling_points = brief.differentiated_selling_points or ["Clear product identity"]
         recipes: list[EcommerceAssetRecipe] = []
         for index, slot in enumerate(marketplace_profile.image_slots):
@@ -87,6 +93,11 @@ class SellingPointToImagePlanner:
             )
             provider_native_text = copy_plan["text"]
             evidence_intent = evidence_intent_for_slot(slot)
+            category_slot_guidance = slot_guidance_for(
+                category_profile,
+                slot,
+                product_category=truth.product_category,
+            )
             platform_compliance_intent = platform_compliance_intent_for_slot(
                 marketplace_profile.platform,
                 marketplace_profile.market,
@@ -101,6 +112,8 @@ class SellingPointToImagePlanner:
                 marketplace_profile=marketplace_profile,
             )
             visual_scene = f"{visual_scene} {evidence_intent['direction']}"
+            if category_slot_guidance["direction"]:
+                visual_scene = f"{visual_scene} {category_slot_guidance['direction']}"
             if platform_compliance_intent["direction"]:
                 visual_scene = f"{visual_scene} {platform_compliance_intent['direction']}"
             if creative_intent["direction"]:
@@ -113,7 +126,7 @@ class SellingPointToImagePlanner:
                     business_goal=goal,
                     selling_point=selling_point,
                     buyer_intent=buyer_intent,
-                    required_product_facts=truth.immutable_attributes[:8],
+                    required_product_facts=required_product_facts,
                     visual_scene=visual_scene,
                     overlay_text=None,
                     provider_native_text=provider_native_text,
@@ -131,6 +144,9 @@ class SellingPointToImagePlanner:
                         "market": marketplace_profile.market,
                         **(category_profile.metadata() if category_profile else {}),
                         "category_evidence_targets": list(evidence_for_slot(category_profile, slot)),
+                        "category_slot_guidance_id": category_slot_guidance["id"],
+                        "category_slot_guidance": category_slot_guidance["direction"],
+                        "unverified_visual_facts": unverified_visual_facts,
                         "copy_plan": copy_plan,
                         "evidence_intent_id": evidence_intent["id"],
                         "evidence_intent_direction": evidence_intent["direction"],

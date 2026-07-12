@@ -202,10 +202,10 @@ class MarketplaceRuleEngine:
                 "main_image",
                 "feature_image_1",
                 "feature_image_2",
+                "detail_image",
                 "scenario_image",
                 "size_spec_image",
                 "trust_comparison_image",
-                "ad_cover",
             ]
         if platform == "ozon":
             return [

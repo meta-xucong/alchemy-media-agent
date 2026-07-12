@@ -28,6 +28,10 @@
   roles and remains separately auditable;
 - historical `platform_visual_intent_id` jobs remain readable while new jobs
   use evidence/compliance/strategy metadata.
+- the Amazon apparel benchmark plans a distinct primary, worn-front,
+  back-or-side, detail, lifestyle, fit/size, and styling-versatility role;
+  a supplier-provided visual fact that is absent from the reference remains an
+  explicit delivery confirmation, not silent product truth.
 - General Template does not receive commerce suite metadata.
 
 ## Isolation tests
@@ -90,6 +94,15 @@ Each run must inspect:
   source of each placement/canvas decision;
 - final file resolution and export names;
 - retry history and delivery count.
+
+### External Amazon apparel benchmark
+
+`E10_EXTERNAL_AMAZON_APPAREL_BENCHMARK.md` defines the first retained visual
+benchmark card. Its screenshots are not repository assets and must not be used
+as pixel-match test data. The automated E24 fixture tests the role map and
+unverified-fact contract; a real-provider run must score product fidelity,
+slot differentiation, Amazon main-image compliance, human realism, and OCR/
+claim safety before it can become an accepted regression fixture.
 
 ## Activation gate
 
