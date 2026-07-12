@@ -37,11 +37,34 @@ def test_new_jobs_default_to_enforced_activation(monkeypatch) -> None:
 
 
 def test_product_only_job_excludes_human_and_portrait(monkeypatch) -> None:
-    result = _plan(monkeypatch, {"user_input": "Create a premium product hero for a desk lamp", "scenario_selection": {"scenario_id": "general_creative"}, "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}], "metadata": {"requested_image_count": 1}})
+    result = _plan(monkeypatch, {"user_input": "Create a premium product hero for a desk lamp with a brass handle", "scenario_selection": {"scenario_id": "general_creative"}, "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}], "metadata": {"requested_image_count": 1}})
     active = set(result.metadata["capability_activation_plan"]["dependency_order"])
     assert "product_identity" in active
     assert "human_realism" not in active
     assert "portrait_identity" not in active
+
+
+def test_product_on_person_hand_activates_human_realism_without_portrait_identity(monkeypatch) -> None:
+    result = _plan(
+        monkeypatch,
+        {
+            "user_input": "Create a product photograph of the uploaded drink held by an adult hand with visible fingers and forearm.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}],
+            "metadata": {"requested_image_count": 1},
+        },
+    )
+    active = set(result.metadata["capability_activation_plan"]["dependency_order"])
+    reason_codes = {
+        code
+        for item in result.metadata["capability_activation_intent"]["requested_capabilities"]
+        if item["capability_id"] == "human_realism"
+        for code in item["reason_codes"]
+    }
+
+    assert {"product_identity", "human_realism"} <= active
+    assert "portrait_identity" not in active
+    assert reason_codes == {"visible_human_surface"}
 
 
 def test_product_job_does_not_execute_human_builder(monkeypatch) -> None:

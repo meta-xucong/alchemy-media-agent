@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ...creative_core.rules import stable_id
@@ -41,6 +42,21 @@ PERSON_SIGNALS = (
     "真人",
 )
 STYLIZED_PERSON_SIGNALS = ("anime", "cartoon", "illustration", "3d character", "动漫", "漫画", "插画", "卡通", "三维角色")
+HUMAN_SURFACE_SIGNALS = (
+    "hand",
+    "hands",
+    "finger",
+    "fingers",
+    "forearm",
+    "skin",
+    "手持",
+    "手部",
+    "手指",
+    "手掌",
+    "前臂",
+    "手臂",
+    "皮肤",
+)
 PRODUCT_SIGNALS = ("product", "packshot", "listing", "商品", "产品", "包装", "主图", "电商")
 SCENE_SIGNALS = ("landscape", "interior", "architecture", "cityscape", "风景", "室内", "建筑", "场景", "空间")
 LAYOUT_SIGNALS = ("poster", "banner", "carousel", "layout", "headline", "海报", "横幅", "轮播", "排版", "标题", "文字")
@@ -100,6 +116,8 @@ def build_task_profile_and_intent(
     # A typed non-human identity reference is explicit subject evidence.  It
     # wins over ambiguous photographic vocabulary such as "portrait".
     person_text = any(signal in text for signal in PERSON_SIGNALS) and not bool(nonhuman_assets)
+    human_surface_text = _has_human_surface_signal(text) and not bool(nonhuman_assets)
+    visible_human_text = person_text or human_surface_text
     stylized_person = any(signal in text for signal in STYLIZED_PERSON_SIGNALS)
     portrait_assets = [
         asset_id
@@ -114,11 +132,13 @@ def build_task_profile_and_intent(
     scene_text = any(signal in text for signal in SCENE_SIGNALS)
     layout_text = any(signal in text for signal in LAYOUT_SIGNALS)
 
-    if person_text or portrait_assets:
-        evidence_id = add_evidence("visible_person", "user_input" if person_text else "declared_asset_role", True, 0.85)
+    if visible_human_text or portrait_assets:
+        evidence_source = "user_input" if visible_human_text else "declared_asset_role"
+        evidence_id = add_evidence("visible_person", evidence_source, True, 0.85)
         entity_id = add_entity("person", 0.85, portrait_assets, "strong" if portrait_assets else "none")
         if not stylized_person:
-            requested.append(RequestedCapability(capability_id="human_realism", reason_codes=["visible_real_person"], evidence_ids=[evidence_id], confidence=0.85))
+            reason_code = "visible_human_surface" if human_surface_text and not person_text else "visible_real_person"
+            requested.append(RequestedCapability(capability_id="human_realism", reason_codes=[reason_code], evidence_ids=[evidence_id], confidence=0.85))
         if portrait_assets:
             portrait_evidence = add_evidence("portrait_reference", "declared_asset_role", portrait_assets, 0.95)
             preservation.append(PreservationTarget(target_id=stable_id("preserve", entity_id), target_type="person_identity", source_entity_id=entity_id, source_asset_ids=portrait_assets, level="strong", allowed_changes=["pose", "expression", "camera", "lighting", "styling"], evidence_ids=[portrait_evidence]))
@@ -226,7 +246,7 @@ def build_task_profile_and_intent(
         subject_entities=entities,
         preservation_targets=preservation,
         allowed_changes=["composition", "camera", "lighting", "background"] if preservation else [],
-        visual_intent_tags=[tag for tag, active in (("portrait", person_text), ("nonhuman_subject", bool(nonhuman_assets)), ("product", product_text), ("scene", scene_text), ("layout", layout_text)) if active],
+        visual_intent_tags=[tag for tag, active in (("portrait", person_text), ("human_surface", human_surface_text), ("nonhuman_subject", bool(nonhuman_assets)), ("product", product_text), ("scene", scene_text), ("layout", layout_text)) if active],
         requested_deliverable_roles=list(metadata.get("requested_deliverable_roles") or []),
         explicit_user_controls={key: metadata[key] for key in ("requested_image_count", "variation_mode", "preserve_scene") if key in metadata},
         unknown_requirements=[] if entities else ["subject_type_not_explicit"],
@@ -241,6 +261,21 @@ def build_task_profile_and_intent(
         confidence=profile.confidence,
     )
     return profile, intent
+
+
+def _has_human_surface_signal(text: str) -> bool:
+    """Recognize explicit visible skin/hand evidence without matching product parts.
+
+    A desk-lamp *handle* is not a human hand. English body terms therefore use
+    word boundaries; CJK body terms remain literal evidence.
+    """
+    for signal in HUMAN_SURFACE_SIGNALS:
+        if signal.isascii() and signal.replace(" ", "").isalpha():
+            if re.search(rf"\b{re.escape(signal)}\b", text):
+                return True
+        elif signal in text:
+            return True
+    return False
 
 
 def _dedupe_requested(items: list[RequestedCapability]) -> list[RequestedCapability]:
