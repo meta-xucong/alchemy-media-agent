@@ -1078,7 +1078,12 @@ class ScenarioRuntime:
     ) -> CapabilityActivationPlan:
         frozen = request.metadata.get("capability_activation_plan")
         if isinstance(frozen, dict) and frozen.get("plan_id"):
+            if not request.trusted_capability_plan_reuse:
+                raise CapabilityActivationError("untrusted_frozen_capability_activation_plan")
             plan = CapabilityActivationPlan.model_validate(frozen)
+            provenance = request.metadata.get("capability_plan_provenance")
+            if not self._trusted_frozen_plan_provenance_matches(plan, provenance):
+                raise CapabilityActivationError("capability_activation_plan_provenance_mismatch")
             if plan.template_id != self._template_id(request, resolution):
                 raise CapabilityActivationError("frozen capability plan template does not match this job")
             if plan.scenario_id != resolution.manifest.scenario_id:
@@ -1097,6 +1102,28 @@ class ScenarioRuntime:
             policy,
             catalog_version,
             mode,
+        )
+
+    @staticmethod
+    def _trusted_frozen_plan_provenance_matches(
+        plan: CapabilityActivationPlan,
+        provenance: Any,
+    ) -> bool:
+        """Verify the Product API's immutable plan hand-off before reuse.
+
+        The Scenario Runtime deliberately does not query Product API storage.
+        Its public-facing callers therefore cannot turn an arbitrary metadata
+        plan into execution truth: Product API must first validate the parent
+        record, then attach this exact server-issued binding.
+        """
+
+        if not isinstance(provenance, dict):
+            return False
+        return (
+            provenance.get("authority") == "v3_product_api"
+            and str(provenance.get("plan_id") or "") == plan.plan_id
+            and str(provenance.get("plan_fingerprint") or "") == plan.fingerprint
+            and bool(str(provenance.get("issued_for_job_id") or "").strip())
         )
 
     def _combine_capability_runs(

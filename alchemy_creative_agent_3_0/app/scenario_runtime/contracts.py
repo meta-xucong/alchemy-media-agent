@@ -41,6 +41,11 @@ class ScenarioRuntimeRequest(V3BaseModel):
     uploaded_assets: list[UploadedAssetInfo] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # This is an internal service-to-runtime transport flag, never a Product
+    # API control.  A frozen plan can only be reused after Product API has
+    # resolved its persisted parent/job provenance and explicitly marked the
+    # hand-off trusted.
+    trusted_capability_plan_reuse: bool = False
 
     @model_validator(mode="before")
     @classmethod

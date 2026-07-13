@@ -717,6 +717,7 @@ class V3ProjectModeService:
         request: CreateProjectJobRequest | dict[str, Any],
         *,
         _trusted_photography_continuation: bool = False,
+        _trusted_capability_continuation: bool = False,
     ) -> ProductJobStatus:
         project = self._require_project(project_id)
         job_request = self._coerce_create_project_job_request(request)
@@ -829,6 +830,8 @@ class V3ProjectModeService:
         status = (
             self.product_service.create_trusted_photography_continuation_job(create_payload)
             if _trusted_photography_continuation
+            else self.product_service.create_trusted_capability_continuation_job(create_payload)
+            if _trusted_capability_continuation
             else self.product_service.create_job(create_payload)
         )
         bound_context_snapshot = status.metadata.get("project_context_snapshot")
@@ -946,6 +949,11 @@ class V3ProjectModeService:
             "requested_image_count": 1,
             "capability_activation_plan": frozen_plan.model_dump(mode="json"),
             "capability_activation_plan_id": frozen_plan.plan_id,
+            "capability_plan_reuse_source_job_id": parent_job_id,
+            "capability_plan_reuse_source_snapshot": self._capability_plan_source_snapshot(
+                parent_job_id,
+                anchor,
+            ),
             "continuation_evidence_asset_ids": evidence_ids,
             **amendment_metadata,
         }
@@ -966,6 +974,7 @@ class V3ProjectModeService:
                 "uploaded_asset_ids": self._continuation_product_evidence_ids(project, evidence_ids),
                 "metadata": child_metadata,
             },
+            _trusted_capability_continuation=True,
         )
         child_anchor = self._require_ecommerce_slot_anchor(project, child.job_id)
         child_lineage = EcommerceSlotLineage.model_validate(child_anchor["lineage"])
@@ -1148,6 +1157,11 @@ class V3ProjectModeService:
             "photography_role_lineage": lineage_payload.model_dump(mode="json"),
             "capability_activation_plan": frozen_plan.model_dump(mode="json"),
             "capability_activation_plan_id": frozen_plan.plan_id,
+            "capability_plan_reuse_source_job_id": parent_job_id,
+            "capability_plan_reuse_source_snapshot": self._capability_plan_source_snapshot(
+                parent_job_id,
+                anchor,
+            ),
             "continuation_reference_asset_ids": evidence_ids,
             **amendment_metadata,
         }
@@ -2151,6 +2165,24 @@ class V3ProjectModeService:
 
     def _continuation_product_evidence_ids(self, project: ProjectRecord, evidence_ids: list[str]) -> list[str]:
         return [asset_id for asset_id in evidence_ids if self._is_ready_product_upload(asset_id)]
+
+    @staticmethod
+    def _capability_plan_source_snapshot(parent_job_id: str, anchor: dict[str, Any]) -> dict[str, Any]:
+        """Carry the durable parent binding across a Project Mode restart.
+
+        Product API's in-memory job store is deliberately replaceable.  The
+        append-only Project anchor is the persisted continuation authority, so
+        it transports the minimal source-plan proof for the internal Product
+        API hand-off after a process restart.
+        """
+
+        planning_request = dict(anchor.get("planning_request") or {})
+        metadata = dict(planning_request.get("metadata") or {})
+        return {
+            "job_id": parent_job_id,
+            "capability_activation_plan": dict(anchor.get("frozen_capability_activation_plan") or {}),
+            "capability_plan_provenance": dict(metadata.get("capability_plan_provenance") or {}),
+        }
 
     def _capability_plan_amendment_enabled(self) -> bool:
         return os.getenv("V3_CAPABILITY_PLAN_AMENDMENT_ENABLED", "false").strip().lower() == "true"

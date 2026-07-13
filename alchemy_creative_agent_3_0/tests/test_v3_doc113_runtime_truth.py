@@ -7,7 +7,10 @@ without depending on a real provider.
 
 from types import SimpleNamespace
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.generation_router.providers import GenerationProvider
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.shared_capabilities import (
@@ -49,6 +52,32 @@ def test_frozen_enforced_plan_cannot_be_downgraded_by_environment(monkeypatch) -
     )
 
     assert runtime._capability_activation_mode(request) == "enforced"
+
+
+def test_direct_runtime_rejects_a_frozen_plan_without_product_api_provenance() -> None:
+    runtime = ScenarioRuntime()
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one still life",
+            "metadata": {"capability_activation_plan": _frozen_enforced_plan()},
+        }
+    )
+
+    assert result.status.value == "blocked"
+    assert any("untrusted_frozen_capability_activation_plan" in warning for warning in result.warnings)
+
+
+def test_public_product_api_rejects_runtime_owned_frozen_plan_metadata() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Create one still life",
+                "metadata": {"capability_activation_plan": _frozen_enforced_plan()},
+            }
+        )
 
 
 def test_enforced_combined_run_preserves_an_accepted_executor_result() -> None:

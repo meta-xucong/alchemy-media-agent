@@ -541,21 +541,55 @@ class V3ProductApiService:
         continuation.
         """
 
-        return self._create_creative_job(request, trusted_photography_continuation=True)
+        return self.create_trusted_capability_continuation_job(
+            request,
+            trusted_photography_continuation=True,
+        )
+
+    def create_trusted_capability_continuation_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        trusted_photography_continuation: bool = False,
+    ) -> ProductJobStatus:
+        """Internal-only continuation seam for a server-validated frozen plan.
+
+        Project Mode is responsible for append-only lineage.  This service
+        verifies that the plan comes from its persisted parent job (or from
+        its one recorded amendment) before Scenario Runtime may reuse it.
+        """
+
+        return self._create_creative_job(
+            request,
+            trusted_photography_continuation=trusted_photography_continuation,
+            trusted_capability_plan_reuse=True,
+        )
 
     def _create_creative_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         trusted_photography_continuation: bool = False,
+        trusted_capability_plan_reuse: bool = False,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
+        self._assert_runtime_metadata_server_owned(
+            create_request,
+            trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+        )
+        if trusted_capability_plan_reuse:
+            self._validate_and_bind_trusted_capability_plan_reuse(create_request)
         self._resolve_and_pin_photographer_profile(
             create_request,
             trusted_photography_continuation=trusted_photography_continuation,
         )
         self._prepare_ecommerce_creative_context(create_request)
-        runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
+        runtime_result = self.scenario_runtime.plan_job(
+            self._runtime_request_payload(
+                create_request,
+                trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+            )
+        )
         planning_result = runtime_result.planning_result
         estimate = self._estimate_for_result(planning_result) if planning_result else self._empty_balance_estimate()
         status = ProductJobStatusValue.PLANNED if planning_result else ProductJobStatusValue.BLOCKED
@@ -586,6 +620,7 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        self._bind_capability_plan_provenance(create_request, job_id)
         self._bind_internal_copy_render_plan(create_request)
         self._seed_ecommerce_slot_root_lineage(create_request, job_id)
         self._seed_photography_role_root_lineage(create_request, job_id)
@@ -634,6 +669,10 @@ class V3ProductApiService:
         """Plan a possible evidence amendment without creating a job or provider call."""
 
         create_request = self._coerce_create_job_request(request)
+        self._assert_runtime_metadata_server_owned(
+            create_request,
+            trusted_capability_plan_reuse=False,
+        )
         self._resolve_and_pin_photographer_profile(create_request)
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         plan = runtime_result.metadata.get("capability_activation_plan")
@@ -5181,8 +5220,16 @@ class V3ProductApiService:
                 return message.strip()
         return value.strip()
 
-    def _runtime_request_payload(self, request: CreateCreativeJobRequest) -> dict[str, Any]:
+    def _runtime_request_payload(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        trusted_capability_plan_reuse: bool | None = None,
+    ) -> dict[str, Any]:
         self._prepare_ecommerce_creative_context(request)
+        metadata = dict(request.metadata or {})
+        has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
+        trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
         return {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,
@@ -5190,8 +5237,127 @@ class V3ProductApiService:
             "uploaded_asset_ids": list(request.uploaded_asset_ids),
             "uploaded_assets": self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids)),
             "product_profile": dict(request.product_profile),
-            "metadata": dict(request.metadata),
+            "metadata": metadata,
+            "trusted_capability_plan_reuse": trusted_reuse,
         }
+
+    _SERVER_OWNED_RUNTIME_METADATA = frozenset(
+        {
+            "capability_activation_plan",
+            "capability_activation_plan_id",
+            "capability_catalog_version",
+            "capability_activation_mode",
+            "capability_plan_provenance",
+            "capability_execution_envelope",
+            "capability_execution_envelope_id",
+            "normalized_v3_job_intent",
+            "normalized_v3_job_intent_id",
+            "template_deliverable_plan",
+            "template_deliverable_plan_id",
+            "resolved_constraint_ledger",
+            "resolved_constraint_ledger_id",
+        }
+    )
+
+    def _assert_runtime_metadata_server_owned(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        trusted_capability_plan_reuse: bool,
+    ) -> None:
+        """Keep browser/API metadata from impersonating a frozen runtime job."""
+
+        supplied = set(dict(request.metadata or {})).intersection(self._SERVER_OWNED_RUNTIME_METADATA)
+        if supplied and not trusted_capability_plan_reuse:
+            raise ValueError(
+                "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
+            )
+
+    def _validate_and_bind_trusted_capability_plan_reuse(self, request: CreateCreativeJobRequest) -> None:
+        """Bind a child to a persisted parent plan or its one audited amendment."""
+
+        metadata = dict(request.metadata or {})
+        plan_payload = metadata.get("capability_activation_plan")
+        source_job_id = str(metadata.get("capability_plan_reuse_source_job_id") or "").strip()
+        if not isinstance(plan_payload, dict) or not source_job_id:
+            raise ValueError("trusted_capability_plan_reuse_contract_missing")
+        source = self.job_store.get(source_job_id)
+        if source is not None:
+            source_metadata = dict(source.request.metadata or {})
+            source_plan = source_metadata.get("capability_activation_plan")
+        else:
+            # A Project Mode restart may reload the durable project store
+            # before its in-memory Product API cache.  The Project service
+            # supplies the immutable parent anchor only through this
+            # internal method, so validate that self-contained snapshot just
+            # as strictly instead of weakening the continuation contract.
+            snapshot = metadata.get("capability_plan_reuse_source_snapshot")
+            if not isinstance(snapshot, dict) or str(snapshot.get("job_id") or "") != source_job_id:
+                raise ValueError("trusted_capability_plan_reuse_source_not_found")
+            source_metadata = {
+                "capability_plan_provenance": snapshot.get("capability_plan_provenance"),
+            }
+            source_plan = snapshot.get("capability_activation_plan")
+        if not isinstance(source_plan, dict):
+            raise ValueError("trusted_capability_plan_reuse_source_plan_missing")
+
+        plan_id = str(plan_payload.get("plan_id") or "").strip()
+        fingerprint = str(plan_payload.get("fingerprint") or "").strip()
+        source_plan_id = str(source_plan.get("plan_id") or "").strip()
+        source_fingerprint = str(source_plan.get("fingerprint") or "").strip()
+        same_source_plan = plan_id == source_plan_id and fingerprint == source_fingerprint
+        amendment = metadata.get("capability_plan_amendment")
+        allowed_amendment = (
+            isinstance(amendment, dict)
+            and str(amendment.get("original_plan_id") or "") == source_plan_id
+            and str(amendment.get("amended_plan_id") or "") == plan_id
+            and int(amendment.get("amendment_index") or 1) == 1
+        )
+        if not same_source_plan and not allowed_amendment:
+            raise ValueError("trusted_capability_plan_reuse_source_plan_mismatch")
+        source_provenance = source_metadata.get("capability_plan_provenance")
+        if isinstance(source_provenance, dict) and source_provenance:
+            if (
+                source_provenance.get("authority") != "v3_product_api"
+                or str(source_provenance.get("issued_for_job_id") or "") != source_job_id
+                or str(source_provenance.get("plan_id") or "") != source_plan_id
+                or str(source_provenance.get("plan_fingerprint") or "") != source_fingerprint
+            ):
+                raise ValueError("trusted_capability_plan_reuse_source_provenance_mismatch")
+        metadata["capability_plan_provenance"] = {
+            "authority": "v3_product_api",
+            "issued_for_job_id": "pending_product_job",
+            "source_job_id": source_job_id,
+            "source_plan_id": source_plan_id,
+            "plan_id": plan_id,
+            "plan_fingerprint": fingerprint,
+            "reuse_kind": "amendment" if allowed_amendment and not same_source_plan else "continuation",
+        }
+        request.metadata = metadata
+
+    def _bind_capability_plan_provenance(self, request: CreateCreativeJobRequest, job_id: str) -> None:
+        """Persist a server-issued binding after a root or child plan is known."""
+
+        metadata = dict(request.metadata or {})
+        plan = metadata.get("capability_activation_plan")
+        if not isinstance(plan, dict):
+            return
+        provenance = metadata.get("capability_plan_provenance")
+        base = dict(provenance) if isinstance(provenance, dict) else {}
+        base.update(
+            {
+                "authority": "v3_product_api",
+                "issued_for_job_id": job_id,
+                "plan_id": str(plan.get("plan_id") or ""),
+                "plan_fingerprint": str(plan.get("fingerprint") or ""),
+            }
+        )
+        if not str(base.get("source_job_id") or "").strip():
+            base["source_job_id"] = job_id
+            base["source_plan_id"] = str(plan.get("plan_id") or "")
+            base["reuse_kind"] = "root"
+        metadata["capability_plan_provenance"] = base
+        request.metadata = metadata
 
     def _prepare_ecommerce_creative_context(self, request: CreateCreativeJobRequest) -> None:
         """Pin server-derived facts before the remote Brain sees an E-Commerce job.
