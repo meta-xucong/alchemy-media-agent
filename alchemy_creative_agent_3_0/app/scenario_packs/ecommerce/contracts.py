@@ -24,6 +24,21 @@ class ProductTruthLock(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ApparelOnModelEvidenceProfile(V3BaseModel):
+    """E-Commerce evidence boundary for a Brain-directed apparel-on-model set.
+
+    This is intentionally not an image recipe: it never names a slot, scene,
+    pose, camera, crop, or output order.  The remote Brain maps the available
+    dimensions to the requested outputs and the runtime freezes that result.
+    """
+
+    applies: bool = False
+    source_evidence: list[str] = Field(default_factory=list)
+    allowed_evidence_dimensions: list[str] = Field(default_factory=list)
+    required_distinct_dimension_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class CommerceIntelligenceBrief(V3BaseModel):
     target_audience: list[str] = Field(default_factory=list)
     buying_motivations: list[str] = Field(default_factory=list)
@@ -56,8 +71,9 @@ class EcommerceCreativeContext(V3BaseModel):
     """
 
     context_id: str
-    source_version: str = "ecommerce_creative_context_v1"
+    source_version: str = "ecommerce_creative_context_v2"
     product_truth: ProductTruthLock
+    apparel_on_model_evidence_profile: ApparelOnModelEvidenceProfile | None = None
     platform_constraints: dict[str, Any] = Field(default_factory=dict)
     category_evidence_questions: list[str] = Field(default_factory=list)
     seller_inputs: dict[str, Any] = Field(default_factory=dict)

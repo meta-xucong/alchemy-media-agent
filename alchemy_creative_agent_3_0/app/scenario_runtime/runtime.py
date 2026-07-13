@@ -261,6 +261,7 @@ class ScenarioRuntime:
             )
             self._require_remote_creative_brain(request, policy, brain_result)
             deliverable_plan = self._build_template_deliverable_plan(
+                request,
                 normalized_intent,
                 policy,
                 brain_result,
@@ -299,6 +300,7 @@ class ScenarioRuntime:
                 mode,
             )
             deliverable_plan = self._build_template_deliverable_plan(
+                request,
                 normalized_intent,
                 policy,
                 brain_result,
@@ -335,6 +337,7 @@ class ScenarioRuntime:
             mode,
         )
         deliverable_plan = self._build_template_deliverable_plan(
+            request,
             normalized_intent,
             policy,
             brain_result,
@@ -564,6 +567,7 @@ class ScenarioRuntime:
 
     def _build_template_deliverable_plan(
         self,
+        request: ScenarioRuntimeRequest,
         normalized_intent: NormalizedV3JobIntent,
         policy: TemplateCapabilityPolicy,
         brain_result: BrainRunResult,
@@ -573,6 +577,11 @@ class ScenarioRuntime:
         expected = normalized_intent.effective_image_count
         if brain_result.image_set_plan.image_count != expected or len(directions) != expected:
             raise CapabilityActivationError("template_deliverable_plan_output_count_mismatch")
+        evidence_dimensions_by_output = self._validated_ecommerce_apparel_evidence_dimensions(
+            request=request,
+            brain_result=brain_result,
+            expected_count=expected,
+        )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -582,22 +591,29 @@ class ScenarioRuntime:
         deliverables: list[TemplateDeliverable] = []
         for index, direction in enumerate(directions, 1):
             recipe = role_recipes[index - 1] if index <= len(role_recipes) and isinstance(role_recipes[index - 1], dict) else {}
+            evidence_dimensions = evidence_dimensions_by_output.get(index, [])
+            factual_acceptance = (
+                ["product_truth", "platform_factual_constraints"]
+                if normalized_intent.scenario_id == "ecommerce"
+                else []
+            )
+            if evidence_dimensions:
+                factual_acceptance.append("apparel_on_model_evidence_contract")
+            deliverable_metadata = (
+                {"specialized_role_key": recipe.get("role_key")}
+                if recipe.get("role_key")
+                else {}
+            )
+            if evidence_dimensions:
+                deliverable_metadata["brain_evidence_dimensions"] = evidence_dimensions
             deliverables.append(
                 TemplateDeliverable(
                     deliverable_id=stable_id("template_deliverable", normalized_intent.intent_id, index, direction),
                     output_index=index,
                     image_intent=direction,
                     source=creative_owner,
-                    factual_acceptance=(
-                        ["product_truth", "platform_factual_constraints"]
-                        if normalized_intent.scenario_id == "ecommerce"
-                        else []
-                    ),
-                    metadata=(
-                        {"specialized_role_key": recipe.get("role_key")}
-                        if recipe.get("role_key")
-                        else {}
-                    ),
+                    factual_acceptance=factual_acceptance,
+                    metadata=deliverable_metadata,
                 )
             )
         return TemplateDeliverablePlan(
@@ -622,6 +638,59 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _validated_ecommerce_apparel_evidence_dimensions(
+        *,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        expected_count: int,
+    ) -> dict[int, list[str]]:
+        """Freeze only a Brain-chosen apparel evidence contract for multi-output E-Commerce.
+
+        The E-Commerce context provides an allowed vocabulary and a required
+        diversity floor. It never contributes a local output map, role, scene,
+        camera, crop, pose, or expression recipe.
+        """
+
+        if expected_count <= 1:
+            return {}
+        context = request.metadata.get("ecommerce_creative_context")
+        if not isinstance(context, dict):
+            return {}
+        profile = context.get("apparel_on_model_evidence_profile")
+        if not isinstance(profile, dict) or not profile.get("applies"):
+            return {}
+        allowed = {
+            str(item).strip()
+            for item in profile.get("allowed_evidence_dimensions", [])
+            if str(item).strip()
+        }
+        required_distinct = min(
+            expected_count,
+            max(0, int(profile.get("required_distinct_dimension_count") or 0)),
+        )
+        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
+        if len(raw_entries) != expected_count:
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_missing_or_incomplete")
+        resolved: dict[int, list[str]] = {}
+        for entry in raw_entries:
+            index = int(entry.output_index)
+            dimensions = list(dict.fromkeys(str(item).strip() for item in entry.evidence_dimensions if str(item).strip()))
+            if index in resolved or index < 1 or index > expected_count or not dimensions:
+                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
+            if not set(dimensions).issubset(allowed):
+                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid_dimension")
+            resolved[index] = dimensions
+        if sorted(resolved) != list(range(1, expected_count + 1)):
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
+        signatures = [tuple(dimensions) for _, dimensions in sorted(resolved.items())]
+        if len(set(signatures)) != len(signatures):
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_repeated_output")
+        distinct_dimensions = {dimension for dimensions in resolved.values() for dimension in dimensions}
+        if len(distinct_dimensions) < required_distinct:
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_insufficient_diversity")
+        return resolved
 
     def _prepare_specialized_scenario_plan(
         self,
@@ -1100,6 +1169,7 @@ class ScenarioRuntime:
             request.product_profile,
             has_reference_evidence=bool(self._uploaded_assets(request)),
         )
+
         for key, value in sorted(dict(request.product_profile or {}).items()):
             if value in (None, "", [], {}):
                 continue

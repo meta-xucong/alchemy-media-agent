@@ -13,7 +13,7 @@ from ..base import ScenarioPack
 from .category_profiles import resolve_category
 from .commerce_brief import CommerceBriefBuilder
 from .commerce_critic import CommerceCritic
-from .contracts import EcommerceCreativeContext, EcommercePackOutput
+from .contracts import ApparelOnModelEvidenceProfile, EcommerceCreativeContext, EcommercePackOutput, ProductTruthLock
 from .export_packager import EcommerceExportPackager
 from .manifest import ECOMMERCE_MANIFEST
 from .marketplace_rules import MarketplaceRuleEngine
@@ -67,6 +67,11 @@ class EcommerceScenarioPackPlanner:
             uploaded_asset_ids=uploaded_asset_ids,
             parameters=scenario_parameters,
         )
+        apparel_on_model_profile = self._apparel_on_model_evidence_profile(
+            user_input=user_input,
+            truth=truth,
+            requested_image_count=_bounded_requested_count(scenario_parameters.get("requested_image_count")) or 1,
+        )
         category = resolve_category(product_profile.get("product_category"), user_input=user_input)
         approved_copy = _explicit_approved_copy(product_profile, scenario_parameters)
         locale = (
@@ -106,6 +111,7 @@ class EcommerceScenarioPackPlanner:
                 scenario_parameters,
             ),
             product_truth=truth,
+            apparel_on_model_evidence_profile=apparel_on_model_profile,
             platform_constraints=platform_constraints,
             category_evidence_questions=category_questions,
             seller_inputs=seller_inputs,
@@ -119,6 +125,40 @@ class EcommerceScenarioPackPlanner:
                 "category_id": category.category_id if category else "generic_product",
                 "platform_profile_id": marketplace.metadata.get("profile_id"),
                 "platform_profile_version": marketplace.metadata.get("profile_version"),
+                "apparel_on_model_evidence_contract": bool(apparel_on_model_profile and apparel_on_model_profile.applies),
+            },
+        )
+
+    @staticmethod
+    def _apparel_on_model_evidence_profile(
+        *,
+        user_input: str,
+        truth: ProductTruthLock,
+        requested_image_count: int,
+    ) -> ApparelOnModelEvidenceProfile | None:
+        construction = truth.apparel_construction
+        if construction is None or not construction.facts or not _requests_product_on_person(user_input):
+            return None
+        dimensions = [
+            "product_view",
+            "movement",
+            "construction_proof",
+            "context",
+            "camera_crop",
+            "expression_pose",
+        ]
+        return ApparelOnModelEvidenceProfile(
+            applies=True,
+            source_evidence=unique_preserve_order([construction.source_summary, *truth.evidence_sources]),
+            allowed_evidence_dimensions=dimensions,
+            required_distinct_dimension_count=(
+                min(requested_image_count, len(dimensions)) if requested_image_count > 1 else 0
+            ),
+            metadata={
+                "source": "EcommerceScenarioPackPlanner",
+                "static_recipe_present": False,
+                "brain_maps_dimensions_to_requested_outputs": True,
+                "single_output_product_first": requested_image_count == 1,
             },
         )
 
@@ -231,6 +271,22 @@ def _category_evidence_questions(category) -> list[str]:
         return []
     values = [*category.required_evidence, *category.optional_evidence, *category.review_checks]
     return unique_preserve_order(str(item).strip() for item in values if str(item).strip())[:12]
+
+
+def _requests_product_on_person(user_input: str) -> bool:
+    text = str(user_input or "").lower()
+    english = (
+        "on model",
+        "model wearing",
+        "person wearing",
+        "wearing the supplied",
+        "wearing this",
+        "try-on",
+        "try on",
+        "apparel-on-model",
+    )
+    chinese = ("模特上身", "真人上身", "试穿", "穿着", "上身展示")
+    return any(token in text for token in english) or any(token in str(user_input or "") for token in chinese)
 
 
 def _bounded_requested_count(value: object) -> int | None:

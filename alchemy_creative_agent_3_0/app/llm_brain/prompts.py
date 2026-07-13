@@ -25,7 +25,12 @@ user-approved literal copy, and platform constraints. Decide the complete
 product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
-operation."""
+operation. If apparel_on_model_evidence_profile applies and more than one
+output is requested, return exactly one evidence_dimensions_by_output entry
+per output. Map only the profile's allowed evidence dimensions, use enough
+distinct dimensions to meet its required_distinct_dimension_count, and do not
+turn that mapping into a stock role, scene, camera, crop, pose, or output-order
+recipe."""
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -115,9 +120,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             },
             "image_set_plan": {
                 "set_goal": "string",
-                "image_count": "integer 1-4",
+                "image_count": "integer exactly equal to requested_image_count",
                 "size": "string|null",
                 "shot_plan": ["string"],
+                "evidence_dimensions_by_output": [
+                    {"output_index": "integer", "evidence_dimensions": ["string"]}
+                ],
                 "composition_rules": ["string"],
                 "quality_bar": ["string"],
             },
