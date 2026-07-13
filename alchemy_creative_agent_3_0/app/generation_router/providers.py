@@ -2037,7 +2037,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if not allow_product_language and len(user_direction) < 180
                 else ""
             ),
-            f"Platform: {asset.platform.value}; aspect ratio: {asset.aspect_ratio}" if asset else "",
+            self._asset_canvas_instruction(request, asset),
             "Composition is owned by the LLM creative brief and image provider; use any planning focus only as advisory context, never as fixed coordinates or overlay lanes.",
             "Generate exactly one image; it must be a single complete image frame. Do not create a collage, split screen, contact sheet, storyboard, before-after comparison, duplicated frame, or grid of separate images inside the same output.",
             provider_text_instruction,
@@ -3267,6 +3267,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "16:9": "1536x1024",
         }
         return mapping.get(ratio, "1024x1024")
+
+    def _asset_canvas_instruction(self, request: GenerationRequest, asset: AssetSpec | None) -> str:
+        if asset is None:
+            return ""
+        requested_size = str(
+            request.metadata.get("requested_image_size")
+            or request.generation_plan.metadata.get("requested_image_size")
+            or ""
+        ).strip()
+        explicit_ratio = {
+            "1024x1024": "1:1",
+            "1024x1536": "2:3",
+            "1536x1024": "3:2",
+        }.get(requested_size)
+        aspect_ratio = explicit_ratio or asset.aspect_ratio
+        return f"Platform: {asset.platform.value}; aspect ratio: {aspect_ratio}"
 
     def _quality_for_request(self, request: GenerationRequest) -> str:
         quality_mode = str(request.metadata.get("quality_mode") or request.generation_plan.metadata.get("quality_mode") or "standard")

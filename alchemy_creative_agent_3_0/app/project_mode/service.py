@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -2512,7 +2513,9 @@ class V3ProjectModeService:
         requested_count = _bounded_requested_image_count(request.metadata.get("requested_image_count"))
         if requested_count is not None:
             parameters["requested_image_count"] = requested_count
-        requested_size = str(request.metadata.get("requested_image_size") or "").strip()
+        requested_size = _explicit_requested_image_size(request.metadata.get("requested_image_size"))
+        if requested_size is None:
+            requested_size = _infer_general_requested_image_size(request.user_input)
         if requested_size:
             parameters["requested_image_size"] = requested_size
         return {
@@ -5116,3 +5119,46 @@ def _bounded_requested_image_count(value: object) -> int | None:
         return max(1, min(4, int(value)))
     except (TypeError, ValueError):
         return None
+
+
+_REQUESTED_IMAGE_SIZE_ALIASES = {
+    "1024x1024": "1024x1024",
+    "1024×1024": "1024x1024",
+    "1024 by 1024": "1024x1024",
+    "1024x1536": "1024x1536",
+    "1024×1536": "1024x1536",
+    "1024 by 1536": "1024x1536",
+    "1536x1024": "1536x1024",
+    "1536×1024": "1536x1024",
+    "1536 by 1024": "1536x1024",
+}
+
+
+def _explicit_requested_image_size(value: object) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return _REQUESTED_IMAGE_SIZE_ALIASES.get(normalized)
+
+
+def _infer_general_requested_image_size(user_input: str | None) -> str | None:
+    """Honor an explicit General canvas instruction before the 4:5 default.
+
+    General's default social canvas is an implementation fallback, not an
+    instruction that may override a user's stated output format.  Only clear
+    dimension or aspect-ratio language is inferred here; vague words such as
+    "cinematic" or "banner-like" intentionally retain the default.
+    """
+
+    text = re.sub(r"\s+", " ", str(user_input or "").lower())
+    compact = text.replace(" ", "")
+    for alias, size in _REQUESTED_IMAGE_SIZE_ALIASES.items():
+        if alias.replace(" ", "") in compact:
+            return size
+    ratio_patterns = (
+        ("1536x1024", r"(?<!\d)3\s*[:：]\s*2(?!\d)"),
+        ("1024x1536", r"(?<!\d)2\s*[:：]\s*3(?!\d)"),
+        ("1024x1024", r"(?<!\d)1\s*[:：]\s*1(?!\d)"),
+    )
+    for size, pattern in ratio_patterns:
+        if re.search(pattern, text):
+            return size
+    return None

@@ -1758,3 +1758,20 @@ def test_general_project_job_preserves_requested_image_count_and_size() -> None:
 
     assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 3
     assert job["metadata"]["scenario_parameters"]["requested_image_size"] == "1024x1536"
+
+
+def test_general_project_job_infers_explicit_wide_canvas_from_user_input() -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects({"user_goal": "Create a landscape image"})["project"]
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "user_input": "Create exactly one wide 3:2 landscape photograph, 1536 by 1024.",
+            "template_id": "general_template",
+            "metadata": {"requested_image_count": 1},
+        },
+    )
+
+    assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 1
+    assert job["metadata"]["scenario_parameters"]["requested_image_size"] == "1536x1024"

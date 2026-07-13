@@ -511,6 +511,7 @@ def test_production_provider_respects_requested_size_without_multiplying_group_c
     assert len(records) == 3
     assert response.provider_metadata["requested_image_count"] == 3
     assert response.provider_metadata["requested_image_size"] == "1536x1024"
+    assert "aspect ratio: 3:2" in response.candidates[0].metadata["final_provider_prompt"]
 
 
 def test_production_provider_consumes_visual_retry_patch_and_uniques_candidate_id(tmp_path, monkeypatch) -> None:
