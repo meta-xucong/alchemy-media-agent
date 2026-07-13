@@ -62,7 +62,7 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
 
 
 def photography_capability_policy() -> TemplateCapabilityPolicy:
-    """Photography owns direction while the shared runtime owns execution quality."""
+    """Photography freezes delivery contracts; the remote Brain owns direction."""
 
     return TemplateCapabilityPolicy(
         policy_id="photographer_template_capabilities",
@@ -81,7 +81,15 @@ def photography_capability_policy() -> TemplateCapabilityPolicy:
         ],
         deliverable_role_owner="photography_scenario_pack",
         review_threshold_profile="commercial_strict",
-        metadata={"specialized_direction_capability": "photography_direction"},
+        # A Photography role is an auditable delivery binding, not a local
+        # camera/lighting/pose recipe.  Its natural-language image intention
+        # must therefore come from the remote Central Brain just as it does
+        # for the LLM-native E-Commerce path.
+        requires_remote_creative_brain=True,
+        metadata={
+            "specialized_direction_capability": "photography_direction",
+            "creative_direction_owner": "remote_v3_llm_brain",
+        },
     )
 
 

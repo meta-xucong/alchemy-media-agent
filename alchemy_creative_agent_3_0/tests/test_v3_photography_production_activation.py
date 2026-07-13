@@ -19,7 +19,12 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, Sce
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
+from alchemy_creative_agent_3_0.tests.photography_test_support import (
+    PhotographyRemoteBrainTestProvider,
+    photography_test_runtime,
+    photography_test_service,
+    photography_test_vision_inspector,
+)
 
 
 def _binding() -> dict:
@@ -63,7 +68,7 @@ def test_gate_off_leaves_photography_unregistered_and_template_placeholder(monke
 
 def test_gate_on_freezes_photography_plan_then_uses_shared_generation_review_and_retry(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    service = V3ProductApiService()
+    service = photography_test_service()
 
     created = service.create_job(
         {
@@ -106,7 +111,7 @@ def test_adapter_uses_only_pinned_entry_point_and_composer_materializes_directio
 
     monkeypatch.setattr(planner, "plan_from_pinned_binding", pinned_only)
     monkeypatch.setattr(planner, "plan", forbidden_local_selection)
-    runtime = ScenarioRuntime(specialized_planning_adapters=[PhotographyScenarioPlanningAdapter(planner=planner)])
+    runtime = photography_test_runtime(specialized_planning_adapters=[PhotographyScenarioPlanningAdapter(planner=planner)])
 
     result = runtime.generate_job(_request())
     assert result.status == ScenarioRuntimeStatus.GENERATED
@@ -114,14 +119,18 @@ def test_adapter_uses_only_pinned_entry_point_and_composer_materializes_directio
     cluster = result.metadata["shared_capabilities"]["visual_cluster"]
     composed = cluster["composed_visual_contribution"]
     assert "photography_direction" in composed["active_capability_ids"]
-    assert any("professional photographic color" in item for item in composed["prompt_additions"])
-    assert all(item["capability_id"] != "photography_direction" or item["version"] == "v1" for item in composed["provenance"])
+    photography_contribution = next(
+        item for item in cluster["capability_contributions"] if item["capability_id"] == "photography_direction"
+    )
+    assert photography_contribution["prompt_additions"] == []
+    assert photography_contribution["negative_additions"] == []
+    assert photography_contribution["metadata"]["static_recipe_present"] is False
 
 
 def test_nonhuman_identity_request_blocks_without_typed_native_reference_and_requires_shared_capability(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+        llm_brain_adapter=V3LLMBrainAdapter(provider=PhotographyRemoteBrainTestProvider())
     )
     unknown = UploadedAssetInfo(asset_id="asset_dog", role=AssetRole.UNKNOWN_REFERENCE, uri="memory://dog")
     blocked = runtime.plan_job(
@@ -162,7 +171,7 @@ def test_general_and_ecommerce_never_activate_photography_direction_when_gate_is
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+        llm_brain_adapter=V3LLMBrainAdapter(provider=PhotographyRemoteBrainTestProvider())
     )
 
     general = runtime.plan_job({"user_input": "Create a calm abstract book cover.", "scenario_selection": {"scenario_id": "general_creative"}})
@@ -199,9 +208,10 @@ def test_named_profile_is_validated_and_pinned_by_mainline_then_read_by_photogra
         catalog_version="photography-production-activation-test",
     )
     planner = PhotographyScenarioPackPlanner(profile_catalog=operator_catalog, named_profiles_enabled=True)
-    runtime = ScenarioRuntime(specialized_planning_adapters=[PhotographyScenarioPlanningAdapter(planner=planner)])
+    runtime = photography_test_runtime(specialized_planning_adapters=[PhotographyScenarioPlanningAdapter(planner=planner)])
     service = V3ProductApiService(
         scenario_runtime=runtime,
+        vision_inspector=photography_test_vision_inspector(),
         photographer_profile_catalog=operator_catalog.shared_catalog(),
         photographer_profile_region_resolver=lambda: "CN",
     )
@@ -218,8 +228,8 @@ def test_named_profile_is_validated_and_pinned_by_mainline_then_read_by_photogra
     assert record is not None
     assert record.request.metadata["photographer_profile_binding"]["profile_id"] == "licensed_editorial_v1"
     draft = record.request.metadata["specialized_scenario_plan"]["capability_contribution_draft"]
-    assert "asymmetric frame" in " ".join(draft["prompt_additions"])
-    assert "licensed editorial profile" not in " ".join(draft["prompt_additions"]).lower()
+    assert draft["prompt_additions"] == []
+    assert draft["metadata"]["creative_direction_owner"] == "remote_v3_llm_brain"
 
     generated = service.generate_job(created.job_id)
     assert generated.status.value == "generated"

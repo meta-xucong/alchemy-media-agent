@@ -32,6 +32,7 @@ from alchemy_creative_agent_3_0.app.scenario_packs.photography import (
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
 from alchemy_creative_agent_3_0.app.schemas import CandidateResult, ProviderStrategy
+from alchemy_creative_agent_3_0.tests.photography_test_support import photography_test_runtime, photography_test_service
 
 
 class _RecordingProductionProvider(GenerationProvider):
@@ -96,7 +97,7 @@ def _handlers_with_recording_production_provider(
     fail_role: str | None = None,
 ) -> tuple[V3ProductRouteHandlers, _RecordingProductionProvider]:
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
-    service = V3ProductApiService(output_store=output_store)
+    service = photography_test_service(output_store=output_store)
     provider = _RecordingProductionProvider(output_store, fail_role=fail_role)
     service.scenario_runtime.generation_router = GenerationRouter(provider=provider)
     return V3ProductRouteHandlers(service=service, project_store=PersistentProjectStore(tmp_path / "projects")), provider
@@ -151,7 +152,7 @@ def _ready_nonhuman_identity_upload(handlers: V3ProductRouteHandlers, *, filenam
 
 def test_professional_set_executes_three_frozen_roles_and_resolves_one_winner_per_role(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    handlers = V3ProductRouteHandlers()
+    handlers = V3ProductRouteHandlers(service=photography_test_service())
     project, root = _project_and_root(handlers)
     record = handlers.service.get_job_record(root["job_id"])
     assert record is not None
@@ -213,6 +214,7 @@ def test_professional_set_t2i_executes_three_frozen_roles_without_generated_imag
     assert "This image role: Session Hero" in rendered_prompts[0]
     assert "This image role: Environmental Context" in rendered_prompts[1]
     assert "This image role: Detail Or Moment" in rendered_prompts[2]
+    assert all("Remote Photography direction" in prompt for prompt in rendered_prompts)
     assert all("Suite director rules:" not in prompt for prompt in rendered_prompts)
     assert all("Cover hero" not in prompt for prompt in rendered_prompts)
     summary = generated["metadata"]["specialized_execution_summary"]
@@ -262,7 +264,7 @@ def test_photography_project_summary_and_terminal_delivery_keep_the_photographer
     """A Photography project must never be summarized as General after a terminal job."""
 
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    handlers = V3ProductRouteHandlers()
+    handlers = V3ProductRouteHandlers(service=photography_test_service())
     project, root = _project_and_root(handlers, mode_id="single_hero")
 
     assert project["primary_template_id"] == "photographer_template"
@@ -295,7 +297,7 @@ def test_photography_project_summary_and_terminal_delivery_keep_the_photographer
 
 def test_role_continuation_is_append_only_and_reuses_the_exact_frozen_plan(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    handlers = V3ProductRouteHandlers()
+    handlers = V3ProductRouteHandlers(service=photography_test_service())
     project, root = _project_and_root(handlers)
     handlers.post_project_job_generate(project["project_id"], root["job_id"], {"quality_mode": "standard"})
     root_record = handlers.service.get_job_record(root["job_id"])
@@ -348,7 +350,7 @@ def test_named_profile_continuation_requires_exact_explicit_reconfirmation(monke
         ],
         catalog_version="mainline-004-test",
     )
-    runtime = ScenarioRuntime(
+    runtime = photography_test_runtime(
         specialized_planning_adapters=[
             PhotographyScenarioPlanningAdapter(
                 planner=PhotographyScenarioPackPlanner(
@@ -394,9 +396,9 @@ def test_named_profile_continuation_requires_exact_explicit_reconfirmation(monke
 def test_role_lineage_survives_project_store_reload_and_general_is_rejected(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     store_root = Path(tmp_path) / "projects"
-    first = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    first = V3ProductRouteHandlers(service=photography_test_service(), project_store=PersistentProjectStore(store_root))
     project, root = _project_and_root(first)
-    restarted = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    restarted = V3ProductRouteHandlers(service=photography_test_service(), project_store=PersistentProjectStore(store_root))
     continuation = restarted.post_project_photography_role_continuation(
         project["project_id"], root["job_id"], "detail_or_moment", {"correction_note": "Emphasize the hands and clay detail."}
     )
@@ -415,7 +417,7 @@ def test_role_lineage_survives_project_store_reload_and_general_is_rejected(monk
 
 def test_new_animal_identity_evidence_is_renegotiated_and_blocks_without_shared_native_support(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    handlers = V3ProductRouteHandlers()
+    handlers = V3ProductRouteHandlers(service=photography_test_service())
     original_reference = _ready_nonhuman_identity_upload(handlers, filename="dog-original.png")
     project = handlers.post_projects(
         {

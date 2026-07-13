@@ -127,6 +127,18 @@ class GenerationProvider:
                     "template_role_contract": True,
                     "static_recipe_present": False,
                 }
+                if isinstance(projection, dict) and projection.get("template_id") == "photographer_template":
+                    # Photography's frozen record validates role lineage only.
+                    # Materialize the actual provider direction exclusively
+                    # from the remote Brain deliverable, never from a local
+                    # role recipe.
+                    role["purpose"] = direction
+                    role["prompt_pressure"] = direction
+                    role["metadata"] = {
+                        **dict(role["metadata"]),
+                        "creative_direction_owner": "remote_v3_llm_brain",
+                        "remote_image_intent_bound": True,
+                    }
                 return role
             return {
                 "role_key": str(

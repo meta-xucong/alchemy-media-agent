@@ -1,0 +1,84 @@
+"""Explicit remote-Brain fixture for active Photography runtime tests.
+
+Production intentionally never imports this module.  Active Photography is
+LLM-first and fails closed without a remote creative Brain, so tests that need
+successful generation must opt into this contract-shaped substitute.
+"""
+
+from __future__ import annotations
+
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
+from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import VisionOutputInspector
+
+
+class PhotographyRemoteBrainTestProvider:
+    provider = "photography_remote_brain_test_double"
+    model = "contract-fixture-v1"
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request) -> dict:
+        self.requests.append(request)
+        payload = build_fallback_result(request).model_dump(mode="json")
+        count = request.requested_image_count
+        payload["image_set_plan"] = {
+            "set_goal": "Test-only remote Brain photography delivery",
+            "image_count": count,
+            "size": request.requested_image_size,
+            "shot_plan": [
+                (
+                    f"Remote Photography direction {index}: create one complete, original photographic image "
+                    "that answers the user's request and respects the declared reference truth."
+                )
+                for index in range(1, count + 1)
+            ],
+            "composition_rules": ["The remote Brain owns each image's composition and visual treatment."],
+            "quality_bar": ["Preserve explicit controls and reference truth without a local shot recipe."],
+        }
+        payload["prompt_guidance"] = {
+            **payload["prompt_guidance"],
+            "optimized_direction": "Use each remote Photography image intent as the complete creative direction.",
+            "visual_direction_addons": ["Use the remote Photography image intent."],
+        }
+        return payload
+
+
+class PhotographyVisionTestProvider:
+    provider_name = "photography_vision_test_double"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, resolution, *, metadata=None) -> dict:
+        return {
+            "status": "pass",
+            "confidence": 0.96,
+            "issue_codes": [],
+            "scores": {"artifact_safety": 0.96, "composition": 0.94, "commercial_finish": 0.95, "overall": 0.95},
+        }
+
+
+def photography_test_runtime(**runtime_kwargs) -> ScenarioRuntime:
+    return ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=PhotographyRemoteBrainTestProvider()),
+        **runtime_kwargs,
+    )
+
+
+def photography_test_vision_inspector() -> VisionOutputInspector:
+    return VisionOutputInspector(vision_provider=PhotographyVisionTestProvider())
+
+
+def photography_test_service(**service_kwargs) -> V3ProductApiService:
+    return V3ProductApiService(
+        scenario_runtime=photography_test_runtime(),
+        vision_inspector=photography_test_vision_inspector(),
+        **service_kwargs,
+    )
