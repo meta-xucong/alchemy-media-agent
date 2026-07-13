@@ -600,6 +600,42 @@ def v3_get_ecommerce_slot_delivery_endpoint(
     )
 
 
+@app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{parent_job_id}/photography-roles/{role_id}/continuations")
+async def v3_create_photography_role_continuation_endpoint(
+    project_id: str,
+    parent_job_id: str,
+    role_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    payload = _v3_payload_with_veyra_owner(await _v3_json_payload(request), user_id)
+    return _run_v3_handler(
+        v3_route_handlers.post_project_photography_role_continuation,
+        project_id,
+        parent_job_id,
+        role_id,
+        payload,
+    )
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}/photography-roles/{role_id}/delivery")
+def v3_get_photography_role_delivery_endpoint(
+    project_id: str,
+    root_job_id: str,
+    role_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(
+        v3_route_handlers.get_project_photography_role_delivery,
+        project_id,
+        root_job_id,
+        role_id,
+    )
+
+
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{job_id}/generate")
 async def v3_generate_project_job_endpoint(
     project_id: str,

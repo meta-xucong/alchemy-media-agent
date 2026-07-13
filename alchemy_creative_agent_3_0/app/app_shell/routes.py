@@ -10,6 +10,8 @@ ROUTE_CONTRACTS = {
     "projects": f"{API_NAMESPACE}/projects",
     "get_project": f"{API_NAMESPACE}/projects/{{project_id}}",
     "create_project_job": f"{API_NAMESPACE}/projects/{{project_id}}/jobs",
+    "create_photography_role_continuation": f"{API_NAMESPACE}/projects/{{project_id}}/jobs/{{parent_job_id}}/photography-roles/{{role_id}}/continuations",
+    "get_photography_role_delivery": f"{API_NAMESPACE}/projects/{{project_id}}/jobs/{{root_job_id}}/photography-roles/{{role_id}}/delivery",
     "project_timeline": f"{API_NAMESPACE}/projects/{{project_id}}/timeline",
     "create_job": f"{API_NAMESPACE}/jobs",
     "get_job": f"{API_NAMESPACE}/jobs/{{job_id}}",

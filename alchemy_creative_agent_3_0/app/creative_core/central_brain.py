@@ -517,6 +517,15 @@ class CentralCreativeBrain:
                 cluster["role_specific_generation_plan"] = dict(role_plan)
             if isinstance(mode_policy, dict):
                 cluster["mode_execution_policy"] = dict(mode_policy)
+        specialized_plan = context.metadata.get("specialized_role_execution_plan")
+        if isinstance(specialized_plan, dict) and specialized_plan:
+            # This is a server-frozen shared-runtime execution plan, never a
+            # General Template deliverable map.  The generic role machinery
+            # below is intentionally reused by active specialized templates.
+            cluster["role_specific_generation_plan"] = dict(specialized_plan)
+            policy = specialized_plan.get("policy")
+            if isinstance(policy, dict):
+                cluster["mode_execution_policy"] = dict(policy)
         return cluster
 
     def _apply_llm_brain_to_brief(self, context: PipelineContext) -> None:
@@ -585,6 +594,9 @@ class CentralCreativeBrain:
         return list(dict.fromkeys(item for item in values if item))
 
     def _role_specific_generation_plan_metadata(self, context: PipelineContext) -> dict[str, Any]:
+        specialized = context.metadata.get("specialized_role_execution_plan")
+        if isinstance(specialized, dict) and specialized:
+            return dict(specialized)
         if context.series_plan is not None:
             series_plan = dict(getattr(context.series_plan, "metadata", {}) or {})
             plan = series_plan.get("role_specific_generation_plan")

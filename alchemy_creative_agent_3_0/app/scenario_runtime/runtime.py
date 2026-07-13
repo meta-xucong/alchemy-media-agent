@@ -335,6 +335,12 @@ class ScenarioRuntime:
             return None
         existing = self._specialized_scenario_plan_from_metadata(request, resolution)
         if existing is not None:
+            metadata = dict(request.metadata or {})
+            if existing.requested_image_count is not None:
+                metadata["requested_image_count"] = existing.requested_image_count
+            if existing.execution_plan:
+                metadata["specialized_role_execution_plan"] = dict(existing.execution_plan)
+            request.metadata = metadata
             return existing
         metadata = dict(request.metadata or {})
         project_context = metadata.get("project_context_snapshot")
@@ -378,9 +384,11 @@ class ScenarioRuntime:
             raise CapabilityActivationError("specialized planning template does not match the resolved template")
         metadata["specialized_scenario_plan"] = specialized.model_dump(mode="json")
         if specialized.requested_image_count is not None:
-            # P4/P5 formally activate only the single-hero contract.  This
-            # keeps an unimplemented session suite out of the shared runtime.
             metadata["requested_image_count"] = specialized.requested_image_count
+        if specialized.execution_plan:
+            # Kept opaque to Central Brain.  The shared pipeline reads this
+            # only when it assigns each generated asset its frozen role.
+            metadata["specialized_role_execution_plan"] = dict(specialized.execution_plan)
         request.metadata = metadata
         return specialized
 
@@ -725,6 +733,17 @@ class ScenarioRuntime:
             # public result surfaces only receive this auditable summary.
             "specialized_scenario_plan": specialized.model_dump(mode="json"),
             "specialized_scenario_plan_summary": dict(specialized.safe_summary),
+            "specialized_execution_summary": {
+                "requested_image_count": specialized.execution_plan.get("requested_image_count"),
+                "role_keys": [
+                    str(item.get("role_key"))
+                    for item in specialized.execution_plan.get("role_recipes", [])
+                    if isinstance(item, dict) and item.get("role_key")
+                ],
+                "shared_execution_only": True,
+            }
+            if specialized.execution_plan
+            else {},
         }
 
     def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:

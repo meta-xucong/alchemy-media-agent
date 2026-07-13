@@ -20,6 +20,12 @@ from ..product_api.contracts import (
     V3AssetUploadStatusValue,
     V3UploadedAssetRecord,
 )
+from ..scenario_packs.photography import (
+    PhotographerProfileBinding,
+    PhotographyPackOutput,
+    PhotographySetContinuationRequest,
+)
+from ..scenario_packs.photography.continuation import PhotographySetContinuationDirector
 from ..schemas import BrandProfile, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
@@ -34,6 +40,12 @@ from .contracts import (
     EcommerceSlotCurrentDelivery,
     EcommerceSlotDeliveryResponse,
     EcommerceSlotLineage,
+    PhotographyRoleAttemptSummary,
+    PhotographyRoleContinuationRequest,
+    PhotographyRoleContinuationResponse,
+    PhotographyRoleCurrentDelivery,
+    PhotographyRoleDeliveryResponse,
+    PhotographyRoleLineage,
     OutputRef,
     ProjectBrandMemoryConfirmRequest,
     ProjectBrandMemoryConfirmResponse,
@@ -81,6 +93,15 @@ PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 
 class EcommerceSlotContinuationError(ValueError):
     """Structured public failure for the namespaced slot-continuation route."""
+
+    def __init__(self, code: str, message: str, *, status_code: int = 409) -> None:
+        super().__init__(message)
+        self.code = code
+        self.v3_status_code = status_code
+
+
+class PhotographyRoleContinuationError(ValueError):
+    """Structured public failure for the Photography role-continuation route."""
 
     def __init__(self, code: str, message: str, *, status_code: int = 409) -> None:
         super().__init__(message)
@@ -217,7 +238,13 @@ class V3ProjectModeService:
             project.project_id,
             TimelineItemType.PROJECT_CREATED,
             "创建了项目",
-            "项目已准备好，可以上传商品图生成第一组电商套图。" if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else "项目已准备好，可以使用通用模板生成第一组创意图。",
+            (
+                "项目已准备好，可以上传商品图生成第一组电商套图。"
+                if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+                else "项目已准备好，可以冻结摄影专业套图并生成第一组照片。"
+                if template_manifest.template_id == "photographer_template"
+                else "项目已准备好，可以使用通用模板生成第一组创意图。"
+            ),
             metadata={"template_id": template_manifest.template_id, "scenario_pack_id": template_manifest.scenario_pack_id},
         )
         project.latest_context = self._build_context(project)
@@ -683,7 +710,13 @@ class V3ProjectModeService:
         )
         return self._state_change_response(project, context, feedback=feedback)
 
-    def create_project_job(self, project_id: str, request: CreateProjectJobRequest | dict[str, Any]) -> ProductJobStatus:
+    def create_project_job(
+        self,
+        project_id: str,
+        request: CreateProjectJobRequest | dict[str, Any],
+        *,
+        _trusted_photography_continuation: bool = False,
+    ) -> ProductJobStatus:
         project = self._require_project(project_id)
         job_request = self._coerce_create_project_job_request(request)
         template_manifest = self._ensure_active_template(job_request.template_id)
@@ -766,7 +799,11 @@ class V3ProjectModeService:
                 "ecommerce_slot_lineage_seed": template_manifest.template_id == ECOMMERCE_TEMPLATE_ID,
             },
         }
-        status = self.product_service.create_job(create_payload)
+        status = (
+            self.product_service.create_trusted_photography_continuation_job(create_payload)
+            if _trusted_photography_continuation
+            else self.product_service.create_job(create_payload)
+        )
         bound_context_snapshot = status.metadata.get("project_context_snapshot")
         if not isinstance(bound_context_snapshot, dict):
             bound_context_snapshot = context_snapshot
@@ -800,6 +837,8 @@ class V3ProjectModeService:
         self._link_job(project, status.job_id, context)
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             self._persist_ecommerce_slot_anchor(project, status)
+        elif template_manifest.template_id == "photographer_template":
+            self._persist_photography_role_anchor(project, status)
         self._append_timeline(
             project.project_id,
             TimelineItemType.JOB_CREATED,
@@ -1005,6 +1044,216 @@ class V3ProjectModeService:
                 "source": PROJECT_API_SOURCE,
                 "append_only_history": True,
                 "failed_or_blocked_children_preserve_previous_delivery": True,
+            },
+        )
+
+    def create_photography_role_continuation(
+        self,
+        project_id: str,
+        parent_job_id: str,
+        role_id: str,
+        request: PhotographyRoleContinuationRequest | dict[str, Any],
+    ) -> PhotographyRoleContinuationResponse:
+        """Append one user-directed continuation for a frozen Photography role."""
+
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, parent_job_id)
+        continuation_request = self._coerce_photography_role_continuation_request(request)
+        clean_role_id = str(role_id or "").strip()
+        anchor = self._require_photography_role_anchor(project, parent_job_id)
+        parent_lineage = PhotographyRoleLineage.model_validate(anchor["lineage"])
+        if parent_lineage.parent_role_id and parent_lineage.parent_role_id != clean_role_id:
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "A Photography child continuation can only continue its own frozen role.",
+            )
+        root_anchor = self._require_photography_role_anchor(project, parent_lineage.root_job_id)
+        declared_roles = self._declared_photography_roles(root_anchor)
+        if not clean_role_id or clean_role_id not in declared_roles:
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "This role is not declared by the parent professional-set contract.",
+            )
+        evidence_ids = list(continuation_request.new_reference_asset_ids)
+        self._validate_photography_continuation_evidence(project, anchor, evidence_ids)
+        module_continuation = self._plan_photography_module_continuation(
+            anchor=anchor,
+            role_id=clean_role_id,
+            request=continuation_request,
+            job_key=f"{parent_job_id}:{clean_role_id}:continuation",
+        )
+        parent_plan = CapabilityActivationPlan.model_validate(anchor["frozen_capability_activation_plan"])
+        frozen_plan, amendment, amendment_metadata = self._resolve_photography_role_plan(
+            project=project,
+            root_job_id=parent_lineage.root_job_id,
+            role_id=clean_role_id,
+            parent_anchor=anchor,
+            parent_plan=parent_plan,
+            evidence_ids=evidence_ids,
+        )
+        child_specialized = self._photography_child_specialized_plan(
+            anchor=anchor,
+            role_id=clean_role_id,
+            correction_note=continuation_request.correction_note,
+            module_continuation=module_continuation.model_dump(mode="json"),
+        )
+        lineage_payload = PhotographyRoleLineage(
+            root_job_id=parent_lineage.root_job_id,
+            parent_job_id=parent_job_id,
+            parent_role_id=clean_role_id,
+            root_set_id=parent_lineage.root_set_id,
+            continuation_kind="photography_role",
+            continuation_correction_note=continuation_request.correction_note,
+            new_reference_asset_ids=evidence_ids,
+            capability_activation_plan_id=frozen_plan.plan_id,
+            plan_amendment_id=amendment.amendment_id if amendment else None,
+            created_at=_utc_now_iso(),
+        )
+        parent_request = dict(anchor["planning_request"])
+        parent_metadata = dict(parent_request.get("metadata") or {})
+        child_metadata = {
+            "source": self._photography_continuation_source(continuation_request.metadata),
+            "photographer_profile_binding": dict(parent_metadata["photographer_profile_binding"]),
+            "specialized_scenario_plan": child_specialized,
+            "photography_role_lineage": lineage_payload.model_dump(mode="json"),
+            "capability_activation_plan": frozen_plan.model_dump(mode="json"),
+            "capability_activation_plan_id": frozen_plan.plan_id,
+            "continuation_reference_asset_ids": evidence_ids,
+            **amendment_metadata,
+        }
+        if amendment is not None:
+            child_metadata["capability_plan_amendment"] = amendment.model_dump(mode="json")
+        owner_user_id = self._positive_owner_id(dict(continuation_request.metadata or {}).get("veyra_user_id"))
+        if owner_user_id is not None:
+            child_metadata["veyra_user_id"] = owner_user_id
+        child = self.create_project_job(
+            project_id,
+            {
+                "template_id": "photographer_template",
+                "user_input": self._photography_role_continuation_instruction(
+                    str(parent_request.get("user_input") or project.user_goal),
+                    clean_role_id,
+                    continuation_request.correction_note,
+                ),
+                "uploaded_asset_ids": evidence_ids,
+                "metadata": child_metadata,
+            },
+            _trusted_photography_continuation=True,
+        )
+        child_anchor = self._require_photography_role_anchor(project, child.job_id)
+        child_lineage = PhotographyRoleLineage.model_validate(child_anchor["lineage"])
+        delivery = self.resolve_photography_role_delivery(
+            project_id,
+            parent_lineage.root_job_id,
+            clean_role_id,
+        )
+        return PhotographyRoleContinuationResponse(
+            api_namespace=API_NAMESPACE,
+            route=self._photography_role_continuation_route(project_id, parent_job_id, clean_role_id),
+            project_id=project_id,
+            parent_job_id=parent_job_id,
+            role_id=clean_role_id,
+            child_job_id=child.job_id,
+            child_status=str(child.status),
+            lineage=child_lineage,
+            delivery=delivery,
+            metadata={
+                "source": PROJECT_API_SOURCE,
+                "generation_route": f"{API_NAMESPACE}/projects/{project_id}/jobs/{child.job_id}/generate",
+                "append_only": True,
+                "uses_shared_generation_review_retry": True,
+                "plan_amendment_applied": amendment is not None,
+                "plan_amendment_enabled": self._capability_plan_amendment_enabled(),
+                "named_profile_reconfirmation_validated": True,
+            },
+        )
+
+    def get_photography_role_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        role_id: str,
+    ) -> PhotographyRoleDeliveryResponse:
+        return self.resolve_photography_role_delivery(project_id, root_job_id, role_id)
+
+    def resolve_photography_role_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        role_id: str,
+    ) -> PhotographyRoleDeliveryResponse:
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, root_job_id)
+        root_anchor = self._require_photography_role_anchor(project, root_job_id)
+        root_lineage = PhotographyRoleLineage.model_validate(root_anchor["lineage"])
+        clean_role_id = str(role_id or "").strip()
+        declared_roles = self._declared_photography_roles(root_anchor)
+        if root_lineage.root_job_id != root_job_id or not clean_role_id or clean_role_id not in declared_roles:
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "This job and role do not expose a Photography professional-set delivery lineage.",
+            )
+        attempts: list[PhotographyRoleAttemptSummary] = []
+        current_delivery: PhotographyRoleCurrentDelivery | None = None
+        for job_id in project.job_ids:
+            anchor = self._photography_role_anchor(project, job_id)
+            if anchor is None:
+                continue
+            lineage = PhotographyRoleLineage.model_validate(anchor["lineage"])
+            is_root_attempt = job_id == root_job_id
+            if not is_root_attempt and (
+                lineage.root_job_id != root_job_id or lineage.parent_role_id != clean_role_id
+            ):
+                continue
+            status = self.product_service.get_job(job_id)
+            candidates = self._photography_role_candidates(status, clean_role_id, is_root_attempt=is_root_attempt)
+            candidate_ids = [str(item.get("candidate_id") or "") for item in candidates if item.get("candidate_id")]
+            output_ids = [str(item.get("output_id") or "") for item in candidates if item.get("output_id")]
+            attempts.append(
+                PhotographyRoleAttemptSummary(
+                    job_id=job_id,
+                    parent_job_id=lineage.parent_job_id,
+                    status=str(status.status),
+                    candidate_ids=candidate_ids,
+                    output_ids=output_ids,
+                    created_at=str(anchor.get("created_at") or "") or None,
+                    metadata={
+                        "continuation_kind": lineage.continuation_kind,
+                        "plan_amendment_id": lineage.plan_amendment_id,
+                    },
+                )
+            )
+            if status.status == ProductJobStatusValue.GENERATED and candidates:
+                candidate = candidates[0]
+                current_delivery = PhotographyRoleCurrentDelivery(
+                    root_job_id=root_job_id,
+                    root_set_id=root_lineage.root_set_id,
+                    role_id=clean_role_id,
+                    job_id=job_id,
+                    candidate_id=str(candidate["candidate_id"]),
+                    asset_id=str(candidate.get("asset_id") or "") or None,
+                    output_id=str(candidate.get("output_id") or "") or None,
+                    preview_url=str(candidate.get("preview_url") or candidate.get("preview_uri") or "") or None,
+                    download_url=str(candidate.get("download_url") or "") or None,
+                    resolved_at=_utc_now_iso(),
+                )
+        if current_delivery is not None:
+            for attempt in attempts:
+                attempt.is_current_delivery = attempt.job_id == current_delivery.job_id
+        return PhotographyRoleDeliveryResponse(
+            api_namespace=API_NAMESPACE,
+            route=self._photography_role_delivery_route(project_id, root_job_id, clean_role_id),
+            project_id=project_id,
+            root_job_id=root_job_id,
+            root_set_id=root_lineage.root_set_id,
+            role_id=clean_role_id,
+            current_delivery=current_delivery,
+            attempts=attempts,
+            metadata={
+                "source": PROJECT_API_SOURCE,
+                "append_only_history": True,
+                "failed_or_blocked_children_preserve_previous_delivery": True,
+                "final_role_winner_only": True,
             },
         )
 
@@ -1344,6 +1593,398 @@ class V3ProjectModeService:
         }
         project.updated_at = _utc_now_iso()
         self.project_store.save_project(project)
+
+    def _coerce_photography_role_continuation_request(
+        self,
+        request: PhotographyRoleContinuationRequest | dict[str, Any],
+    ) -> PhotographyRoleContinuationRequest:
+        if isinstance(request, PhotographyRoleContinuationRequest):
+            return request
+        return PhotographyRoleContinuationRequest.model_validate(request)
+
+    def _persist_photography_role_anchor(self, project: ProjectRecord, status: ProductJobStatus) -> None:
+        """Persist the immutable set plan needed for role-level lineage reads."""
+
+        record = self.product_service.get_job_record(status.job_id)
+        if record is None:
+            return
+        request_metadata = dict(record.request.metadata or {})
+        lineage = request_metadata.get("photography_role_lineage")
+        plan = request_metadata.get("capability_activation_plan")
+        specialized = request_metadata.get("specialized_scenario_plan")
+        if not isinstance(lineage, dict) or not isinstance(plan, dict) or not isinstance(specialized, dict):
+            return
+        parsed_lineage = PhotographyRoleLineage.model_validate(lineage)
+        CapabilityActivationPlan.model_validate(plan)
+        execution = specialized.get("execution_plan")
+        if not isinstance(execution, dict):
+            return
+        anchors = self._photography_role_anchors(project)
+        declared_roles = self._declared_photography_roles_from_execution(execution)
+        if parsed_lineage.root_job_id != status.job_id:
+            root_anchor = anchors.get(parsed_lineage.root_job_id) or {}
+            declared_roles = [
+                str(item).strip()
+                for item in root_anchor.get("declared_role_ids") or []
+                if str(item).strip()
+            ]
+        anchors[status.job_id] = {
+            "lineage": parsed_lineage.model_dump(mode="json"),
+            "frozen_capability_activation_plan": plan,
+            "specialized_scenario_plan": specialized,
+            "planning_request": record.request.model_dump(mode="json"),
+            "declared_role_ids": declared_roles,
+            "created_at": record.created_at,
+        }
+        project.metadata = {
+            **dict(project.metadata or {}),
+            "photography_role_lineage_records": anchors,
+        }
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+
+    def _photography_role_anchors(self, project: ProjectRecord) -> dict[str, dict[str, Any]]:
+        raw = dict(project.metadata or {}).get("photography_role_lineage_records")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(job_id): dict(payload)
+            for job_id, payload in raw.items()
+            if isinstance(payload, dict)
+        }
+
+    def _photography_role_anchor(self, project: ProjectRecord, job_id: str) -> dict[str, Any] | None:
+        return self._photography_role_anchors(project).get(job_id)
+
+    def _require_photography_role_anchor(self, project: ProjectRecord, job_id: str) -> dict[str, Any]:
+        anchor = self._photography_role_anchor(project, job_id)
+        if anchor is None:
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "This historical or non-Photography job has no readable professional-set continuation lineage.",
+            )
+        required = ("lineage", "frozen_capability_activation_plan", "specialized_scenario_plan", "planning_request")
+        if any(not isinstance(anchor.get(key), dict) for key in required):
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "This Photography job has incomplete professional-set continuation lineage.",
+            )
+        return anchor
+
+    def _declared_photography_roles(self, root_anchor: dict[str, Any]) -> list[str]:
+        return [
+            str(item).strip()
+            for item in root_anchor.get("declared_role_ids") or []
+            if str(item).strip()
+        ]
+
+    def _declared_photography_roles_from_execution(self, execution: dict[str, Any]) -> list[str]:
+        recipes = execution.get("role_recipes")
+        if not isinstance(recipes, list):
+            return []
+        return list(
+            dict.fromkeys(
+                str(item.get("role_key") or "").strip()
+                for item in recipes
+                if isinstance(item, dict) and str(item.get("role_key") or "").strip()
+            )
+        )
+
+    def _validate_photography_continuation_evidence(
+        self,
+        project: ProjectRecord,
+        parent_anchor: dict[str, Any],
+        evidence_ids: list[str],
+    ) -> None:
+        if not evidence_ids:
+            return
+        authorized = set(self._project_asset_ids(project)) | set(self._project_output_reference_ids(project))
+        unknown = [item for item in evidence_ids if item not in authorized]
+        if unknown:
+            raise PhotographyRoleContinuationError(
+                "invalid_photography_continuation_evidence",
+                "New reference evidence must already be an authorized project asset or selected output.",
+                status_code=400,
+            )
+        planning_request = dict(parent_anchor.get("planning_request") or {})
+        parent_metadata = dict(planning_request.get("metadata") or {})
+        parent_evidence = {
+            str(item).strip()
+            for item in [
+                *list(planning_request.get("uploaded_asset_ids") or []),
+                *list(parent_metadata.get("continuation_reference_asset_ids") or []),
+            ]
+            if str(item).strip()
+        }
+        if any(item in parent_evidence for item in evidence_ids):
+            raise PhotographyRoleContinuationError(
+                "invalid_photography_continuation_evidence",
+                "A new-evidence continuation must add reference evidence not already present in its parent lineage.",
+                status_code=400,
+            )
+
+    def _plan_photography_module_continuation(
+        self,
+        *,
+        anchor: dict[str, Any],
+        role_id: str,
+        request: PhotographyRoleContinuationRequest,
+        job_key: str,
+    ):
+        specialized = dict(anchor["specialized_scenario_plan"])
+        metadata = dict(specialized.get("metadata") or {})
+        raw_output = metadata.get("photography_pack_output")
+        if not isinstance(raw_output, dict):
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "The frozen Photography planning output is unavailable for continuation validation.",
+            )
+        try:
+            parent_output = PhotographyPackOutput.model_validate(raw_output)
+            execution = dict(specialized.get("execution_plan") or {})
+            recipe = next(
+                (
+                    item
+                    for item in execution.get("role_recipes", [])
+                    if isinstance(item, dict) and str(item.get("role_key") or "") == role_id
+                ),
+                None,
+            )
+            if not isinstance(recipe, dict):
+                raise ValueError("photography_set_continuation_parent_role_mismatch")
+            module_request = PhotographySetContinuationRequest(
+                parent_shot_id=str(recipe.get("role_id") or ""),
+                target_role=role_id,
+                correction_note=request.correction_note,
+                new_reference_asset_ids=list(request.new_reference_asset_ids),
+                reconfirmed_profile_id=request.reconfirmed_profile_id,
+                reconfirmed_profile_version=request.reconfirmed_profile_version,
+                reconfirmed_technique_package_checksum=request.reconfirmed_technique_package_checksum,
+                profile_selection_source=request.profile_selection_source,
+            )
+            return PhotographySetContinuationDirector().plan(
+                parent_output=parent_output,
+                profile_binding=PhotographerProfileBinding.model_validate(parent_output.profile_binding),
+                request=module_request,
+                job_key=job_key,
+            )
+        except ValueError as exc:
+            raise PhotographyRoleContinuationError(
+                "photography_role_profile_reconfirmation_failed",
+                str(exc),
+            ) from exc
+
+    def _resolve_photography_role_plan(
+        self,
+        *,
+        project: ProjectRecord,
+        root_job_id: str,
+        role_id: str,
+        parent_anchor: dict[str, Any],
+        parent_plan: CapabilityActivationPlan,
+        evidence_ids: list[str],
+    ) -> tuple[CapabilityActivationPlan, CapabilityPlanAmendment | None, dict[str, Any]]:
+        if not evidence_ids:
+            return parent_plan, None, {}
+        preview_payload = dict(parent_anchor["planning_request"])
+        preview_metadata = dict(preview_payload.get("metadata") or {})
+        for key in (
+            "capability_activation_plan",
+            "capability_activation_plan_id",
+            "capability_catalog_version",
+            "capability_activation_mode",
+            "capability_plan_amendment",
+            "photographer_profile_binding",
+            "specialized_scenario_plan",
+            "specialized_scenario_plan_summary",
+            "specialized_role_execution_plan",
+            "photography_role_lineage",
+            "continuation_reference_asset_ids",
+        ):
+            preview_metadata.pop(key, None)
+        preview_metadata["continuation_new_reference_asset_ids"] = list(evidence_ids)
+        preview_payload["metadata"] = preview_metadata
+        binding = dict(parent_anchor["planning_request"].get("metadata") or {}).get("photographer_profile_binding")
+        if isinstance(binding, dict):
+            profile_id = str(binding.get("profile_id") or "").strip()
+            if profile_id and profile_id != "general_photography":
+                preview_payload["photographer_profile_id"] = profile_id
+                preview_payload["photographer_profile_selection_source"] = "user_explicit_ui"
+        preview_payload["scenario_selection"] = {
+            "scenario_id": "photography",
+            "mode_id": "professional_set",
+            "parameters": {"delivery_mode": "professional_set"},
+        }
+        preview_payload["uploaded_asset_ids"] = list(
+            dict.fromkeys([*list(preview_payload.get("uploaded_asset_ids") or []), *evidence_ids])
+        )
+        try:
+            preview = self.product_service.preview_capability_activation(preview_payload)
+            candidate_plan = CapabilityActivationPlan.model_validate(preview["capability_activation_plan"])
+        except Exception as exc:
+            raise PhotographyRoleContinuationError(
+                "photography_role_plan_amendment_unavailable",
+                "The new reference could not be negotiated through the shared high-fidelity capability path: "
+                f"{str(exc)[:160]}",
+            ) from exc
+        if candidate_plan.template_id != parent_plan.template_id or candidate_plan.scenario_id != parent_plan.scenario_id:
+            raise PhotographyRoleContinuationError(
+                "photography_role_plan_amendment_invalid",
+                "The proposed shared capability plan does not match the parent Photography job.",
+            )
+        if candidate_plan.dependency_order == parent_plan.dependency_order:
+            return parent_plan, None, {}
+        if not self._capability_plan_amendment_enabled():
+            raise PhotographyRoleContinuationError(
+                "photography_role_plan_amendment_disabled",
+                "New evidence changes the shared capability plan, but controlled plan amendments are disabled.",
+            )
+        if self._photography_role_has_plan_amendment(project, root_job_id, role_id):
+            raise PhotographyRoleContinuationError(
+                "photography_role_plan_amendment_exhausted",
+                "This professional-set role already used its one allowed capability-plan amendment.",
+            )
+        amendment = CapabilityPlanAmendment(
+            amendment_id=stable_id(
+                "photography_role_plan_amendment",
+                root_job_id,
+                role_id,
+                parent_plan.plan_id,
+                candidate_plan.plan_id,
+                evidence_ids,
+            ),
+            original_plan_id=parent_plan.plan_id,
+            amended_plan_id=candidate_plan.plan_id,
+            evidence_ids=evidence_ids,
+            reason_code="new_authorized_reference_changed_capability_plan",
+        )
+        return candidate_plan, amendment, {
+            key: preview[key]
+            for key in (
+                "visual_task_profile",
+                "capability_activation_intent",
+                "capability_catalog_version",
+                "capability_activation_mode",
+            )
+            if key in preview
+        }
+
+    def _photography_role_has_plan_amendment(self, project: ProjectRecord, root_job_id: str, role_id: str) -> bool:
+        for anchor in self._photography_role_anchors(project).values():
+            lineage = anchor.get("lineage")
+            if not isinstance(lineage, dict):
+                continue
+            if (
+                lineage.get("root_job_id") == root_job_id
+                and lineage.get("parent_role_id") == role_id
+                and lineage.get("plan_amendment_id")
+            ):
+                return True
+        return False
+
+    def _photography_child_specialized_plan(
+        self,
+        *,
+        anchor: dict[str, Any],
+        role_id: str,
+        correction_note: str | None,
+        module_continuation: dict[str, Any],
+    ) -> dict[str, Any]:
+        specialized = dict(anchor["specialized_scenario_plan"])
+        execution = dict(specialized.get("execution_plan") or {})
+        recipe = next(
+            (
+                dict(item)
+                for item in execution.get("role_recipes", [])
+                if isinstance(item, dict) and str(item.get("role_key") or "") == role_id
+            ),
+            None,
+        )
+        if recipe is None:
+            raise PhotographyRoleContinuationError(
+                "photography_role_continuation_not_supported",
+                "The frozen professional-set role recipe is unavailable.",
+            )
+        if correction_note:
+            recipe["prompt_pressure"] = (
+                f"{str(recipe.get('prompt_pressure') or '').strip()} User correction: {correction_note}"
+            ).strip()
+        execution_metadata = dict(execution.get("metadata") or {})
+        execution_metadata.update(
+            {
+                "role_continuation": True,
+                "continuation_target_role": role_id,
+                "module_continuation": module_continuation,
+                "requested_delivery_count": 1,
+            }
+        )
+        execution.update(
+            {
+                "plan_id": stable_id("photography_role_execution_child", execution.get("plan_id"), role_id, correction_note),
+                "requested_image_count": 1,
+                "role_recipes": [recipe],
+                "prompt_additions": [f"Photography role {role_id}: {recipe.get('prompt_pressure') or ''}".strip()],
+                "negative_additions": list(recipe.get("negative_pressure") or []),
+                "metadata": execution_metadata,
+            }
+        )
+        safe_summary = dict(specialized.get("safe_summary") or {})
+        safe_summary.update({"delivery_roles": [role_id], "role_continuation": True})
+        specialized["requested_image_count"] = 1
+        specialized["execution_plan"] = execution
+        specialized["safe_summary"] = safe_summary
+        return specialized
+
+    def _photography_role_candidates(
+        self,
+        status: ProductJobStatus,
+        role_id: str,
+        *,
+        is_root_attempt: bool,
+    ) -> list[dict[str, Any]]:
+        asset_metadata_by_candidate = {
+            asset.selected_candidate_id: dict(asset.metadata or {})
+            for asset in status.asset_series
+            if asset.selected_candidate_id
+        }
+        candidates = [candidate.model_dump(mode="json") for candidate in status.candidates]
+        matched = [
+            candidate
+            for candidate in candidates
+            if str(
+                dict(candidate.get("metadata") or {}).get("mode_role_key")
+                or asset_metadata_by_candidate.get(candidate.get("candidate_id"), {}).get("asset_metadata", {}).get("mode_role_key")
+                or asset_metadata_by_candidate.get(candidate.get("candidate_id"), {}).get("mode_role_key")
+                or ""
+            ).strip()
+            == role_id
+        ]
+        if matched or is_root_attempt:
+            return matched
+        return candidates
+
+    def _photography_continuation_source(self, metadata: dict[str, Any]) -> str:
+        source = str(dict(metadata or {}).get("source") or "photography_workspace").strip()
+        return source[:120] or "photography_workspace"
+
+    def _photography_role_continuation_instruction(
+        self,
+        parent_instruction: str,
+        role_id: str,
+        correction_note: str | None,
+    ) -> str:
+        correction = f" User correction: {correction_note}" if correction_note else ""
+        return (
+            f"{parent_instruction}\n\n"
+            f"Photography professional-set continuation: regenerate only the frozen '{role_id}' role."
+            f" Preserve the parent profile binding, color/finish anchor, reference truth, and capability plan.{correction}"
+        )
+
+    def _photography_role_continuation_route(self, project_id: str, parent_job_id: str, role_id: str) -> str:
+        return f"{API_NAMESPACE}/projects/{project_id}/jobs/{parent_job_id}/photography-roles/{role_id}/continuations"
+
+    def _photography_role_delivery_route(self, project_id: str, root_job_id: str, role_id: str) -> str:
+        return f"{API_NAMESPACE}/projects/{project_id}/jobs/{root_job_id}/photography-roles/{role_id}/delivery"
 
     def _selection_hold_response(
         self,
@@ -1820,6 +2461,46 @@ class V3ProjectModeService:
                 "platform_profile": platform or "generic",
                 "parameters": parameters,
             }
+        if manifest.template_id == "photographer_template":
+            raw_mode = str(
+                request.metadata.get("selected_mode_id")
+                or request.metadata.get("mode_id")
+                or "single_hero"
+            ).strip()
+            allowed_modes = {"single_hero", "reference_reshoot", "professional_set"}
+            if raw_mode not in allowed_modes:
+                raise PhotographyRoleContinuationError(
+                    "photography_mode_not_supported",
+                    "Photography accepts only single hero, reference reshoot, or the frozen professional set.",
+                    status_code=400,
+                )
+            raw_preservation = request.metadata.get("preservation_controls")
+            preservation = dict(raw_preservation) if isinstance(raw_preservation, dict) else {}
+            parameters = {
+                "project_context_version": context.context_version,
+                "use_project_context": request.use_project_context,
+                "project_mode": True,
+                "delivery_mode": raw_mode,
+                "input_mode": (
+                    "reference_to_professional_reshoot"
+                    if raw_mode == "reference_reshoot"
+                    else str(request.metadata.get("input_mode") or "text_to_photo")
+                ),
+                "scene_domain": request.metadata.get("scene_domain"),
+                "reshoot_strength": request.metadata.get("reshoot_strength"),
+                "preservation_controls": preservation,
+                "preserve_nonhuman_identity": bool(request.metadata.get("preserve_nonhuman_identity")),
+                "requested_image_count": 3 if raw_mode == "professional_set" else 1,
+            }
+            requested_size = str(request.metadata.get("requested_image_size") or "").strip()
+            if requested_size:
+                parameters["requested_image_size"] = requested_size
+            return {
+                "scenario_id": manifest.scenario_pack_id,
+                "mode_id": raw_mode,
+                "preset_id": None,
+                "parameters": {key: value for key, value in parameters.items() if value is not None},
+            }
         variation_contract = self._general_variation_contract(request.metadata)
         parameters = {
             "project_context_version": context.context_version,
@@ -1981,11 +2662,15 @@ class V3ProjectModeService:
     def _job_created_title(self, manifest: ProjectTemplateManifest) -> str:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             return "电商套图任务已创建"
+        if manifest.template_id == "photographer_template":
+            return "摄影专业套图任务已创建"
         return "生成任务已创建"
 
     def _job_created_summary(self, manifest: ProjectTemplateManifest) -> str:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             return "电商模板已开始整理商品信息、卖点和套图位置。"
+        if manifest.template_id == "photographer_template":
+            return "摄影模板已冻结角色、档案和参考真值，并将交给共享生成与审查流程。"
         return "通用模板已开始理解项目需求。"
 
     def _template_id_for_project_job(self, project: ProjectRecord, job_id: str) -> str:

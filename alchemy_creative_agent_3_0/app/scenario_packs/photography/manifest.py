@@ -30,10 +30,8 @@ def photography_manifest(*, enabled: bool | None = None) -> ScenarioPackManifest
             if active
             else "Professional photographic planning and AI reshoot module; deployment gate is disabled."
         ),
-        # P4/P5 only certify one hero output. A session-package switch must
-        # arrive with its own photographer-owned suite contract.
         default_mode_id="single_hero",
-        supported_mode_ids=["single_hero", "reference_reshoot"],
+        supported_mode_ids=["single_hero", "reference_reshoot", "professional_set"],
         preset_ids=[],
         enabled_capabilities=["photography_direction"] if active else [],
         route_hint="/creative-agent-v3/photography",
@@ -43,7 +41,7 @@ def photography_manifest(*, enabled: bool | None = None) -> ScenarioPackManifest
             "primary_action": "start_template" if active else "none",
         },
         metadata={
-            "current_stage": "photography_production_activation" if active else "photography_p5_gated",
+            "current_stage": "photography_mainline_004_execution" if active else "photography_p6_gated",
             "document_family": "docs/photography_module/P00-P09",
             "activation_ready": active,
             "registered_in_default_scenario_registry": active,
@@ -53,6 +51,7 @@ def photography_manifest(*, enabled: bool | None = None) -> ScenarioPackManifest
             "v1_v2_runtime_import": False,
             "direct_provider_call": False,
             "shared_review_retry_owner": "v3_product_runtime",
+            "professional_set_execution": "shared_runtime_role_plan" if active else "unavailable",
         },
     )
 

@@ -170,7 +170,7 @@ def _photography_template_manifest() -> ProjectTemplateManifest:
         ),
         output_summary_policy=TemplateOutputSummaryPolicy(
             summary_sections=["photographs", "art_direction", "next_actions"],
-            image_slot_model="photography_single_hero",
+            image_slot_model="photography_professional_set",
             user_visible_fields=["image", "purpose", "why_useful", "next_step"],
             hidden_debug_fields=["provider", "job_id", "photography_plan", "manifest"],
         ),
@@ -179,12 +179,14 @@ def _photography_template_manifest() -> ProjectTemplateManifest:
             "PHOTOGRAPHY-MAINLINE-003 deployment gate enabled",
             "server-owned photographer profile binding available",
             "shared generation, review, retry, and result resolution available",
+            "PHOTOGRAPHY-MAINLINE-004 role execution and continuation available",
         ],
         test_requirements=[
             "Photography gate-on planning runs through ScenarioRuntime",
             "named profile is explicitly confirmed then immutable",
             "non-human identity reference blocks without native high-fidelity support",
             "General and E-Commerce isolation passes",
+            "professional set executes three frozen roles without single-hero fallback",
         ],
         ui_card={"label": "\u6444\u5f71\u5e08\u6a21\u677f", "icon": "camera"},
         metadata={"maps_to_scenario_pack": "photography", "production_gate_required": True},

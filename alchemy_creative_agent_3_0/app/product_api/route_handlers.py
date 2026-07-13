@@ -149,6 +149,32 @@ class V3ProductRouteHandlers:
             slot_id,
         ).model_dump(mode="json")
 
+    def post_project_photography_role_continuation(
+        self,
+        project_id: str,
+        parent_job_id: str,
+        role_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.project_service.create_photography_role_continuation(
+            project_id,
+            parent_job_id,
+            role_id,
+            payload,
+        ).model_dump(mode="json")
+
+    def get_project_photography_role_delivery(
+        self,
+        project_id: str,
+        root_job_id: str,
+        role_id: str,
+    ) -> dict[str, Any]:
+        return self.project_service.get_photography_role_delivery(
+            project_id,
+            root_job_id,
+            role_id,
+        ).model_dump(mode="json")
+
     def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.generate_project_job(project_id, job_id, payload or {}).model_dump(mode="json")
 

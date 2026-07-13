@@ -79,7 +79,8 @@ class PhotographyScenarioPlanningAdapter:
             planner_id=self.planner_id,
             capability_contribution_draft=contribution,
             required_capability_ids=required,
-            requested_image_count=1,
+            requested_image_count=len(output.shot_specs),
+            execution_plan=self._execution_plan(context, output, binding),
             safe_summary={
                 "scenario_id": "photography",
                 "scene_domain": output.brief.scene_domain.value,
@@ -89,6 +90,7 @@ class PhotographyScenarioPlanningAdapter:
                 "named_profile_binding_present": str(binding.get("binding_mode") or "") == "named",
                 "shared_execution_only": True,
                 "required_capability_ids": required,
+                "delivery_mode": controls.delivery_mode.value,
             },
             metadata={
                 "contract_version": "photography_mainline_003_v1",
@@ -99,6 +101,10 @@ class PhotographyScenarioPlanningAdapter:
                 "owns_visual_review": False,
                 "owns_retry": False,
                 "owns_result_selection": False,
+                # Server-pinned internal evidence used only when Project Mode
+                # asks the Photography module to validate a role continuation.
+                # It is intentionally absent from all public summaries.
+                "photography_pack_output": output.model_dump(mode="json"),
             },
         )
 
@@ -110,15 +116,140 @@ class PhotographyScenarioPlanningAdapter:
             input_mode = "reference_to_professional_reshoot"
         controls = {
             "input_mode": input_mode or "text_to_photo",
-            "delivery_mode": "single_hero",
+            "delivery_mode": (
+                "professional_set"
+                if context.selected_mode_id == "professional_set"
+                else "single_hero"
+            ),
             "reshoot_strength": params.get("reshoot_strength"),
             "explicit_scene_id": params.get("scene_domain") or params.get("explicit_scene_id"),
             "preservation_controls": dict(params.get("preservation_controls") or {}),
             "aspect_ratio": params.get("aspect_ratio"),
             # The profile lives exclusively in the immutable mainline binding.
-            "output_count": 1,
+            "output_count": 3 if context.selected_mode_id == "professional_set" else 1,
         }
         return PhotographyUserControls.model_validate(controls)
+
+    def _execution_plan(self, context, output, binding: dict[str, Any]) -> dict[str, Any]:
+        """Translate frozen Photography shots into the shared role contract.
+
+        The role recipe is deliberately the generic runtime shape already used
+        by the shared Prompt/Provider/Review path.  Photography contributes
+        professional art direction only; it does not acquire a private image
+        loop or result selector.
+        """
+
+        is_set = output.professional_set_plan is not None
+        role_recipes = []
+        for shot in output.shot_specs:
+            role_recipes.append(
+                {
+                    "role_id": shot.shot_id,
+                    "index": shot.sequence_index,
+                    "role_key": shot.role,
+                    "label": shot.role.replace("_", " ").title(),
+                    "purpose": shot.subject_and_decisive_moment,
+                    "shot_family": "professional photography role",
+                    "camera_distance": shot.camera_position_and_perspective_effect,
+                    "angle_rule": shot.camera_position_and_perspective_effect,
+                    "crop_rule": shot.framing_and_crop,
+                    "scene_rule": shot.subject_direction,
+                    "variation_axes": list(shot.metadata.get("differentiated_dimensions") or []),
+                    "must_keep_rules": [
+                        *list(shot.immutable_reference_truth),
+                        "preserve the frozen photographer profile checksum and shared color/finish anchor",
+                    ],
+                    "must_not_rules": list(shot.negative_constraints),
+                    "prompt_pressure": " ".join(
+                        item
+                        for item in (
+                            shot.subject_and_decisive_moment,
+                            shot.depth_and_focus_behavior,
+                            shot.motion_behavior,
+                            shot.lighting_map_and_exposure_key,
+                            shot.palette_and_tone_curve,
+                            shot.surface_texture_and_grain,
+                            shot.retouch_direction,
+                        )
+                        if item
+                    ),
+                    "negative_pressure": list(shot.negative_constraints),
+                    "review_checks": list(shot.review_profile.get("issue_codes") or []),
+                    "user_visible_summary": [shot.subject_and_decisive_moment],
+                    "metadata": {
+                        "owner": "photography_scenario_pack",
+                        "photography_role": shot.role,
+                        "photography_shot_id": shot.shot_id,
+                        "photography_profile_checksum": binding.get("technique_package_checksum"),
+                        "immutable_reference_truth": list(shot.immutable_reference_truth),
+                        "allowed_changes": list(shot.allowed_changes),
+                    },
+                }
+            )
+        set_plan = output.professional_set_plan
+        role_order = list(set_plan.role_order) if set_plan is not None else [shot.role for shot in output.shot_specs]
+        return {
+            "plan_id": stable_id(
+                "specialized_photography_role_execution",
+                context.job_key,
+                set_plan.set_id if set_plan is not None else output.brief.brief_id,
+                *[item["role_id"] for item in role_recipes],
+            ),
+            "project_id": str(context.project_context_snapshot.get("project_id") or "") or None,
+            "job_id": context.job_key,
+            "mode": "delivery_suite" if is_set else "single_hero",
+            "subject_type": output.brief.scene_domain.value,
+            "requested_image_count": len(role_recipes),
+            "policy": {
+                "policy_id": stable_id("photography_role_execution_policy", context.job_key, is_set),
+                "mode": "delivery_suite" if is_set else "single_hero",
+                "mode_meaning": "frozen professional photography role set" if is_set else "one professional photography hero",
+                "visual_distance_budget": "purposeful_professional_variation" if is_set else "single_frame",
+                "anchor_strength": "frozen_profile_color_and_reference_truth",
+                "scene_change_allowed": bool(is_set),
+                "role_strategy": "photography_professional_roles",
+                "role_difference_requirement": "each frozen Photography role must retain its own composition and camera duty",
+                "review_priority": "role coverage, profile fidelity, reference truth, real-camera finish",
+                "user_visible_label": "Professional photography set" if is_set else "Professional photograph",
+                "user_visible_summary": [],
+                "metadata": {"owner": "shared_runtime", "scenario_id": "photography"},
+            },
+            "role_recipes": role_recipes,
+            "prompt_additions": [
+                f"Photography role {recipe['role_key']}: {recipe['prompt_pressure']}"
+                for recipe in role_recipes
+            ],
+            "negative_additions": _dedupe(
+                item for recipe in role_recipes for item in recipe["negative_pressure"]
+            ),
+            "user_visible_summary": [
+                "Prepared frozen professional photography role directions for shared execution."
+            ],
+            "metadata": {
+                "owner": "photography_scenario_pack",
+                "scenario_id": "photography",
+                "execution_owner": "shared_generation_review_retry",
+                "professional_set": is_set,
+                "photography_set_id": set_plan.set_id if set_plan is not None else None,
+                "role_order": role_order,
+                "profile_binding_snapshot": (
+                    dict(set_plan.profile_binding_snapshot)
+                    if set_plan is not None
+                    else {
+                        "profile_id": binding.get("profile_id"),
+                        "profile_version": binding.get("profile_version"),
+                        "technique_package_checksum": binding.get("technique_package_checksum"),
+                    }
+                ),
+                "coherence_contract": dict(set_plan.coherence_contract) if set_plan is not None else {},
+                "selection_contract": dict(set_plan.selection_contract) if set_plan is not None else {},
+                "delivery_package": dict(set_plan.delivery_package) if set_plan is not None else {},
+                "direct_provider_call": False,
+                "owns_visual_review": False,
+                "owns_retry": False,
+                "owns_result_selection": False,
+            },
+        }
 
     def _nonhuman_identity_requirements(
         self,

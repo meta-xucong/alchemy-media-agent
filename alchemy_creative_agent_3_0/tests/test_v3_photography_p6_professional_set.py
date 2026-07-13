@@ -57,12 +57,14 @@ def _set_controls(**overrides: object) -> PhotographyUserControls:
     return PhotographyUserControls(**payload)
 
 
-def test_p6_shadow_set_is_not_exposed_by_the_current_gated_runtime_manifest() -> None:
-    manifest = photography_manifest(enabled=True)
+def test_p6_professional_set_is_exposed_only_when_the_photography_gate_is_enabled() -> None:
+    enabled = photography_manifest(enabled=True)
+    disabled = photography_manifest(enabled=False)
 
-    assert manifest.default_mode_id == "single_hero"
-    assert manifest.supported_mode_ids == ["single_hero", "reference_reshoot"]
-    assert "professional_set" not in manifest.supported_mode_ids
+    assert enabled.default_mode_id == "single_hero"
+    assert "professional_set" in enabled.supported_mode_ids
+    assert disabled.status.value == "inactive"
+    assert disabled.metadata["professional_set_execution"] == "unavailable"
 
 
 def test_p6_professional_set_has_differentiated_roles_and_shared_coherence() -> None:

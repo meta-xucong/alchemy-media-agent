@@ -530,8 +530,33 @@ class V3ProductApiService:
         return default_photography_operator_catalog() if photography_production_enabled() else None
 
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
+        return self._create_creative_job(request)
+
+    def create_trusted_photography_continuation_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+    ) -> ProductJobStatus:
+        """Internal Project Mode seam for a server-validated role child.
+
+        This method is deliberately not exposed by the public Product API.
+        It is the sole path allowed to reuse the parent's immutable profile
+        binding and specialized frozen plan for append-only Photography role
+        continuation.
+        """
+
+        return self._create_creative_job(request, trusted_photography_continuation=True)
+
+    def _create_creative_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        trusted_photography_continuation: bool = False,
+    ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
-        self._resolve_and_pin_photographer_profile(create_request)
+        self._resolve_and_pin_photographer_profile(
+            create_request,
+            trusted_photography_continuation=trusted_photography_continuation,
+        )
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         planning_result = runtime_result.planning_result
         estimate = self._estimate_for_result(planning_result) if planning_result else self._empty_balance_estimate()
@@ -557,6 +582,7 @@ class V3ProductApiService:
                 "capability_activation_mode",
                 "specialized_scenario_plan",
                 "specialized_scenario_plan_summary",
+                "specialized_execution_summary",
             )
             if key in runtime_result.metadata
         }
@@ -564,6 +590,7 @@ class V3ProductApiService:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
         self._bind_internal_copy_render_plan(create_request)
         self._seed_ecommerce_slot_root_lineage(create_request, job_id)
+        self._seed_photography_role_root_lineage(create_request, job_id)
         record = ProductJobRecord(
             request=create_request,
             status=status,
@@ -3904,6 +3931,7 @@ class V3ProductApiService:
             "ecommerce_text_to_image_fallback",
             "has_product_reference",
             "ecommerce_slot_lineage",
+            "photography_role_lineage",
             "capability_plan_amendment",
             "continuation_evidence_asset_ids",
             "capability_activation_plan_id",
@@ -3915,6 +3943,7 @@ class V3ProductApiService:
             "background_generation_watchdog",
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",
+            "specialized_execution_summary",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
         result = record.generation_result or record.planning_result
@@ -3939,22 +3968,37 @@ class V3ProductApiService:
                 status_metadata["capability_summary"] = friendly
         return status_metadata
 
-    def _resolve_and_pin_photographer_profile(self, request: CreateCreativeJobRequest) -> None:
+    def _resolve_and_pin_photographer_profile(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        trusted_photography_continuation: bool = False,
+    ) -> None:
         """Resolve selection before Central Brain and pin it outside prompt-owned state."""
 
         metadata = dict(request.metadata or {})
-        if "photographer_profile_binding" in metadata:
+        if "photographer_profile_binding" in metadata and not trusted_photography_continuation:
             raise PhotographerProfileSelectionError(
                 "photographer_profile_binding_immutable",
                 "Photographer profile bindings are server-owned.",
                 status_code=409,
             )
-        if "specialized_scenario_plan" in metadata:
+        if "specialized_scenario_plan" in metadata and not trusted_photography_continuation:
             raise PhotographerProfileSelectionError(
                 "photography_runtime_metadata_server_owned",
                 "Specialized photography planning snapshots are server-owned.",
                 status_code=409,
             )
+        if trusted_photography_continuation:
+            binding = metadata.get("photographer_profile_binding")
+            specialized = metadata.get("specialized_scenario_plan")
+            if not isinstance(binding, dict) or not isinstance(specialized, dict):
+                raise PhotographerProfileSelectionError(
+                    "photography_trusted_continuation_contract_missing",
+                    "A trusted Photography continuation requires the server-pinned profile and planning snapshot.",
+                    status_code=409,
+                )
+            return
         scenario_resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
         binding = self.photographer_profile_catalog.resolve_binding(
             scenario_id=scenario_resolution.manifest.scenario_id,
@@ -5129,6 +5173,46 @@ class V3ProductApiService:
             "continuation_kind": "ecommerce_root",
             "continuation_correction_note": None,
             "new_evidence_asset_ids": [],
+            "capability_activation_plan_id": plan_id,
+            "plan_amendment_id": None,
+            "created_at": _utc_now_iso(),
+        }
+        request.metadata = metadata
+
+    def _seed_photography_role_root_lineage(self, request: CreateCreativeJobRequest, job_id: str) -> None:
+        """Seed append-only professional-set lineage after planning is frozen."""
+
+        metadata = dict(request.metadata or {})
+        if isinstance(metadata.get("photography_role_lineage"), dict):
+            return
+        specialized = metadata.get("specialized_scenario_plan")
+        if not isinstance(specialized, dict):
+            return
+        execution = specialized.get("execution_plan")
+        if not isinstance(execution, dict):
+            return
+        execution_metadata = execution.get("metadata")
+        if not isinstance(execution_metadata, dict) or not execution_metadata.get("professional_set"):
+            return
+        plan_id = str(metadata.get("capability_activation_plan_id") or "").strip()
+        set_id = str(execution_metadata.get("photography_set_id") or "").strip()
+        role_recipes = execution.get("role_recipes")
+        role_ids = [
+            str(item.get("role_key") or "").strip()
+            for item in role_recipes
+            if isinstance(item, dict) and str(item.get("role_key") or "").strip()
+        ] if isinstance(role_recipes, list) else []
+        if not plan_id or not set_id or not role_ids:
+            return
+        metadata["photography_role_lineage"] = {
+            "schema_version": "photography_role_lineage_v1",
+            "root_job_id": job_id,
+            "parent_job_id": None,
+            "parent_role_id": None,
+            "root_set_id": set_id,
+            "continuation_kind": "photography_professional_set_root",
+            "continuation_correction_note": None,
+            "new_reference_asset_ids": [],
             "capability_activation_plan_id": plan_id,
             "plan_amendment_id": None,
             "created_at": _utc_now_iso(),

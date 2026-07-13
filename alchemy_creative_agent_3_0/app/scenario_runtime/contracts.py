@@ -86,6 +86,12 @@ class SpecializedScenarioPlanningResult(V3BaseModel):
     capability_contribution_draft: CapabilityContribution
     required_capability_ids: list[str] = Field(default_factory=list)
     requested_image_count: int | None = Field(default=None, ge=1, le=4)
+    # An active specialized Scenario Pack may freeze an execution-neutral
+    # per-output role contract.  Central Brain never receives this raw
+    # payload; the shared execution runtime materializes it only after the
+    # capability plan is frozen.  This keeps the seam reusable for future
+    # specialized templates without putting their deliverable maps in General.
+    execution_plan: dict[str, Any] = Field(default_factory=dict)
     safe_summary: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
