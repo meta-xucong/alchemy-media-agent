@@ -3929,7 +3929,7 @@ class V3ProjectModeService:
         selected_policy = self._generated_output_use_policy(project, template_id)
         if selected_policy == ProjectReferenceUsePolicy.PRODUCT_IDENTITY:
             return {
-                "policy_id": "ecommerce_product_truth",
+                "policy_id": "product_truth",
                 "primary_priority": "product_identity",
                 "strong_reference_default": "hard",
                 "identity_lock_default": "product",

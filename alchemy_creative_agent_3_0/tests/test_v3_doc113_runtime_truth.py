@@ -11,6 +11,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router.providers import GenerationProvider
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.shared_capabilities import (
@@ -78,6 +79,60 @@ def test_public_product_api_rejects_runtime_owned_frozen_plan_metadata() -> None
                 "metadata": {"capability_activation_plan": _frozen_enforced_plan()},
             }
         )
+
+
+def test_direct_product_and_project_entries_normalize_one_count_size_and_text_contract() -> None:
+    user_input = "Create two wide editorial still-life images with no visible text."
+    runtime = ScenarioRuntime()
+    direct = runtime.plan_job(
+        {
+            "user_input": user_input,
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
+            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+        }
+    )
+    product_service = V3ProductApiService()
+    product = product_service.create_job(
+        {
+            "user_input": user_input,
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
+            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+        }
+    )
+    product_record = product_service.get_job_record(product.job_id)
+    assert product_record is not None
+
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects({"user_goal": user_input})["project"]
+    project_job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "general_template",
+            "user_input": user_input,
+            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+        },
+    )
+    project_record = handlers.service.get_job_record(project_job["job_id"])
+    assert project_record is not None
+
+    intents = [
+        direct.metadata["normalized_v3_job_intent"],
+        product_record.request.metadata["normalized_v3_job_intent"],
+        project_record.request.metadata["normalized_v3_job_intent"],
+    ]
+    deliveries = [
+        direct.metadata["template_deliverable_plan"],
+        product_record.request.metadata["template_deliverable_plan"],
+        project_record.request.metadata["template_deliverable_plan"],
+    ]
+
+    for intent, delivery in zip(intents, deliveries, strict=True):
+        assert intent["effective_image_count"] == 2
+        assert intent["effective_image_size"] == "1536x1024"
+        assert intent["visible_text_policy"] == "forbidden"
+        assert intent["text_policy"] == "provider_native_text_forbidden"
+        assert delivery["effective_image_count"] == 2
+        assert len(delivery["deliverables"]) == 2
 
 
 def test_enforced_combined_run_preserves_an_accepted_executor_result() -> None:

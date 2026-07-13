@@ -36,15 +36,28 @@ class BaseVisualCapabilityPlugin:
         retry: dict[str, Any] | None = None,
         stages: list[str] | None = None,
     ) -> CapabilityContribution:
+        prompt_additions = string_list(prompt or [])
+        negative_additions = string_list(negative or [])
+        retry_contract = dict(retry or {})
+        # Retry is a capability-owned projection of already accepted guidance.
+        # Do not leave Product API to reconstruct a prompt from issue names.
+        # Specialized plugins may provide a narrower template themselves; the
+        # default keeps the same active capability's safe prompt/negative
+        # contribution bounded and auditable.
+        if retry_contract and not isinstance(retry_contract.get("templates"), dict):
+            retry_contract["templates"] = {
+                "prompt_additions": list(prompt_additions),
+                "negative_additions": list(negative_additions),
+            }
         return CapabilityContribution(
             capability_id=context.active.capability_id,
             capability_version=context.active.version,
             activation_plan_id=context.plan.plan_id,
-            prompt_additions=string_list(prompt or []),
-            negative_additions=string_list(negative or []),
+            prompt_additions=prompt_additions,
+            negative_additions=negative_additions,
             provider_input_requirements=list(provider_requirements or []),
             review_contract=dict(review or {}),
-            retry_contract=dict(retry or {}),
+            retry_contract=retry_contract,
             stages=list(stages or []),
             metadata={"selected_profile": context.active.selected_profile},
         )

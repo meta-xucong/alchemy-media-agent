@@ -183,8 +183,8 @@ RETRYABLE_ISSUE_CODES = {
     "product_label_unreadable",
     "product_logo_or_label_obscured",
     "brand_asset_drift",
-    "ecommerce_slot_mismatch",
-    "ecommerce_suite_role_mismatch",
+    "deliverable_intent_mismatch",
+    "delivery_set_role_mismatch",
     "bad_hands_or_body",
     "face_artifact",
     "ai_face_render",
@@ -909,8 +909,8 @@ def _issue_message(code: str) -> str:
         "product_label_unreadable": "The visible product label or logo may be too unclear for a product image.",
         "product_logo_or_label_obscured": "The product label or logo may be covered, cropped, darkened, or hidden.",
         "brand_asset_drift": "A referenced brand or visual asset may have drifted.",
-        "ecommerce_slot_mismatch": "The generated image may not match the requested ecommerce image role.",
-        "ecommerce_suite_role_mismatch": "The product image set may not preserve the requested ecommerce role sequence.",
+        "deliverable_intent_mismatch": "The generated image may not match its requested delivery intent.",
+        "delivery_set_role_mismatch": "The image set may not preserve the requested role differentiation.",
         "camera_distance_drift": "Camera distance may have drifted from the intended direction.",
         "bad_hands_or_body": "Body or hand details may need cleanup.",
         "face_artifact": "Face details may need cleanup.",
@@ -1462,15 +1462,14 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "beauty-app glow",
                 ]
             )
-        elif code in {"ecommerce_slot_mismatch", "ecommerce_suite_role_mismatch"}:
-            prompt_additions.append("preserve the requested ecommerce slot for this output and do not substitute another listing role")
-            composition_repair.append("separate ecommerce roles clearly: main image, feature proof, lifestyle scene, detail proof, trust cue, and cover-safe image must stay distinct")
+        elif code in {"deliverable_intent_mismatch", "delivery_set_role_mismatch"}:
+            prompt_additions.append("preserve this output's requested delivery intent and do not substitute a different image role")
+            composition_repair.append("separate the requested image roles clearly across the delivery set")
             negative_additions.extend(
                 [
-                    "wrong ecommerce image role",
-                    "requested listing slot ignored",
-                    "feature image replaced by detail image",
-                    "lifestyle image replaced by studio packshot",
+                    "wrong requested image role",
+                    "requested delivery intent ignored",
+                    "one role replaced by another",
                 ]
             )
     return {

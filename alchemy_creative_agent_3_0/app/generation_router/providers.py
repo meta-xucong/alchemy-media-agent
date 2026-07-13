@@ -66,6 +66,11 @@ class GenerationProvider:
         raise NotImplementedError
 
     def _retry_patch(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request):
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            patch = projection.get("retry_patch") if isinstance(projection, dict) else None
+            return dict(patch) if isinstance(patch, dict) else {}
         patch = request.metadata.get("visual_retry_patch")
         return dict(patch) if isinstance(patch, dict) else {}
 
@@ -85,21 +90,14 @@ class GenerationProvider:
 
     def _mode_role_recipe(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
-            cluster = self._visual_cluster(request)
-            value = cluster.get("mode_role_recipe") if isinstance(cluster, dict) else None
-            if isinstance(value, dict):
-                return dict(value)
-            # General's lightweight multi-output mode keeps a template-owned,
-            # Brain-bound output binding.  Materialize only that opaque
-            # binding here; do not reopen old request metadata or introduce a
-            # vertical recipe.  E-Commerce intentionally has no generic role
-            # recipe because its provider intent is already its deliverable.
             ledger = self._resolved_constraint_ledger(request)
             projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
-            deliverable_plan = projection.get("template_deliverable_plan") if isinstance(projection, dict) else {}
-            if not isinstance(deliverable_plan, dict) or deliverable_plan.get("template_id") != "general_template":
+            if isinstance(projection, dict) and projection.get("template_id") == "ecommerce_template":
+                # E-Commerce's Brain direction already belongs to the
+                # template deliverable plan.  Do not relabel it as a generic
+                # mode recipe or reintroduce a shared role vocabulary.
                 return {}
-            deliverables = deliverable_plan.get("deliverables")
+            deliverables = projection.get("deliverables") if isinstance(projection, dict) else None
             if not isinstance(deliverables, list):
                 return {}
             priority = getattr(request.asset_spec, "priority", None) if request.asset_spec is not None else None
@@ -113,12 +111,21 @@ class GenerationProvider:
             direction = str(item.get("image_intent") or "").strip()
             if not direction:
                 return {}
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             return {
-                "role_key": str(item.get("deliverable_id") or f"general_output_{index}"),
+                "role_key": str(
+                    metadata.get("specialized_role_key")
+                    or item.get("deliverable_id")
+                    or f"general_output_{index}"
+                ),
                 "label": f"Output {index}",
                 "purpose": direction,
                 "prompt_pressure": direction,
-                "metadata": {"source": "template_deliverable_plan", "static_recipe_present": False},
+                "metadata": {
+                    "source": "resolved_constraint_ledger",
+                    "static_recipe_present": False,
+                    **dict(metadata),
+                },
             }
         for source in (request.metadata, request.generation_plan.metadata, request.prompt_compilation.provider_notes):
             value = source.get("mode_role_recipe") if isinstance(source, dict) else None
@@ -162,7 +169,7 @@ class GenerationProvider:
         if self._activation_enforced(request):
             ledger = self._resolved_constraint_ledger(request)
             projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
-            cluster = projection.get("visual_cluster") if isinstance(projection, dict) else None
+            cluster = projection.get("capability_projection") if isinstance(projection, dict) else None
             return dict(cluster) if isinstance(cluster, dict) else {}
         cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata, dict) else None
         if isinstance(cluster, dict):
@@ -218,8 +225,12 @@ class GenerationProvider:
         if self._activation_enforced(request):
             ledger = self._resolved_constraint_ledger(request)
             projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
-            value = projection.get("composed_visual_contribution") if isinstance(projection, dict) else None
-            return dict(value) if isinstance(value, dict) else {}
+            if not isinstance(projection, dict):
+                return {}
+            return {
+                "prompt_additions": self._string_list(projection.get("quality_guidance")),
+                "negative_additions": self._string_list(projection.get("negative_guidance")),
+            }
         cluster = self._visual_cluster(request)
         value = cluster.get("composed_visual_contribution") if isinstance(cluster, dict) else None
         if isinstance(value, dict):
@@ -499,12 +510,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
-        shared_capabilities = (
-            request.metadata.get("shared_capabilities") if isinstance(request.metadata.get("shared_capabilities"), dict) else {}
-        )
-        visual_cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata.get("visual_cluster"), dict) else {}
-        if not visual_cluster and isinstance(shared_capabilities.get("visual_cluster"), dict):
-            visual_cluster = shared_capabilities["visual_cluster"]
+        if self._activation_enforced(request):
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            shared_capabilities = {
+                "source": "resolved_constraint_ledger",
+                "active_capability_ids": list(
+                    (self._activation_plan_summary(request).get("dependency_order") or [])
+                ),
+            }
+            visual_cluster = (
+                dict(projection.get("capability_projection") or {})
+                if isinstance(projection, dict)
+                else {}
+            )
+        else:
+            shared_capabilities = (
+                request.metadata.get("shared_capabilities") if isinstance(request.metadata.get("shared_capabilities"), dict) else {}
+            )
+            visual_cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata.get("visual_cluster"), dict) else {}
+            if not visual_cluster and isinstance(shared_capabilities.get("visual_cluster"), dict):
+                visual_cluster = shared_capabilities["visual_cluster"]
         mode_role_recipe = self._mode_role_recipe(request)
         role_specific_plan = self._role_specific_generation_plan(request)
         mode_policy = self._mode_execution_policy(request)

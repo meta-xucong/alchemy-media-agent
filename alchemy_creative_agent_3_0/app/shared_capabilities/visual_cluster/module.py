@@ -1444,9 +1444,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         portrait_like = _contains_latin_terms(text, ["portrait", "woman", "girl", "person", "model", "face"]) or any(
             token in user_input for token in ["人像", "写真", "美女", "人物", "脸", "发型"]
         )
-        if allow_product_language or "ecommerce" in text:
+        if allow_product_language:
             return {
-                "policy_id": "ecommerce_product_truth",
+                "policy_id": "product_truth",
                 "primary_priority": "product_identity",
                 "strong_reference_default": "hard",
                 "identity_lock_default": "product",
@@ -2904,16 +2904,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             raw_controls.update(_clean_advanced_reference_controls(source))
         has_identity_binding = any(self._binding_is_person_identity(binding) for binding in strong_bindings)
         has_any_binding = bool(strong_bindings)
-        if template_id not in {"general_template", "ecommerce_template"}:
-            return {
-                "applies": False,
-                "template_scope": template_id or "unknown",
-                "doc": "90",
-                "reason": "doc90_currently_general_or_ecommerce_only",
-            }
         defaults = {
             "preserve_person_identity": bool(has_identity_binding or (subject_type == "character" and has_any_binding)),
-            "preserve_product_appearance": bool(template_id == "ecommerce_template" and has_any_binding),
+            "preserve_product_appearance": bool(subject_type == "product" and has_any_binding),
             "preserve_scene_consistency": False,
         }
         controls = {
@@ -2926,7 +2919,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "applies": applies,
             "template_scope": template_id,
             "doc": "90",
-            "source": "manual" if raw_controls else f"{template_id}_defaults",
+            "source": "manual" if raw_controls else "generic_reference_defaults",
             "has_reference_binding": has_any_binding,
             "has_identity_binding": has_identity_binding,
             "subject_type": subject_type,

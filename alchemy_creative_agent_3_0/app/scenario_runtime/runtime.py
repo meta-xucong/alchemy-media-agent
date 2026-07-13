@@ -443,6 +443,36 @@ class ScenarioRuntime:
                 parameters.get("approved_literal_copy"),
             )
         )
+        explicit_visible_text_policy = str(
+            metadata.get("visible_text_policy")
+            or parameters.get("visible_text_policy")
+            or ""
+        ).strip().lower()
+        forbidden_text_markers = (
+            "no visible text",
+            "without visible text",
+            "no text",
+            "text-free",
+            "不要文字",
+            "无文字",
+            "不加文字",
+            "不含文字",
+        )
+        user_forbids_visible_text = explicit_visible_text_policy == "forbidden" or any(
+            marker in request.user_input.lower() for marker in forbidden_text_markers
+        )
+        if explicit_visible_text_policy not in {"required", "allowed", "forbidden", "unspecified", ""}:
+            raise CapabilityActivationError("visible_text_policy_invalid")
+        visible_text_policy = "forbidden" if user_forbids_visible_text else (
+            explicit_visible_text_policy or ("required" if explicit_text else "unspecified")
+        )
+        text_policy = (
+            "provider_native_text_forbidden"
+            if visible_text_policy == "forbidden"
+            else "provider_native_explicit_text"
+            if explicit_text
+            else "provider_native_no_forced_text"
+        )
         template_id = self._template_id(request, resolution)
         normalized = NormalizedV3JobIntent(
             intent_id=stable_id(
@@ -455,6 +485,7 @@ class ScenarioRuntime:
                 requested_size,
                 declared_limit,
                 explicit_text,
+                visible_text_policy,
             ),
             template_id=template_id,
             scenario_id=resolution.manifest.scenario_id,
@@ -465,13 +496,34 @@ class ScenarioRuntime:
             count_limit_source=limit_source,
             requested_image_size=requested_size,
             effective_image_size=requested_size,
-            text_policy="provider_native_explicit_text" if explicit_text else "provider_native_no_forced_text",
+            text_policy=text_policy,
+            visible_text_policy=visible_text_policy,
+            user_constraints=[
+                {
+                    "channel": "visible_text",
+                    "owner": "user",
+                    "strength": "hard",
+                    "value": visible_text_policy,
+                    "source": "explicit_metadata_or_user_intent",
+                }
+            ],
+            source_truth_locks=[
+                {
+                    "channel": "product_truth",
+                    "owner": "product_identity",
+                    "source": "product_profile",
+                    "fields": sorted(str(key) for key, value in request.product_profile.items() if value not in (None, "", [], {})),
+                }
+            ]
+            if request.product_profile
+            else [],
             provenance=[
                 {
                     "source": "ScenarioRuntime._normalize_v3_job_intent",
                     "requested_image_count": requested_count,
                     "declared_image_count_limit": declared_limit,
                     "count_limit_source": limit_source,
+                    "visible_text_policy": visible_text_policy,
                 }
             ],
         )
@@ -867,6 +919,7 @@ class ScenarioRuntime:
         if not isinstance(raw_composed, dict):
             raise CapabilityActivationError("accepted active execution did not produce a resolved constraint contribution")
         composed = ComposedVisualContribution.model_validate(raw_composed)
+        conflicts: list[dict[str, Any]] = []
         entries: list[ResolvedConstraintEntry] = [
             ResolvedConstraintEntry(
                 constraint_id=stable_id("constraint", normalized_intent.intent_id, "user_intent"),
@@ -902,20 +955,146 @@ class ScenarioRuntime:
                 provenance=[{"source": "NormalizedV3JobIntent"}],
             ),
         ]
-        for deliverable in template_deliverable_plan.deliverables:
+        parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
+        metadata_size = str(request.metadata.get("requested_image_size") or "").strip() or None
+        parameter_size = str(parameters.get("requested_image_size") or "").strip() or None
+        if metadata_size and parameter_size and metadata_size != parameter_size:
+            scenario_canvas_id = stable_id("constraint", normalized_intent.intent_id, "canvas", "scenario_parameter")
             entries.append(
                 ResolvedConstraintEntry(
-                    constraint_id=stable_id("constraint", template_deliverable_plan.plan_id, deliverable.deliverable_id),
+                    constraint_id=scenario_canvas_id,
+                    channel="canvas",
+                    owner="scenario_parameter",
+                    strength="hard",
+                    precedence=80,
+                    requested_value=parameter_size,
+                    resolved_value=normalized_intent.effective_image_size,
+                    resolution="overridden",
+                    provenance=[{"source": "ScenarioSelection.parameters", "field": "requested_image_size"}],
+                )
+            )
+            conflicts.append(
+                {
+                    "channel": "canvas",
+                    "winner": "user_metadata",
+                    "loser": "scenario_parameter",
+                    "resolution": "user_explicit_size_overrides_default",
+                    "winner_value": normalized_intent.effective_image_size,
+                    "loser_value": parameter_size,
+                    "constraint_ids": [entries[1].constraint_id, scenario_canvas_id],
+                }
+            )
+        metadata_count = request.metadata.get("requested_image_count")
+        parameter_count = parameters.get("requested_image_count")
+        if metadata_count not in (None, "") and parameter_count not in (None, ""):
+            try:
+                count_conflict = int(metadata_count) != int(parameter_count)
+            except (TypeError, ValueError):
+                count_conflict = False
+            if count_conflict:
+                scenario_count_id = stable_id("constraint", normalized_intent.intent_id, "count", "scenario_parameter")
+                entries.append(
+                    ResolvedConstraintEntry(
+                        constraint_id=scenario_count_id,
+                        channel="count",
+                        owner="scenario_parameter",
+                        strength="hard",
+                        precedence=80,
+                        requested_value=parameter_count,
+                        resolved_value=normalized_intent.effective_image_count,
+                        resolution="overridden",
+                        provenance=[{"source": "ScenarioSelection.parameters", "field": "requested_image_count"}],
+                    )
+                )
+                conflicts.append(
+                    {
+                        "channel": "count",
+                        "winner": "user_metadata",
+                        "loser": "scenario_parameter",
+                        "resolution": "user_explicit_count_overrides_default",
+                        "winner_value": normalized_intent.effective_image_count,
+                        "loser_value": parameter_count,
+                        "constraint_ids": [entries[1].constraint_id, scenario_count_id],
+                    }
+                )
+        copy_values = [
+            value
+            for value in (
+                request.metadata.get("provider_native_text_requirements"),
+                request.metadata.get("approved_literal_copy"),
+                parameters.get("provider_native_text_requirements"),
+                parameters.get("approved_literal_copy"),
+            )
+            if value not in (None, "", [], {})
+        ]
+        if normalized_intent.visible_text_policy == "forbidden" and copy_values:
+            copy_constraint_id = stable_id("constraint", normalized_intent.intent_id, "visible_text", "copy_request")
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=copy_constraint_id,
+                    channel="visible_text",
+                    owner="user_copy_request",
+                    strength="hard",
+                    precedence=93,
+                    requested_value=copy_values,
+                    resolved_value=None,
+                    resolution="rejected",
+                    provenance=[{"source": "request_metadata", "reason": "visible_text_forbidden"}],
+                )
+            )
+            conflicts.append(
+                {
+                    "channel": "visible_text",
+                    "winner": "user_no_visible_text",
+                    "loser": "user_copy_request",
+                    "resolution": "copy_rejected_no_visible_text_wins",
+                    "constraint_ids": [entries[2].constraint_id, copy_constraint_id],
+                }
+            )
+        for deliverable in template_deliverable_plan.deliverables:
+            direction = str(deliverable.image_intent or "")
+            direction_requests_text = any(
+                marker in direction.lower()
+                for marker in ("headline", "call to action", "cta", "visible text", "marketing copy", "文字", "文案")
+            )
+            deliverable_resolution = (
+                "translated"
+                if normalized_intent.visible_text_policy == "forbidden" and direction_requests_text
+                else "accepted"
+            )
+            resolved_deliverable_value: Any = (
+                {
+                    "image_intent": direction,
+                    "visible_text": "forbidden",
+                    "translation": "preserve composition intent without visible copy",
+                }
+                if deliverable_resolution == "translated"
+                else direction
+            )
+            constraint_id = stable_id("constraint", template_deliverable_plan.plan_id, deliverable.deliverable_id)
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=constraint_id,
                     channel="deliverable_role",
                     owner=template_deliverable_plan.owner,
                     strength="hard",
                     precedence=90,
-                    requested_value=deliverable.image_intent,
-                    resolved_value=deliverable.image_intent,
-                    resolution="accepted",
+                    requested_value=direction,
+                    resolved_value=resolved_deliverable_value,
+                    resolution=deliverable_resolution,
                     provenance=[{"source": deliverable.source, "output_index": deliverable.output_index}],
                 )
             )
+            if deliverable_resolution == "translated":
+                conflicts.append(
+                    {
+                        "channel": "visible_text",
+                        "winner": "user_no_visible_text",
+                        "loser": "template_deliverable_intent",
+                        "resolution": "deliverable_translated_without_visible_copy",
+                        "constraint_ids": [entries[2].constraint_id, constraint_id],
+                    }
+                )
         for key, value in sorted(dict(request.product_profile or {}).items()):
             if value in (None, "", [], {}):
                 continue
@@ -958,17 +1137,64 @@ class ScenarioRuntime:
             or normalized_intent.text_policy == "provider_native_explicit_text"
             or normalized_intent.effective_image_count > 1
         )
+        resolved_deliverables = []
+        for deliverable in template_deliverable_plan.deliverables:
+            matching = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.channel == "deliverable_role"
+                    and entry.constraint_id == stable_id("constraint", template_deliverable_plan.plan_id, deliverable.deliverable_id)
+                ),
+                None,
+            )
+            resolved_value = matching.resolved_value if matching is not None else deliverable.image_intent
+            resolved_intent = (
+                str(resolved_value.get("image_intent") or "")
+                if isinstance(resolved_value, dict)
+                else str(resolved_value or "")
+            )
+            resolved_deliverables.append(
+                {
+                    "deliverable_id": deliverable.deliverable_id,
+                    "output_index": deliverable.output_index,
+                    "image_intent": resolved_intent,
+                    "factual_acceptance": list(deliverable.factual_acceptance),
+                    "metadata": dict(deliverable.metadata),
+                    "constraint_id": matching.constraint_id if matching is not None else None,
+                    "resolution": matching.resolution if matching is not None else "accepted",
+                }
+            )
+        product_truth = {
+            str(key): value
+            for key, value in dict(request.product_profile or {}).items()
+            if value not in (None, "", [], {})
+        }
+        retry_patch = self._server_resolved_retry_patch(request, plan)
         provider_projection = {
+            "projection_version": "resolved_constraint_ledger_v1",
+            "template_id": normalized_intent.template_id,
+            "scenario_id": normalized_intent.scenario_id,
             "protected_user_intent": normalized_intent.protected_user_intent,
             "effective_image_count": normalized_intent.effective_image_count,
             "requested_image_size": normalized_intent.effective_image_size,
             "text_policy": normalized_intent.text_policy,
-            "template_deliverable_plan": template_deliverable_plan.model_dump(mode="json"),
-            "visual_cluster": raw_cluster,
-            "generic_human_realism": raw_cluster.get("human_photorealism_guidance")
-            if isinstance(raw_cluster.get("human_photorealism_guidance"), dict)
-            else {},
-            "composed_visual_contribution": composed.model_dump(mode="json"),
+            "visible_text_policy": normalized_intent.visible_text_policy,
+            "deliverables": resolved_deliverables,
+            "product_truth": product_truth,
+            "quality_guidance": [
+                entry.resolved_value
+                for entry in entries
+                if entry.channel == "quality_guidance" and entry.resolution == "accepted"
+            ],
+            "negative_guidance": list(composed.negative_additions),
+            "retry_patch": retry_patch,
+            "capability_projection": self._ledger_capability_projection(raw_cluster, plan),
+            "legacy_adapter": {
+                "source": "accepted_active_executor_results",
+                "raw_cluster_retained": False,
+                "fallback_allowed": False,
+            },
         }
         applied_ids = [entry.constraint_id for entry in entries if entry.resolution == "accepted"]
         translated_ids = [entry.constraint_id for entry in entries if entry.resolution == "translated"]
@@ -985,7 +1211,7 @@ class ScenarioRuntime:
             template_id=normalized_intent.template_id,
             scenario_id=normalized_intent.scenario_id,
             entries=entries,
-            conflicts=[],
+            conflicts=conflicts,
             provider_projection=provider_projection,
             audit_summary={
                 "ledger_id": stable_id(
@@ -999,10 +1225,12 @@ class ScenarioRuntime:
                 "effective_image_count": normalized_intent.effective_image_count,
                 "effective_image_size": normalized_intent.effective_image_size,
                 "text_policy": normalized_intent.text_policy,
+                "visible_text_policy": normalized_intent.visible_text_policy,
                 "deliverable_owner": template_deliverable_plan.owner,
                 "applied_constraint_ids": applied_ids,
                 "translated_constraint_ids": translated_ids,
                 "rejected_constraint_ids": rejected_ids,
+                "conflict_count": len(conflicts),
             },
             review_contracts=list(composed.review_contracts),
             retry_contracts=list(composed.retry_contracts),
@@ -1015,6 +1243,80 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _server_resolved_retry_patch(
+        request: ScenarioRuntimeRequest,
+        plan: CapabilityActivationPlan,
+    ) -> dict[str, Any]:
+        """Accept a retry patch only when Product API bound it to this plan."""
+
+        patch = request.metadata.get("resolved_retry_patch")
+        provenance = request.metadata.get("resolved_retry_provenance")
+        if not isinstance(patch, dict) or not isinstance(provenance, dict):
+            return {}
+        if (
+            provenance.get("authority") != "v3_product_api"
+            or str(provenance.get("activation_plan_id") or "") != plan.plan_id
+            or str(provenance.get("activation_plan_fingerprint") or "") != plan.fingerprint
+        ):
+            return {}
+        return dict(patch)
+
+    @staticmethod
+    def _ledger_capability_projection(
+        raw_cluster: dict[str, Any],
+        plan: CapabilityActivationPlan,
+    ) -> dict[str, Any]:
+        """Project only active executor facts into the enforced ledger.
+
+        This is a labelled migration adapter from accepted executor output,
+        not a downstream fallback to Visual Capability Cluster metadata.  It
+        keeps generic capability facts available while refusing to move the
+        full, mutable cluster payload across the Provider boundary.
+        """
+
+        active = set(plan.dependency_order)
+        guarded_keys = {
+            "human_photorealism_guidance": {"human_realism"},
+            "strong_reference_closure_package": {"portrait_identity"},
+            "resolved_reference_policy_package": {"reference_channel_policy"},
+            "adaptive_reference_selection_plan": {
+                "portrait_identity",
+                "product_identity",
+                "scene_continuity",
+            },
+            "identity_repair_strategy_plan": {"portrait_identity"},
+            "mode_execution_policy": {"suite_direction"},
+            "role_specific_generation_plan": {"suite_direction"},
+            "mode_role_recipe": {"suite_direction"},
+            "mode_quality_profile": {"suite_direction"},
+            "reference_truth_package": {
+                "portrait_identity",
+                "product_identity",
+                "nonhuman_subject_identity",
+                "scene_continuity",
+            },
+            "subject_continuity_asset_package": {
+                "portrait_identity",
+                "product_identity",
+                "nonhuman_subject_identity",
+                "scene_continuity",
+            },
+            "portrait_bone_structure_lock": {"portrait_identity"},
+            "styling_delta_policy": {"portrait_identity"},
+            "portrait_reference_influence_policy": {"portrait_identity"},
+            "portrait_reference_balance_policy": {"portrait_identity"},
+        }
+        projection: dict[str, Any] = {}
+        for key, required_capabilities in guarded_keys.items():
+            value = raw_cluster.get(key)
+            if not isinstance(value, dict) or not (active & required_capabilities):
+                continue
+            projection[key] = dict(value)
+        if "suite_direction" in active and isinstance(raw_cluster.get("mode_role_plan_reconciled_to_series"), bool):
+            projection["mode_role_plan_reconciled_to_series"] = raw_cluster["mode_role_plan_reconciled_to_series"]
+        return projection
 
     def _capability_contributions(
         self,
@@ -1643,7 +1945,7 @@ class ScenarioRuntime:
     def _public_visual_cluster_metadata(self, cluster: dict[str, Any]) -> dict[str, Any]:
         policy = cluster.get("template_consistency_policy") if isinstance(cluster.get("template_consistency_policy"), dict) else {}
         policy_id = str(policy.get("policy_id") or "")
-        if policy_id == "ecommerce_product_truth":
+        if policy_id == "product_truth":
             return cluster
         public_cluster = dict(cluster)
         public_cluster.pop("commercial_output_selection", None)

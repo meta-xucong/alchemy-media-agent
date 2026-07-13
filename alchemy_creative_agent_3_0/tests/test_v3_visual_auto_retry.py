@@ -84,8 +84,13 @@ def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path
     assert records[-1]["original_job_id"] == created.job_id
 
 
-def test_visual_auto_retry_executes_for_product_label_issue(tmp_path) -> None:
+def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(tmp_path, monkeypatch) -> None:
     service = _ecommerce_service(tmp_path)
+    monkeypatch.setattr(
+        service,
+        "_visual_retry_patch_from_issues",
+        lambda _codes: (_ for _ in ()).throw(AssertionError("enforced retry must not use legacy issue mapper")),
+    )
     created = service.create_job(
         {
             "user_input": "Create a clean ecommerce product set for a drink can",
@@ -108,6 +113,7 @@ def test_visual_auto_retry_executes_for_product_label_issue(tmp_path) -> None:
             "quality_mode": "standard",
             "metadata": {
                 "force_visual_retry_issue_codes": ["product_label_unreadable"],
+                "visual_retry_patch": {"product_reinforcement": ["FORGED REQUEST PATCH"]},
                 "max_visual_retry_attempts": 1,
             },
         },
@@ -122,6 +128,7 @@ def test_visual_auto_retry_executes_for_product_label_issue(tmp_path) -> None:
     assert retry_summary["executed_count"] == 1
     assert "product_label_unreadable" in retry_summary["issue_codes"]
     assert "label/logo" in patch_text
+    assert "FORGED REQUEST PATCH" not in patch_text
 
 
 def test_visual_auto_retry_skips_empty_patch_without_provider_loop(tmp_path) -> None:

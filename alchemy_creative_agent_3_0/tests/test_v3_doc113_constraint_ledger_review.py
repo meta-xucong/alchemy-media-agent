@@ -1,10 +1,12 @@
 """Doc113 Phase 4/5 constraint resolution and non-certifying review tests."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.generation_router.providers import GenerationProvider
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     GeneratedOutputResolution,
     VisionOutputInspector,
@@ -47,6 +49,48 @@ def test_ledger_resolves_owner_channel_strength_and_provider_projection(monkeypa
         entry["constraint_id"] for entry in ledger["entries"]
     }
     assert ledger["hard_semantic_contract"] is True
+    assert "visual_cluster" not in ledger["provider_projection"]
+    assert "composed_visual_contribution" not in ledger["provider_projection"]
+    assert ledger["provider_projection"]["legacy_adapter"]["fallback_allowed"] is False
+
+
+def test_no_visible_text_wins_over_competing_literal_copy_and_template_copy_intent(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create a clean bottle campaign image with no visible text or headline.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+            "metadata": {
+                "requested_image_count": 1,
+                "approved_literal_copy": ["SUMMER SALE"],
+            },
+        }
+    )
+
+    ledger = result.metadata["resolved_constraint_ledger"]
+    entries = ledger["entries"]
+    rejected = [entry for entry in entries if entry["channel"] == "visible_text" and entry["resolution"] == "rejected"]
+
+    assert result.metadata["normalized_v3_job_intent"]["visible_text_policy"] == "forbidden"
+    assert ledger["provider_projection"]["text_policy"] == "provider_native_text_forbidden"
+    assert rejected and ["SUMMER SALE"] in rejected[0]["requested_value"]
+    assert any(item["resolution"] == "copy_rejected_no_visible_text_wins" for item in ledger["conflicts"])
+
+
+def test_enforced_provider_reads_only_the_resolved_capability_projection(monkeypatch) -> None:
+    result = _hard_product_plan(monkeypatch)
+    request = SimpleNamespace(
+        metadata={
+            "capability_execution_envelope": result.metadata["capability_execution_envelope"],
+            "visual_cluster": {"human_photorealism_guidance": {"applies": True, "forged": True}},
+        },
+        generation_plan=SimpleNamespace(metadata={}),
+        asset_spec=SimpleNamespace(priority=1),
+    )
+
+    projection = GenerationProvider()._visual_cluster(request)
+
+    assert projection.get("human_photorealism_guidance", {}).get("forged") is not True
 
 
 def test_local_only_review_cannot_certify_hard_semantic_contract(monkeypatch, tmp_path: Path) -> None:

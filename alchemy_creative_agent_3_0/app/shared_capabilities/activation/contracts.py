@@ -326,6 +326,9 @@ class NormalizedV3JobIntent(V3BaseModel):
     requested_image_size: str | None = None
     effective_image_size: str | None = None
     text_policy: str = "provider_native_only"
+    visible_text_policy: str = "unspecified"
+    user_constraints: list[dict[str, Any]] = Field(default_factory=list)
+    source_truth_locks: list[dict[str, Any]] = Field(default_factory=list)
     provenance: list[dict[str, Any]] = Field(default_factory=list)
 
 

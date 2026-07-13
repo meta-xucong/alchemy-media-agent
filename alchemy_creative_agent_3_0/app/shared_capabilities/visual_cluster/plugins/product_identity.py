@@ -16,6 +16,18 @@ class ProductIdentityPlugin(BaseVisualCapabilityPlugin):
             ],
             negative=["avoid generic product replacement", "avoid changed labels, logos, structure, pattern, or proportions"],
             review={"issue_codes": issues, "score_dimensions": ["product_fidelity"]},
-            retry={"issue_codes": issues},
+            retry={
+                "issue_codes": issues,
+                "templates": {
+                    "product_reinforcement": [
+                        "preserve the supplied product's label/logo placement, readable label hierarchy, package silhouette, materials, proportions, and visible identity without inventing new copy",
+                    ],
+                    "negative_additions": [
+                        "changed product label",
+                        "changed logo placement",
+                        "generic replacement packaging",
+                    ],
+                },
+            },
             stages=["generation_prompt", "negative_prompt", "provider_input_plan", "post_generation_review", "retry_patch"],
         )

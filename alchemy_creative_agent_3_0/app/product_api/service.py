@@ -303,8 +303,8 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "mode_role_metadata_missing",
     "mode_role_duplication",
     "delivery_suite_role_collapse",
-    "ecommerce_slot_mismatch",
-    "ecommerce_suite_role_mismatch",
+    "deliverable_intent_mismatch",
+    "delivery_set_role_mismatch",
     "format_layout_collapse",
     "selection_candidate_distance_risk",
     "text_background_readability_failure",
@@ -612,6 +612,14 @@ class V3ProductApiService:
                 "capability_activation_plan_id",
                 "capability_catalog_version",
                 "capability_activation_mode",
+                "normalized_v3_job_intent",
+                "normalized_v3_job_intent_id",
+                "template_deliverable_plan",
+                "template_deliverable_plan_id",
+                "resolved_constraint_ledger",
+                "resolved_constraint_ledger_id",
+                "capability_execution_envelope",
+                "capability_execution_envelope_id",
                 "specialized_scenario_plan",
                 "specialized_scenario_plan_summary",
                 "specialized_execution_summary",
@@ -1208,21 +1216,38 @@ class V3ProductApiService:
             "scenario_id": generation_result.metadata.get("scenario_id"),
             "template_id": record.request.metadata.get("template_id") or generation_result.metadata.get("scenario_id"),
         }
-        result_cluster = generation_result.metadata.get("visual_cluster")
-        if not isinstance(result_cluster, dict):
-            shared = generation_result.metadata.get("shared_capabilities")
-            result_cluster = shared.get("visual_cluster") if isinstance(shared, dict) else {}
-        if isinstance(result_cluster, dict):
-            review_metadata["visual_cluster"] = dict(result_cluster)
-            composed = result_cluster.get("composed_visual_contribution")
-            if isinstance(composed, dict):
-                review_metadata["composed_visual_contribution"] = dict(composed)
-            reference_policy = result_cluster.get("resolved_reference_policy_package")
-            if isinstance(reference_policy, dict) and reference_policy:
-                review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
         execution_envelope = generation_result.metadata.get("capability_execution_envelope")
         if isinstance(execution_envelope, dict):
             review_metadata["capability_execution_envelope"] = dict(execution_envelope)
+        enforced = (
+            isinstance(execution_envelope, dict)
+            and str((execution_envelope.get("activation_plan") or {}).get("activation_mode") or "").lower() == "enforced"
+        )
+        if enforced:
+            ledger = execution_envelope.get("resolved_constraint_ledger")
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            result_cluster = (
+                dict(projection.get("capability_projection") or {})
+                if isinstance(projection, dict)
+                else {}
+            )
+            reference_policy = result_cluster.get("resolved_reference_policy_package")
+            if isinstance(reference_policy, dict) and reference_policy:
+                review_metadata["resolved_reference_policy_package"] = reference_policy
+            review_metadata["resolved_constraint_ledger"] = dict(ledger) if isinstance(ledger, dict) else {}
+        else:
+            result_cluster = generation_result.metadata.get("visual_cluster")
+            if not isinstance(result_cluster, dict):
+                shared = generation_result.metadata.get("shared_capabilities")
+                result_cluster = shared.get("visual_cluster") if isinstance(shared, dict) else {}
+            if isinstance(result_cluster, dict):
+                review_metadata["visual_cluster"] = dict(result_cluster)
+                composed = result_cluster.get("composed_visual_contribution")
+                if isinstance(composed, dict):
+                    review_metadata["composed_visual_contribution"] = dict(composed)
+                reference_policy = result_cluster.get("resolved_reference_policy_package")
+                if isinstance(reference_policy, dict) and reference_policy:
+                    review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
         if self._reference_conditioned_real_review_required(
             review_metadata,
             quality_mode=generate_request.quality_mode,
@@ -1243,7 +1268,16 @@ class V3ProductApiService:
         package_payload = package.model_dump(mode="json")
         metadata = dict(generation_result.metadata)
         shared_capabilities = dict(metadata.get("shared_capabilities") or {})
-        visual_cluster = dict(shared_capabilities.get("visual_cluster") or metadata.get("visual_cluster") or {})
+        if enforced:
+            # Keep executor results readable for job diagnostics and legacy
+            # history, but replace the mutable visual-cluster surface used by
+            # downstream review/retry with the frozen ledger projection.
+            shared_capabilities["source"] = "resolved_constraint_ledger"
+        visual_cluster = (
+            dict(result_cluster or {})
+            if enforced
+            else dict(shared_capabilities.get("visual_cluster") or metadata.get("visual_cluster") or {})
+        )
         mode_review = self._mode_differentiation_review_for_result(
             generation_result=generation_result,
             project_id=project_id,
@@ -1555,8 +1589,8 @@ class V3ProductApiService:
                 "visual_auto_retry_attempt": attempt_index,
                 "retry_attempt": attempt_index,
                 "visual_retry_reason_codes": reason_codes,
-                "visual_retry_patch": retry_patch,
                 "max_visual_retry_attempts": max_attempts,
+                **self._resolved_retry_metadata(merged_result, retry_patch),
                 **identity_local_repair,
             }
             record.request.metadata = retry_metadata
@@ -1676,17 +1710,22 @@ class V3ProductApiService:
         )
         if not local_repair:
             return result, max_attempts
-        if not self._visual_retry_patch_has_content(retry_patch):
+        if (
+            not self._visual_retry_patch_has_content(retry_patch)
+            and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced"
+        ):
             retry_patch = self._visual_retry_patch_from_issues(issue_codes)
+        if not self._visual_retry_patch_has_content(retry_patch):
+            return result, max_attempts
         retry_metadata = {
             **base_metadata,
             "visual_auto_retry_active": True,
             "visual_auto_retry_attempt": attempt_index,
             "retry_attempt": attempt_index,
             "visual_retry_reason_codes": issue_codes,
-            "visual_retry_patch": retry_patch,
             "max_visual_retry_attempts": attempt_index,
             "identity_post_retry_closeout": True,
+            **self._resolved_retry_metadata(result, retry_patch),
             **local_repair,
         }
         record.request.metadata = retry_metadata
@@ -1756,6 +1795,13 @@ class V3ProductApiService:
         return False
 
     def _identity_repair_strategy_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        plan = self._activation_plan_from_result(result)
+        if str(plan.get("activation_mode") or "").lower() == "enforced":
+            ledger = self._constraint_ledger_from_result(result)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            capability_projection = projection.get("capability_projection") if isinstance(projection, dict) else {}
+            strategy = capability_projection.get("identity_repair_strategy_plan") if isinstance(capability_projection, dict) else None
+            return dict(strategy) if isinstance(strategy, dict) and strategy.get("applies") else {}
         cluster = self._visual_cluster_metadata_from_result(result)
         plan = cluster.get("identity_repair_strategy_plan") if isinstance(cluster, dict) else None
         return dict(plan) if isinstance(plan, dict) and plan.get("applies") else {}
@@ -1991,7 +2037,7 @@ class V3ProductApiService:
                 ),
             }
 
-        if not retry_patch:
+        if not retry_patch and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced":
             retry_patch = self._visual_retry_patch_from_issues(retryable_codes)
         if bool(metadata.get("force_empty_visual_retry_patch")):
             retry_patch = {}
@@ -2031,8 +2077,28 @@ class V3ProductApiService:
                 "request_metadata",
             )
 
-        text_deliveries: list[dict[str, Any]] = []
+        enforced = str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() == "enforced"
         result_metadata = dict(result.metadata or {})
+        if enforced:
+            review_package = result_metadata.get("post_generation_review_package")
+            real_signal = self._real_review_signal_package_from_cluster(
+                dict(review_package) if isinstance(review_package, dict) else {}
+            )
+            if real_signal:
+                signal_codes, signal_patch = self._visual_retry_signal_from_real_review(
+                    real_signal,
+                    allow_legacy_patch=False,
+                )
+                if signal_codes:
+                    return self._activation_filtered_retry_signal(
+                        result,
+                        signal_codes,
+                        signal_patch,
+                        "real_review_signal_package",
+                    )
+            return [], {}, "envelope_bound_review"
+
+        text_deliveries: list[dict[str, Any]] = []
         single_delivery = result_metadata.get("text_pixel_delivery")
         if isinstance(single_delivery, dict):
             text_deliveries.append(single_delivery)
@@ -2093,6 +2159,25 @@ class V3ProductApiService:
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
 
+    def _resolved_retry_metadata(self, result: PlanningResult, retry_patch: dict[str, Any]) -> dict[str, Any]:
+        """Carry an active-ledger retry patch back through the shared runtime."""
+
+        plan = self._activation_plan_from_result(result)
+        if str(plan.get("activation_mode") or "").lower() != "enforced":
+            return {"visual_retry_patch": dict(retry_patch)}
+        plan_id = str(plan.get("plan_id") or "").strip()
+        fingerprint = str(plan.get("fingerprint") or "").strip()
+        if not plan_id or not fingerprint:
+            return {}
+        return {
+            "resolved_retry_patch": dict(retry_patch),
+            "resolved_retry_provenance": {
+                "authority": "v3_product_api",
+                "activation_plan_id": plan_id,
+                "activation_plan_fingerprint": fingerprint,
+            },
+        }
+
     def _constraint_ledger_from_result(self, result: PlanningResult) -> dict[str, Any]:
         creative_job = getattr(result, "creative_job", None)
         creative_job_metadata = getattr(creative_job, "metadata", {})
@@ -2135,11 +2220,29 @@ class V3ProductApiService:
             for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])
             if str(item).strip()
         }
+        retry_contracts = [
+            dict(contract)
+            for contract in ledger.get("retry_contracts", [])
+            if isinstance(contract, dict) and str(contract.get("capability_id") or "") in active
+        ]
         filtered: list[str] = []
         ignored: list[str] = []
-        for code in self._dedupe_strings(issue_codes):
+        for raw_code in self._dedupe_strings(issue_codes):
+            code = self._normalize_legacy_review_issue_code(raw_code)
             owner = self._review_issue_capability_owner(code)
-            if owner is None or owner in active:
+            matching_contracts = [
+                contract
+                for contract in retry_contracts
+                if str(contract.get("capability_id") or "") == owner
+                or code in self._dedupe_strings(contract.get("issue_codes"))
+            ]
+            if owner is None and code in VISUAL_AUTO_RETRY_RETRYABLE_ISSUES:
+                matching_contracts = [
+                    contract
+                    for contract in retry_contracts
+                    if str(contract.get("capability_id") or "") == "universal_visual_quality"
+                ]
+            if (owner is None or owner in active) and matching_contracts:
                 filtered.append(code)
             else:
                 ignored.append(code)
@@ -2150,9 +2253,35 @@ class V3ProductApiService:
             )
         if not filtered:
             return [], {}, source
-        if ignored or not self._visual_retry_patch_has_content(retry_patch):
-            retry_patch = self._visual_retry_patch_from_issues(filtered)
-        return filtered, retry_patch, source
+        # Enforced retries use only templates published by active capability
+        # contracts in the frozen ledger.  Review/request metadata may name an
+        # issue, but cannot inject a prompt patch or revive a legacy mapper.
+        resolved_patch = self._ledger_retry_patch(ledger, filtered)
+        # Candidate/output targeting is review provenance, not prompt text.
+        # Preserve it so append-only history explains which failed output the
+        # bounded retry supersedes, while discarding every caller-supplied
+        # prompt/reinforcement field.
+        for key in ("target_candidate_ids", "target_output_ids", "issue_groups"):
+            values = self._dedupe_strings(retry_patch.get(key)) if isinstance(retry_patch, dict) else []
+            if values:
+                resolved_patch[key] = values
+        return filtered, resolved_patch, source
+
+    def _ledger_retry_patch(self, ledger: dict[str, Any], issue_codes: list[str]) -> dict[str, Any]:
+        contracts = [item for item in ledger.get("retry_contracts", []) if isinstance(item, dict)]
+        patches: list[dict[str, Any]] = []
+        for code in self._dedupe_strings(issue_codes):
+            owner = self._review_issue_capability_owner(code)
+            for contract in contracts:
+                capability_id = str(contract.get("capability_id") or "")
+                contract_codes = self._dedupe_strings(contract.get("issue_codes"))
+                if capability_id != owner and code not in contract_codes:
+                    if not (owner is None and code in VISUAL_AUTO_RETRY_RETRYABLE_ISSUES and capability_id == "universal_visual_quality"):
+                        continue
+                templates = contract.get("templates")
+                if isinstance(templates, dict):
+                    patches.append(dict(templates))
+        return self._merge_visual_retry_patches(patches)
 
     def _review_issue_capability_owner(self, issue_code: str) -> str | None:
         code = str(issue_code or "").strip().lower()
@@ -2171,7 +2300,17 @@ class V3ProductApiService:
             return "typography_layout"
         if "text_background_readability" in code:
             return "text_pixel_delivery"
-        if any(token in code for token in ("role_", "suite_", "batch_duplication", "same_pose_repetition")):
+        if any(
+            token in code
+            for token in (
+                "role_",
+                "suite_",
+                "batch_duplication",
+                "same_pose_repetition",
+                "deliverable_intent",
+                "delivery_set",
+            )
+        ):
             return "suite_direction"
         if any(
             token in code
@@ -2214,6 +2353,17 @@ class V3ProductApiService:
             return "human_realism"
         return None
 
+    @staticmethod
+    def _normalize_legacy_review_issue_code(issue_code: str) -> str:
+        """Read historical vertical aliases only at the Product API boundary."""
+
+        aliases = {
+            "ecommerce_slot_mismatch": "deliverable_intent_mismatch",
+            "ecommerce_suite_role_mismatch": "delivery_set_role_mismatch",
+        }
+        code = str(issue_code or "").strip()
+        return aliases.get(code, code)
+
     def _real_review_signal_package_from_cluster(self, cluster: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(cluster, dict):
             return {}
@@ -2225,7 +2375,12 @@ class V3ProductApiService:
             return dict(package["real_review_signal_package"])
         return {}
 
-    def _visual_retry_signal_from_real_review(self, package: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    def _visual_retry_signal_from_real_review(
+        self,
+        package: dict[str, Any],
+        *,
+        allow_legacy_patch: bool = True,
+    ) -> tuple[list[str], dict[str, Any]]:
         signals = package.get("candidate_signals")
         if not isinstance(signals, list):
             return [], {}
@@ -2245,7 +2400,7 @@ class V3ProductApiService:
         )
         patches = [dict(signal.get("retry_patch") or {}) for signal in retry_signals]
         retry_patch = self._merge_visual_retry_patches(patches)
-        if not self._visual_retry_patch_has_content(retry_patch):
+        if allow_legacy_patch and not self._visual_retry_patch_has_content(retry_patch):
             retry_patch = self._visual_retry_patch_from_issues(reason_codes)
         target_candidate_ids = self._dedupe_strings(signal.get("candidate_id") for signal in retry_signals if signal.get("candidate_id"))
         target_output_ids = self._dedupe_strings(signal.get("output_id") for signal in retry_signals if signal.get("output_id"))
@@ -2300,7 +2455,7 @@ class V3ProductApiService:
         single = metadata.get("force_visual_retry_issue") or metadata.get("visual_retry_issue_code")
         if single:
             values.append(single)
-        return self._dedupe_strings(values)
+        return self._dedupe_strings(self._normalize_legacy_review_issue_code(value) for value in values)
 
     def _metadata_retry_patch(self, metadata: dict[str, Any]) -> dict[str, Any]:
         patch = metadata.get("visual_retry_patch")
@@ -2679,8 +2834,8 @@ class V3ProductApiService:
                 "mode_role_metadata_missing",
                 "mode_role_duplication",
                 "delivery_suite_role_collapse",
-                "ecommerce_slot_mismatch",
-                "ecommerce_suite_role_mismatch",
+                "deliverable_intent_mismatch",
+                "delivery_set_role_mismatch",
                 "format_layout_collapse",
                 "selection_candidate_distance_risk",
             }:
@@ -2694,8 +2849,8 @@ class V3ProductApiService:
                         "same camera distance for every output",
                         "same pose repeated across the set",
                         "same image duty repeated",
-                        "wrong ecommerce image role",
-                        "requested listing slot ignored",
+                        "wrong requested image role",
+                        "requested delivery intent ignored",
                     ]
                 )
         return {

@@ -142,7 +142,7 @@ def test_doc90_general_template_defaults_person_reference_priority_on() -> None:
 
     assert controls["preserve_person_identity"] is True
     assert controls["applies"] is True
-    assert controls["source"] == "general_template_defaults"
+    assert controls["source"] == "generic_reference_defaults"
     assert "advanced_reference_priority_controls" in cluster["child_module_ids"]
     assert role_plan["metadata"]["doc90_advanced_reference_controls"] is True
     assert "Doc90 person priority" in " ".join(role_plan["prompt_additions"])
