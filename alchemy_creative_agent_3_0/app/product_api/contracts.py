@@ -277,6 +277,8 @@ class EcommerceCapabilitySummary(V3BaseModel):
     competitor_patterns: list[str] = Field(default_factory=list)
     visual_strategy: list[str] = Field(default_factory=list)
     image_recipes: list[dict[str, Any]] = Field(default_factory=list)
+    creative_context: dict[str, Any] = Field(default_factory=dict)
+    remote_brain_output_intents: list[dict[str, Any]] = Field(default_factory=list)
     critic_checks: list[dict[str, Any]] = Field(default_factory=list)
     export_package: dict[str, Any] = Field(default_factory=dict)
     closure_checks: list[dict[str, Any]] = Field(default_factory=list)

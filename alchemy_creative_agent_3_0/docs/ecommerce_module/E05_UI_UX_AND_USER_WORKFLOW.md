@@ -2,71 +2,63 @@
 
 ## User promise
 
-The user should be able to upload a product, choose where it will be sold,
-choose a product type, and receive a labeled image suite without seeing
-providers, prompts, manifests, capability graphs, or internal job IDs.
+The user uploads a product, chooses where it will be sold, confirms facts and
+request constraints, then receives an image-first set. The user never has to
+see provider names, prompts, manifests, capability graphs, or local recipes.
 
 ## Primary flow
 
 ```text
 select/create product project
-→ upload product images
-→ confirm detected product facts
-→ choose platform/market
-→ choose product category
-→ choose complete suite or selected roles
-→ enter one-sentence request
-→ review proposed suite
-→ generate
-→ select/reject individual results
-→ regenerate one slot or continue the suite
-→ export selected images
+-> upload product images
+-> confirm product facts and unknown-fact warnings
+-> choose platform/market and category evidence context
+-> choose requested output count
+-> enter the request and optional approved literal copy / locale
+-> generate through the remote Central Brain
+-> select/reject an individual output or continue it with feedback
+-> export selected images
 ```
 
 ## Required workspace regions
 
-1. Product reference area.
-2. Confirmed product facts and unknown-fact warnings.
+1. Product-reference area.
+2. Confirmed facts and unknown-fact warnings.
 3. Platform and market selector.
-4. Category selector.
-5. Suite scope and slot selector.
-6. One-sentence request composer.
-7. Optional selling-point and copy-language controls.
-8. Image-first suite board with slot labels.
-9. Per-slot regenerate, select, reject, and continue actions.
-10. Export panel with publish-check summary.
+4. Category evidence selector.
+5. Request composer and requested-count control.
+6. Optional seller facts, approved literal copy, and locale controls.
+7. Image-first output board with the Brain-returned purpose in plain language.
+8. Per-output select, reject, and continuation actions.
+9. Export panel with publish-check summary and evidence provenance.
+
+The UI must not offer a suite scope, role selector, shot preset, overlay-copy
+mode, coordinate, font, or any cosmetic button that implies a local creative
+plan exists.
 
 ## Progressive disclosure
 
-Default view shows only product, platform, category, suite scope, request, and
-generate. Advanced controls may expose:
+The default view shows product, platform, category, count, request, and
+generate. Advanced controls may expose seller-provided audience, must-keep
+facts, claims to avoid, reference notes, exact approved copy, language/units,
+and requested canvas. These are facts or constraints, not a visual recipe.
 
-- target audience;
-- keywords;
-- competitor/style reference notes;
-- must-keep facts;
-- claims to avoid;
-- exact copy;
-- language and units;
-- requested aspect ratio.
-
-## Beginner-facing language
-
-Use “商品主图”, “卖点图”, “使用场景”, “细节证明”, “尺寸/规格”, and “导出前
-检查”. Hide “recipe”, “capability”, “provider”, “manifest”, “activation plan”,
-and raw export filenames.
-
-## Project continuation
+## Continuation
 
 Selected images become positive references only after user selection. Rejected
-directions become negative feedback. Retry-superseded candidates remain in
-folded history and do not occupy the final delivery board.
+directions become correction feedback. A continuation preserves the opaque
+output ID and append-only history; it does not recreate a named platform or
+category slot. Retry-superseded candidates remain folded from the delivery
+board.
 
 ## UI quality rules
 
-- Generated images remain visually primary.
-- Every card explains its purpose in one short sentence.
-- A slot can be regenerated without recreating the whole suite.
-- Platform/category choices are visible in the run summary.
-- Locked or unavailable features cannot appear executable.
+- Images remain visually primary.
+- Every card shows one short Brain-returned purpose statement.
+- Locked or unavailable remote-Brain/continuation features cannot appear
+  executable.
+- Platform/category selection and constraint provenance remain visible in the
+  run summary.
 - Mobile layout keeps images and next actions above dense metadata.
+- General Template does not render E-Commerce controls, output IDs, platform
+  semantics, or continuation language.

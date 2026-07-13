@@ -5,53 +5,50 @@
 ### Universal V3 review
 
 Use the shared foundation for artifacts, composition, exposure, finish,
-watermarks, anatomy, and general image usability.
+watermarks, anatomy, reference integrity, and general image usability.
 
-### Commerce review
+### E-Commerce observational review
 
-Review:
+Review the final provider pixels against:
 
 - product truth and visible product identity;
-- platform slot fit;
-- selling-point clarity;
-- buyer-question coverage;
-- suite differentiation;
-- requested-text correctness and final-pixel legibility;
-- unsupported claims, fake certificates, and invented specifications;
-- packaging/logo/label integrity;
-- commercial direct-use readiness.
+- verified platform/content/claim constraints;
+- seller-approved claim and literal-copy fidelity;
+- relevant buyer-question coverage;
+- output-set differentiation;
+- packaging/logo/label integrity; and
+- commercial direct-use warnings.
 
-### Category review
-
-Only the active category pack may add category-specific checks. A product-only
-image must not receive person/skin/portrait checks unless a visible person is
-actually planned and activated through the shared Human Realism capability.
+The reviewer observes actual results. It does not turn category evidence into
+a local visual recipe or reimplement shared Human Realism/Product Identity.
 
 ## Retry policy
 
 Retry is bounded, append-only, and issue-specific.
 
 ```text
-review issue
-→ map issue to active capability/commerce contract
-→ create minimal patch
-→ regenerate the affected slot
-→ compare candidates
-→ retain best reviewed result
+reviewed issue
+-> shared Brain/provider-native revision path
+-> regenerate the affected opaque output
+-> compare candidates in the shared review path
+-> retain the best reviewed delivery result
 ```
 
-Do not retry solely because a newer result exists. Do not activate a dormant
-capability after review without an auditable plan amendment.
+Do not retry merely because a newer image exists. Do not activate a dormant
+capability after review without the shared auditable-plan amendment. Do not
+replace a failed Brain decision with a static E-Commerce role, prompt, or shot.
 
 ## Copy policy
 
 - Product names, trademarks, numbers, and confirmed claims are protected.
 - Unconfirmed claims become warnings or are omitted.
-- Main-image text is forbidden by default where the profile requires it.
-- Requested text must be generated as part of the provider image, then checked
-  from final pixels; a failure requests a provider-native revision and never a
-  local font/overlay repair.
-- Translation must not change product facts or claim strength.
+- A verified platform text restriction applies only when relevant to the
+  requested output and is sent as Brain/provider context.
+- Requested text is generated as part of the provider image and checked from
+  final pixels. A failure requests only a bounded provider-native revision.
+- Translation never changes product facts or claim strength.
+- No local font, overlay, canvas, coordinate, safe area, OCR compositor, or
+  deterministic text repair may be introduced.
 
 ## Export manifest
 
@@ -63,7 +60,7 @@ market
 profile_version
 category_id
 category_version
-selected_slot_ids
+selected_output_ids
 delivery_files
 copy_locale
 review_summary
@@ -71,11 +68,7 @@ publish_checklist
 generated_at
 ```
 
-The export package must distinguish:
-
-- final delivery outputs;
-- rejected outputs;
-- retry-superseded history;
-- warnings requiring user review.
-
-It must never claim guaranteed approval or guaranteed performance.
+The package distinguishes final delivery, rejected outputs, and
+retry-superseded history. It includes factual/evidence provenance and the
+Brain-returned output intent where useful for audit, but never promises
+marketplace approval or performance.

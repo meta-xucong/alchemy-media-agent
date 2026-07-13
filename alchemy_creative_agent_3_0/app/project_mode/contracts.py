@@ -213,6 +213,8 @@ class ProjectCommerceProfile(V3BaseModel):
     keyword_roots: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     competitor_notes: list[str] = Field(default_factory=list)
+    # Historical payload-read field. New E-Commerce requests reject it because
+    # the remote Brain decides the output set.
     suite_slots_requested: list[str] = Field(default_factory=list)
     updated_at: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -394,6 +396,7 @@ class CreateProjectJobRequest(ProjectModeBase):
     uploaded_asset_ids: list[str] = Field(default_factory=list)
     use_project_context: bool = True
     commerce_profile_patch: ProjectCommerceProfile | None = None
+    # Historical payload-read field. New E-Commerce requests reject it.
     suite_slot_request: list[str] = Field(default_factory=list)
     advanced_reference_controls: dict[str, bool] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -425,7 +428,7 @@ class CreateProjectJobRequest(ProjectModeBase):
 
 
 class EcommerceSlotContinuationRequest(ProjectModeBase):
-    """User-directed continuation of one declared E-Commerce suite role."""
+    """User-directed continuation of one opaque E-Commerce output identity."""
 
     correction_note: str | None = Field(default=None, max_length=1200)
     new_evidence_asset_ids: list[str] = Field(default_factory=list, max_length=12)

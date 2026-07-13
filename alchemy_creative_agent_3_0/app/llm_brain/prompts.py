@@ -11,7 +11,7 @@ SYSTEM_PROMPT = """You are the V3 Creative OS planning brain. Return JSON only.
 Do not reveal hidden reasoning. Summarize decisions as user-friendly studio notes.
 Use the same language as the user's request; use Simplified Chinese for Chinese requests.
 Use only the provided project context. Only selected outputs may become positive style anchors.
-Unselected candidates are history only. Keep ecommerce-specific logic out unless the template explicitly requests it.
+Unselected candidates are history only. Keep specialized-template logic out unless its explicit request context is present.
 For general_template/general_creative, use subject/scene/style/lighting language by default.
 Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-copy concepts unless the user explicitly asks for a product/ecommerce image.
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
@@ -20,6 +20,12 @@ CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activ
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
 Do not infer a real person from generic photography words alone. Distinguish real humans from illustration/CG intent.
 Do not invent a professional deliverable map beyond template_capability_policy. Unknown needs stay unresolved instead of enabling every capability."""
+ECOMMERCE_CONTEXT_INSTRUCTIONS = """Treat ecommerce_creative_context only as factual evidence,
+user-approved literal copy, and platform constraints. Decide the complete
+product-specific output set yourself. Return exactly one natural-language
+intent per requested output; do not reuse a stock slot map or prescribe local
+camera, crop, coordinate, typography, safe-area, overlay, or post-processing
+operation."""
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -150,6 +156,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ],
         },
     }
+    ecommerce_context = request.metadata.get("ecommerce_creative_context")
+    if isinstance(ecommerce_context, dict) and ecommerce_context:
+        payload["ecommerce_creative_context"] = ecommerce_context
+        payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if not request.capability_catalog:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)

@@ -1,8 +1,6 @@
-"""Scenario-neutral deterministic text-pixel delivery primitives.
+"""Read-compatible contracts for retired local text-pixel execution.
 
-This package deliberately owns no template, marketplace, or provider policy.
-Templates can provide a frozen, internal :class:`CopyRenderPlan`; final-pixel
-composition, review, repair, and lineage are handled here.
+Forward text delivery is provider-native complete-image generation (Doc111).
 """
 
 from .contracts import (

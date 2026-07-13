@@ -168,7 +168,7 @@ def test_brain_request_exposes_literal_provider_native_copy_without_template_geo
         template_id="general_template",
         metadata={
             "scenario_parameters": {
-                "overlay_copy": {"feature_image_1": "Approved provider-native headline"},
+                "approved_copy": "Approved provider-native headline",
             }
         },
     )

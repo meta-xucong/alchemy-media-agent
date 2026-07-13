@@ -25,28 +25,32 @@ baseline. No runtime behavior change.
 
 ### E1 Contract freeze
 
-Finalize platform profile, localization, category pack, recipe, copy, review,
-and export contracts. Add schema compatibility tests.
+Finalize factual platform evidence, localization context, category evidence,
+opaque output lineage, copy provenance, review, and export contracts. Preserve
+legacy recipe fields for reading only. Add schema compatibility tests.
 
-### E2 Planner hardening
+### E2 Brain-context migration
 
-Implement the two-axis platform/category planner, requested-count behavior,
-unknown-fact handling, and slot differentiation.
+Replace deterministic platform/category suite planning with factual,
+evidence-provenance context for the remote Central Brain. The Brain—not local
+code—decides one natural-language image intent for each user-requested output.
 
-### E3 First five category packs
+### E3 First five category evidence packs
 
-Add apparel, beauty, electronics, home/kitchen, and food/beverage profiles.
-Keep them data-driven and separate from shared visual plugins.
+Add apparel, beauty, electronics, home/kitchen, and food/beverage evidence
+questions. They must not contain shot orders, fixed scenes, camera rules, or
+fallback copy.
 
-### E4 Platform and localization profiles
+### E4 Platform and localization evidence
 
-Add versioned Amazon, Ozon, Taobao/Tmall, TikTok Shop, and Shopify profiles.
-Add `en-US`, `ru-RU`, and `zh-CN` copy paths. Keep policy updates configurable.
+Add versioned Amazon, Ozon, Taobao/Tmall, TikTok Shop, and Shopify constraints
+with provenance. Locale and approved copy are provider-native inputs; no
+localization path may manufacture a slogan or text layout.
 
 ### E5 Review, copy, and export closure
 
-Connect commerce review, text/OCR checks, bounded slot retry, best-result
-selection, and platform-aware export metadata.
+Connect observational commerce review, provider-native text inspection,
+bounded provider revision, best-result selection, and export metadata.
 
 ### E6 Dedicated workspace UI
 
@@ -70,7 +74,7 @@ continuation; it is not part of this branch's isolated implementation scope.
 | Planning | Existing V3 Brain + Scenario Runtime + factual/policy guardrails; LLM owns creative direction |
 | Capabilities | V3 Visual Capability Cluster and activation planner |
 | Rendering | GPT Image 2 through the existing V3 provider adapter |
-| Image inspection | Existing V3 vision/review interfaces plus OCR-capable validation |
+| Image inspection | Existing V3 vision/review interfaces and provider-native final-pixel validation |
 | Persistence | Existing Project Store/Job records; versioned profile metadata |
 | Frontend | Existing V3 project/workspace shell and image-first components |
 | Tests | pytest, compileall, frontend syntax checks, browser smoke tests |
@@ -86,7 +90,7 @@ Recommended commits:
 
 1. E00-E08 docs and governance.
 2. contracts and compatibility fixtures.
-3. profile registry and planner.
+3. profile/evidence registry and factual-context builder.
 4. category packs.
 5. localization/copy path.
 6. review/retry/export.

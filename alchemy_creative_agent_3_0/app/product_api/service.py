@@ -28,7 +28,6 @@ from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPac
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
-from ..shared_capabilities.text_pixel import CopyRenderPlan, CopyRenderPlanBatch, TextPixelDeliveryRuntime
 from ..shared_capabilities.visual_cluster import (
     HumanPhotorealismLayer,
     ModeAwareRoleDirector,
@@ -478,7 +477,6 @@ class V3ProductApiService:
         mode_role_director: ModeAwareRoleDirector | None = None,
         photographer_profile_catalog: PhotographerProfileCatalog | None = None,
         photographer_profile_region_resolver: Callable[[], str | None] | None = None,
-        text_pixel_delivery_runtime: TextPixelDeliveryRuntime | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -497,7 +495,6 @@ class V3ProductApiService:
         self.review_merger = review_merger or OutputQualityReviewMerger()
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
-        self.text_pixel_delivery_runtime = text_pixel_delivery_runtime or TextPixelDeliveryRuntime(self.output_store)
 
     def _default_scenario_runtime(self, operator_catalog=None) -> ScenarioRuntime:
         """Compose the default runtime from one reviewed Photography catalog source."""
@@ -557,6 +554,7 @@ class V3ProductApiService:
             create_request,
             trusted_photography_continuation=trusted_photography_continuation,
         )
+        self._prepare_ecommerce_creative_context(create_request)
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         planning_result = runtime_result.planning_result
         estimate = self._estimate_for_result(planning_result) if planning_result else self._empty_balance_estimate()
@@ -1465,163 +1463,6 @@ class V3ProductApiService:
             )
         return self._with_text_pixel_delivery_metadata(generation_result, {"text_pixel_delivery": retired_delivery})
 
-        # The retained code below documents historical result parsing and is
-        # intentionally unreachable for new jobs.  It will be removed after
-        # archived records no longer need its compatibility vocabulary.
-        if is_batch and isinstance(raw_plan, dict):
-            return self._with_text_pixel_delivery_metadata(
-                generation_result,
-                {
-                    "text_pixel_delivery_batch": {
-                        "schema_version": "v3_text_pixel_delivery_batch_v1",
-                        "batch_id": stable_id("text_pixel_delivery_batch", "ambiguous"),
-                        "deliveries": [
-                            {
-                                "delivery_id": stable_id("text_pixel_delivery", "ambiguous"),
-                                "status": "blocked",
-                                "rendered": False,
-                                "review_passed": False,
-                                "issue_codes": ["copy_render_plan_and_copy_render_plans_conflict"],
-                                "user_visible_summary": ["Text delivery plans need correction."],
-                                "metadata": {"append_only": True},
-                            }
-                        ],
-                        "source_asset_ids_by_plan": {},
-                        "metadata": {"append_only": True, "error": "copy_render_plan_and_copy_render_plans_conflict"},
-                    }
-                },
-            )
-        try:
-            plan_batch = CopyRenderPlanBatch(
-                plans=[CopyRenderPlan.model_validate(raw_plan)] if isinstance(raw_plan, dict) else list(raw_plans or [])
-            )
-        except Exception as exc:
-            delivery = {
-                "status": "blocked",
-                "rendered": False,
-                "review_passed": False,
-                "issue_codes": ["copy_render_plan_batch_invalid" if is_batch else "copy_render_plan_invalid"],
-                "user_visible_summary": ["Text delivery plan needs correction."],
-                "metadata": {"error": str(exc)[:240], "append_only": True},
-            }
-            if is_batch:
-                return self._with_text_pixel_delivery_metadata(
-                    generation_result,
-                    {
-                        "text_pixel_delivery_batch": {
-                            "schema_version": "v3_text_pixel_delivery_batch_v1",
-                            "batch_id": stable_id("text_pixel_delivery_batch", "invalid"),
-                            "deliveries": [
-                                {
-                                    "delivery_id": stable_id("text_pixel_delivery", "invalid"),
-                                    **delivery,
-                                }
-                            ],
-                            "source_asset_ids_by_plan": {},
-                            "metadata": {"append_only": True, "invalid_batch": True},
-                        }
-                    },
-                )
-            return self._with_text_pixel_delivery_metadata(generation_result, {"text_pixel_delivery": delivery})
-
-        source_outputs_by_plan: dict[str, Any] = {}
-        candidate_ids_by_plan: dict[str, str] = {}
-        asset_ids_by_plan: dict[str, str] = {}
-        all_assets = list(generation_result.asset_pack.assets)
-        for copy_plan in plan_batch.plans:
-            target_assets = list(all_assets)
-            if copy_plan.source_lineage.source_asset_id:
-                target_assets = [asset for asset in target_assets if asset.asset_id == copy_plan.source_lineage.source_asset_id]
-            if copy_plan.source_lineage.source_output_id:
-                target_assets = [
-                    asset
-                    for asset in target_assets
-                    if self._asset_output_id(asset) == copy_plan.source_lineage.source_output_id
-                ]
-            if len(target_assets) != 1:
-                source_outputs_by_plan[copy_plan.plan_id] = None
-                asset_ids_by_plan[copy_plan.plan_id] = str(copy_plan.source_lineage.source_asset_id or "")
-                continue
-            asset = target_assets[0]
-            source_output_id = self._asset_output_id(asset)
-            source_outputs_by_plan[copy_plan.plan_id] = self.output_store.get_output(source_output_id) if source_output_id else None
-            candidate_ids_by_plan[copy_plan.plan_id] = str(asset.metadata.get("selected_candidate_id") or source_output_id or asset.asset_id)
-            asset_ids_by_plan[copy_plan.plan_id] = asset.asset_id
-
-        frozen_plan = self._activation_plan_from_result(generation_result)
-        delivery_batch = self.text_pixel_delivery_runtime.deliver_many(
-            plans=plan_batch,
-            frozen_activation_plan=frozen_plan,
-            source_outputs_by_plan=source_outputs_by_plan,
-            candidate_ids_by_plan=candidate_ids_by_plan,
-            asset_ids_by_plan=asset_ids_by_plan,
-        )
-        batch_payload = delivery_batch.model_dump(mode="json")
-        deliveries_by_asset_id = {
-            asset_id: delivery
-            for plan_id, asset_id in delivery_batch.source_asset_ids_by_plan.items()
-            for delivery in delivery_batch.deliveries
-            if delivery.copy_render_plan_id == plan_id
-        }
-        updated_assets: list[PackagedAsset] = []
-        for item in generation_result.asset_pack.assets:
-            delivery_result = deliveries_by_asset_id.get(item.asset_id)
-            if delivery_result is None:
-                updated_assets.append(item)
-                continue
-            metadata = dict(item.metadata)
-            candidate_metadata = dict(metadata.get("candidate_metadata") or {})
-            delivery = delivery_result.model_dump(mode="json")
-            source_output_id = delivery_result.source_output_id
-            current_output = self.output_store.get_output(delivery_result.current_output_id or "")
-            candidate_metadata.update(
-                {
-                    "text_pixel_source_output_id": source_output_id,
-                    "text_pixel_delivery": delivery,
-                }
-            )
-            metadata.update(
-                {
-                    "text_pixel_source_output_id": source_output_id,
-                    "text_pixel_delivery": delivery,
-                    "candidate_metadata": candidate_metadata,
-                }
-            )
-            update: dict[str, Any] = {"metadata": metadata}
-            if current_output is not None:
-                candidate_metadata.update(
-                    {
-                        "output_id": current_output.output_id,
-                        "download_url": current_output.download_url,
-                        "preview_url": current_output.preview_url,
-                        "thumbnail_url": current_output.thumbnail_url,
-                        "file_path": current_output.file_path,
-                    }
-                )
-                metadata["output_id"] = current_output.output_id
-                update.update({"file_path": current_output.file_path, "uri": current_output.download_url})
-            updated_assets.append(
-                item.model_copy(update=update)
-            )
-        delivery_metadata = (
-            {"text_pixel_delivery_batch": batch_payload}
-            if is_batch
-            else {"text_pixel_delivery": batch_payload["deliveries"][0]}
-        )
-        asset_pack = generation_result.asset_pack.model_copy(
-            update={
-                "assets": updated_assets,
-                "manifest": {**dict(generation_result.asset_pack.manifest), **delivery_metadata},
-                "metadata": {**dict(generation_result.asset_pack.metadata), **delivery_metadata},
-            }
-        )
-        return generation_result.model_copy(
-            update={
-                "asset_pack": asset_pack,
-                "metadata": {**dict(generation_result.metadata), **delivery_metadata},
-            }
-        )
-
     def _with_text_pixel_delivery_metadata(self, result: PlanningResult, delivery_metadata: dict[str, Any]) -> PlanningResult:
         asset_pack = result.asset_pack.model_copy(
             update={
@@ -1630,12 +1471,6 @@ class V3ProductApiService:
             }
         )
         return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), **delivery_metadata}})
-
-    def _asset_output_id(self, asset: PackagedAsset) -> str | None:
-        metadata = dict(asset.metadata or {})
-        candidate_metadata = metadata.get("candidate_metadata") if isinstance(metadata.get("candidate_metadata"), dict) else {}
-        value = candidate_metadata.get("output_id") or metadata.get("output_id")
-        return str(value) if value else None
 
     def _run_visual_auto_retries(
         self,
@@ -3817,14 +3652,14 @@ class V3ProductApiService:
             )
 
         pack_output = self._ecommerce_pack_output(record)
-        export_package = pack_output.export_package.model_dump(mode="json")
-        manifest = self._ecommerce_export_manifest(record, pack_output)
+        export_package = self._ecommerce_runtime_export_package(record, pack_output)
+        manifest = self._ecommerce_export_manifest(record, pack_output, export_package)
         return V3ExportPackageResponse(
             job_id=record.job_id,
             status=record.status,
             api_namespace=API_NAMESPACE,
             scenario_id=scenario_id,
-            package_id=pack_output.export_package.package_id,
+            package_id=str(export_package.get("package_id") or pack_output.export_package.package_id),
             export_package=export_package,
             manifest=manifest,
             download_route=download_route,
@@ -4411,7 +4246,7 @@ class V3ProductApiService:
                         "requires_brand_consistency": asset.requires_brand_consistency,
                         "asset_metadata": dict(asset.metadata),
                         "ecommerce_slot": asset.metadata.get("ecommerce_slot"),
-                        "ecommerce_recipe": asset.metadata.get("ecommerce_recipe"),
+                        **self._legacy_ecommerce_recipe_metadata(asset.metadata),
                         "candidate_metadata": candidate_metadata,
                     },
                 )
@@ -4454,7 +4289,7 @@ class V3ProductApiService:
                         "asset_pack_id": result.asset_pack.asset_pack_id,
                         "asset_metadata": asset_metadata,
                         "ecommerce_slot": asset.metadata.get("ecommerce_slot") or asset_metadata.get("ecommerce_slot"),
-                        "ecommerce_recipe": asset.metadata.get("ecommerce_recipe") or asset_metadata.get("ecommerce_recipe"),
+                        **self._legacy_ecommerce_recipe_metadata(asset.metadata, asset_metadata),
                         **candidate_metadata,
                     },
                 )
@@ -4463,6 +4298,16 @@ class V3ProductApiService:
 
     def _output_preview_uri(self, fallback: str | None, metadata: dict[str, Any]) -> str | None:
         return metadata.get("thumbnail_url") or metadata.get("preview_url") or fallback
+
+    @staticmethod
+    def _legacy_ecommerce_recipe_metadata(*metadata_records: dict[str, Any]) -> dict[str, Any]:
+        """Keep pre-migration recipe data readable without emitting it anew."""
+
+        for metadata in metadata_records:
+            recipe = metadata.get("ecommerce_recipe") if isinstance(metadata, dict) else None
+            if isinstance(recipe, dict):
+                return {"ecommerce_recipe": recipe}
+        return {}
 
     def _selected_assets(self, result: PlanningResult, request: SelectResultRequest) -> list[PackagedAsset]:
         assets = result.asset_pack.assets
@@ -4648,6 +4493,9 @@ class V3ProductApiService:
             return None
         pack_output = self._ecommerce_pack_output(record)
         warnings = self._ecommerce_public_warnings(record, pack_output)
+        output_intents = self._ecommerce_output_intents(record)
+        export_package = self._ecommerce_runtime_export_package(record, pack_output)
+        creative_context = dict(record.request.metadata.get("ecommerce_creative_context") or {})
         return EcommerceCapabilitySummary(
             enabled=True,
             scenario_id="ecommerce",
@@ -4673,10 +4521,14 @@ class V3ProductApiService:
             keyword_intent_map=[dict(item) for item in pack_output.commerce_brief.keyword_intent_map],
             competitor_patterns=list(pack_output.commerce_brief.competitor_patterns),
             visual_strategy=list(pack_output.commerce_brief.visual_strategy),
+            # Legacy consumers still receive an empty recipe list for a new
+            # LLM-native job.  New E-Commerce UI reads output intents instead.
             image_recipes=[recipe.model_dump(mode="json") for recipe in pack_output.recipes],
+            creative_context=creative_context,
+            remote_brain_output_intents=output_intents,
             critic_checks=[dict(item) for item in pack_output.critic.checks],
-            export_package=pack_output.export_package.model_dump(mode="json"),
-            closure_checks=self._ecommerce_closure_checks(pack_output),
+            export_package=export_package,
+            closure_checks=self._ecommerce_closure_checks(record, pack_output, output_intents, export_package),
             warnings=warnings,
             metadata={
                 "product_language": True,
@@ -4684,33 +4536,102 @@ class V3ProductApiService:
                 "imports_v1_v2_runtime": False,
                 "external_research_used": False,
                 "recipe_count": len(pack_output.recipes),
+                "remote_brain_output_count": len(output_intents),
+                "creative_recipe_present": False,
                 "shared_capabilities": self._capability_run_summary(record.capability_run),
             },
         )
 
-    def _ecommerce_export_manifest(self, record: ProductJobRecord, output: EcommercePackOutput) -> dict[str, Any]:
+    def _ecommerce_runtime_export_package(
+        self,
+        record: ProductJobRecord,
+        output: EcommercePackOutput,
+    ) -> dict[str, Any]:
+        """Bind actual provider outputs to opaque Brain-selected output IDs."""
+
+        package = output.export_package.model_dump(mode="json")
+        output_by_asset = {
+            str(item.get("asset_id") or ""): item
+            for item in self._generated_asset_records(record)
+            if str(item.get("asset_id") or "")
+        }
+        files: list[dict[str, Any]] = []
+        dimensions: dict[str, str] = {}
+        for intent in self._ecommerce_output_intents(record):
+            asset_id = str(intent.get("asset_id") or "")
+            generated = output_by_asset.get(asset_id)
+            if generated is None:
+                continue
+            output_id = str(generated.get("output_id") or "").strip()
+            if not output_id:
+                continue
+            opaque_output_id = str(intent.get("slot_id") or output_id).strip()
+            files.append(
+                {
+                    "opaque_output_id": opaque_output_id,
+                    "filename": f"{opaque_output_id}.png",
+                    "asset_id": asset_id,
+                    "output_id": output_id,
+                    "intent": intent.get("intent"),
+                    "download_url": generated.get("download_url"),
+                    "preview_url": generated.get("preview_url"),
+                    "width": generated.get("width"),
+                    "height": generated.get("height"),
+                    "mime_type": generated.get("mime_type"),
+                    "review_status": generated.get("review_status"),
+                    "provider_native_complete_image": True,
+                }
+            )
+            width, height = generated.get("width"), generated.get("height")
+            if width and height:
+                dimensions[opaque_output_id] = f"{width}x{height}"
+        package.update(
+            {
+                "files": files,
+                "dimensions": dimensions,
+                "naming_pattern": "{opaque_output_id}.png",
+                "review_status": "metadata_ready" if files else "attention",
+                "metadata": {
+                    **dict(package.get("metadata") or {}),
+                    "source": "V3ProductApiService._ecommerce_runtime_export_package",
+                    "creative_recipe_present": False,
+                    "remote_brain_output_count": len(self._ecommerce_output_intents(record)),
+                    "actual_provider_file_count": len(files),
+                },
+            }
+        )
+        return package
+
+    def _ecommerce_export_manifest(
+        self,
+        record: ProductJobRecord,
+        output: EcommercePackOutput,
+        export_package: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
             "manifest_version": "v3_ecommerce_export_manifest_001",
             "job_id": record.job_id,
             "scenario_id": "ecommerce",
             "job_status": record.status.value,
-            "package_id": output.export_package.package_id,
+            "package_id": export_package.get("package_id") or output.export_package.package_id,
             "platform": output.marketplace_profile.platform,
             "market": output.marketplace_profile.market,
             "source_asset_ids": list(record.request.uploaded_asset_ids),
             "uploaded_assets": self._uploaded_asset_records(record.request.uploaded_asset_ids),
             "product_truth": output.product_truth.model_dump(mode="json"),
             "commerce_brief": output.commerce_brief.model_dump(mode="json"),
-            "image_recipes": [recipe.model_dump(mode="json") for recipe in output.recipes],
+            "image_recipes": [],
+            "remote_brain_output_intents": self._ecommerce_output_intents(record),
             "generated_assets": self._generated_asset_records(record),
-            "export_files": list(output.export_package.files),
+            "export_files": list(export_package.get("files") or []),
             "review_checks": [dict(item) for item in output.critic.checks],
             "warnings": self._ecommerce_public_warnings(record, output),
             "metadata": {
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
-                "export_package_review_status": output.export_package.review_status,
-                "pixel_assets_required_before_download": output.export_package.metadata.get("pixel_assets_required_before_download", True),
+                "export_package_review_status": export_package.get("review_status"),
+                "pixel_assets_required_before_download": dict(export_package.get("metadata") or {}).get("pixel_assets_required_before_download", True),
+                "creative_recipe_present": False,
                 "imports_v1_v2_runtime": False,
             },
         }
@@ -4800,7 +4721,34 @@ class V3ProductApiService:
             job_key=record.job_id,
         )
 
-    def _ecommerce_closure_checks(self, output: EcommercePackOutput) -> list[dict[str, Any]]:
+    def _ecommerce_output_intents(self, record: ProductJobRecord) -> list[dict[str, Any]]:
+        result = record.generation_result or record.planning_result
+        if result is None:
+            return []
+        intents: list[dict[str, Any]] = []
+        for asset in result.series_plan.assets:
+            metadata = dict(asset.metadata or {})
+            slot_id = str(metadata.get("ecommerce_slot") or "").strip()
+            if not slot_id:
+                continue
+            intents.append(
+                {
+                    "slot_id": slot_id,
+                    "index": metadata.get("ecommerce_slot_index"),
+                    "intent": str(metadata.get("ecommerce_creative_direction") or asset.purpose or "").strip(),
+                    "source": "remote_v3_llm_brain" if metadata.get("ecommerce_llm_directed") else "legacy_record",
+                    "asset_id": asset.asset_id,
+                }
+            )
+        return intents
+
+    def _ecommerce_closure_checks(
+        self,
+        record: ProductJobRecord,
+        output: EcommercePackOutput,
+        output_intents: list[dict[str, Any]],
+        export_package: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         checks = [
             {
                 "id": "product_truth",
@@ -4809,28 +4757,28 @@ class V3ProductApiService:
                 "detail": f"{len(output.product_truth.immutable_attributes)} immutable product fact(s) will be checked.",
             },
             {
-                "id": "commerce_brief",
-                "label": "Audience and selling-point brief",
-                "status": "done" if output.commerce_brief.differentiated_selling_points else "attention",
-                "detail": f"{len(output.commerce_brief.differentiated_selling_points)} selling point(s) ranked for image planning.",
+                "id": "commerce_context",
+                "label": "Seller facts and evidence",
+                "status": "done" if record.request.metadata.get("ecommerce_creative_context") else "attention",
+                "detail": "Product facts, seller inputs, category evidence questions, and versioned platform constraints are ready for the Brain.",
             },
             {
                 "id": "marketplace_profile",
                 "label": "Marketplace profile",
-                "status": "done" if output.marketplace_profile.image_slots else "attention",
+                "status": "done" if output.marketplace_profile.metadata.get("profile_id") else "attention",
                 "detail": f"{output.marketplace_profile.platform}/{output.marketplace_profile.market} profile is applied.",
             },
             {
-                "id": "image_set_recipe",
-                "label": "Image set recipe",
-                "status": "done" if len(output.recipes) >= 5 else "attention",
-                "detail": f"{len(output.recipes)} image slot(s) planned with one business job each.",
+                "id": "remote_brain_output_set",
+                "label": "Central Brain output set",
+                "status": "done" if output_intents else "attention",
+                "detail": f"{len(output_intents)} opaque E-Commerce output intent(s) came from the remote Brain.",
             },
             {
                 "id": "export_package",
                 "label": "Export package",
-                "status": "done" if output.export_package.files else "attention",
-                "detail": f"{len(output.export_package.files)} export file record(s) prepared.",
+                "status": "done" if export_package.get("files") else "attention",
+                "detail": f"{len(export_package.get('files') or [])} provider output file record(s) prepared.",
             },
         ]
         return [*checks, *[dict(item) for item in output.critic.checks]]
@@ -5148,6 +5096,7 @@ class V3ProductApiService:
         return value.strip()
 
     def _runtime_request_payload(self, request: CreateCreativeJobRequest) -> dict[str, Any]:
+        self._prepare_ecommerce_creative_context(request)
         return {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,
@@ -5157,6 +5106,39 @@ class V3ProductApiService:
             "product_profile": dict(request.product_profile),
             "metadata": dict(request.metadata),
         }
+
+    def _prepare_ecommerce_creative_context(self, request: CreateCreativeJobRequest) -> None:
+        """Pin server-derived facts before the remote Brain sees an E-Commerce job.
+
+        The browser cannot provide this payload as a creative recipe.  It is
+        rebuilt from product-level request data and contains evidence only.
+        """
+
+        resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
+        if resolution.manifest.scenario_id != "ecommerce":
+            return
+        selection = request.scenario_selection
+        parameters = dict(selection.parameters) if selection is not None else {}
+        parameters.setdefault("mode", resolution.selected_mode_id)
+        parameters.setdefault("preset", resolution.selected_preset_id)
+        metadata = dict(request.metadata or {})
+        job_key = str(metadata.get("job_id") or "").strip() or stable_id(
+            "ecommerce_context_job",
+            request.user_input,
+            metadata.get("project_id"),
+            metadata.get("project_job_sequence"),
+        )
+        context = self.ecommerce_planner.build_creative_context(
+            user_input=request.user_input,
+            product_profile=dict(request.product_profile),
+            uploaded_asset_ids=list(request.uploaded_asset_ids),
+            scenario_parameters=parameters,
+            platform_profile=selection.platform_profile if selection is not None else None,
+            job_key=job_key,
+        )
+        metadata["ecommerce_creative_context"] = context.model_dump(mode="json")
+        metadata["ecommerce_creative_context_server_owned"] = True
+        request.metadata = metadata
 
     def _bind_internal_copy_render_plan(self, request: CreateCreativeJobRequest) -> None:
         """Mark a legacy plan as read-compatible without binding or executing it."""

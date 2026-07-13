@@ -1,86 +1,89 @@
-# E02 Platform Profiles, Market Adaptation, and Localization
+# E02 Platform Constraints, Market Adaptation, and Localization
 
 ## Design principle
 
-Platform preferences are operational profiles, not permanent facts in code.
-Each profile has `profile_id`, `platform`, `market`, `version`, `source_notes`,
-`effective_at`, `reviewed_at`, and `status`.
+Platform knowledge is sourced, versioned constraint evidence—not a permanent
+style catalogue or a local set of images to make. Each record has
+`profile_id`, `platform`, `market`, `version`, `source_notes`, `effective_at`,
+`reviewed_at`, and `status`.
 
-The planner may use a profile only when its status is active. Unknown or stale
-profiles degrade to a generic commerce profile and emit a review warning.
+An active record is supplied as factual E-Commerce context to the remote
+Central Brain. An unknown or stale record produces a warning. It must not
+degrade into a locally invented generic suite, default scene, or fallback role.
 
 ## Initial strategic profiles
 
-| Profile family | Default visual strategy | Typical roles |
+| Profile family | Useful evidence for the Brain | Explicitly not a local output map |
 | --- | --- | --- |
-| Amazon | compliant product-first sequence with narrative secondary images | main, benefit, detail, use, size/compatibility, trust/A+ |
-| Ozon | mobile-readable scene-led commerce images with concise Russian copy when needed | scene hero, benefit, detail, size, use, trust |
-| Taobao/Tmall | high-impact first impression plus rich detail-page storytelling | hero, angle, detail, benefit, scene, size, service/trust |
-| JD | clear product, parameters, quality and service confidence | main, function, specification, detail, scene, trust |
-| Pinduoduo | immediate product/benefit/quantity comprehension | hero, benefit, quantity, comparison, use, promotion-safe cover |
-| TikTok Shop | scroll-stopping but truthful real-use and creator-friendly visuals | hook, hand-held/use, detail, proof, cover, listing main |
-| Shopify/independent site | brand-consistent product story across page and campaign | hero, product, lifestyle, detail, proof, brand story |
+| Amazon | verified listing restrictions and accepted product-first constraints | a main/benefit/detail sequence |
+| Ozon | verified market, mobile/readability, and Russian-language constraints | a default scene-led sequence |
+| Taobao/Tmall | verified market/detail-page and Chinese-language constraints | a fixed hero/angle/detail sequence |
+| JD/Pinduoduo | verified listing, content, and claim constraints | a conversion-role table |
+| TikTok Shop | verified truthfulness and market constraints | a fixed creator or use shot |
+| Shopify/independent site | seller-approved brand/campaign constraints | a local brand-story recipe |
 
-These are planning defaults. Actual platform policies must be imported or
-maintained as versioned data and reviewed before production use.
+Actual platform policies must be sourced, reviewed, frozen into the job, and
+validated on real provider outputs before production activation.
 
 ## Profile contract
 
 ```text
-MarketplaceRuleProfile
+MarketplaceConstraintProfile
   platform
   market
   version
   status
-  image_slots
-  main_image_rules
-  secondary_image_rules
-  allowed_text_modes
-  recommended_aspect_ratios
-  safe_area
+  verified_constraints
+  claim_and_content_risks
+  requested_canvas_constraints
+  text_policy
   export_rules
-  prohibited_or_risky_claims
   source_notes
   reviewed_at
 ```
 
+`verified_constraints` may say what is forbidden or required. It must never
+encode an automatic slot list, a camera/crop, a scene, a visual lane, a
+marketing phrase, or a default image count.
+
 ## Localization contract
 
 ```text
-LocalizationProfile
+LocalizationContext
   locale
   language
   market
+  user_approved_literal_copy
   terminology_policy
-  max_copy_length_by_slot
-  typography_policy
   decimal_and_unit_policy
   required_human_review
 ```
 
-Initial locales: `en-US`, `ru-RU`, `zh-CN`, with `ja-JP` and EU language packs
-later. Copy generation must preserve user-provided product names, trademarks,
-measurements, and claims exactly unless the user requests translation.
+Initial locale evidence supports `en-US`, `ru-RU`, and `zh-CN`; new locales are
+added only with source/review provenance. User-provided product names,
+trademarks, measurements, and claims are preserved exactly unless the user
+explicitly requests translation.
 
-## Text pipeline
+## Text path
 
 ```text
 seller facts and approved literal copy
-→ LLM creative reasoning
-→ provider-native complete-image generation
-→ final-pixel OCR/vision/claim review
-→ provider-native targeted revision when needed
+-> remote Brain creative reasoning
+-> provider-native complete-image generation
+-> final-pixel vision/claim review
+-> bounded provider-native revision when necessary
 ```
 
-Main images default to `text_forbidden`. A text-enabled image may carry
-approved literal wording and locale, but the LLM/provider—not a slot
-coordinate, maximum-length rule, or post-render layer—decides the visual
-expression. Final-pixel review decides whether it is accepted.
+Where a verified restriction forbids text for a particular requested output,
+that restriction is given to the Brain. Otherwise the Brain/provider decides
+whether and how approved literal wording appears. No field may prescribe a
+coordinate, line length, font, safe area, or post-render layer.
 
 ## Profile update policy
 
 - Never silently change an in-flight job's profile.
-- Freeze profile versions into the job and export manifest.
-- New profile versions affect only new jobs unless explicitly migrated.
-- A profile change requires focused tests and at least three materially
-  different product/category fixtures.
+- Freeze profile versions and evidence provenance into the job/export manifest.
+- New versions affect only new jobs unless the user explicitly starts a new
+  continuation with the changed evidence.
+- A profile change requires focused tests and real-provider fixtures across at
+  least three materially different products before it becomes production-ready.

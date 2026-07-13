@@ -5,6 +5,8 @@ from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, Bra
 from alchemy_creative_agent_3_0.app.product_api import CreateCreativeJobRequest, ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioSelection
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _brand_service(tmp_path) -> BrandProfileService:
@@ -33,7 +35,10 @@ def test_scenario_runtime_runs_general_creative_and_enriches_metadata(tmp_path) 
 
 
 def test_scenario_runtime_runs_ecommerce_and_enriches_metadata(tmp_path) -> None:
-    runtime = ScenarioRuntime(brand_profile_service=_brand_service(tmp_path))
+    runtime = ScenarioRuntime(
+        brand_profile_service=_brand_service(tmp_path),
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()),
+    )
 
     result = runtime.plan_job(
         {
@@ -78,7 +83,13 @@ def test_product_api_accepts_general_scenario_selection_and_keeps_simple_respons
 
 
 def test_product_api_runs_ecommerce_scenario_and_keeps_job_retrievable(tmp_path) -> None:
-    service = V3ProductApiService(brand_profile_service=_brand_service(tmp_path))
+    service = V3ProductApiService(
+        brand_profile_service=_brand_service(tmp_path),
+        scenario_runtime=ScenarioRuntime(
+            brand_profile_service=_brand_service(tmp_path),
+            llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()),
+        ),
+    )
 
     created = service.create_job(
         {

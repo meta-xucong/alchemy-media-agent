@@ -55,7 +55,9 @@ def test_vertical_agent_registry_selects_expected_stubs_and_fallback() -> None:
     restaurant_brief = default_brief.model_copy(update={"industry": IndustryCategory.RESTAURANT_HOTPOT})
 
     assert registry.select_pack(_job(), default_brief).name == "default_commercial_pack"
-    assert registry.select_pack(_job(), ecommerce_brief).name == "ecommerce_agent_family"
+    # Product intent alone stays in the neutral path.  E-Commerce is selected
+    # only by an explicit E-Commerce template/scenario request.
+    assert registry.select_pack(_job(), ecommerce_brief).name == "default_commercial_pack"
     assert registry.select_pack(_job(), restaurant_brief).name == "restaurant_agent_family"
 
 

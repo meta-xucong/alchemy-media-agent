@@ -5,6 +5,7 @@ import json
 import pytest
 
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService, V3UploadedAssetStore
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
 def _png_base64(width: int = 320, height: int = 280) -> str:
@@ -92,7 +93,7 @@ def test_v3_uploaded_asset_store_accepts_webp_reference(tmp_path) -> None:
 def test_product_api_uses_uploaded_asset_pixels_and_exports_manifest(tmp_path) -> None:
     store = V3UploadedAssetStore(storage_root=tmp_path)
     asset_id = _upload_ready_asset(store)
-    service = V3ProductApiService(asset_store=store)
+    service = ecommerce_test_service(asset_store=store)
 
     status = service.create_job(
         {
@@ -122,7 +123,9 @@ def test_product_api_uses_uploaded_asset_pixels_and_exports_manifest(tmp_path) -
     export = service.export_job(status.job_id)
     assert export.status == "planned"
     assert export.package_id
-    assert export.export_package["files"]
+    # Planning never invents export files from a static role map. Files appear
+    # only after provider outputs exist.
+    assert export.export_package["files"] == []
     assert export.manifest["uploaded_assets"][0]["stored"] is True
     assert export.manifest["metadata"]["imports_v1_v2_runtime"] is False
 

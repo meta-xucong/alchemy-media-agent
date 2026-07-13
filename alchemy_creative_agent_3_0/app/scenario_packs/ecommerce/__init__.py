@@ -2,6 +2,7 @@
 
 from .contracts import (
     CommerceCriticReport,
+    EcommerceCreativeContext,
     CommerceIntelligenceBrief,
     EcommerceAssetRecipe,
     EcommerceExportPackage,
@@ -13,6 +14,7 @@ from .pack import EcommerceScenarioPack, EcommerceScenarioPackPlanner
 
 __all__ = [
     "CommerceCriticReport",
+    "EcommerceCreativeContext",
     "CommerceIntelligenceBrief",
     "EcommerceAssetRecipe",
     "EcommerceExportPackage",

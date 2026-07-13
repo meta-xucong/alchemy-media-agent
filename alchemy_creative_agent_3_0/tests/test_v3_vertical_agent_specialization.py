@@ -3,16 +3,16 @@ from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 from alchemy_creative_agent_3_0.app.vertical_agents import VerticalAgentRegistry
 
 
-def test_v36_ecommerce_pack_specializes_standard_schema_outputs() -> None:
+def test_v36_implicit_ecommerce_language_does_not_activate_specialized_pack() -> None:
     result = run_creative_planning("帮我做一组蓝牙耳机淘宝主图和详情页，要干净科技感，突出降噪和续航。")
 
-    assert result.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
     assert result.metadata["vertical_pack_metadata"]["extends_v3_standard_schemas"] is True
     assert result.metadata["vertical_pack_metadata"]["forks_runtime"] is False
-    assert "product clarity" in result.commercial_brief.commercial_hooks
-    assert result.prompt_compilations[0].provider_notes["provider_native_complete_image"] is True
+    assert "product feature clarity" in result.commercial_brief.commercial_hooks
+    assert "ecommerce_recipe" not in result.prompt_compilations[0].provider_notes
     assert result.layout_plans[0].product_area.position == "provider_directed"
-    assert all(asset.metadata["selected_vertical_pack"] == "ecommerce_agent_family" for asset in result.series_plan.assets)
+    assert all("ecommerce_slot" not in asset.metadata for asset in result.series_plan.assets)
 
 
 def test_v36_restaurant_pack_specializes_food_conversion_outputs() -> None:
@@ -66,19 +66,18 @@ def test_v36_vertical_registry_uses_priority_and_default_fallback() -> None:
     ecommerce_brief = run_creative_planning("淘宝耳机主图").commercial_brief
     fallback = run_creative_planning("做一个普通活动宣传图，适合小红书。")
 
-    assert registry.select_pack(ecommerce_job, ecommerce_brief).name == "ecommerce_agent_family"
+    assert registry.select_pack(ecommerce_job, ecommerce_brief).name == "default_commercial_pack"
     assert fallback.commercial_brief.industry == IndustryCategory.UNKNOWN
     assert fallback.metadata["selected_vertical_pack"] == "default_commercial_pack"
     assert fallback.asset_pack.metadata["selected_vertical_pack"] == "default_commercial_pack"
 
 
-def test_v36_generation_result_preserves_vertical_policy_and_pack_metadata() -> None:
+def test_v36_implicit_product_generation_preserves_general_policy_metadata() -> None:
     result = run_generation_loop("帮我做一组蓝牙耳机京东主图，要科技感、干净。")
 
-    assert result.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
-    assert result.metadata["vertical_evaluation_policy"]["mode"] == "ecommerce_product_clarity"
-    assert result.metadata["vertical_evaluation_policy"]["commercial_score_delta"] > 0
-    assert result.asset_pack.manifest["selected_vertical_pack"] == "ecommerce_agent_family"
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.metadata["vertical_evaluation_policy"]["pack"] == "default_commercial_pack"
+    assert result.asset_pack.manifest["selected_vertical_pack"] == "default_commercial_pack"
     assert {asset.platform for asset in result.series_plan.assets}.issubset(
         {Platform.JD, Platform.ECOMMERCE_GENERIC, Platform.GENERIC_SOCIAL, Platform.XIAOHONGSHU}
     )

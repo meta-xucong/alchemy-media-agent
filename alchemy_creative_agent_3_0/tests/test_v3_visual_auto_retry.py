@@ -1,9 +1,16 @@
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
 def _service(tmp_path) -> V3ProductApiService:
     return V3ProductApiService(brand_profile_service=BrandProfileService(BrandProfileStore(tmp_path / "brand_memory")))
+
+
+def _ecommerce_service(tmp_path) -> V3ProductApiService:
+    return ecommerce_test_service(
+        brand_profile_service=BrandProfileService(BrandProfileStore(tmp_path / "brand_memory"))
+    )
 
 
 def _create_general_job(service: V3ProductApiService):
@@ -78,16 +85,13 @@ def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path
 
 
 def test_visual_auto_retry_executes_for_product_label_issue(tmp_path) -> None:
-    service = _service(tmp_path)
+    service = _ecommerce_service(tmp_path)
     created = service.create_job(
         {
             "user_input": "Create a clean ecommerce product set for a drink can",
             "scenario_selection": {
                 "scenario_id": "ecommerce",
-                "parameters": {
-                    "requested_image_count": 1,
-                    "suite_slot_request": ["main_image"],
-                },
+                "parameters": {"requested_image_count": 1},
             },
             "uploaded_asset_ids": ["product_drink_can"],
             "product_profile": {

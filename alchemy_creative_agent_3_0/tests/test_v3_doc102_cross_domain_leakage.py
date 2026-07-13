@@ -1,10 +1,16 @@
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _cluster(monkeypatch, payload):
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
-    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
-    result = ScenarioRuntime().plan_job(payload)
+    ecommerce = payload.get("scenario_selection", {}).get("scenario_id") == "ecommerce"
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true" if ecommerce else "false")
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+    ) if ecommerce else ScenarioRuntime()
+    result = runtime.plan_job(payload)
     return result.planning_result.metadata["visual_cluster"]
 
 

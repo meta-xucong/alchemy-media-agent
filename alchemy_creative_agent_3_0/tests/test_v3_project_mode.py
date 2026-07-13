@@ -13,6 +13,11 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+
+def _ecommerce_handlers() -> V3ProductRouteHandlers:
+    return V3ProductRouteHandlers(service=ecommerce_test_service())
 
 
 def _project_handlers_with_brand_store(tmp_path):
@@ -368,7 +373,7 @@ def test_project_archive_hides_project_from_recent_list_but_keeps_detail() -> No
 
 
 def test_project_mode_allows_ecommerce_project_job_without_product_reference() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     created = handlers.post_projects({"user_goal": "帮我做一个产品宣传项目"})
     project_id = created["project"]["project_id"]
 
@@ -462,7 +467,7 @@ def test_project_mode_rejects_fake_saved_product_reference() -> None:
 
 
 def test_project_mode_ignores_fake_project_create_product_asset_and_falls_back_to_text() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     project = handlers.post_projects(
         {
             "user_goal": "Create a product launch image suite",
@@ -482,7 +487,7 @@ def test_project_mode_ignores_fake_project_create_product_asset_and_falls_back_t
 
 
 def test_project_mode_uses_ready_project_create_product_asset(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
     project = handlers.post_projects(
         {
@@ -502,7 +507,7 @@ def test_project_mode_uses_ready_project_create_product_asset(tmp_path) -> None:
 
 
 def test_project_mode_accepts_ready_saved_product_reference(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
     project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
     handlers.post_project_reference(
@@ -530,7 +535,7 @@ def test_project_mode_accepts_ready_saved_product_reference(tmp_path) -> None:
 
 
 def test_project_mode_creates_ecommerce_project_job_through_template_registry(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
     project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
 
@@ -549,7 +554,6 @@ def test_project_mode_creates_ecommerce_project_job_through_template_registry(tm
                 "must_keep_facts": ["black metal body"],
                 "keywords": ["desk lamp"],
             },
-            "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
             "metadata": {"selected_preset_id": "marketplace_listing_set"},
         },
     )
@@ -564,19 +568,16 @@ def test_project_mode_creates_ecommerce_project_job_through_template_registry(tm
     assert job["metadata"]["project_context_snapshot"]["metadata"]["commerce_profile"]["product_category"] == "desk lamp"
     assert job["ecommerce"]["platform"] == "amazon"
     assert job["ecommerce"]["target_audience"][0] == "home office users"
-    assert job["ecommerce"]["image_recipes"]
+    assert job["ecommerce"]["image_recipes"] == []
+    assert job["ecommerce"]["remote_brain_output_intents"]
     assert loaded["project"]["primary_template_id"] == "ecommerce_template"
     assert loaded["project"]["commerce_profile"]["product_category"] == "desk lamp"
     assert loaded["project"]["commerce_profile"]["target_audience"] == "home office users"
-    assert loaded["project"]["commerce_profile"]["suite_slots_requested"] == [
-        "main_image",
-        "feature_image_1",
-        "scenario_image",
-    ]
+    assert loaded["project"]["commerce_profile"]["suite_slots_requested"] == []
 
 
 def test_project_mode_passes_ecommerce_requested_count_to_pack(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="summer-drink.png")
     project = handlers.post_projects({"user_goal": "Create a compact marketplace lifestyle set"})["project"]
 
@@ -591,19 +592,17 @@ def test_project_mode_passes_ecommerce_requested_count_to_pack(tmp_path) -> None
                 "target_platform": "amazon_us",
                 "core_selling_points": ["Fresh summer refreshment"],
             },
-            "suite_slot_request": ["main_image", "scenario_image", "ad_cover"],
             "metadata": {"requested_image_count": 2},
         },
     )
 
     assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 2
-    assert len(job["ecommerce"]["image_recipes"]) == 2
-    assert [recipe["slot"] for recipe in job["ecommerce"]["image_recipes"]] == ["main_image", "scenario_image"]
-    assert job["ecommerce"]["image_recipes"][1]["metadata"]["lifestyle_realism_required"] is True
+    assert job["ecommerce"]["image_recipes"] == []
+    assert [item["slot_id"] for item in job["ecommerce"]["remote_brain_output_intents"]] == ["ecommerce_output_1", "ecommerce_output_2"]
 
 
-def test_project_mode_forwards_ecommerce_copy_metadata_to_existing_slot_safe_planner(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+def test_project_mode_forwards_explicit_approved_copy_to_remote_brain_context(tmp_path) -> None:
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp-copy.png")
     project = handlers.post_projects({"user_goal": "Create listing images with approved product copy"})["project"]
 
@@ -618,23 +617,20 @@ def test_project_mode_forwards_ecommerce_copy_metadata_to_existing_slot_safe_pla
                 "target_platform": "amazon_us",
                 "metadata": {
                     "copy_locale": "en-US",
-                    "overlay_copy": {"feature_image_1": "Adjustable angle"},
+                    "approved_literal_copy": "Adjustable angle",
                 },
             },
-            "suite_slot_request": ["main_image", "feature_image_1"],
         },
     )
 
     assert job["metadata"]["scenario_parameters"]["copy_locale"] == "en-US"
-    assert job["metadata"]["scenario_parameters"]["overlay_copy"] == {"feature_image_1": "Adjustable angle"}
-    recipes = {recipe["slot"]: recipe for recipe in job["ecommerce"]["image_recipes"]}
-    assert recipes["main_image"]["overlay_text"] is None
-    assert recipes["feature_image_1"]["overlay_text"] is None
-    assert recipes["feature_image_1"]["provider_native_text"] == "Adjustable angle"
+    assert job["metadata"]["scenario_parameters"]["approved_literal_copy"] == "Adjustable angle"
+    assert job["ecommerce"]["creative_context"]["approved_literal_copy"] == "Adjustable angle"
+    assert job["ecommerce"]["image_recipes"] == []
 
 
 def test_selected_ecommerce_output_enters_project_context_without_brand_memory_auto_write(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _ecommerce_handlers()
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
     project = handlers.post_projects({"user_goal": "Create a marketplace image suite"})["project"]
     job = handlers.post_project_job(
@@ -664,7 +660,8 @@ def test_selected_ecommerce_output_enters_project_context_without_brand_memory_a
     assert generated["scenario"]["scenario_id"] == "ecommerce"
     assert generated["metadata"]["template_id"] == "ecommerce_template"
     assert generated["asset_series"]
-    assert generated["ecommerce"]["image_recipes"]
+    assert generated["ecommerce"]["image_recipes"] == []
+    assert generated["ecommerce"]["remote_brain_output_intents"]
     assert selected["selected_result"]["memory_update_applied"] is False
     assert selected["metadata"]["brand_memory_auto_applied"] is False
     assert selected["project"]["selected_output_refs"]

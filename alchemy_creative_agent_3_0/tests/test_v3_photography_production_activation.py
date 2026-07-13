@@ -16,8 +16,10 @@ from alchemy_creative_agent_3_0.app.scenario_packs.photography import (
     PhotographyTechniquePackage,
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _binding() -> dict:
@@ -118,7 +120,9 @@ def test_adapter_uses_only_pinned_entry_point_and_composer_materializes_directio
 
 def test_nonhuman_identity_request_blocks_without_typed_native_reference_and_requires_shared_capability(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    runtime = ScenarioRuntime()
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+    )
     unknown = UploadedAssetInfo(asset_id="asset_dog", role=AssetRole.UNKNOWN_REFERENCE, uri="memory://dog")
     blocked = runtime.plan_job(
         _request(
@@ -156,7 +160,10 @@ def test_nonhuman_identity_request_blocks_without_typed_native_reference_and_req
 
 def test_general_and_ecommerce_never_activate_photography_direction_when_gate_is_on(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
-    runtime = ScenarioRuntime()
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+    )
 
     general = runtime.plan_job({"user_input": "Create a calm abstract book cover.", "scenario_selection": {"scenario_id": "general_creative"}})
     ecommerce = runtime.plan_job({"user_input": "Create a clean product atmosphere image.", "scenario_selection": {"scenario_id": "ecommerce"}})

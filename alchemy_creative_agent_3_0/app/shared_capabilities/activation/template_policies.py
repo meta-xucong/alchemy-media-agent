@@ -44,7 +44,6 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
         recommended_capabilities=[
             TemplateCapabilityBinding(capability_id="product_identity", profile="described_concept"),
             TemplateCapabilityBinding(capability_id="reference_channel_policy"),
-            TemplateCapabilityBinding(capability_id="suite_direction"),
         ],
         optional_capabilities=[
             TemplateCapabilityBinding(capability_id="human_realism"),
@@ -53,8 +52,9 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
             TemplateCapabilityBinding(capability_id="scene_continuity"),
             TemplateCapabilityBinding(capability_id="typography_layout"),
         ],
-        deliverable_role_owner="ecommerce_scenario_pack",
+        deliverable_role_owner="remote_v3_llm_brain",
         review_threshold_profile="commercial_strict",
+        requires_remote_creative_brain=True,
     )
 
 

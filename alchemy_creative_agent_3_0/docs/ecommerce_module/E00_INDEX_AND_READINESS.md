@@ -1,7 +1,7 @@
 # E-Commerce Module Documentation Set
 
-Status: development preparation baseline with provider-native text correction
-Document family: `E00-E11`, corrected by V3 Doc111
+Status: migration baseline; new E-Commerce jobs follow E17 and Doc111
+Document family: `E00-E11`, corrected by V3 Doc111 and E17
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -19,7 +19,8 @@ commerce-specific deliverables.
 2. V3 foundation and capability authorities, especially Docs 76, 77, 91-103.
 3. V3 template/project authorities, especially Docs 41-43, 57, and 60.
 4. V3 Doc111 provider-native text and creative-direction correction.
-5. This E-Commerce module family.
+5. E17 LLM-native E-Commerce architecture correction.
+6. This E-Commerce module family.
 6. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
@@ -44,9 +45,9 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | --- | --- | --- |
 | V3 foundation | baseline accepted for specialized work | consume, do not fork |
 | General Template | active and broad | may support light product visuals only |
-| E-Commerce Scenario Pack | existing skeleton | needs professional suite expansion |
-| Platform profiles | partial | require versioned policy/config records |
-| Category packs | partial | need first five category definitions |
+| E-Commerce Scenario Pack | migration required | replace static suite direction with factual context to Central Brain |
+| Platform profiles | evidence only | retain versioned constraints; do not generate default slots or image recipes |
+| Category packs | evidence only | retain buyer questions; do not generate shot orders or category recipes |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
 | Real-output acceptance | ongoing | required before production activation of new profiles |
 | In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |
@@ -58,7 +59,8 @@ activation for the shared foundation integration gates.
 
 The historical E12-E16 handoffs on the documentation branch must not merge
 unchanged: their deterministic compositor, font, safe-area, and multi-plan
-contracts are superseded for new work by Doc111. Product facts, platform
+contracts are superseded for new work by Doc111. E17 additionally supersedes
+active deterministic platform/category slot direction. Product facts, platform
 evidence, output lineage, and final-pixel review remain valid inputs.
 
 ## Definition of preparation complete
