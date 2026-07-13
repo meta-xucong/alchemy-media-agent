@@ -643,6 +643,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
         timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
         max_attempts = self._app_provider_max_attempts()
+        execution_audit = self._provider_execution_audit(
+            reference_assets=reference_assets,
+            outer_timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+        )
         attempts: list[dict[str, Any]] = []
         last_error: BaseException | None = None
         provider_prompt_chars = self._app_request_prompt_chars(app_request)
@@ -654,6 +659,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "attempts": attempts,
             "reference_asset_count": len(reference_assets),
             "provider_prompt_chars": provider_prompt_chars,
+            "execution_audit": execution_audit,
         }
         for attempt in range(1, max_attempts + 1):
             retry_metadata = self._provider_failure_retry_metadata(
@@ -676,6 +682,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "attempts": attempts,
                     "reference_asset_count": len(reference_assets),
                     "provider_prompt_chars": provider_prompt_chars,
+                    "execution_audit": execution_audit,
                 }
                 return result
             except BaseException as exc:
@@ -690,6 +697,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "error_type": exc.__class__.__name__,
                         "message": self._provider_failure_message(exc),
                         "retryable": retryable,
+                        **self._provider_error_transport_audit(exc),
                     }
                 )
                 if attempt >= max_attempts or not retryable:
@@ -701,6 +709,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "attempts": attempts,
                         "reference_asset_count": len(reference_assets),
                         "provider_prompt_chars": provider_prompt_chars,
+                        "execution_audit": execution_audit,
                         "final_classification": classification,
                     }
                     try:
@@ -712,6 +721,39 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if last_error is not None:
             raise last_error
         raise TimeoutError("V3 production provider timed out.")
+
+    def _provider_execution_audit(
+        self,
+        *,
+        reference_assets: list[dict[str, Any]],
+        outer_timeout_seconds: float,
+        max_attempts: int,
+    ) -> dict[str, Any]:
+        """Persist the owning V3 deadline without leaking provider secrets."""
+
+        try:
+            from app.config import settings as app_settings
+
+            managed = bool(getattr(app_settings, "openai_image_gateway_managed_failover", False))
+            managed_timeout = float(app_settings.openai_image_gateway_managed_failover_timeout_seconds)
+        except Exception:
+            managed = False
+            managed_timeout = None
+        return {
+            "gateway_managed_failover": managed,
+            "gateway_managed_failover_timeout_seconds": managed_timeout,
+            "outer_timeout_seconds": float(outer_timeout_seconds),
+            "outer_max_attempts": int(max_attempts),
+            "operation": "image_edit" if reference_assets else "image_generate",
+        }
+
+    @staticmethod
+    def _provider_error_transport_audit(exc: BaseException) -> dict[str, Any]:
+        detail = getattr(exc, "detail", None)
+        if not isinstance(detail, dict):
+            return {}
+        transport = detail.get("runtime_transport")
+        return {"runtime_transport": dict(transport)} if isinstance(transport, dict) else {}
 
     def _app_request_prompt_chars(self, app_request) -> int:
         prompt_plan = getattr(app_request, "prompt_plan", None)

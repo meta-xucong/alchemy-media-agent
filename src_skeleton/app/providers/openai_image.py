@@ -251,6 +251,12 @@ class OpenAIGPTImageProvider:
                 "upstream_cooldown_seconds": settings.openai_image_upstream_cooldown_seconds,
                 "request_timeout_seconds": settings.openai_image_request_timeout_seconds,
                 "image_edit_request_timeout_seconds": settings.openai_image_edit_request_timeout_seconds,
+                # The raw per-operation values above remain useful for ordinary
+                # OpenAI-compatible deployments.  Expose the effective values
+                # separately so an operator can see when a gateway-owned
+                # failover budget overrides them for the actual SDK client.
+                **self._runtime_transport_summary(image_edit=False),
+                "effective_image_edit_client_timeout_seconds": self._client_timeout_seconds(image_edit=True),
                 "image_edit_transient_cooldown_seconds": settings.openai_image_edit_transient_cooldown_seconds,
             },
             reason=None if configured else "OPENAI_API_KEY is not configured.",
@@ -379,6 +385,7 @@ class OpenAIGPTImageProvider:
                             "request_index": index,
                             "attempts": attempt,
                             "retryable": retryable,
+                            "runtime_transport": self._runtime_transport_summary(image_edit=False),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
                         },
@@ -528,6 +535,7 @@ class OpenAIGPTImageProvider:
                             "transient_image_edit_failure": transient_image_edit,
                             "operation_timeout_exhausted": operation_timeout_exhausted,
                             "operation_timeout_seconds": operation_timeout,
+                            "runtime_transport": self._runtime_transport_summary(image_edit=True),
                             "reference_image_count": len(reference_paths),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
@@ -1087,6 +1095,24 @@ class OpenAIGPTImageProvider:
         # retry is deliberately never an SDK configuration knob: V3's explicit
         # retry owner or the gateway must remain the only retry authority.
         return 0
+
+    def _runtime_transport_summary(self, *, image_edit: bool) -> dict[str, object]:
+        """Return safe-to-persist runtime facts for generation audit records.
+
+        A gateway can distinguish its own 5xx from a downstream cancellation
+        only when V3 records the timeout actually handed to AsyncOpenAI.  These
+        fields intentionally exclude credentials, URLs and user prompt data.
+        """
+
+        return {
+            "gateway_managed_failover": self._uses_gateway_managed_failover(),
+            "gateway_managed_failover_timeout_seconds": float(
+                settings.openai_image_gateway_managed_failover_timeout_seconds
+            ),
+            "effective_client_timeout_seconds": self._client_timeout_seconds(image_edit=image_edit),
+            "sdk_max_retries": self._sdk_max_retries(),
+            "operation": "image_edit" if image_edit else "image_generate",
+        }
 
     def _uses_gateway_managed_failover(self) -> bool:
         return bool(getattr(settings, "openai_image_gateway_managed_failover", False))

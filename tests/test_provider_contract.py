@@ -272,6 +272,18 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
 
     assert calls["count"] == 1
     assert error.value.detail["attempts"] == 1
+    assert error.value.detail["runtime_transport"] == {
+        "gateway_managed_failover": True,
+        "gateway_managed_failover_timeout_seconds": 420.0,
+        "effective_client_timeout_seconds": 660.0,
+        "sdk_max_retries": 0,
+        "operation": "image_generate",
+    }
+    capabilities = asyncio.run(provider.capabilities())
+    assert capabilities.limits["gateway_managed_failover"] is True
+    assert capabilities.limits["effective_client_timeout_seconds"] == 660.0
+    assert capabilities.limits["effective_image_edit_client_timeout_seconds"] == 660.0
+    assert capabilities.limits["sdk_max_retries"] == 0
     assert provider._client_timeout_seconds(image_edit=False) == 660.0  # noqa: SLF001
     assert provider._client_timeout_seconds(image_edit=True) == 660.0  # noqa: SLF001
     assert provider._sdk_max_retries() == 0  # noqa: SLF001

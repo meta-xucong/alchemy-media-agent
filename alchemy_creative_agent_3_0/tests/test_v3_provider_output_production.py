@@ -336,6 +336,13 @@ def test_production_provider_gateway_managed_failover_does_not_replay_terminal_f
     summary = error.value.provider_failure_retry
     assert summary["max_attempts"] == 1
     assert summary["fresh_upstream_requests"] == 1
+    assert summary["execution_audit"] == {
+        "gateway_managed_failover": True,
+        "gateway_managed_failover_timeout_seconds": 420.0,
+        "outer_timeout_seconds": 665.0,
+        "outer_max_attempts": 1,
+        "operation": "image_generate",
+    }
     assert managed_timeout == 665.0
     assert managed_attempts == 1
 
