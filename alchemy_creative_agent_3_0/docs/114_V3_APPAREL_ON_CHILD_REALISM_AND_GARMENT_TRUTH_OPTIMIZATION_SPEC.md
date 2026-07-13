@@ -21,6 +21,24 @@ Provider/Review/Retry consume envelope and resolved ledger only
 metadata-only inspection cannot approve a pixel-dependent contract
 ```
 
+Doc113 closure is necessary but not sufficient for production runtime work.
+Before adding Doc114 runtime behavior, all of the following independent
+acceptances must also be green:
+
+```text
+1. E-Commerce real-chain acceptance: real product reference, remote Brain,
+   Provider, and shared review/retry all complete one reliable delivery path.
+2. Photography P10: cross-domain person/reference/three-role acceptance is
+   complete and recorded as regression evidence.
+3. Browser Gate D: selected-result delivery, continuation, refresh recovery,
+   and failure presentation are trustworthy in the user path.
+```
+
+Before those three gates close, Doc114 work is limited to structured test
+fixtures, acceptance matrices, and non-runtime evaluation preparation. Do not
+add a child/apparel-specific runtime branch, prompt rule, provider behavior, or
+review/retry behavior during that period.
+
 This is not a request for a kidswear module. The architecture remains:
 
 ```text
