@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "authority": "Doc114",
-  "purpose": "Pre-gate semantic acceptance matrix only; this file must not activate or prescribe a children-specific runtime recipe.",
+  "purpose": "Pre-merge semantic acceptance matrix; this file must not activate or prescribe a children-specific runtime recipe.",
   "fixture_asset_policy": "Textual and structured evidence only. Add consented reference-image paths only in a separately approved real-output evaluation run.",
-  "runtime_implementation_blockers": [
+  "merge_validation_gates": [
     "ecommerce_real_product_reference_brain_provider_review_retry_acceptance",
     "photography_p10_cross_domain_acceptance",
     "browser_gate_d_delivery_continuation_recovery_acceptance"

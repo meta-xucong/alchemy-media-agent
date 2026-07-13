@@ -21,9 +21,9 @@ Provider/Review/Retry consume envelope and resolved ledger only
 metadata-only inspection cannot approve a pixel-dependent contract
 ```
 
-Doc113 closure is necessary but not sufficient for production runtime work.
-Before adding Doc114 runtime behavior, all of the following independent
-acceptances must also be green:
+Doc113 closure is necessary but not sufficient for a Doc114 mainline merge.
+The implementation branch may proceed, but the agent must independently run
+and record all of the following acceptance gates before requesting merge:
 
 ```text
 1. E-Commerce real-chain acceptance: real product reference, remote Brain,
@@ -34,10 +34,10 @@ acceptances must also be green:
    and failure presentation are trustworthy in the user path.
 ```
 
-Before those three gates close, Doc114 work is limited to structured test
-fixtures, acceptance matrices, and non-runtime evaluation preparation. Do not
-add a child/apparel-specific runtime branch, prompt rule, provider behavior, or
-review/retry behavior during that period.
+These are merge/release gates, not a requirement for an additional user-side
+pre-approval before development begins. If a gate cannot be executed because a
+required external service or browser environment is unavailable, record that
+fact as a release blocker; do not claim the corresponding behavior is proven.
 
 This is not a request for a kidswear module. The architecture remains:
 

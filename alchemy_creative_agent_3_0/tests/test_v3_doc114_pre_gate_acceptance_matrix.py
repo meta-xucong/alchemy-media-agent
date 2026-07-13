@@ -37,10 +37,10 @@ def test_doc114_pre_gate_matrix_has_the_required_cross_domain_cases() -> None:
     }
 
 
-def test_doc114_runtime_work_is_explicitly_blocked_by_the_three_external_acceptances() -> None:
+def test_doc114_merge_requires_the_three_external_acceptances() -> None:
     payload = _fixture()
 
-    assert payload["runtime_implementation_blockers"] == [
+    assert payload["merge_validation_gates"] == [
         "ecommerce_real_product_reference_brain_provider_review_retry_acceptance",
         "photography_p10_cross_domain_acceptance",
         "browser_gate_d_delivery_continuation_recovery_acceptance",
