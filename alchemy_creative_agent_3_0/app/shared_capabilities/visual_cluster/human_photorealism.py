@@ -812,8 +812,8 @@ class HumanPhotorealismLayer:
             reason_codes.append("product_with_human_signal")
         if any(role in text for role in ["face_reference", "person_reference", "portrait_reference"]):
             reason_codes.append("face_or_person_reference")
-        if any(token in text for token in ["ecommerce", "product", "listing"]) and "product_with_human_signal" in reason_codes:
-            reason_codes.append("ecommerce_human_model_detected")
+        if "product_with_human_signal" in reason_codes:
+            reason_codes.append("product_on_person_detected")
 
         explicit_age_signal = _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS)
         is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
@@ -837,7 +837,7 @@ class HumanPhotorealismLayer:
             human_subject_kind = "hand_or_skin_detail"
             strictness = "balanced"
             reason_codes.append("hand_or_skin_detail_detected")
-        elif any(token in reason_codes for token in ["product_with_human_signal", "ecommerce_human_model_detected"]):
+        elif any(token in reason_codes for token in ["product_with_human_signal", "product_on_person_detected"]):
             human_subject_kind = "product_on_person"
             strictness = "commercial_strict"
         elif "model" in text or "\u6a21\u7279" in text:

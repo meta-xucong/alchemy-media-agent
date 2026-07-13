@@ -226,9 +226,9 @@ class EcommerceAgentFamily(VerticalAgentPack):
             if isinstance(image_plan, dict):
                 raw = image_plan.get("image_count")
         try:
-            return max(1, min(4, int(raw or fallback or 1)))
+            return max(1, int(raw or fallback or 1))
         except (TypeError, ValueError):
-            return max(1, min(4, fallback or 1))
+            return max(1, fallback or 1)
 
     def _context_payload(self, context) -> dict[str, Any]:
         payload = context.metadata.get("ecommerce_creative_context")

@@ -237,6 +237,6 @@ def _bounded_requested_count(value: object) -> int | None:
     if value in (None, ""):
         return None
     try:
-        return max(1, min(4, int(value)))
+        return max(1, int(value))
     except (TypeError, ValueError):
         return None

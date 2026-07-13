@@ -30,6 +30,9 @@ from ..shared_capabilities.activation import (
     CapabilityContributionComposer,
     CapabilityExecutionEnvelope,
     ComposedVisualContribution,
+    NormalizedV3JobIntent,
+    TemplateDeliverable,
+    TemplateDeliverablePlan,
     TemplateCapabilityPolicy,
     VisualCapabilityManifest,
     VisualCapabilityRegistry,
@@ -240,6 +243,7 @@ class ScenarioRuntime:
     ) -> CapabilityPreparationResult:
         mode = self._capability_activation_mode(request)
         specialized_plan = self._prepare_specialized_scenario_plan(request, resolution)
+        normalized_intent = self._normalize_v3_job_intent(request, resolution)
         if resolution.manifest.scenario_id == "photography" and mode != "enforced":
             raise CapabilityActivationError("Photography production activation requires enforced capability execution")
         policy = self._resolve_template_capability_policy(request, resolution)
@@ -253,10 +257,18 @@ class ScenarioRuntime:
                 quality_mode=quality_mode,
             )
             self._require_remote_creative_brain(request, policy, brain_result)
+            deliverable_plan = self._build_template_deliverable_plan(
+                normalized_intent,
+                policy,
+                brain_result,
+                specialized_plan,
+            )
             return CapabilityPreparationResult(
                 brain_result=brain_result,
                 combined_capability_run=capability_run,
                 activation_mode=mode,
+                normalized_job_intent=normalized_intent,
+                template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
             )
 
@@ -283,12 +295,20 @@ class ScenarioRuntime:
                 catalog.catalog_version,
                 mode,
             )
+            deliverable_plan = self._build_template_deliverable_plan(
+                normalized_intent,
+                policy,
+                brain_result,
+                specialized_plan,
+            )
             return CapabilityPreparationResult(
                 pre_activation_run=pre_activation_run,
                 brain_result=brain_result,
                 activation_plan=plan,
                 combined_capability_run=legacy_run,
                 activation_mode=mode,
+                normalized_job_intent=normalized_intent,
+                template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
             )
 
@@ -311,9 +331,20 @@ class ScenarioRuntime:
             catalog.catalog_version,
             mode,
         )
+        deliverable_plan = self._build_template_deliverable_plan(
+            normalized_intent,
+            policy,
+            brain_result,
+            specialized_plan,
+        )
         active_run = self._run_active_capabilities(request, resolution, plan, pre_activation_run)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
-        envelope = self._build_capability_execution_envelope(plan, combined)
+        envelope = self._build_capability_execution_envelope(
+            plan,
+            combined,
+            normalized_intent,
+            deliverable_plan,
+        )
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
             brain_result=brain_result,
@@ -321,6 +352,8 @@ class ScenarioRuntime:
             active_capability_run=active_run,
             combined_capability_run=combined,
             capability_execution_envelope=envelope,
+            normalized_job_intent=normalized_intent,
+            template_deliverable_plan=deliverable_plan,
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
         )
@@ -348,6 +381,10 @@ class ScenarioRuntime:
             raise CapabilityActivationError("remote_creative_brain_output_count_mismatch")
 
     def _requested_image_count_for_brain(self, request: ScenarioRuntimeRequest) -> int:
+        frozen_intent = request.metadata.get("normalized_v3_job_intent")
+        if isinstance(frozen_intent, dict):
+            normalized = NormalizedV3JobIntent.model_validate(frozen_intent)
+            return normalized.effective_image_count
         parameters = request.scenario_selection.parameters if request.scenario_selection else {}
         raw = (
             request.metadata.get("requested_image_count")
@@ -355,9 +392,172 @@ class ScenarioRuntime:
             or 2
         )
         try:
-            return max(1, min(4, int(raw)))
+            return max(1, int(raw))
         except (TypeError, ValueError):
             return 2
+
+    def _normalize_v3_job_intent(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution: ScenarioPackResolution,
+    ) -> NormalizedV3JobIntent:
+        """Freeze count, canvas, text policy, and provenance once at runtime entry.
+
+        A declared platform or provider cap is a contract, never a reason to
+        silently change a user's requested count.  The caller is blocked when
+        it asks beyond a declared cap; an undeclared cap remains unassumed.
+        """
+
+        metadata = dict(request.metadata or {})
+        parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
+        raw_count = metadata.get("requested_image_count", parameters.get("requested_image_count", 2))
+        try:
+            requested_count = max(1, int(raw_count))
+        except (TypeError, ValueError):
+            raise CapabilityActivationError("requested_image_count_invalid") from None
+        declared_limit, limit_source = self._declared_image_count_limit(metadata, parameters)
+        if declared_limit is not None and requested_count > declared_limit:
+            raise CapabilityActivationError("requested_image_count_not_supported_by_declared_contract")
+        requested_size = str(
+            metadata.get("requested_image_size")
+            or parameters.get("requested_image_size")
+            or ""
+        ).strip() or None
+        explicit_text = any(
+            value not in (None, "", [], {})
+            for value in (
+                metadata.get("provider_native_text_requirements"),
+                metadata.get("approved_literal_copy"),
+                parameters.get("provider_native_text_requirements"),
+                parameters.get("approved_literal_copy"),
+            )
+        )
+        template_id = self._template_id(request, resolution)
+        normalized = NormalizedV3JobIntent(
+            intent_id=stable_id(
+                "normalized_v3_job_intent",
+                metadata.get("job_id"),
+                template_id,
+                resolution.manifest.scenario_id,
+                request.user_input,
+                requested_count,
+                requested_size,
+                declared_limit,
+                explicit_text,
+            ),
+            template_id=template_id,
+            scenario_id=resolution.manifest.scenario_id,
+            protected_user_intent=request.user_input,
+            requested_image_count=requested_count,
+            effective_image_count=requested_count,
+            declared_image_count_limit=declared_limit,
+            count_limit_source=limit_source,
+            requested_image_size=requested_size,
+            effective_image_size=requested_size,
+            text_policy="provider_native_explicit_text" if explicit_text else "provider_native_no_forced_text",
+            provenance=[
+                {
+                    "source": "ScenarioRuntime._normalize_v3_job_intent",
+                    "requested_image_count": requested_count,
+                    "declared_image_count_limit": declared_limit,
+                    "count_limit_source": limit_source,
+                }
+            ],
+        )
+        metadata.update(
+            {
+                "requested_image_count": normalized.effective_image_count,
+                "normalized_v3_job_intent": normalized.model_dump(mode="json"),
+                "normalized_v3_job_intent_id": normalized.intent_id,
+            }
+        )
+        if normalized.effective_image_size:
+            metadata["requested_image_size"] = normalized.effective_image_size
+        request.metadata = metadata
+        return normalized
+
+    def _declared_image_count_limit(
+        self,
+        metadata: dict[str, Any],
+        parameters: dict[str, Any],
+    ) -> tuple[int | None, str]:
+        sources = (
+            ("provider_max_requested_images", metadata.get("provider_max_requested_images")),
+            ("platform_max_requested_images", metadata.get("platform_max_requested_images")),
+            ("max_requested_images", metadata.get("max_requested_images")),
+            ("provider_max_requested_images", parameters.get("provider_max_requested_images")),
+            ("platform_max_requested_images", parameters.get("platform_max_requested_images")),
+            ("max_requested_images", parameters.get("max_requested_images")),
+        )
+        for source, value in sources:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed >= 1:
+                return parsed, source
+        return None, "undeclared"
+
+    def _build_template_deliverable_plan(
+        self,
+        normalized_intent: NormalizedV3JobIntent,
+        policy: TemplateCapabilityPolicy,
+        brain_result: BrainRunResult,
+        specialized_plan: SpecializedScenarioPlanningResult | None,
+    ) -> TemplateDeliverablePlan:
+        directions = [str(item).strip() for item in brain_result.image_set_plan.shot_plan if str(item).strip()]
+        expected = normalized_intent.effective_image_count
+        if brain_result.image_set_plan.image_count != expected or len(directions) != expected:
+            raise CapabilityActivationError("template_deliverable_plan_output_count_mismatch")
+        role_recipes = (
+            specialized_plan.execution_plan.get("role_recipes", [])
+            if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
+            else []
+        )
+        creative_owner = str(policy.metadata.get("creative_direction_owner") or "central_brain")
+        deliverables: list[TemplateDeliverable] = []
+        for index, direction in enumerate(directions, 1):
+            recipe = role_recipes[index - 1] if index <= len(role_recipes) and isinstance(role_recipes[index - 1], dict) else {}
+            deliverables.append(
+                TemplateDeliverable(
+                    deliverable_id=stable_id("template_deliverable", normalized_intent.intent_id, index, direction),
+                    output_index=index,
+                    image_intent=direction,
+                    source=creative_owner,
+                    factual_acceptance=(
+                        ["product_truth", "platform_factual_constraints"]
+                        if normalized_intent.scenario_id == "ecommerce"
+                        else []
+                    ),
+                    metadata=(
+                        {"specialized_role_key": recipe.get("role_key")}
+                        if recipe.get("role_key")
+                        else {}
+                    ),
+                )
+            )
+        return TemplateDeliverablePlan(
+            plan_id=stable_id(
+                "template_deliverable_plan",
+                normalized_intent.intent_id,
+                policy.deliverable_role_owner,
+                directions,
+            ),
+            template_id=normalized_intent.template_id,
+            scenario_id=normalized_intent.scenario_id,
+            owner=policy.deliverable_role_owner,
+            creative_direction_owner=creative_owner,
+            requested_image_count=normalized_intent.requested_image_count,
+            effective_image_count=expected,
+            deliverables=deliverables,
+            provenance=[
+                {
+                    "source": "ScenarioRuntime._build_template_deliverable_plan",
+                    "creative_direction_owner": creative_owner,
+                    "static_recipe_present": False,
+                }
+            ],
+        )
 
     def _prepare_specialized_scenario_plan(
         self,
@@ -567,6 +767,8 @@ class ScenarioRuntime:
         self,
         plan: CapabilityActivationPlan,
         capability_run: CapabilityRunResult | None,
+        normalized_intent: NormalizedV3JobIntent,
+        template_deliverable_plan: TemplateDeliverablePlan,
     ) -> CapabilityExecutionEnvelope:
         """Freeze the active executor output before provider/review/retry use it.
 
@@ -607,6 +809,8 @@ class ScenarioRuntime:
             scenario_id=plan.scenario_id,
             activation_mode=plan.activation_mode,
             activation_plan=plan,
+            normalized_job_intent=normalized_intent,
+            template_deliverable_plan=template_deliverable_plan,
             active_capability_ids=list(plan.dependency_order),
             composed_visual_contribution=composed,
             provider_projection=projection,
@@ -824,6 +1028,12 @@ class ScenarioRuntime:
             "capability_catalog_version": plan.catalog_version,
             "capability_activation_mode": preparation.activation_mode,
         }
+        if preparation.normalized_job_intent is not None:
+            metadata["normalized_v3_job_intent"] = preparation.normalized_job_intent.model_dump(mode="json")
+            metadata["normalized_v3_job_intent_id"] = preparation.normalized_job_intent.intent_id
+        if preparation.template_deliverable_plan is not None:
+            metadata["template_deliverable_plan"] = preparation.template_deliverable_plan.model_dump(mode="json")
+            metadata["template_deliverable_plan_id"] = preparation.template_deliverable_plan.plan_id
         if preparation.capability_execution_envelope is not None:
             envelope = preparation.capability_execution_envelope.safe_metadata()
             metadata.update(

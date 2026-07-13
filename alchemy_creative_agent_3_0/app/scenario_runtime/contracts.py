@@ -10,7 +10,13 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..public_api_guardrails import reject_low_level_controls
 from ..scenario_packs import ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import CapabilityRunResult, UploadedAssetInfo
-from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityContribution, CapabilityExecutionEnvelope
+from ..shared_capabilities.activation import (
+    CapabilityActivationPlan,
+    CapabilityContribution,
+    CapabilityExecutionEnvelope,
+    NormalizedV3JobIntent,
+    TemplateDeliverablePlan,
+)
 from ..llm_brain import BrainRunResult
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
@@ -85,7 +91,7 @@ class SpecializedScenarioPlanningResult(V3BaseModel):
     planner_id: str
     capability_contribution_draft: CapabilityContribution
     required_capability_ids: list[str] = Field(default_factory=list)
-    requested_image_count: int | None = Field(default=None, ge=1, le=4)
+    requested_image_count: int | None = Field(default=None, ge=1)
     # An active specialized Scenario Pack may freeze an execution-neutral
     # per-output role contract.  Central Brain never receives this raw
     # payload; the shared execution runtime materializes it only after the
@@ -114,6 +120,8 @@ class CapabilityPreparationResult(V3BaseModel):
     brain_result: BrainRunResult
     activation_plan: CapabilityActivationPlan | None = None
     capability_execution_envelope: CapabilityExecutionEnvelope | None = None
+    normalized_job_intent: NormalizedV3JobIntent | None = None
+    template_deliverable_plan: TemplateDeliverablePlan | None = None
     active_capability_run: CapabilityRunResult | None = None
     combined_capability_run: CapabilityRunResult | None = None
     activation_mode: str = "legacy"

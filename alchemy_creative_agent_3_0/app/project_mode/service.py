@@ -4233,7 +4233,7 @@ class V3ProjectModeService:
         if template_id != GENERAL_TEMPLATE_ID:
             return {}
         requested_count = _bounded_requested_image_count(metadata.get("requested_image_count")) or 2
-        requested_count = max(1, min(4, requested_count))
+        requested_count = max(1, requested_count)
         mode = str(metadata.get("effective_variation_mode") or metadata.get("variation_mode") or "delivery_suite")
         if mode not in {"selection_candidates", "delivery_suite", "creative_exploration", "format_layout_adaptation"}:
             mode = "delivery_suite"
@@ -5153,7 +5153,7 @@ def _bounded_requested_image_count(value: object) -> int | None:
     if value in (None, ""):
         return None
     try:
-        return max(1, min(4, int(value)))
+        return max(1, int(value))
     except (TypeError, ValueError):
         return None
 

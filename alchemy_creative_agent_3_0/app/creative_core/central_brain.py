@@ -26,7 +26,7 @@ from ..vertical_agents import VerticalAgentRegistry
 
 def _bounded_requested_image_count(value: object) -> int:
     try:
-        return max(1, min(4, int(value or 2)))
+        return max(1, int(value or 2))
     except (TypeError, ValueError):
         return 2
 

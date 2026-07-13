@@ -264,6 +264,8 @@ class CapabilityExecutionEnvelope(V3BaseModel):
     scenario_id: str
     activation_mode: str
     activation_plan: CapabilityActivationPlan
+    normalized_job_intent: "NormalizedV3JobIntent"
+    template_deliverable_plan: "TemplateDeliverablePlan"
     active_capability_ids: list[str] = Field(default_factory=list)
     composed_visual_contribution: "ComposedVisualContribution"
     provider_projection: dict[str, Any] = Field(default_factory=dict)
@@ -287,10 +289,77 @@ class CapabilityExecutionEnvelope(V3BaseModel):
             raise ValueError("execution envelope contribution does not match activation plan")
         if self.composed_visual_contribution.active_capability_ids != self.active_capability_ids:
             raise ValueError("execution envelope contribution active capabilities do not match activation plan")
+        if self.template_id != self.normalized_job_intent.template_id:
+            raise ValueError("execution envelope template does not match normalized intent")
+        if self.scenario_id != self.normalized_job_intent.scenario_id:
+            raise ValueError("execution envelope scenario does not match normalized intent")
+        if self.template_id != self.template_deliverable_plan.template_id:
+            raise ValueError("execution envelope template does not match deliverable plan")
+        if self.scenario_id != self.template_deliverable_plan.scenario_id:
+            raise ValueError("execution envelope scenario does not match deliverable plan")
+        if self.normalized_job_intent.effective_image_count != self.template_deliverable_plan.effective_image_count:
+            raise ValueError("execution envelope deliverable count does not match normalized intent")
         return self
 
     def safe_metadata(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+class NormalizedV3JobIntent(V3BaseModel):
+    """The one canonical image request shape shared by every V3 entry path."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    intent_id: str
+    template_id: str
+    scenario_id: str
+    protected_user_intent: str
+    requested_image_count: int = Field(ge=1)
+    effective_image_count: int = Field(ge=1)
+    declared_image_count_limit: int | None = Field(default=None, ge=1)
+    count_limit_source: str = "unspecified"
+    requested_image_size: str | None = None
+    effective_image_size: str | None = None
+    text_policy: str = "provider_native_only"
+    provenance: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TemplateDeliverable(V3BaseModel):
+    """Opaque output binding, never a static camera/scene recipe."""
+
+    deliverable_id: str
+    output_index: int = Field(ge=1)
+    image_intent: str
+    source: str
+    factual_acceptance: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TemplateDeliverablePlan(V3BaseModel):
+    """Template-owned binding of requested outputs to Brain-approved intents."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan_id: str
+    template_id: str
+    scenario_id: str
+    owner: str
+    creative_direction_owner: str
+    requested_image_count: int = Field(ge=1)
+    effective_image_count: int = Field(ge=1)
+    deliverables: list[TemplateDeliverable] = Field(default_factory=list)
+    provenance: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def output_binding_matches_count(self) -> "TemplateDeliverablePlan":
+        if self.requested_image_count != self.effective_image_count:
+            raise ValueError("template deliverable plan may not silently truncate requested outputs")
+        if len(self.deliverables) != self.effective_image_count:
+            raise ValueError("template deliverable plan must bind every effective output")
+        expected = list(range(1, self.effective_image_count + 1))
+        if [item.output_index for item in self.deliverables] != expected:
+            raise ValueError("template deliverable outputs must be ordered and contiguous")
+        return self
 
 
 class CapabilityContribution(V3BaseModel):

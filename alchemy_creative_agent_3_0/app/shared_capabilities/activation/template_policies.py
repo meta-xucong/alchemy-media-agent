@@ -52,9 +52,12 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
             TemplateCapabilityBinding(capability_id="scene_continuity"),
             TemplateCapabilityBinding(capability_id="typography_layout"),
         ],
-        deliverable_role_owner="remote_v3_llm_brain",
+        # The template owns the auditable output binding.  The remote Brain
+        # remains the sole owner of each natural-language image intention.
+        deliverable_role_owner="ecommerce_template",
         review_threshold_profile="commercial_strict",
         requires_remote_creative_brain=True,
+        metadata={"creative_direction_owner": "remote_v3_llm_brain"},
     )
 
 

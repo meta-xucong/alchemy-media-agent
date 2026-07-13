@@ -3308,7 +3308,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or 2
         )
         try:
-            return max(1, min(4, int(raw)))
+            return max(1, int(raw))
         except (TypeError, ValueError):
             return 2
 

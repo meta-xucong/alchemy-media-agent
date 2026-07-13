@@ -166,7 +166,7 @@ def test_doc91_ecommerce_kidswear_model_activates_human_realism_for_product_subj
     assert plugin["strictness"] == "commercial_strict"
     assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
     assert plugin["disabled_by_style"] is False
-    assert "ecommerce_human_model_detected" in plugin["reason_codes"]
+    assert "product_on_person_detected" in plugin["reason_codes"]
     assert "age-inappropriate facial morphology" in guidance.negative_prompt_fragments
 
 

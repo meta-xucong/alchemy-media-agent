@@ -36,7 +36,7 @@ class BrainProjectMemoryDigest(V3BaseModel):
 
 class BrainImageSetPlan(V3BaseModel):
     set_goal: str
-    image_count: int = Field(default=2, ge=1, le=4)
+    image_count: int = Field(default=2, ge=1)
     size: str | None = None
     shot_plan: list[str] = Field(default_factory=list)
     composition_rules: list[str] = Field(default_factory=list)
@@ -90,7 +90,7 @@ class BrainRunRequest(V3BaseModel):
     reference_assets: list[dict[str, Any]] = Field(default_factory=list)
     selected_output_assets: list[dict[str, Any]] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
-    requested_image_count: int = Field(default=2, ge=1, le=4)
+    requested_image_count: int = Field(default=2, ge=1)
     requested_image_size: str | None = None
     reasoning_depth: str = "balanced"
     metadata: dict[str, Any] = Field(default_factory=dict)
