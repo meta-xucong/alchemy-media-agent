@@ -168,6 +168,24 @@ def test_owner_local_retry_keeps_frozen_brain_evidence_map_and_product_truth(mon
     assert any("output 1:" in item for item in patch["prompt_additions"])
 
 
+def test_multi_output_pixel_review_binds_each_asset_to_its_frozen_brain_evidence(monkeypatch) -> None:
+    result = _ecommerce_result(monkeypatch)
+    service = V3ProductApiService()
+
+    contracts = service._frozen_output_review_contracts_by_asset_id(result, result.metadata)
+    deliverables = {
+        int(item["output_index"]): item["deliverable_id"]
+        for item in result.metadata["resolved_constraint_ledger"]["provider_projection"]["deliverables"]
+    }
+
+    assert len(contracts) == len(result.series_plan.assets) == 4
+    for asset in result.series_plan.assets:
+        assert contracts[asset.asset_id] == {
+            "source": "resolved_constraint_ledger",
+            "deliverable_id": deliverables[asset.priority],
+        }
+
+
 def test_generic_human_realism_issues_route_back_to_their_active_owner(monkeypatch) -> None:
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")

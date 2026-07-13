@@ -1261,6 +1261,10 @@ class V3ProductApiService:
         ):
             review_metadata["enable_real_vision_inspection"] = True
         resolutions = self.output_resolver.resolve_result(generation_result, project_id=project_id)
+        frozen_output_review_contracts = self._frozen_output_review_contracts_by_asset_id(
+            generation_result,
+            review_metadata,
+        )
         inspections = [
             self.vision_inspector.inspect(
                 resolution,
@@ -1268,7 +1272,7 @@ class V3ProductApiService:
                     **review_metadata,
                     "frozen_output_review_contract": self._frozen_output_review_contract(
                         resolution,
-                        review_metadata,
+                        frozen_output_review_contracts,
                     ),
                 },
             )
@@ -1349,15 +1353,17 @@ class V3ProductApiService:
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
 
     @staticmethod
-    def _frozen_output_review_contract(
-        resolution: Any,
+    def _frozen_output_review_contracts_by_asset_id(
+        generation_result: PlanningResult,
         review_metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Identify the current output by an internal ledger deliverable id.
+    ) -> dict[str, dict[str, str]]:
+        """Bind each generated asset to its frozen deliverable before review.
 
-        The review provider receives no mutable role recipe as authority.  It
-        receives only an identifier which the visual-review layer resolves back
-        against the frozen ledger before exposing the Brain evidence contract.
+        E-Commerce deliberately emits no shared ``mode_role_recipe``.  The
+        immutable mapping is instead the series asset priority selected before
+        generation and the matching frozen ledger ``output_index``.  Candidate
+        and provider response metadata are never used to decide which Brain
+        evidence contract a pixel reviewer receives.
         """
 
         envelope = review_metadata.get("capability_execution_envelope")
@@ -1367,28 +1373,43 @@ class V3ProductApiService:
         if not isinstance(deliverables, list):
             return {}
 
-        resolution_metadata = getattr(resolution, "metadata", {})
-        resolution_metadata = dict(resolution_metadata) if isinstance(resolution_metadata, dict) else {}
-        candidate_metadata = resolution_metadata.get("candidate_metadata")
-        candidate_metadata = dict(candidate_metadata) if isinstance(candidate_metadata, dict) else {}
-        asset_metadata = resolution_metadata.get("asset_metadata")
-        asset_metadata = dict(asset_metadata) if isinstance(asset_metadata, dict) else {}
-        recipe = candidate_metadata.get("mode_role_recipe") or asset_metadata.get("mode_role_recipe")
-        recipe = dict(recipe) if isinstance(recipe, dict) else {}
-        deliverable_id = str(recipe.get("role_key") or "").strip()
-        if not deliverable_id and len(deliverables) == 1:
-            deliverable_id = str(deliverables[0].get("deliverable_id") or "").strip()
-        if not deliverable_id:
-            return {}
-        if not any(
-            isinstance(item, dict) and str(item.get("deliverable_id") or "") == deliverable_id
-            for item in deliverables
-        ):
-            return {}
-        return {
-            "source": "resolved_constraint_ledger",
-            "deliverable_id": deliverable_id,
-        }
+        deliverable_by_index: dict[int, str] = {}
+        for item in deliverables:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("output_index"))
+            except (TypeError, ValueError):
+                continue
+            deliverable_id = str(item.get("deliverable_id") or "").strip()
+            if index > 0 and deliverable_id and index not in deliverable_by_index:
+                deliverable_by_index[index] = deliverable_id
+
+        contracts: dict[str, dict[str, str]] = {}
+        for asset in generation_result.series_plan.assets:
+            asset_id = str(asset.asset_id or "").strip()
+            try:
+                output_index = int(asset.priority)
+            except (TypeError, ValueError):
+                continue
+            deliverable_id = deliverable_by_index.get(output_index)
+            if asset_id and deliverable_id:
+                contracts[asset_id] = {
+                    "source": "resolved_constraint_ledger",
+                    "deliverable_id": deliverable_id,
+                }
+        return contracts
+
+    @staticmethod
+    def _frozen_output_review_contract(
+        resolution: Any,
+        contracts_by_asset_id: dict[str, dict[str, str]],
+    ) -> dict[str, str]:
+        """Return the pre-bound frozen contract for exactly this output."""
+
+        asset_id = str(getattr(resolution, "asset_id", "") or "").strip()
+        contract = contracts_by_asset_id.get(asset_id)
+        return dict(contract) if isinstance(contract, dict) else {}
 
     def _clear_superseded_pre_generation_review_warning(
         self,

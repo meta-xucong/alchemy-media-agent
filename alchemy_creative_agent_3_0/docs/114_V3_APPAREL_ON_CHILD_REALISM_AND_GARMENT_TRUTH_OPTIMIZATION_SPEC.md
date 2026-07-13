@@ -149,6 +149,12 @@ facts with strengths, generic Human Realism variables, user-owned art direction,
 text policy, resolved format, and review IDs. No independent child, beauty,
 listing-role, or studio recipe may be appended.
 
+For a multi-output E-Commerce request, the per-output review ID is frozen
+before generation by the internal `asset_id -> requested output index ->
+ledger deliverable_id` mapping. Pixel review must resolve that ID back against
+the ledger; it must not infer a Brain evidence assignment from candidate,
+provider, or shared `mode_role_recipe` metadata.
+
 Hard garment truth, explicit-age direction, visible anatomy, and role-difference
 contracts require real/hybrid pixel review. Ownership is local and bounded:
 
