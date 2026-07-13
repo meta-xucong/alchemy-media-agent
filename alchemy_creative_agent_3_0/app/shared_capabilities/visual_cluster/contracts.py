@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -466,6 +466,7 @@ class VisualInspectionReport(V3BaseModel):
     output_id: str | None = None
     mode: str = "metadata_only"
     status: str = "manual_review"
+    verification_state: Literal["verified", "locally_checked", "unverified", "unavailable"] = "unverified"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     score_card: dict[str, float] = Field(default_factory=dict)
     detected_issues: list[dict[str, Any]] = Field(default_factory=list)

@@ -266,6 +266,7 @@ class CapabilityExecutionEnvelope(V3BaseModel):
     activation_plan: CapabilityActivationPlan
     normalized_job_intent: "NormalizedV3JobIntent"
     template_deliverable_plan: "TemplateDeliverablePlan"
+    resolved_constraint_ledger: "ResolvedConstraintLedger"
     active_capability_ids: list[str] = Field(default_factory=list)
     composed_visual_contribution: "ComposedVisualContribution"
     provider_projection: dict[str, Any] = Field(default_factory=dict)
@@ -299,6 +300,10 @@ class CapabilityExecutionEnvelope(V3BaseModel):
             raise ValueError("execution envelope scenario does not match deliverable plan")
         if self.normalized_job_intent.effective_image_count != self.template_deliverable_plan.effective_image_count:
             raise ValueError("execution envelope deliverable count does not match normalized intent")
+        if self.resolved_constraint_ledger.template_id != self.template_id:
+            raise ValueError("execution envelope ledger template does not match activation plan")
+        if self.resolved_constraint_ledger.scenario_id != self.scenario_id:
+            raise ValueError("execution envelope ledger scenario does not match activation plan")
         return self
 
     def safe_metadata(self) -> dict[str, Any]:
@@ -359,6 +364,47 @@ class TemplateDeliverablePlan(V3BaseModel):
         expected = list(range(1, self.effective_image_count + 1))
         if [item.output_index for item in self.deliverables] != expected:
             raise ValueError("template deliverable outputs must be ordered and contiguous")
+        return self
+
+
+class ResolvedConstraintEntry(V3BaseModel):
+    """One resolved item in the provider/review constraint ledger."""
+
+    constraint_id: str
+    channel: str
+    owner: str
+    strength: str
+    precedence: int
+    requested_value: Any = None
+    resolved_value: Any = None
+    resolution: str
+    provenance: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResolvedConstraintLedger(V3BaseModel):
+    """The only enforced source for materialized provider/review constraints."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ledger_id: str
+    intent_id: str
+    template_id: str
+    scenario_id: str
+    entries: list[ResolvedConstraintEntry] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    provider_projection: dict[str, Any] = Field(default_factory=dict)
+    audit_summary: dict[str, Any] = Field(default_factory=dict)
+    review_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    retry_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    hard_semantic_contract: bool = False
+    provenance: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def entries_are_unique_and_resolved(self) -> "ResolvedConstraintLedger":
+        ids = [entry.constraint_id for entry in self.entries]
+        _ensure_unique(ids, "constraint_id")
+        if any(entry.resolution not in {"accepted", "overridden", "rejected", "translated", "manual_review"} for entry in self.entries):
+            raise ValueError("constraint ledger contains an unsupported resolution")
         return self
 
 

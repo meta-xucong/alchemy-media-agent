@@ -87,7 +87,39 @@ class GenerationProvider:
         if self._activation_enforced(request):
             cluster = self._visual_cluster(request)
             value = cluster.get("mode_role_recipe") if isinstance(cluster, dict) else None
-            return dict(value) if isinstance(value, dict) else {}
+            if isinstance(value, dict):
+                return dict(value)
+            # General's lightweight multi-output mode keeps a template-owned,
+            # Brain-bound output binding.  Materialize only that opaque
+            # binding here; do not reopen old request metadata or introduce a
+            # vertical recipe.  E-Commerce intentionally has no generic role
+            # recipe because its provider intent is already its deliverable.
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            deliverable_plan = projection.get("template_deliverable_plan") if isinstance(projection, dict) else {}
+            if not isinstance(deliverable_plan, dict) or deliverable_plan.get("template_id") != "general_template":
+                return {}
+            deliverables = deliverable_plan.get("deliverables")
+            if not isinstance(deliverables, list):
+                return {}
+            priority = getattr(request.asset_spec, "priority", None) if request.asset_spec is not None else None
+            try:
+                index = max(1, int(priority or 1))
+            except (TypeError, ValueError):
+                index = 1
+            item = deliverables[index - 1] if index <= len(deliverables) else None
+            if not isinstance(item, dict):
+                return {}
+            direction = str(item.get("image_intent") or "").strip()
+            if not direction:
+                return {}
+            return {
+                "role_key": str(item.get("deliverable_id") or f"general_output_{index}"),
+                "label": f"Output {index}",
+                "purpose": direction,
+                "prompt_pressure": direction,
+                "metadata": {"source": "template_deliverable_plan", "static_recipe_present": False},
+            }
         for source in (request.metadata, request.generation_plan.metadata, request.prompt_compilation.provider_notes):
             value = source.get("mode_role_recipe") if isinstance(source, dict) else None
             if isinstance(value, dict):
@@ -128,8 +160,8 @@ class GenerationProvider:
 
     def _visual_cluster(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
-            envelope = self._execution_envelope(request)
-            projection = envelope.get("provider_projection") if isinstance(envelope, dict) else None
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
             cluster = projection.get("visual_cluster") if isinstance(projection, dict) else None
             return dict(cluster) if isinstance(cluster, dict) else {}
         cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata, dict) else None
@@ -184,8 +216,9 @@ class GenerationProvider:
 
     def _composed_visual_contribution(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
-            envelope = self._execution_envelope(request)
-            value = envelope.get("composed_visual_contribution") if isinstance(envelope, dict) else None
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+            value = projection.get("composed_visual_contribution") if isinstance(projection, dict) else None
             return dict(value) if isinstance(value, dict) else {}
         cluster = self._visual_cluster(request)
         value = cluster.get("composed_visual_contribution") if isinstance(cluster, dict) else None
@@ -281,6 +314,13 @@ class GenerationProvider:
             envelope = source.get("capability_execution_envelope")
             if isinstance(envelope, dict) and isinstance(envelope.get("activation_plan"), dict):
                 return dict(envelope)
+        return {}
+
+    def _resolved_constraint_ledger(self, request: GenerationRequest) -> dict[str, Any]:
+        envelope = self._execution_envelope(request)
+        ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+        if isinstance(ledger, dict) and isinstance(ledger.get("provider_projection"), dict):
+            return dict(ledger)
         return {}
 
     def _legacy_enforced_plan_marker(self, request: GenerationRequest) -> bool:
@@ -2250,7 +2290,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
 
     def _provider_user_direction(self, request: GenerationRequest) -> str:
-        raw = str(request.metadata.get("normalized_input") or request.metadata.get("user_input") or "").strip()
+        ledger = self._resolved_constraint_ledger(request) if self._activation_enforced(request) else {}
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+        raw = str(
+            projection.get("protected_user_intent")
+            if isinstance(projection, dict) and projection.get("protected_user_intent")
+            else request.metadata.get("normalized_input")
+            or request.metadata.get("user_input")
+            or ""
+        ).strip()
         if not raw:
             return ""
         positive, _explicit_negative = split_positive_and_negative_prompt(raw)

@@ -50,15 +50,15 @@ def test_doc67_ecommerce_outputs_are_owned_by_remote_brain_not_static_pack() -> 
     assert all(item.metadata["asset_metadata"]["ecommerce_llm_directed"] for item in created.asset_series)
 
     generated = service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {"requested_image_count": 3}})
-    visual_cluster = generated.metadata.get("visual_cluster") or generated.metadata["shared_capabilities"]["visual_cluster"]
-    role_plan = visual_cluster["role_specific_generation_plan"]
-    candidate_role_keys = [candidate.metadata["mode_role_recipe"]["role_key"] for candidate in generated.candidates]
     record = service.job_store.get(created.job_id)
+    deliverable_plan = record.generation_result.metadata["template_deliverable_plan"]
     feature_prompt = record.generation_result.prompt_compilations[1].visual_prompt
 
-    assert role_plan["metadata"]["owner"] == "remote_v3_llm_brain"
-    assert [recipe["role_key"] for recipe in role_plan["role_recipes"]] == slots
-    assert candidate_role_keys == slots
+    assert deliverable_plan["owner"] == "ecommerce_template"
+    assert deliverable_plan["creative_direction_owner"] == "remote_v3_llm_brain"
+    assert len(deliverable_plan["deliverables"]) == len(slots) == len(generated.candidates)
+    assert all(item["source"] == "remote_v3_llm_brain" for item in deliverable_plan["deliverables"])
+    assert all(not candidate.metadata.get("mode_role_recipe") for candidate in generated.candidates)
     assert "Remote Brain test output 2" in feature_prompt
     assert "main_image" not in feature_prompt
 

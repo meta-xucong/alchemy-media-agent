@@ -256,6 +256,15 @@ class CentralCreativeBrain:
                 "llm_brain": self._llm_brain_metadata(context),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
+                # The Scenario Runtime freezes these five records before the
+                # Central Brain starts materializing assets.  Keep the full
+                # execution envelope with every provider request so enforced
+                # providers do not fall back to mutable cluster/metadata
+                # fields while rendering an individual asset.
+                "normalized_v3_job_intent": context.metadata.get("normalized_v3_job_intent"),
+                "template_deliverable_plan": context.metadata.get("template_deliverable_plan"),
+                "resolved_constraint_ledger": context.metadata.get("resolved_constraint_ledger"),
+                "capability_execution_envelope": context.metadata.get("capability_execution_envelope"),
                 "requested_image_count": _bounded_requested_image_count(context.metadata.get("requested_image_count")),
                 "requested_image_size": context.metadata.get("requested_image_size"),
                 "mode_execution_policy": mode_policy,
@@ -870,6 +879,10 @@ class CentralCreativeBrain:
                     "llm_brain": generation_plan.metadata.get("llm_brain", {}),
                     "requested_image_count": generation_plan.metadata.get("requested_image_count"),
                     "requested_image_size": generation_plan.metadata.get("requested_image_size"),
+                    "normalized_v3_job_intent": generation_plan.metadata.get("normalized_v3_job_intent"),
+                    "template_deliverable_plan": generation_plan.metadata.get("template_deliverable_plan"),
+                    "resolved_constraint_ledger": generation_plan.metadata.get("resolved_constraint_ledger"),
+                    "capability_execution_envelope": generation_plan.metadata.get("capability_execution_envelope"),
                     "mode_execution_policy": generation_plan.metadata.get("mode_execution_policy", {}),
                     "role_specific_generation_plan": generation_plan.metadata.get("role_specific_generation_plan", {}),
                     "mode_role_recipe": generation_plan.metadata.get("mode_role_recipe", {}),

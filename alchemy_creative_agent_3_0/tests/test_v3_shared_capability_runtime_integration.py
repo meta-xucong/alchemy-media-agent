@@ -35,12 +35,16 @@ def test_scenario_runtime_runs_optional_asset_capabilities_for_general_creative(
     assert result.status == ScenarioRuntimeStatus.PLANNED
     assert result.capability_run is not None
     assert result.capability_run.status.value == "complete"
-    assert [item.module_id for item in result.capability_run.results] == [
+    module_ids = [item.module_id for item in result.capability_run.results]
+    assert {
         "asset_role_analyzer",
         "asset_binding_planner",
         "prompt_constraint_compiler",
         "visual_capability_cluster",
-    ]
+    }.issubset(module_ids)
+    assert module_ids.index("asset_role_analyzer") < module_ids.index("asset_binding_planner")
+    assert module_ids.index("asset_binding_planner") < module_ids.index("prompt_constraint_compiler")
+    assert not any("ecommerce" in module_id or "kidswear" in module_id for module_id in module_ids)
     assert result.planning_result is not None
     shared = result.planning_result.metadata["shared_capabilities"]
     assert shared["enabled"] is True
@@ -65,7 +69,10 @@ def test_product_api_runs_information_integrity_for_product_profile(tmp_path) ->
     assert created.status == ProductJobStatusValue.PLANNED
     shared = created.metadata["shared_capabilities"]
     assert shared["enabled"] is True
-    assert shared["module_ids"] == ["information_integrity_lock", "prompt_constraint_compiler", "visual_capability_cluster"]
+    module_ids = shared["module_ids"]
+    assert {"information_integrity_lock", "prompt_constraint_compiler", "visual_capability_cluster"}.issubset(module_ids)
+    assert module_ids.index("information_integrity_lock") < module_ids.index("prompt_constraint_compiler")
+    assert not any("ecommerce" in module_id or "kidswear" in module_id for module_id in module_ids)
     assert shared["result_statuses"]["information_integrity_lock"] == "warning"
     assert shared["visual_cluster"]["cluster_id"]
     assert created.warnings

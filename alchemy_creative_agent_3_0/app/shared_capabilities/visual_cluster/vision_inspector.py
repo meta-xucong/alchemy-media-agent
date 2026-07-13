@@ -260,6 +260,7 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "low_confidence_review",
     "provider_error",
     "metadata_only_non_certifying",
+    "hard_semantic_contract_unverified",
     "feedback_or_similarity_not_verifiable",
 }
 
@@ -292,6 +293,48 @@ class VisionOutputInspector:
         if resolution.status != "ready":
             return self._manual_report(resolution, resolution.status, metadata)
         mode = self._inspection_mode(metadata)
+        review_contract = active_review_contract(metadata)
+        if review_contract["requires_pixel_review"] and mode == "local_image_heuristic":
+            # A local check cannot certify semantic fidelity, but it can still
+            # detect objective file-level failures such as provenance marks or
+            # unreadable pixels.  Keep those bounded retry signals intact.
+            local_report = self._local_report(resolution, metadata)
+            if local_report.status in {"fail_retryable", "fail_final"}:
+                return local_report
+            return self._manual_report(
+                resolution,
+                "hard_semantic_contract_unverified",
+                metadata,
+                mode=mode,
+                evidence_extra={
+                    "required_pixel_review": True,
+                    "review_contract": review_contract,
+                    "local_preflight": local_report.evidence,
+                    "not_verifiable": [
+                        "hard_identity_or_product_truth",
+                        "human_or_anatomy_fidelity",
+                        "explicit_text_policy",
+                        "multi_output_role_contract",
+                    ],
+                },
+            )
+        if review_contract["requires_pixel_review"] and mode not in {"vision_model", "hybrid"}:
+            return self._manual_report(
+                resolution,
+                "hard_semantic_contract_unverified",
+                metadata,
+                mode=mode,
+                evidence_extra={
+                    "required_pixel_review": True,
+                    "review_contract": review_contract,
+                    "not_verifiable": [
+                        "hard_identity_or_product_truth",
+                        "human_or_anatomy_fidelity",
+                        "explicit_text_policy",
+                        "multi_output_role_contract",
+                    ],
+                },
+            )
         if mode in {"vision_model", "hybrid"}:
             return self._vision_model_report(resolution, mode=mode, metadata=metadata)
         if mode == "metadata_only":
@@ -433,6 +476,7 @@ class VisionOutputInspector:
             output_id=resolution.output_id,
             mode=mode,
             status=status,
+            verification_state="verified",
             confidence=confidence,
             score_card=score_card,
             detected_issues=detected_issues,
@@ -593,6 +637,7 @@ class VisionOutputInspector:
                 output_id=resolution.output_id,
                 mode="local_image_heuristic",
                 status="fail_retryable",
+                verification_state="locally_checked",
                 confidence=0.9,
                 score_card=_score_card("fail_retryable"),
                 detected_issues=detected_issues,
@@ -627,6 +672,7 @@ class VisionOutputInspector:
             output_id=resolution.output_id,
             mode="local_image_heuristic",
             status="pass" if not warnings else "warning",
+            verification_state="locally_checked",
             confidence=0.72,
             score_card=score_card,
             detected_issues=[],
@@ -708,6 +754,7 @@ class VisionOutputInspector:
             output_id=resolution.output_id,
             mode="fake_for_tests",
             status=status,
+            verification_state="unverified",
             confidence=confidence,
             score_card=_score_card(status),
             detected_issues=detected_issues,
@@ -734,6 +781,11 @@ class VisionOutputInspector:
     ) -> VisualInspectionReport:
         issue_code = reason_code if reason_code in MANUAL_REVIEW_ISSUE_CODES else "file_missing"
         issue_codes = [issue_code]
+        verification_state = (
+            "unavailable"
+            if issue_code in {"vision_provider_unavailable", "provider_error", "file_missing", "file_unreadable"}
+            else "unverified"
+        )
         score_card = _score_card("manual_review")
         identity_metric, identity_fusion = self._identity_metric_fusion(
             resolution,
@@ -760,6 +812,7 @@ class VisionOutputInspector:
             output_id=resolution.output_id,
             mode=mode,
             status="manual_review",
+            verification_state=verification_state,
             confidence=0.35,
             score_card=score_card,
             detected_issues=detected_issues,
@@ -946,6 +999,7 @@ def _issue_message(code: str) -> str:
         "file_unreadable": "Generated image file could not be read.",
         "vision_provider_unavailable": "Vision inspection provider is unavailable.",
         "metadata_only_non_certifying": "Metadata-only review cannot certify visual quality.",
+        "hard_semantic_contract_unverified": "This result needs real pixel review before its hard visual requirements can be certified.",
         "feedback_direction_not_resolved": "The image may still follow a direction you marked as unwanted.",
         "near_duplicate_risk": "The result may be too similar to the selected reference image.",
         "feedback_or_similarity_not_verifiable": "The review could not verify feedback compliance or image distinction.",

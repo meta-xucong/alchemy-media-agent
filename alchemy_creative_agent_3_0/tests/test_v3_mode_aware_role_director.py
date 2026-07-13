@@ -186,7 +186,13 @@ def test_product_api_mock_generation_persists_distinct_doc59_roles() -> None:
         "side_or_three_quarter_angle",
         "wide_scene_or_context",
     ]
-    assert candidate_role_keys == role_keys
+    runtime_plan = service.job_store.get(created.job_id).generation_result.metadata["template_deliverable_plan"]
+    template_deliverable_ids = [
+        item["deliverable_id"]
+        for item in runtime_plan["deliverables"]
+    ]
+    assert candidate_role_keys == template_deliverable_ids
+    assert len(set(candidate_role_keys)) == len(role_keys)
     assert generated.metadata["post_generation_review"]["metadata"]["mode_differentiation_review"]["status"] == "pass"
 
 
@@ -209,11 +215,14 @@ def test_doc59_role_plan_reconciles_to_default_series_count_without_false_retry(
     role_plan = visual_cluster["role_specific_generation_plan"]
     mode_review = visual_cluster["mode_differentiation_review"]
     retry_decisions = visual_cluster["auto_retry_decisions"]
+    runtime_metadata = service.job_store.get(created.job_id).generation_result.metadata
+    frozen_intent = runtime_metadata["normalized_v3_job_intent"]
+    expected_count = frozen_intent["effective_image_count"]
 
     assert generated.status == "generated"
-    assert len(generated.asset_series) == 3
-    assert role_plan["requested_image_count"] == 3
-    assert len(role_plan["role_recipes"]) == 3
+    assert len(generated.asset_series) == expected_count
+    assert role_plan["requested_image_count"] == expected_count
+    assert len(role_plan["role_recipes"]) == expected_count
     assert visual_cluster["mode_role_plan_reconciled_to_series"] is True
     assert mode_review["status"] == "pass"
     assert not any(

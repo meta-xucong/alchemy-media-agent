@@ -2044,12 +2044,30 @@ class V3ProductApiService:
         for source in (getattr(result, "metadata", {}), creative_job_metadata):
             if not isinstance(source, dict):
                 continue
+            envelope = source.get("capability_execution_envelope")
+            if isinstance(envelope, dict) and isinstance(envelope.get("activation_plan"), dict):
+                return dict(envelope["activation_plan"])
             plan = source.get("capability_activation_plan")
             if isinstance(plan, dict):
                 return dict(plan)
         cluster = self._visual_cluster_metadata_from_result(result)
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
+
+    def _constraint_ledger_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        creative_job = getattr(result, "creative_job", None)
+        creative_job_metadata = getattr(creative_job, "metadata", {})
+        for source in (getattr(result, "metadata", {}), creative_job_metadata):
+            if not isinstance(source, dict):
+                continue
+            envelope = source.get("capability_execution_envelope")
+            ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+            if isinstance(ledger, dict):
+                return dict(ledger)
+            ledger = source.get("resolved_constraint_ledger")
+            if isinstance(ledger, dict):
+                return dict(ledger)
+        return {}
 
     def _record_has_active_capability(self, record: ProductJobRecord, capability_id: str) -> bool:
         plan = dict(record.request.metadata or {}).get("capability_activation_plan")
@@ -2068,6 +2086,11 @@ class V3ProductApiService:
         plan = self._activation_plan_from_result(result)
         if str(plan.get("activation_mode") or "").lower() != "enforced":
             return self._dedupe_strings(issue_codes), retry_patch, source
+        ledger = self._constraint_ledger_from_result(result)
+        if not ledger:
+            audit = result.metadata.setdefault("capability_activation_audit", {})
+            audit["retry_blocked_reason"] = "resolved_constraint_ledger_missing"
+            return [], {}, source
         active = {
             str(item)
             for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])

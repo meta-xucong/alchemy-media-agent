@@ -55,6 +55,15 @@ def _request(active_ids, composed, *, text="clean visual", asset_type=AssetType.
         "active_capability_ids": active_ids,
         "composed_visual_contribution": cluster["composed_visual_contribution"],
         "provider_projection": {"visual_cluster": cluster},
+        "resolved_constraint_ledger": {
+            "provider_projection": {
+                "protected_user_intent": text,
+                "visual_cluster": cluster,
+                "composed_visual_contribution": cluster["composed_visual_contribution"],
+            },
+            "review_contracts": [],
+            "hard_semantic_contract": False,
+        },
     }
     return GenerationRequest(
         asset_spec=asset,

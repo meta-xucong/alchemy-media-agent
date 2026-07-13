@@ -15,6 +15,7 @@ from ..shared_capabilities.activation import (
     CapabilityContribution,
     CapabilityExecutionEnvelope,
     NormalizedV3JobIntent,
+    ResolvedConstraintLedger,
     TemplateDeliverablePlan,
 )
 from ..llm_brain import BrainRunResult
@@ -122,6 +123,7 @@ class CapabilityPreparationResult(V3BaseModel):
     capability_execution_envelope: CapabilityExecutionEnvelope | None = None
     normalized_job_intent: NormalizedV3JobIntent | None = None
     template_deliverable_plan: TemplateDeliverablePlan | None = None
+    resolved_constraint_ledger: ResolvedConstraintLedger | None = None
     active_capability_run: CapabilityRunResult | None = None
     combined_capability_run: CapabilityRunResult | None = None
     activation_mode: str = "legacy"

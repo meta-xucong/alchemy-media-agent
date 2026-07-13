@@ -31,6 +31,8 @@ from ..shared_capabilities.activation import (
     CapabilityExecutionEnvelope,
     ComposedVisualContribution,
     NormalizedV3JobIntent,
+    ResolvedConstraintEntry,
+    ResolvedConstraintLedger,
     TemplateDeliverable,
     TemplateDeliverablePlan,
     TemplateCapabilityPolicy,
@@ -339,11 +341,19 @@ class ScenarioRuntime:
         )
         active_run = self._run_active_capabilities(request, resolution, plan, pre_activation_run)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
+        ledger = self._build_resolved_constraint_ledger(
+            request,
+            plan,
+            combined,
+            normalized_intent,
+            deliverable_plan,
+        )
         envelope = self._build_capability_execution_envelope(
             plan,
             combined,
             normalized_intent,
             deliverable_plan,
+            ledger,
         )
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
@@ -354,6 +364,7 @@ class ScenarioRuntime:
             capability_execution_envelope=envelope,
             normalized_job_intent=normalized_intent,
             template_deliverable_plan=deliverable_plan,
+            resolved_constraint_ledger=ledger,
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
         )
@@ -769,6 +780,7 @@ class ScenarioRuntime:
         capability_run: CapabilityRunResult | None,
         normalized_intent: NormalizedV3JobIntent,
         template_deliverable_plan: TemplateDeliverablePlan,
+        resolved_constraint_ledger: ResolvedConstraintLedger,
     ) -> CapabilityExecutionEnvelope:
         """Freeze the active executor output before provider/review/retry use it.
 
@@ -811,6 +823,7 @@ class ScenarioRuntime:
             activation_plan=plan,
             normalized_job_intent=normalized_intent,
             template_deliverable_plan=template_deliverable_plan,
+            resolved_constraint_ledger=resolved_constraint_ledger,
             active_capability_ids=list(plan.dependency_order),
             composed_visual_contribution=composed,
             provider_projection=projection,
@@ -823,6 +836,183 @@ class ScenarioRuntime:
                     "execution_fingerprint": execution_fingerprint,
                     "facts_source": "accepted_active_executor_results",
                 },
+            ],
+        )
+
+    def _build_resolved_constraint_ledger(
+        self,
+        request: ScenarioRuntimeRequest,
+        plan: CapabilityActivationPlan,
+        capability_run: CapabilityRunResult | None,
+        normalized_intent: NormalizedV3JobIntent,
+        template_deliverable_plan: TemplateDeliverablePlan,
+    ) -> ResolvedConstraintLedger:
+        """Resolve runtime constraints once instead of appending prompt strings.
+
+        The ledger keeps ownership and precedence explicit.  The existing
+        contribution composer remains a producer of evidence, but it is no
+        longer the downstream policy resolver.
+        """
+
+        raw_cluster: dict[str, Any] = {}
+        if capability_run is not None:
+            for result in capability_run.results:
+                if result.module_id == VISUAL_CAPABILITY_CLUSTER_ID:
+                    raw_cluster = dict(result.facts.get("visual_capability_cluster") or {})
+                    break
+        raw_composed = raw_cluster.get("composed_visual_contribution")
+        if not isinstance(raw_composed, dict) and capability_run is not None:
+            candidate = capability_run.metadata.get("composed_visual_contribution")
+            raw_composed = candidate if isinstance(candidate, dict) else None
+        if not isinstance(raw_composed, dict):
+            raise CapabilityActivationError("accepted active execution did not produce a resolved constraint contribution")
+        composed = ComposedVisualContribution.model_validate(raw_composed)
+        entries: list[ResolvedConstraintEntry] = [
+            ResolvedConstraintEntry(
+                constraint_id=stable_id("constraint", normalized_intent.intent_id, "user_intent"),
+                channel="user_intent",
+                owner="user",
+                strength="hard",
+                precedence=100,
+                requested_value=normalized_intent.protected_user_intent,
+                resolved_value=normalized_intent.protected_user_intent,
+                resolution="accepted",
+                provenance=[{"source": "NormalizedV3JobIntent"}],
+            ),
+            ResolvedConstraintEntry(
+                constraint_id=stable_id("constraint", normalized_intent.intent_id, "canvas"),
+                channel="canvas",
+                owner="user",
+                strength="hard",
+                precedence=95,
+                requested_value=normalized_intent.requested_image_size,
+                resolved_value=normalized_intent.effective_image_size,
+                resolution="accepted",
+                provenance=[{"source": "NormalizedV3JobIntent", "count": normalized_intent.effective_image_count}],
+            ),
+            ResolvedConstraintEntry(
+                constraint_id=stable_id("constraint", normalized_intent.intent_id, "text_policy"),
+                channel="text_policy",
+                owner="user",
+                strength="hard",
+                precedence=94,
+                requested_value=normalized_intent.text_policy,
+                resolved_value=normalized_intent.text_policy,
+                resolution="accepted",
+                provenance=[{"source": "NormalizedV3JobIntent"}],
+            ),
+        ]
+        for deliverable in template_deliverable_plan.deliverables:
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", template_deliverable_plan.plan_id, deliverable.deliverable_id),
+                    channel="deliverable_role",
+                    owner=template_deliverable_plan.owner,
+                    strength="hard",
+                    precedence=90,
+                    requested_value=deliverable.image_intent,
+                    resolved_value=deliverable.image_intent,
+                    resolution="accepted",
+                    provenance=[{"source": deliverable.source, "output_index": deliverable.output_index}],
+                )
+            )
+        for key, value in sorted(dict(request.product_profile or {}).items()):
+            if value in (None, "", [], {}):
+                continue
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", normalized_intent.intent_id, "product_truth", key),
+                    channel="product_truth",
+                    owner="product_identity",
+                    strength="hard",
+                    precedence=92,
+                    requested_value=value,
+                    resolved_value=value,
+                    resolution="accepted",
+                    provenance=[{"source": "product_profile", "field": key}],
+                )
+            )
+        for capability_id, fragment in enumerate(composed.prompt_additions, 1):
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", plan.plan_id, "quality", capability_id, fragment),
+                    channel="quality_guidance",
+                    owner="active_capability",
+                    strength="soft",
+                    precedence=50,
+                    requested_value=fragment,
+                    resolved_value=fragment,
+                    resolution="accepted",
+                    provenance=[{"source": "ComposedVisualContribution", "activation_plan_id": plan.plan_id}],
+                )
+            )
+        hard_capabilities = {
+            "product_identity",
+            "portrait_identity",
+            "nonhuman_subject_identity",
+            "human_realism",
+        }
+        hard_semantic_contract = bool(
+            set(plan.dependency_order) & hard_capabilities
+            or normalized_intent.scenario_id == "ecommerce"
+            or normalized_intent.text_policy == "provider_native_explicit_text"
+            or normalized_intent.effective_image_count > 1
+        )
+        provider_projection = {
+            "protected_user_intent": normalized_intent.protected_user_intent,
+            "effective_image_count": normalized_intent.effective_image_count,
+            "requested_image_size": normalized_intent.effective_image_size,
+            "text_policy": normalized_intent.text_policy,
+            "template_deliverable_plan": template_deliverable_plan.model_dump(mode="json"),
+            "visual_cluster": raw_cluster,
+            "generic_human_realism": raw_cluster.get("human_photorealism_guidance")
+            if isinstance(raw_cluster.get("human_photorealism_guidance"), dict)
+            else {},
+            "composed_visual_contribution": composed.model_dump(mode="json"),
+        }
+        applied_ids = [entry.constraint_id for entry in entries if entry.resolution == "accepted"]
+        translated_ids = [entry.constraint_id for entry in entries if entry.resolution == "translated"]
+        rejected_ids = [entry.constraint_id for entry in entries if entry.resolution == "rejected"]
+        return ResolvedConstraintLedger(
+            ledger_id=stable_id(
+                "resolved_constraint_ledger",
+                plan.plan_id,
+                normalized_intent.intent_id,
+                template_deliverable_plan.plan_id,
+                [(entry.channel, entry.owner, entry.resolved_value) for entry in entries],
+            ),
+            intent_id=normalized_intent.intent_id,
+            template_id=normalized_intent.template_id,
+            scenario_id=normalized_intent.scenario_id,
+            entries=entries,
+            conflicts=[],
+            provider_projection=provider_projection,
+            audit_summary={
+                "ledger_id": stable_id(
+                    "resolved_constraint_ledger",
+                    plan.plan_id,
+                    normalized_intent.intent_id,
+                    template_deliverable_plan.plan_id,
+                    [(entry.channel, entry.owner, entry.resolved_value) for entry in entries],
+                ),
+                "intent_id": normalized_intent.intent_id,
+                "effective_image_count": normalized_intent.effective_image_count,
+                "effective_image_size": normalized_intent.effective_image_size,
+                "text_policy": normalized_intent.text_policy,
+                "deliverable_owner": template_deliverable_plan.owner,
+                "applied_constraint_ids": applied_ids,
+                "translated_constraint_ids": translated_ids,
+                "rejected_constraint_ids": rejected_ids,
+            },
+            review_contracts=list(composed.review_contracts),
+            retry_contracts=list(composed.retry_contracts),
+            hard_semantic_contract=hard_semantic_contract,
+            provenance=[
+                {
+                    "source": "ScenarioRuntime._build_resolved_constraint_ledger",
+                    "active_capability_ids": list(plan.dependency_order),
+                    "string_append_is_not_resolution": True,
+                }
             ],
         )
 
@@ -1034,6 +1224,9 @@ class ScenarioRuntime:
         if preparation.template_deliverable_plan is not None:
             metadata["template_deliverable_plan"] = preparation.template_deliverable_plan.model_dump(mode="json")
             metadata["template_deliverable_plan_id"] = preparation.template_deliverable_plan.plan_id
+        if preparation.resolved_constraint_ledger is not None:
+            metadata["resolved_constraint_ledger"] = preparation.resolved_constraint_ledger.model_dump(mode="json")
+            metadata["resolved_constraint_ledger_id"] = preparation.resolved_constraint_ledger.ledger_id
         if preparation.capability_execution_envelope is not None:
             envelope = preparation.capability_execution_envelope.safe_metadata()
             metadata.update(

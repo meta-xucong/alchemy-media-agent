@@ -239,19 +239,23 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
     legacy_enforced = not envelope and _legacy_enforced_plan(metadata)
     cluster = metadata.get("visual_cluster") if isinstance(metadata.get("visual_cluster"), dict) else {}
     if envelope:
+        ledger = envelope.get("resolved_constraint_ledger")
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
         composed = (
-            envelope.get("composed_visual_contribution")
-            if isinstance(envelope.get("composed_visual_contribution"), dict)
+            projection.get("composed_visual_contribution")
+            if isinstance(projection, dict) and isinstance(projection.get("composed_visual_contribution"), dict)
             else {}
         )
         plan = envelope.get("activation_plan") if isinstance(envelope.get("activation_plan"), dict) else {}
-        review_contracts = envelope.get("review_contracts") if isinstance(envelope.get("review_contracts"), list) else []
+        review_contracts = ledger.get("review_contracts") if isinstance(ledger, dict) and isinstance(ledger.get("review_contracts"), list) else []
+        hard_semantic_contract = bool(ledger.get("hard_semantic_contract")) if isinstance(ledger, dict) else True
     elif legacy_enforced:
         # A legacy record is readable, but an enforced reviewer must not infer
         # semantic obligations from its mutable cluster payload.
         composed = {}
         plan = {"activation_mode": "enforced"}
         review_contracts = []
+        hard_semantic_contract = True
     else:
         composed = (
             metadata.get("composed_visual_contribution")
@@ -264,6 +268,7 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         if not plan and isinstance(cluster.get("capability_activation_plan_summary"), dict):
             plan = dict(cluster["capability_activation_plan_summary"])
         review_contracts = composed.get("review_contracts", []) if isinstance(composed, dict) else []
+        hard_semantic_contract = False
     active_ids = [
         str(item)
         for item in (
@@ -319,6 +324,8 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         "review_capability_sources": list(dict.fromkeys(item for item in sources if item)),
         "enforced": str(plan.get("activation_mode") or "").lower() == "enforced",
         "legacy_fallback_rejected": legacy_enforced,
+        "hard_semantic_contract": hard_semantic_contract,
+        "requires_pixel_review": hard_semantic_contract,
     }
 
 
