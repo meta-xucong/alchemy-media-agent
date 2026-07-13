@@ -45,6 +45,17 @@ def _request(active_ids, composed, *, text="clean visual", asset_type=AssetType.
         },
         "portrait_bone_structure_lock": {"applies": True, "prompt_rules": ["STALE IDENTITY RULE"]},
     }
+    # Direct provider tests model the post-Doc113 boundary explicitly.  The
+    # cluster is present only as an active-executor projection inside the
+    # frozen envelope; the provider must not read it from legacy metadata.
+    envelope = {
+        "envelope_id": "envelope",
+        "activation_mode": "enforced",
+        "activation_plan": plan,
+        "active_capability_ids": active_ids,
+        "composed_visual_contribution": cluster["composed_visual_contribution"],
+        "provider_projection": {"visual_cluster": cluster},
+    }
     return GenerationRequest(
         asset_spec=asset,
         prompt_compilation=prompt,
@@ -61,6 +72,7 @@ def _request(active_ids, composed, *, text="clean visual", asset_type=AssetType.
             "job_id": "job",
             "user_input": text,
             "capability_activation_plan": plan,
+            "capability_execution_envelope": envelope,
             "visual_cluster": cluster,
         },
     )

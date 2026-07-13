@@ -28,6 +28,8 @@ from ..shared_capabilities.activation import (
     CapabilityActivationPlanner,
     CapabilityContribution,
     CapabilityContributionComposer,
+    CapabilityExecutionEnvelope,
+    ComposedVisualContribution,
     TemplateCapabilityPolicy,
     VisualCapabilityManifest,
     VisualCapabilityRegistry,
@@ -311,12 +313,14 @@ class ScenarioRuntime:
         )
         active_run = self._run_active_capabilities(request, resolution, plan, pre_activation_run)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
+        envelope = self._build_capability_execution_envelope(plan, combined)
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
             brain_result=brain_result,
             activation_plan=plan,
             active_capability_run=active_run,
             combined_capability_run=combined,
+            capability_execution_envelope=envelope,
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
         )
@@ -559,6 +563,65 @@ class ScenarioRuntime:
             }
         )
 
+    def _build_capability_execution_envelope(
+        self,
+        plan: CapabilityActivationPlan,
+        capability_run: CapabilityRunResult | None,
+    ) -> CapabilityExecutionEnvelope:
+        """Freeze the active executor output before provider/review/retry use it.
+
+        The projection is intentionally derived once from accepted executor
+        results.  Downstream code receives this envelope, never the mutable
+        visual-cluster metadata that preceded activation.
+        """
+
+        raw_cluster: dict[str, Any] = {}
+        if capability_run is not None:
+            for result in capability_run.results:
+                if result.module_id == VISUAL_CAPABILITY_CLUSTER_ID:
+                    raw_cluster = dict(result.facts.get("visual_capability_cluster") or {})
+                    break
+        raw_composed = raw_cluster.get("composed_visual_contribution")
+        if not isinstance(raw_composed, dict) and capability_run is not None:
+            candidate = capability_run.metadata.get("composed_visual_contribution")
+            raw_composed = candidate if isinstance(candidate, dict) else None
+        if not isinstance(raw_composed, dict):
+            raise CapabilityActivationError("accepted active execution did not produce a composed contribution")
+        composed = ComposedVisualContribution.model_validate(raw_composed)
+        projection = {
+            "visual_cluster": raw_cluster,
+            "composed_visual_contribution": composed.model_dump(mode="json"),
+        }
+        execution_fingerprint = stable_id(
+            "capability_execution",
+            plan.fingerprint,
+            plan.activation_mode,
+            composed.model_dump(mode="json"),
+            raw_cluster,
+        )
+        return CapabilityExecutionEnvelope(
+            envelope_id=stable_id("capability_execution_envelope", plan.plan_id, execution_fingerprint),
+            execution_fingerprint=execution_fingerprint,
+            job_id=plan.job_id,
+            template_id=plan.template_id,
+            scenario_id=plan.scenario_id,
+            activation_mode=plan.activation_mode,
+            activation_plan=plan,
+            active_capability_ids=list(plan.dependency_order),
+            composed_visual_contribution=composed,
+            provider_projection=projection,
+            review_contracts=list(composed.review_contracts),
+            retry_contracts=list(composed.retry_contracts),
+            provenance=[
+                *list(composed.provenance),
+                {
+                    "source": "ScenarioRuntime._build_capability_execution_envelope",
+                    "execution_fingerprint": execution_fingerprint,
+                    "facts_source": "accepted_active_executor_results",
+                },
+            ],
+        )
+
     def _capability_contributions(
         self,
         plan: CapabilityActivationPlan,
@@ -664,9 +727,10 @@ class ScenarioRuntime:
                     results.append(result)
             warnings.extend(run.warnings)
             required_failures.extend(run.required_failures)
-        compatibility_ids = set(self._selected_capability_ids(request, resolution))
-        compatibility_ids.add(VISUAL_CAPABILITY_CLUSTER_ID)
-        results = [result for result in results if result.module_id in compatibility_ids]
+        # In enforced mode the frozen activation plan is the only selector.
+        # Every result here was accepted by an executor chosen from that plan
+        # (or by its pre-activation dependency).  Reapplying the old
+        # scenario-derived selector silently discarded valid hot-plug results.
         if required_failures:
             status = CapabilityRunStatus.FAILED
         elif any(run.status != CapabilityRunStatus.COMPLETE for run in runs):
@@ -740,7 +804,7 @@ class ScenarioRuntime:
         frozen = request.metadata.get("capability_activation_plan") if request is not None else None
         if isinstance(frozen, dict):
             frozen_mode = str(frozen.get("activation_mode") or "").lower()
-            if frozen_mode in {"legacy", "shadow"}:
+            if frozen_mode in {"legacy", "shadow", "enforced"}:
                 return frozen_mode
         return mode
 
@@ -748,7 +812,7 @@ class ScenarioRuntime:
         plan = preparation.activation_plan
         if plan is None:
             return {"capability_activation_mode": preparation.activation_mode}
-        return {
+        metadata = {
             "visual_task_profile": preparation.brain_result.visual_task_profile.model_dump(mode="json")
             if preparation.brain_result.visual_task_profile
             else None,
@@ -760,6 +824,15 @@ class ScenarioRuntime:
             "capability_catalog_version": plan.catalog_version,
             "capability_activation_mode": preparation.activation_mode,
         }
+        if preparation.capability_execution_envelope is not None:
+            envelope = preparation.capability_execution_envelope.safe_metadata()
+            metadata.update(
+                {
+                    "capability_execution_envelope": envelope,
+                    "capability_execution_envelope_id": envelope["envelope_id"],
+                }
+            )
+        return metadata
 
     def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
         specialized = preparation.specialized_scenario_plan

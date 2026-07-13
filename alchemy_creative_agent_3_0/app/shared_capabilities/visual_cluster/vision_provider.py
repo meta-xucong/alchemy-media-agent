@@ -235,17 +235,35 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
 
 
 def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
+    envelope = _execution_envelope(metadata)
+    legacy_enforced = not envelope and _legacy_enforced_plan(metadata)
     cluster = metadata.get("visual_cluster") if isinstance(metadata.get("visual_cluster"), dict) else {}
-    composed = (
-        metadata.get("composed_visual_contribution")
-        if isinstance(metadata.get("composed_visual_contribution"), dict)
-        else cluster.get("composed_visual_contribution")
-        if isinstance(cluster.get("composed_visual_contribution"), dict)
-        else {}
-    )
-    plan = metadata.get("capability_activation_plan") if isinstance(metadata.get("capability_activation_plan"), dict) else {}
-    if not plan and isinstance(cluster.get("capability_activation_plan_summary"), dict):
-        plan = dict(cluster["capability_activation_plan_summary"])
+    if envelope:
+        composed = (
+            envelope.get("composed_visual_contribution")
+            if isinstance(envelope.get("composed_visual_contribution"), dict)
+            else {}
+        )
+        plan = envelope.get("activation_plan") if isinstance(envelope.get("activation_plan"), dict) else {}
+        review_contracts = envelope.get("review_contracts") if isinstance(envelope.get("review_contracts"), list) else []
+    elif legacy_enforced:
+        # A legacy record is readable, but an enforced reviewer must not infer
+        # semantic obligations from its mutable cluster payload.
+        composed = {}
+        plan = {"activation_mode": "enforced"}
+        review_contracts = []
+    else:
+        composed = (
+            metadata.get("composed_visual_contribution")
+            if isinstance(metadata.get("composed_visual_contribution"), dict)
+            else cluster.get("composed_visual_contribution")
+            if isinstance(cluster.get("composed_visual_contribution"), dict)
+            else {}
+        )
+        plan = metadata.get("capability_activation_plan") if isinstance(metadata.get("capability_activation_plan"), dict) else {}
+        if not plan and isinstance(cluster.get("capability_activation_plan_summary"), dict):
+            plan = dict(cluster["capability_activation_plan_summary"])
+        review_contracts = composed.get("review_contracts", []) if isinstance(composed, dict) else []
     active_ids = [
         str(item)
         for item in (
@@ -284,7 +302,7 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
     issue_codes = list(universal_issues)
     score_dimensions = ["artifact_safety", "composition", "technical_finish", "overall"]
     sources: list[str] = ["universal_visual_quality"]
-    for contract in composed.get("review_contracts", []) if isinstance(composed, dict) else []:
+    for contract in review_contracts:
         if not isinstance(contract, dict):
             continue
         capability_id = str(contract.get("capability_id") or "")
@@ -300,7 +318,24 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         "score_dimensions": list(dict.fromkeys(score_dimensions)),
         "review_capability_sources": list(dict.fromkeys(item for item in sources if item)),
         "enforced": str(plan.get("activation_mode") or "").lower() == "enforced",
+        "legacy_fallback_rejected": legacy_enforced,
     }
+
+
+def _execution_envelope(metadata: dict[str, Any]) -> dict[str, Any]:
+    value = metadata.get("capability_execution_envelope")
+    if isinstance(value, dict) and isinstance(value.get("activation_plan"), dict):
+        return dict(value)
+    return {}
+
+
+def _legacy_enforced_plan(metadata: dict[str, Any]) -> bool:
+    plan = metadata.get("capability_activation_plan")
+    if isinstance(plan, dict) and str(plan.get("activation_mode") or "").lower() == "enforced":
+        return True
+    cluster = metadata.get("visual_cluster") if isinstance(metadata.get("visual_cluster"), dict) else {}
+    summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
+    return isinstance(summary, dict) and str(summary.get("activation_mode") or "").lower() == "enforced"
 
 
 def _scope_inspection_prompt(prompt: str, metadata: dict[str, Any]) -> str:

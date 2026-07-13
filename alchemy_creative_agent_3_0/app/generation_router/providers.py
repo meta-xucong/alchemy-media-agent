@@ -84,6 +84,10 @@ class GenerationProvider:
         return []
 
     def _mode_role_recipe(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request):
+            cluster = self._visual_cluster(request)
+            value = cluster.get("mode_role_recipe") if isinstance(cluster, dict) else None
+            return dict(value) if isinstance(value, dict) else {}
         for source in (request.metadata, request.generation_plan.metadata, request.prompt_compilation.provider_notes):
             value = source.get("mode_role_recipe") if isinstance(source, dict) else None
             if isinstance(value, dict):
@@ -91,8 +95,12 @@ class GenerationProvider:
         return {}
 
     def _role_specific_generation_plan(self, request: GenerationRequest) -> dict[str, Any]:
-        if self._activation_enforced(request) and not self._active_capability(request, "suite_direction"):
-            return {}
+        if self._activation_enforced(request):
+            if not self._active_capability(request, "suite_direction"):
+                return {}
+            cluster = self._visual_cluster(request)
+            value = cluster.get("role_specific_generation_plan") if isinstance(cluster, dict) else None
+            return dict(value) if isinstance(value, dict) else {}
         for source in (request.metadata, request.generation_plan.metadata):
             value = source.get("role_specific_generation_plan") if isinstance(source, dict) else None
             if isinstance(value, dict):
@@ -102,6 +110,14 @@ class GenerationProvider:
         return dict(value) if isinstance(value, dict) else {}
 
     def _mode_execution_policy(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request):
+            cluster = self._visual_cluster(request)
+            value = cluster.get("mode_execution_policy") if isinstance(cluster, dict) else None
+            if isinstance(value, dict):
+                return dict(value)
+            plan = self._role_specific_generation_plan(request)
+            value = plan.get("policy") if isinstance(plan, dict) else None
+            return dict(value) if isinstance(value, dict) else {}
         for source in (request.metadata, request.generation_plan.metadata):
             value = source.get("mode_execution_policy") if isinstance(source, dict) else None
             if isinstance(value, dict):
@@ -111,6 +127,11 @@ class GenerationProvider:
         return dict(value) if isinstance(value, dict) else {}
 
     def _visual_cluster(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request):
+            envelope = self._execution_envelope(request)
+            projection = envelope.get("provider_projection") if isinstance(envelope, dict) else None
+            cluster = projection.get("visual_cluster") if isinstance(projection, dict) else None
+            return dict(cluster) if isinstance(cluster, dict) else {}
         cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata, dict) else None
         if isinstance(cluster, dict):
             return dict(cluster)
@@ -120,6 +141,16 @@ class GenerationProvider:
         return {}
 
     def _activation_plan_summary(self, request: GenerationRequest) -> dict[str, Any]:
+        envelope = self._execution_envelope(request)
+        if envelope:
+            plan = envelope.get("activation_plan")
+            if isinstance(plan, dict):
+                return dict(plan)
+        if self._legacy_enforced_plan_marker(request):
+            # This marker is a fail-closed boundary check, not a legacy
+            # provider input.  It prevents a pre-envelope enforced request
+            # from reviving old cluster fields below.
+            return {"activation_mode": "enforced", "legacy_envelope_missing": True}
         for source in (request.metadata, request.generation_plan.metadata):
             if not isinstance(source, dict):
                 continue
@@ -129,7 +160,14 @@ class GenerationProvider:
             summary = source.get("capability_activation_plan_summary")
             if isinstance(summary, dict):
                 return dict(summary)
-        cluster = self._visual_cluster(request)
+        # This legacy branch intentionally reads the raw payload directly.
+        # Calling _visual_cluster() here would recurse because that helper
+        # first asks whether activation is enforced.
+        raw_metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        cluster = raw_metadata.get("visual_cluster") if isinstance(raw_metadata.get("visual_cluster"), dict) else {}
+        shared = raw_metadata.get("shared_capabilities") if isinstance(raw_metadata.get("shared_capabilities"), dict) else {}
+        if not cluster and isinstance(shared.get("visual_cluster"), dict):
+            cluster = shared["visual_cluster"]
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
 
@@ -145,6 +183,10 @@ class GenerationProvider:
         return capability_id in {str(item) for item in values}
 
     def _composed_visual_contribution(self, request: GenerationRequest) -> dict[str, Any]:
+        if self._activation_enforced(request):
+            envelope = self._execution_envelope(request)
+            value = envelope.get("composed_visual_contribution") if isinstance(envelope, dict) else None
+            return dict(value) if isinstance(value, dict) else {}
         cluster = self._visual_cluster(request)
         value = cluster.get("composed_visual_contribution") if isinstance(cluster, dict) else None
         if isinstance(value, dict):
@@ -229,6 +271,31 @@ class GenerationProvider:
         cluster = self._visual_cluster(request)
         profile = cluster.get("mode_quality_profile") if isinstance(cluster, dict) else None
         return dict(profile) if isinstance(profile, dict) else {}
+
+    def _execution_envelope(self, request: GenerationRequest) -> dict[str, Any]:
+        generation_plan = getattr(request, "generation_plan", None)
+        generation_metadata = getattr(generation_plan, "metadata", {}) if generation_plan is not None else {}
+        for source in (request.metadata, generation_metadata):
+            if not isinstance(source, dict):
+                continue
+            envelope = source.get("capability_execution_envelope")
+            if isinstance(envelope, dict) and isinstance(envelope.get("activation_plan"), dict):
+                return dict(envelope)
+        return {}
+
+    def _legacy_enforced_plan_marker(self, request: GenerationRequest) -> bool:
+        generation_plan = getattr(request, "generation_plan", None)
+        generation_metadata = getattr(generation_plan, "metadata", {}) if generation_plan is not None else {}
+        for source in (request.metadata, generation_metadata):
+            if not isinstance(source, dict):
+                continue
+            plan = source.get("capability_activation_plan")
+            if isinstance(plan, dict) and str(plan.get("activation_mode") or "").lower() == "enforced":
+                return True
+            summary = source.get("capability_activation_plan_summary")
+            if isinstance(summary, dict) and str(summary.get("activation_mode") or "").lower() == "enforced":
+                return True
+        return False
 
 
 class PlanningOnlyGenerationProvider(GenerationProvider):

@@ -1181,6 +1181,9 @@ class V3ProductApiService:
             reference_policy = result_cluster.get("resolved_reference_policy_package")
             if isinstance(reference_policy, dict) and reference_policy:
                 review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
+        execution_envelope = generation_result.metadata.get("capability_execution_envelope")
+        if isinstance(execution_envelope, dict):
+            review_metadata["capability_execution_envelope"] = dict(execution_envelope)
         if self._reference_conditioned_real_review_required(
             review_metadata,
             quality_mode=generate_request.quality_mode,

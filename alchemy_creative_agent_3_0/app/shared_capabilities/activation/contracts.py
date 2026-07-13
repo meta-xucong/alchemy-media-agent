@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ...creative_core.rules import stable_id
 from ...schemas.models import V3BaseModel
@@ -244,6 +244,53 @@ class CapabilityActivationPlan(V3BaseModel):
             "active_capability_ids": list(self.dependency_order),
             "activation_mode": self.activation_mode,
         }
+
+
+class CapabilityExecutionEnvelope(V3BaseModel):
+    """Immutable, auditable execution input for an enforced capability plan.
+
+    This deliberately sits between active capability executors and every
+    downstream consumer.  A provider, reviewer, or retry path must never
+    rediscover instructions from the legacy visual-cluster metadata once this
+    envelope exists.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    envelope_id: str
+    execution_fingerprint: str
+    job_id: str
+    template_id: str
+    scenario_id: str
+    activation_mode: str
+    activation_plan: CapabilityActivationPlan
+    active_capability_ids: list[str] = Field(default_factory=list)
+    composed_visual_contribution: "ComposedVisualContribution"
+    provider_projection: dict[str, Any] = Field(default_factory=dict)
+    review_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    retry_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def execution_truth_is_frozen(self) -> "CapabilityExecutionEnvelope":
+        if self.activation_mode not in {"enforced", "shadow", "legacy"}:
+            raise ValueError("unsupported capability execution mode")
+        if self.activation_mode != self.activation_plan.activation_mode:
+            raise ValueError("capability_execution_mode_mismatch")
+        if self.template_id != self.activation_plan.template_id:
+            raise ValueError("execution envelope template does not match activation plan")
+        if self.scenario_id != self.activation_plan.scenario_id:
+            raise ValueError("execution envelope scenario does not match activation plan")
+        if self.active_capability_ids != self.activation_plan.dependency_order:
+            raise ValueError("execution envelope active capabilities do not match activation plan")
+        if self.composed_visual_contribution.activation_plan_id != self.activation_plan.plan_id:
+            raise ValueError("execution envelope contribution does not match activation plan")
+        if self.composed_visual_contribution.active_capability_ids != self.active_capability_ids:
+            raise ValueError("execution envelope contribution active capabilities do not match activation plan")
+        return self
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
 class CapabilityContribution(V3BaseModel):
