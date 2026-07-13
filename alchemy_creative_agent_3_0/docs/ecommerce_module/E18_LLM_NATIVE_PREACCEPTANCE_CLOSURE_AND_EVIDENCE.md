@@ -70,7 +70,7 @@ pytest -q alchemy_creative_agent_3_0/tests/test_v3_ecommerce_doc26_scenario_pack
   alchemy_creative_agent_3_0/tests/test_v3_doc102_brain_activation_checkpoint.py `
   alchemy_creative_agent_3_0/tests/test_v3_doc113_template_ownership.py
 
-pytest -q alchemy_creative_agent_3_0/tests
+pytest -q
 ```
 
 The focused run must prove the invariant list above. The full V3 run must
