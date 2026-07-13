@@ -214,8 +214,11 @@ class CentralCreativeBrain:
             not use_mock_generation
             and not explicit_references_present
             and self._is_human_identity_suite_context(context)
+            and self._generated_output_reference_chain_allowed(context)
         )
         auto_identity_anchor_reference: dict[str, Any] | None = None
+        role_execution_records: list[dict[str, Any]] = []
+        require_independent_role_terminal_states = self._requires_independent_role_terminal_states(context)
 
         for index, asset in enumerate(context.series_plan.assets):
             asset = self._asset_with_mode_role(context, asset, index)
@@ -307,14 +310,31 @@ class CentralCreativeBrain:
             context.condition_plans.append(condition_plan)
             context.generation_plans.append(generation_plan)
 
-            selected_candidate, selected_evaluation, asset_warnings = self._run_asset_generation_loop(
-                context,
-                asset,
-                layout_plan,
-                prompt,
-                condition_plan,
-                generation_plan,
-            )
+            try:
+                selected_candidate, selected_evaluation, asset_warnings = self._run_asset_generation_loop(
+                    context,
+                    asset,
+                    layout_plan,
+                    prompt,
+                    condition_plan,
+                    generation_plan,
+                )
+            except Exception as exc:
+                if not require_independent_role_terminal_states:
+                    raise
+                role_execution_records.append(
+                    self._role_execution_record(
+                        asset,
+                        mode_role_recipe,
+                        status="failed",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                )
+                pack_warnings.append(
+                    f"specialized role {mode_role_recipe.get('role_key') or asset.asset_id} failed: {str(exc)[:240]}"
+                )
+                continue
             pack_warnings.extend(asset_warnings)
             if selected_candidate is not None:
                 context.selected_candidates.append(selected_candidate)
@@ -324,6 +344,17 @@ class CentralCreativeBrain:
                         asset=asset,
                         context=context,
                     )
+            if require_independent_role_terminal_states:
+                role_execution_records.append(
+                    self._role_execution_record(
+                        asset,
+                        mode_role_recipe,
+                        status="generated" if selected_candidate is not None else "failed",
+                        candidate_id=selected_candidate.candidate_id if selected_candidate is not None else None,
+                        error_type=None if selected_candidate is not None else "NoCandidateProduced",
+                        error_message=None if selected_candidate is not None else "shared generation returned no selected candidate",
+                    )
+                )
             if selected_evaluation is not None and selected_evaluation.recommendation != Recommendation.ACCEPT:
                 pack_warnings.append(
                     f"asset {asset.asset_id} packaged with {selected_evaluation.recommendation} recommendation"
@@ -384,6 +415,19 @@ class CentralCreativeBrain:
             memory_update,
             warnings=list(dict.fromkeys(pack_warnings)),
         ).output
+        if role_execution_records:
+            role_execution_payload = {
+                "schema_version": "specialized_role_execution_v1",
+                "status": "complete" if all(item["status"] == "generated" for item in role_execution_records) else "incomplete",
+                "roles": role_execution_records,
+                "shared_execution_only": True,
+            }
+            asset_pack = asset_pack.model_copy(
+                update={
+                    "manifest": {**dict(asset_pack.manifest), "specialized_role_execution": role_execution_payload},
+                    "metadata": {**dict(asset_pack.metadata), "specialized_role_execution": role_execution_payload},
+                }
+            )
         context.asset_pack = asset_pack
 
         return PlanningResult(
@@ -407,6 +451,7 @@ class CentralCreativeBrain:
                 "vertical_evaluation_policy": selected_pack.refine_evaluation_policy(context),
                 "planning_only": False,
                 "candidate_loop": True,
+                **({"specialized_role_execution": role_execution_payload} if role_execution_records else {}),
                 "candidate_count": len(context.candidate_results),
                 "selected_candidate_ids": [candidate.candidate_id for candidate in context.selected_candidates],
                 "refinement_plan_count": len(context.refinement_plans),
@@ -623,6 +668,11 @@ class CentralCreativeBrain:
         return {}
 
     def _mode_execution_policy_metadata(self, context: PipelineContext) -> dict[str, Any]:
+        specialized = context.metadata.get("specialized_role_execution_plan")
+        if isinstance(specialized, dict) and self._requires_independent_role_terminal_states(context):
+            policy = specialized.get("policy")
+            if isinstance(policy, dict):
+                return dict(policy)
         if context.series_plan is not None:
             series_plan = dict(getattr(context.series_plan, "metadata", {}) or {})
             policy = series_plan.get("mode_execution_policy")
@@ -638,11 +688,14 @@ class CentralCreativeBrain:
 
     def _mode_role_recipe_for_asset(self, context: PipelineContext, asset, index: int) -> dict[str, Any]:
         metadata = dict(getattr(asset, "metadata", {}) or {})
+        plan = self._role_specific_generation_plan_metadata(context)
+        recipes = plan.get("role_recipes")
+        if self._requires_independent_role_terminal_states(context) and isinstance(recipes, list) and recipes:
+            recipe = recipes[min(index, len(recipes) - 1)]
+            return dict(recipe) if isinstance(recipe, dict) else {}
         existing = metadata.get("mode_role_recipe")
         if isinstance(existing, dict):
             return dict(existing)
-        plan = self._role_specific_generation_plan_metadata(context)
-        recipes = plan.get("role_recipes")
         if isinstance(recipes, list) and recipes:
             recipe = recipes[min(index, len(recipes) - 1)]
             return dict(recipe) if isinstance(recipe, dict) else {}
@@ -692,6 +745,54 @@ class CentralCreativeBrain:
             if isinstance(closure, dict) and closure.get("active"):
                 return True
         return False
+
+    def _requires_independent_role_terminal_states(self, context: PipelineContext) -> bool:
+        """Return the generic specialized-execution opt-in, if any.
+
+        The Central Brain deliberately does not know Photography role names.
+        An active specialized Scenario Pack can freeze this one execution
+        property; General and inactive templates keep the pre-existing path.
+        """
+
+        plan = context.metadata.get("specialized_role_execution_plan")
+        if not isinstance(plan, dict):
+            return False
+        metadata = plan.get("metadata")
+        return isinstance(metadata, dict) and bool(metadata.get("require_independent_role_terminal_states"))
+
+    def _generated_output_reference_chain_allowed(self, context: PipelineContext) -> bool:
+        """Respect a frozen template policy before deriving image-edit inputs.
+
+        A generated first output is never user reference evidence.  The
+        policy gives a specialized set a way to require independent T2I roles
+        while leaving the established General same-person suite behavior
+        untouched.
+        """
+
+        policy = self._mode_execution_policy_metadata(context)
+        return str(policy.get("generated_output_reference_chain") or "").strip().lower() not in {
+            "disabled",
+            "explicit_references_only",
+        }
+
+    @staticmethod
+    def _role_execution_record(
+        asset,
+        role_recipe: dict[str, Any],
+        *,
+        status: str,
+        candidate_id: str | None = None,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "role_key": str(role_recipe.get("role_key") or getattr(asset, "asset_id", "")),
+            "asset_id": getattr(asset, "asset_id", None),
+            "status": status,
+            "candidate_id": candidate_id,
+            "error_type": error_type,
+            "error_message": error_message[:500] if error_message else None,
+        }
 
     def _is_human_identity_suite_context(self, context: PipelineContext) -> bool:
         if str(context.metadata.get("scenario_id") or "").strip().lower() == "ecommerce":

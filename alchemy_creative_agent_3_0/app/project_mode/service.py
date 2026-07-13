@@ -1359,6 +1359,15 @@ class V3ProjectModeService:
                 )
         elif status.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
             provider_retry = status.metadata.get("provider_failure_retry") if isinstance(status.metadata, dict) else None
+            specialized_execution = (
+                status.metadata.get("specialized_execution_summary")
+                if isinstance(status.metadata, dict)
+                else None
+            )
+            incomplete_specialized_set = (
+                isinstance(specialized_execution, dict)
+                and str(specialized_execution.get("status") or "").lower() == "incomplete"
+            )
             if isinstance(provider_retry, dict) and int(provider_retry.get("executed_count") or 0) > 0:
                 self._append_timeline(
                     project.project_id,
@@ -1377,14 +1386,19 @@ class V3ProjectModeService:
             self._append_timeline(
                 project.project_id,
                 TimelineItemType.JOB_BLOCKED,
-                "本次没有生成图片",
-                self._blocked_generation_summary(status),
+                "摄影专业套图未完整生成" if incomplete_specialized_set else "本次没有生成图片",
+                (
+                    self._incomplete_specialized_set_summary(specialized_execution)
+                    if incomplete_specialized_set
+                    else self._blocked_generation_summary(status)
+                ),
                 job_id=job_id,
                 metadata={
                     "template_id": template_id,
                     "status": str(status.status),
                     "warnings": list(status.warnings or [])[:3],
                     "provider_failure_retry": provider_retry if isinstance(provider_retry, dict) else {},
+                    "specialized_execution_summary": specialized_execution if incomplete_specialized_set else {},
                 },
             )
         return status
@@ -1449,6 +1463,13 @@ class V3ProjectModeService:
         if any(token in joined for token in ("api key", "not configured", "insufficient", "policy", "safety")):
             return "生成配置或策略暂时不满足要求，本次没有生成图片。项目已保留。"
         return "本次生成没有拿到可用图片。项目已保留，可以稍后重新生成。"
+
+    @staticmethod
+    def _incomplete_specialized_set_summary(execution: dict[str, Any]) -> str:
+        missing = [str(item).strip() for item in execution.get("missing_role_keys", []) if str(item).strip()]
+        if missing:
+            return f"已保留已完成角色的追加历史，但不会把不完整套图当作单张交付。未完成角色：{', '.join(missing)}。"
+        return "已保留执行诊断，但不会把不完整的专业套图当作单张交付。"
 
     def select_project_job(
         self,
@@ -3049,6 +3070,33 @@ class V3ProjectModeService:
             if not records:
                 continue
             records = sorted(records, key=lambda item: item.created_at or "")
+            incomplete_execution = self._incomplete_specialized_set_execution(job_status, records)
+            if incomplete_execution is not None:
+                if not any(
+                    item.item_type == TimelineItemType.NOTE_ADDED
+                    and (item.job_id == job_id or item.related_job_id == job_id)
+                    and isinstance(item.metadata, dict)
+                    and item.metadata.get("execution_diagnostic") == "specialized_role_coverage_incomplete"
+                    for item in timeline
+                ):
+                    self._append_timeline(
+                        project.project_id,
+                        TimelineItemType.NOTE_ADDED,
+                        "专业套图存在未完成角色",
+                        self._incomplete_specialized_set_summary(incomplete_execution),
+                        job_id=job_id,
+                        metadata={
+                            "execution_diagnostic": "specialized_role_coverage_incomplete",
+                            "specialized_execution_summary": incomplete_execution,
+                            "append_only_history_preserved": True,
+                            "normal_project_delivery_withheld": True,
+                        },
+                    )
+                    timeline = self.project_store.list_timeline(project.project_id)
+                    changed = True
+                # Provider pixels remain append-only evidence, but they are
+                # not a deliverable until every frozen role has its winner.
+                continue
             asset_ids = [record.asset_id for record in records if getattr(record, "asset_id", None)]
             candidate_ids = [record.candidate_id for record in records if getattr(record, "candidate_id", None)]
             output_ids = [record.output_id for record in records if getattr(record, "output_id", None)]
@@ -3092,6 +3140,37 @@ class V3ProjectModeService:
             project.memory_summary = self._memory_summary(project)
             self.project_store.save_project(project)
         return changed
+
+    @staticmethod
+    def _incomplete_specialized_set_execution(job_status: ProductJobStatus, records: list[Any]) -> dict[str, Any] | None:
+        metadata = dict(job_status.metadata or {})
+        execution = metadata.get("specialized_execution_summary")
+        if isinstance(execution, dict) and str(execution.get("status") or "").lower() == "incomplete":
+            return dict(execution)
+        if not isinstance(execution, dict):
+            return None
+        expected = [str(item).strip() for item in execution.get("role_keys", []) if str(item).strip()]
+        if len(expected) < 2:
+            return None
+        delivered: set[str] = set()
+        for record in records:
+            record_metadata = dict(getattr(record, "metadata", {}) or {})
+            role_key = str(record_metadata.get("mode_role_key") or "").strip()
+            if not role_key:
+                recipe = record_metadata.get("mode_role_recipe")
+                role_key = str(recipe.get("role_key") or "").strip() if isinstance(recipe, dict) else ""
+            if role_key:
+                delivered.add(role_key)
+        missing = [role_key for role_key in expected if role_key not in delivered]
+        if not missing:
+            return None
+        return {
+            **dict(execution),
+            "status": "incomplete",
+            "missing_role_keys": missing,
+            "final_delivery_withheld": True,
+            "append_only_history_preserved": True,
+        }
 
     def _post_generation_review_summary(self, review_package: dict[str, Any]) -> str:
         lines = [str(item).strip() for item in review_package.get("user_visible_summary", []) if str(item).strip()]
@@ -4700,8 +4779,18 @@ class V3ProjectModeService:
     def _project_job_delivery_is_settled(self, job_id: str) -> bool:
         """Known in-flight jobs must not leak process outputs onto project boards."""
 
-        status = self.product_service.get_job(job_id).status
-        return status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        job_status = self.product_service.get_job(job_id)
+        if job_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            return False
+        execution = dict(job_status.metadata or {}).get("specialized_execution_summary")
+        # A multi-role template can preserve generated pixels in append-only
+        # history while still withholding them from the ordinary project
+        # result panel until every frozen role has a final winner.
+        return not (
+            isinstance(execution, dict)
+            and str(execution.get("status") or "").lower() == "incomplete"
+            and bool(execution.get("final_delivery_withheld"))
+        )
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
         return OutputRef(

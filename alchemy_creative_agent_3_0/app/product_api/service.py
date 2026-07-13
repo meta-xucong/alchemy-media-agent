@@ -976,11 +976,91 @@ class V3ProductApiService:
         record.generation_result = generation_result
         record.scenario_resolution = generation_runtime_result.scenario_resolution
         record.capability_run = generation_runtime_result.capability_run
+        specialized_execution = self._specialized_role_execution_terminal_summary(record, generation_result)
+        if specialized_execution is not None:
+            record.request.metadata = {
+                **dict(record.request.metadata),
+                "specialized_execution_summary": specialized_execution,
+            }
+            if specialized_execution["status"] != "complete":
+                missing = ", ".join(specialized_execution["missing_role_keys"])
+                record.status = ProductJobStatusValue.BLOCKED
+                record.warnings.append(
+                    "Specialized role execution is incomplete; final project delivery is withheld"
+                    + (f": missing {missing}." if missing else ".")
+                )
+                record.balance_estimate = self._estimate_for_result(generation_result)
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+                return self._status_from_record(record)
         record.status = ProductJobStatusValue.GENERATED
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    def _specialized_role_execution_terminal_summary(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+    ) -> dict[str, Any] | None:
+        """Make a frozen multi-role execution truthful at the Product boundary.
+
+        A specialized Template may declare several roles, but it never owns a
+        provider, reviewer, retry loop, or result selector.  The shared
+        executor therefore records every role here and fails closed for the
+        ordinary project delivery surface when a role did not reach a winner.
+        """
+
+        specialized = dict(record.request.metadata or {}).get("specialized_scenario_plan")
+        execution = specialized.get("execution_plan") if isinstance(specialized, dict) else None
+        execution_metadata = execution.get("metadata") if isinstance(execution, dict) else None
+        if not isinstance(execution_metadata, dict) or not execution_metadata.get("require_independent_role_terminal_states"):
+            return None
+        recipes = execution.get("role_recipes") if isinstance(execution, dict) else None
+        expected_role_keys = [
+            str(item.get("role_key") or "").strip()
+            for item in recipes
+            if isinstance(item, dict) and str(item.get("role_key") or "").strip()
+        ] if isinstance(recipes, list) else []
+        if not expected_role_keys:
+            return None
+
+        raw_execution = generation_result.metadata.get("specialized_role_execution")
+        raw_roles = raw_execution.get("roles") if isinstance(raw_execution, dict) else []
+        by_role = {
+            str(item.get("role_key") or "").strip(): dict(item)
+            for item in raw_roles
+            if isinstance(item, dict) and str(item.get("role_key") or "").strip()
+        } if isinstance(raw_roles, list) else {}
+
+        roles: list[dict[str, Any]] = []
+        missing_role_keys: list[str] = []
+        for role_key in expected_role_keys:
+            item = dict(by_role.get(role_key) or {})
+            status = str(item.get("status") or "missing").strip().lower()
+            if status != "generated":
+                missing_role_keys.append(role_key)
+            roles.append(
+                {
+                    "role_key": role_key,
+                    "status": status,
+                    "asset_id": item.get("asset_id"),
+                    "candidate_id": item.get("candidate_id"),
+                    "error_type": item.get("error_type"),
+                    "error_message": item.get("error_message"),
+                }
+            )
+        return {
+            "requested_image_count": len(expected_role_keys),
+            "role_keys": expected_role_keys,
+            "shared_execution_only": True,
+            "status": "complete" if not missing_role_keys else "incomplete",
+            "roles": roles,
+            "missing_role_keys": missing_role_keys,
+            "final_delivery_withheld": bool(missing_role_keys),
+            "append_only_history_preserved": True,
+        }
 
     def _materialize_mock_output_records(
         self,

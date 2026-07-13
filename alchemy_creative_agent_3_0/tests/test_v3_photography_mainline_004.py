@@ -6,8 +6,16 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
+from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationProvider,
+    GenerationRequest,
+    GenerationResponse,
+    GenerationRouter,
+)
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.project_mode.service import PhotographyRoleContinuationError
@@ -22,6 +30,75 @@ from alchemy_creative_agent_3_0.app.scenario_packs.photography import (
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
+from alchemy_creative_agent_3_0.app.schemas import CandidateResult, ProviderStrategy
+
+
+class _RecordingProductionProvider(GenerationProvider):
+    """Provider fixture that persists pixels but never calls a real model."""
+
+    provider_name = "recording_production_provider"
+
+    def __init__(self, output_store: V3GeneratedOutputStore, *, fail_role: str | None = None) -> None:
+        self.output_store = output_store
+        self.fail_role = fail_role
+        self.requests: list[GenerationRequest] = []
+
+    def generate(self, request: GenerationRequest) -> GenerationResponse:
+        self.requests.append(request.model_copy(deep=True))
+        role = dict(request.metadata.get("mode_role_recipe") or {})
+        role_key = str(role.get("role_key") or "")
+        if role_key == self.fail_role:
+            raise RuntimeError(f"simulated provider failure for {role_key}")
+        image = BytesIO()
+        Image.new("RGB", (32, 32), color=(104, 146, 184)).save(image, format="PNG")
+        candidate_id = f"candidate_{role_key or len(self.requests)}"
+        stored = self.output_store.save_base64_output(
+            job_id=str(request.metadata["job_id"]),
+            candidate_id=candidate_id,
+            asset_id=request.generation_plan.asset_id,
+            provider=self.provider_name,
+            model="fixture",
+            encoded_image=base64.b64encode(image.getvalue()).decode("ascii"),
+            metadata={
+                "mode_role_key": role_key,
+                "mode_role_recipe": role,
+                "role_specific_generation_plan": dict(request.metadata.get("role_specific_generation_plan") or {}),
+            },
+        )
+        return GenerationResponse(
+            candidates=[
+                CandidateResult(
+                    candidate_id=candidate_id,
+                    asset_id=request.generation_plan.asset_id,
+                    file_path=stored.file_path,
+                    uri=stored.thumbnail_url,
+                    provider=self.provider_name,
+                    prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
+                    condition_plan_id=request.condition_plan.condition_plan_id,
+                    is_mock=False,
+                    metadata={
+                        "output_id": stored.output_id,
+                        "download_url": stored.download_url,
+                        "preview_url": stored.preview_url,
+                        "thumbnail_url": stored.thumbnail_url,
+                        "mode_role_key": role_key,
+                        "mode_role_recipe": role,
+                    },
+                )
+            ]
+        )
+
+
+def _handlers_with_recording_production_provider(
+    tmp_path: Path,
+    *,
+    fail_role: str | None = None,
+) -> tuple[V3ProductRouteHandlers, _RecordingProductionProvider]:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+    provider = _RecordingProductionProvider(output_store, fail_role=fail_role)
+    service.scenario_runtime.generation_router = GenerationRouter(provider=provider)
+    return V3ProductRouteHandlers(service=service, project_store=PersistentProjectStore(tmp_path / "projects")), provider
 
 
 def _project_and_root(
@@ -100,6 +177,75 @@ def test_professional_set_executes_three_frozen_roles_and_resolves_one_winner_pe
         assert delivery["current_delivery"]["job_id"] == root["job_id"]
         assert delivery["current_delivery"]["role_id"] == role_id
         assert delivery["metadata"]["final_role_winner_only"] is True
+
+
+def test_professional_set_t2i_executes_three_frozen_roles_without_generated_image_edit_chain(monkeypatch, tmp_path) -> None:
+    """P10-T2I must make one shared provider request per frozen role, not an edit chain."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path)
+    project, root = _project_and_root(handlers)
+
+    generated = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    )
+
+    assert generated["status"] == "generated"
+    assert len(provider.requests) == 3
+    assert [request.metadata["mode_role_recipe"]["role_key"] for request in provider.requests] == [
+        "session_hero",
+        "environmental_context",
+        "detail_or_moment",
+    ]
+    assert all(request.metadata.get("reference_assets") == [] for request in provider.requests)
+    assert all(request.metadata["auto_batch_identity_anchor_policy"]["enabled"] is False for request in provider.requests)
+    assert all(
+        request.metadata["capability_execution_envelope"]["activation_plan"]["activation_mode"] == "enforced"
+        for request in provider.requests
+    )
+    summary = generated["metadata"]["specialized_execution_summary"]
+    assert summary["status"] == "complete"
+    assert [item["role_key"] for item in summary["roles"]] == [
+        "session_hero",
+        "environmental_context",
+        "detail_or_moment",
+    ]
+    assert len([item for item in generated["asset_series"] if item["output_id"]]) == 3
+
+
+def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_single_delivery(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path, fail_role="environmental_context")
+    project, root = _project_and_root(handlers)
+
+    blocked = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    )
+
+    assert blocked["status"] == "blocked"
+    assert [request.metadata["mode_role_recipe"]["role_key"] for request in provider.requests] == [
+        "session_hero",
+        "environmental_context",
+        "detail_or_moment",
+    ]
+    summary = blocked["metadata"]["specialized_execution_summary"]
+    assert summary["status"] == "incomplete"
+    assert summary["missing_role_keys"] == ["environmental_context"]
+    assert summary["final_delivery_withheld"] is True
+
+    timeline = handlers.get_project_timeline(project["project_id"])["items"]
+    root_items = [item for item in timeline if item.get("job_id") == root["job_id"]]
+    assert not any(item["item_type"] == "job_generated" for item in root_items)
+    assert any(
+        item["item_type"] == "note_added"
+        and item["metadata"].get("execution_diagnostic") == "specialized_role_coverage_incomplete"
+        for item in root_items
+    )
+    assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
 
 
 def test_photography_project_summary_and_terminal_delivery_keep_the_photographer_binding(monkeypatch) -> None:

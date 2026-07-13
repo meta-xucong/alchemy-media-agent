@@ -210,6 +210,14 @@ class PhotographyScenarioPlanningAdapter:
                 "role_strategy": "photography_professional_roles",
                 "role_difference_requirement": "each frozen Photography role must retain its own composition and camera duty",
                 "review_priority": "role coverage, profile fidelity, reference truth, real-camera finish",
+                # A text-to-image professional set has no user-supplied
+                # identity evidence to turn into an image-edit chain.  The
+                # shared executor must therefore render each frozen role as
+                # its own T2I request.  When the user has supplied reference
+                # evidence, that evidence remains the only provider input.
+                # This is deliberately an execution-neutral policy signal,
+                # not a Photography-owned provider route.
+                "generated_output_reference_chain": "explicit_references_only",
                 "user_visible_label": "Professional photography set" if is_set else "Professional photograph",
                 "user_visible_summary": [],
                 "metadata": {"owner": "shared_runtime", "scenario_id": "photography"},
@@ -248,6 +256,11 @@ class PhotographyScenarioPlanningAdapter:
                 "owns_visual_review": False,
                 "owns_retry": False,
                 "owns_result_selection": False,
+                # Central Brain may continue independently after one role's
+                # provider failure so the shared Product API can record every
+                # role's terminal state and withhold an incomplete set from
+                # normal project delivery.
+                "require_independent_role_terminal_states": bool(is_set),
             },
         }
 

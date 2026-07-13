@@ -614,6 +614,11 @@ class ScenarioRuntime:
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
             else []
         )
+        specialized_policy = (
+            dict(specialized_plan.execution_plan.get("policy") or {})
+            if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
+            else {}
+        )
         creative_owner = str(policy.metadata.get("creative_direction_owner") or "central_brain")
         deliverables: list[TemplateDeliverable] = []
         for index, direction in enumerate(directions, 1):
@@ -629,8 +634,17 @@ class ScenarioRuntime:
                         if normalized_intent.scenario_id == "ecommerce"
                         else []
                     ),
+                    # The Template owns the professional role contract while
+                    # Central Brain owns the image intent.  Carry the frozen
+                    # role record through the deliverable plan so an enforced
+                    # Provider/Review/Retry path can consume it from the
+                    # resolved ledger, never from mutable runtime metadata.
                     metadata=(
-                        {"specialized_role_key": recipe.get("role_key")}
+                        {
+                            "specialized_role_key": recipe.get("role_key"),
+                            "specialized_role_contract": dict(recipe),
+                            "specialized_execution_policy": specialized_policy,
+                        }
                         if recipe.get("role_key")
                         else {}
                     ),

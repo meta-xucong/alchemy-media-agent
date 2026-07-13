@@ -112,6 +112,22 @@ class GenerationProvider:
             if not direction:
                 return {}
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            specialized_contract = metadata.get("specialized_role_contract")
+            if isinstance(specialized_contract, dict) and specialized_contract.get("role_key"):
+                # This contract entered the provider projection through the
+                # frozen TemplateDeliverablePlan.  It is not a raw metadata
+                # fallback: only active specialized templates can bind this
+                # record before the execution envelope is frozen.
+                role = dict(specialized_contract)
+                role_metadata = role.get("metadata") if isinstance(role.get("metadata"), dict) else {}
+                role["role_key"] = str(metadata.get("specialized_role_key") or role["role_key"])
+                role["metadata"] = {
+                    **dict(role_metadata),
+                    "source": "resolved_constraint_ledger",
+                    "template_role_contract": True,
+                    "static_recipe_present": False,
+                }
+                return role
             return {
                 "role_key": str(
                     metadata.get("specialized_role_key")
@@ -150,6 +166,19 @@ class GenerationProvider:
 
     def _mode_execution_policy(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            deliverables = projection.get("deliverables") if isinstance(projection, dict) else None
+            priority = getattr(request.asset_spec, "priority", None) if request.asset_spec is not None else None
+            try:
+                index = max(1, int(priority or 1))
+            except (TypeError, ValueError):
+                index = 1
+            item = deliverables[index - 1] if isinstance(deliverables, list) and index <= len(deliverables) else None
+            metadata = item.get("metadata") if isinstance(item, dict) and isinstance(item.get("metadata"), dict) else {}
+            specialized_policy = metadata.get("specialized_execution_policy")
+            if isinstance(specialized_policy, dict) and specialized_policy:
+                return dict(specialized_policy)
             cluster = self._visual_cluster(request)
             value = cluster.get("mode_execution_policy") if isinstance(cluster, dict) else None
             if isinstance(value, dict):
