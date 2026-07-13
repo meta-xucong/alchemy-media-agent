@@ -459,7 +459,11 @@ class VisionOutputInspector:
         else:
             status = _status_from_issues(issue_codes, str(payload.get("status") or ""))
             retryable = status == "fail_retryable"
-        retry_patch = _merge_retry_patches(_retry_patch_for_issues(issue_codes), payload.get("retry_patch") if retryable else {})
+        preserve_portrait_identity = "portrait_identity" in set(review_contract.get("active_capability_ids") or [])
+        retry_patch = _merge_retry_patches(
+            _retry_patch_for_issues(issue_codes, preserve_portrait_identity=preserve_portrait_identity),
+            payload.get("retry_patch") if retryable else {},
+        )
         detected_issues = [_issue_payload(code, confidence) for code in issue_codes]
         if not identity_fusion:
             score_card = _provider_score_card(payload.get("scores"), status)
@@ -1010,7 +1014,11 @@ def _issue_message(code: str) -> str:
     return messages.get(code, code.replace("_", " "))
 
 
-def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
+def _retry_patch_for_issues(
+    issue_codes: list[str],
+    *,
+    preserve_portrait_identity: bool = False,
+) -> dict[str, Any]:
     prompt_additions: list[str] = []
     negative_additions: list[str] = []
     artifact_repair: list[str] = []
@@ -1090,7 +1098,10 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 ]
             )
         elif code in _DOC93_REFERENCE_CHANNEL_ISSUES:
-            channel_patch = reference_channel_retry_patch([code])
+            channel_patch = reference_channel_retry_patch(
+                [code],
+                preserve_portrait_identity=preserve_portrait_identity,
+            )
             prompt_additions.extend(channel_patch["prompt_additions"])
             negative_additions.extend(channel_patch["negative_additions"])
             identity_reinforcement.extend(channel_patch["identity_reinforcement"])

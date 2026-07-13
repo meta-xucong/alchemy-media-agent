@@ -89,6 +89,7 @@ from .reference_channel_policy import (
     REFERENCE_CHANNEL_ISSUE_CODES,
     REFERENCE_CHANNEL_POLICY_MODULE_ID,
     ReferenceChannelPolicyModule,
+    reference_channel_issue_codes,
 )
 from .strong_reference_loop import StrongReferenceLoopPlanner
 from .subject_asset_memory import SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID, SubjectContinuityAssetPackBuilder
@@ -2306,7 +2307,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "uncanny_micro_detail",
             "low_resolution_output",
             *(
-                sorted(REFERENCE_CHANNEL_ISSUE_CODES)
+                sorted(reference_channel_issue_codes(reference_policy_package))
                 if reference_policy_package and reference_policy_package.applies
                 else []
             ),

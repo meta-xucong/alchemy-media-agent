@@ -319,6 +319,45 @@ def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None
     assert provider.timeout >= 120
 
 
+def test_remote_brain_rejects_internally_inconsistent_image_set_plan(monkeypatch) -> None:
+    class InconsistentImageSetProvider:
+        provider = "openai"
+        model = "remote-cardinality-test"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            return {
+                "image_set_plan": {
+                    "set_goal": "incorrectly over-expanded plan",
+                    "image_count": 1,
+                    "shot_plan": ["first", "second", "third"],
+                },
+                "prompt_guidance": {"optimized_direction": "remote creative direction remains usable"},
+            }
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(provider=InconsistentImageSetProvider())
+    request = adapter.build_request(
+        user_input="Create one calm continuation image.",
+        stage="generate",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={"requested_image_count": 1, "require_real_images": True},
+    )
+
+    result = adapter.run(request)
+
+    assert result.llm_used is True
+    assert result.fallback_used is False
+    assert result.image_set_plan.image_count == 1
+    assert len(result.image_set_plan.shot_plan) == 1
+    assert result.audit["remote_contract_partial_fallback"] is True
+    assert result.audit["remote_contract_rejected_sections"] == ["image_set_plan"]
+
+
 def test_provider_reads_project_reference_assets_for_continuation(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

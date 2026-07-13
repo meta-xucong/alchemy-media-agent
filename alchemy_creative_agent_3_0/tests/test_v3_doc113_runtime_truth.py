@@ -135,6 +135,65 @@ def test_direct_product_and_project_entries_normalize_one_count_size_and_text_co
         assert len(delivery["deliverables"]) == 2
 
 
+def test_generation_reuses_the_server_frozen_intent_when_later_parameters_drift() -> None:
+    runtime = ScenarioRuntime()
+    planning_payload = {
+        "user_input": "Create one clean wide still-life image with no visible text.",
+        "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+        "metadata": {"requested_image_count": 1, "requested_image_size": "1536x1024"},
+    }
+    planned = runtime.plan_job(planning_payload)
+    assert planned.status.value == "planned"
+
+    frozen_plan = planned.metadata["capability_activation_plan"]
+    frozen_intent = planned.metadata["normalized_v3_job_intent"]
+    generation_payload = {
+        **planning_payload,
+        # This simulates stale per-stage/default transport.  It must not
+        # overwrite the immutable job decision made above.
+        "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
+        "metadata": {
+            **planning_payload["metadata"],
+            "requested_image_count": 2,
+            "capability_activation_plan": frozen_plan,
+            "capability_plan_provenance": {
+                "authority": "v3_product_api",
+                "issued_for_job_id": "doc113-frozen-intent-job",
+                "plan_id": frozen_plan["plan_id"],
+                "plan_fingerprint": frozen_plan["fingerprint"],
+            },
+            "normalized_v3_job_intent": frozen_intent,
+        },
+        "trusted_capability_plan_reuse": True,
+    }
+
+    generated = runtime.generate_job(generation_payload)
+
+    assert generated.status.value == "generated"
+    assert generated.metadata["normalized_v3_job_intent"]["effective_image_count"] == 1
+    assert generated.metadata["template_deliverable_plan"]["effective_image_count"] == 1
+    assert len(generated.metadata["template_deliverable_plan"]["deliverables"]) == 1
+
+
+def test_direct_runtime_rejects_untrusted_frozen_normalized_intent() -> None:
+    runtime = ScenarioRuntime()
+    planned = runtime.plan_job(
+        {
+            "user_input": "Create one still life",
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one still life",
+            "metadata": {"normalized_v3_job_intent": planned.metadata["normalized_v3_job_intent"]},
+        }
+    )
+
+    assert result.status.value == "blocked"
+    assert any("untrusted_normalized_v3_job_intent" in warning for warning in result.warnings)
+
+
 def test_enforced_combined_run_preserves_an_accepted_executor_result() -> None:
     runtime = ScenarioRuntime()
     request = ScenarioRuntimeRequest(user_input="Create one still life")

@@ -1,4 +1,5 @@
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
 
 
@@ -88,6 +89,40 @@ def test_ecommerce_brain_runs_only_with_trusted_policy(monkeypatch) -> None:
     result = adapter.run(request)
     assert result.capability_activation_intent is not None
     assert any(item.capability_id == "product_identity" for item in result.capability_activation_intent.requested_capabilities)
+
+
+def test_ecommerce_blocks_when_remote_image_set_plan_is_internally_inconsistent(monkeypatch) -> None:
+    class InconsistentImageSetProvider:
+        provider = "openai"
+        model = "remote-cardinality-test"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            return {
+                "image_set_plan": {
+                    "set_goal": "incorrectly over-expanded product plan",
+                    "image_count": 1,
+                    "shot_plan": ["first", "second"],
+                }
+            }
+
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=InconsistentImageSetProvider()))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one compliant product image from the supplied facts.",
+            "scenario_selection": {"scenario_id": "ecommerce", "parameters": {"requested_image_count": 1}},
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert any("remote_creative_brain_image_set_plan_invalid" in warning for warning in result.warnings)
 
 
 def test_generic_photography_word_does_not_prove_visible_human(monkeypatch) -> None:

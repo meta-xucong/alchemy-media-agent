@@ -477,12 +477,29 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3CurrentGenerationSettings" in script.text
     assert "requested_image_count: generationSettings.count" in script.text
     assert "requested_image_size: generationSettings.size" in script.text
+    assert "function v3RecoveryAttemptLimitForServerWatchdog" in script.text
+    assert "background_generation_watchdog" in script.text
+    assert "function v3JobAwaitingFinalDelivery" in script.text
+    assert "delivery_settling" in script.text
+    assert "function v3ProjectJobNeedsRecovery" in script.text
+    assert "function resumeV3ActiveProjectJobRecovery" in script.text
+    assert "正在恢复仍在后台完成的图片任务，避免重复生成。" in script.text
+    assert "const restoredJob = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });" in script.text
+    assert "recoveryJob = restoredJob || v3State.currentJob;" in script.text
+    assert "resumeV3ActiveProjectJobRecovery(recoveryJob);" in script.text
+    assert 'throw new Error("v3_project_recovery_replaced")' in script.text
+    assert "function v3HasPersonIdentityReferenceForAdvancedControls" in script.text
+    assert "function v3HasProductReferenceForAdvancedControls" in script.text
+    assert "已保持参考物品的外观，场景和镜头按本次要求" in script.text
+    assert "function v3OutputDisplayPurpose" in script.text
+    assert "图片已生成，自动复核建议人工确认细节。" in script.text
+    assert 'itemStatus === "selected" ? job.status' in script.text
     assert 'openV3ProjectSubpage("compose");' in script.text
     assert "function v3TemplateIdForScenario" in script.text
     assert "function v3ProjectHasProductReference" in script.text
-    assert "function v3SuiteSlotRequestForPreset" in script.text
+    assert "function v3SuiteSlotRequestForPreset" not in script.text
     assert "commerce_profile_patch" in script.text
-    assert "suite_slot_request" in script.text
+    assert "suite_slot_request" not in script.text
     assert "async function uploadV3Files" in script.text
     assert "function v3UploadedAssetRoleForCurrentTask" in script.text
     assert "function v3LooksLikeHumanReferenceTask" in script.text
@@ -592,7 +609,7 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     )
     assert text_only_ecommerce.status_code == 200
     text_only_payload = text_only_ecommerce.json()
-    assert text_only_payload["status"] == "planned"
+    assert text_only_payload["status"] == "blocked"
     assert text_only_payload["scenario"]["scenario_id"] == "ecommerce"
     assert text_only_payload["metadata"]["template_id"] == "ecommerce_template"
     assert text_only_payload["metadata"]["ecommerce_text_to_image_fallback"] is True
@@ -600,6 +617,9 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     assert text_only_payload["metadata"]["scenario_parameters"]["text_to_image_fallback"] is True
     assert text_only_payload["metadata"]["scenario_parameters"]["has_product_reference"] is False
     assert text_only_payload["ecommerce"]["product_truth"]["confidence"]["uploaded_image"] == 0.0
+    assert text_only_payload["ecommerce"]["image_recipes"] == []
+    assert text_only_payload["ecommerce"]["remote_brain_output_intents"] == []
+    assert "capability_activation_failed: remote_creative_brain_required_for_template" in text_only_payload["warnings"]
 
     product_asset_id = _create_ready_v3_upload(client, role="product_reference", filename="beverage.png")
     ecommerce_job = client.post(
@@ -613,16 +633,17 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
                 "target_platform": "amazon_us",
                 "core_selling_points": ["summer refreshment"],
             },
-            "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
         },
     )
     assert ecommerce_job.status_code == 200
     ecommerce_payload = ecommerce_job.json()
-    assert ecommerce_payload["status"] == "planned"
+    assert ecommerce_payload["status"] == "blocked"
     assert ecommerce_payload["scenario"]["scenario_id"] == "ecommerce"
     assert ecommerce_payload["metadata"]["template_id"] == "ecommerce_template"
     assert ecommerce_payload["metadata"]["project_context_snapshot"]["template_id"] == "ecommerce_template"
-    assert ecommerce_payload["ecommerce"]["image_recipes"]
+    assert ecommerce_payload["ecommerce"]["image_recipes"] == []
+    assert ecommerce_payload["ecommerce"]["remote_brain_output_intents"] == []
+    assert "capability_activation_failed: remote_creative_brain_required_for_template" in ecommerce_payload["warnings"]
 
     created_job = client.post(
         f"/api/v3/creative-agent/projects/{project_id}/jobs",
@@ -898,12 +919,14 @@ def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:
     )
     assert ecommerce.status_code == 200
     ecommerce_payload = ecommerce.json()
-    assert ecommerce_payload["status"] == "planned"
+    assert ecommerce_payload["status"] == "blocked"
     assert ecommerce_payload["scenario"]["scenario_id"] == "ecommerce"
     assert ecommerce_payload["scenario"]["can_create_jobs"] is True
     assert ecommerce_payload["ecommerce"]["platform"] == "amazon"
-    assert ecommerce_payload["ecommerce"]["image_recipes"]
-    assert ecommerce_payload["ecommerce"]["export_package"]["files"]
+    assert ecommerce_payload["ecommerce"]["image_recipes"] == []
+    assert ecommerce_payload["ecommerce"]["remote_brain_output_intents"] == []
+    assert ecommerce_payload["ecommerce"]["export_package"]["files"] == []
+    assert "capability_activation_failed: remote_creative_brain_required_for_template" in ecommerce_payload["warnings"]
 
 
 def test_v3_upload_routes_feed_ecommerce_export_manifest(tmp_path) -> None:

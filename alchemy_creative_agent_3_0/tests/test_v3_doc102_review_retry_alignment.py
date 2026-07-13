@@ -4,12 +4,43 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
     _inspection_prompt,
     active_review_contract,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import (
+    _retry_patch_for_issues,
+)
 
 
 def _product_result(monkeypatch):
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     return ScenarioRuntime().plan_job({"user_input": "Create a premium product hero for a desk lamp", "scenario_selection": {"scenario_id": "general_creative"}, "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}], "metadata": {"requested_image_count": 1}}).planning_result
+
+
+def _product_reference_result(monkeypatch):
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+    return ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create a premium product hero for a desk lamp with a new tabletop angle.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}],
+            "metadata": {
+                "requested_image_count": 1,
+                "project_context_snapshot": {
+                    "project_id": "project_product_reference_review",
+                    "template_id": "general_template",
+                    "uploaded_reference_assets": [
+                        {
+                            "asset_ref_id": "product",
+                            "asset_id": "product",
+                            "source_type": "uploaded",
+                            "role": "product_reference",
+                            "use_policy": "product",
+                        }
+                    ],
+                },
+            },
+        }
+    ).planning_result
 
 
 def test_product_job_ignores_human_review_issue(monkeypatch) -> None:
@@ -28,7 +59,7 @@ def test_product_job_keeps_product_review_issue(monkeypatch) -> None:
 
 
 def test_enforced_vision_prompt_uses_active_review_vocabulary(monkeypatch) -> None:
-    result = _product_result(monkeypatch)
+    result = _product_reference_result(monkeypatch)
     metadata = dict(result.metadata)
     contract = active_review_contract(metadata)
     prompt = _inspection_prompt(metadata)
@@ -36,6 +67,38 @@ def test_enforced_vision_prompt_uses_active_review_vocabulary(monkeypatch) -> No
     assert "product_identity_drift" in prompt
     assert "ai_face_render" not in prompt
     assert "identity_consistency" not in prompt
+    assert "source_camera_overinherited" in prompt
+    assert "source_hair_overinherited" not in prompt
+    assert "reference_used_as_style_when_identity_only" not in prompt
+
+
+def test_product_reference_retry_never_injects_portrait_repair_language(monkeypatch) -> None:
+    result = _product_reference_result(monkeypatch)
+    contract = active_review_contract(dict(result.metadata))
+    product_patch = _retry_patch_for_issues(
+        ["source_camera_overinherited"],
+        preserve_portrait_identity="portrait_identity" in contract["active_capability_ids"],
+    )
+    portrait_patch = _retry_patch_for_issues(
+        ["source_camera_overinherited"],
+        preserve_portrait_identity=True,
+    )
+
+    product_text = " ".join(
+        [
+            *product_patch["prompt_additions"],
+            *product_patch["negative_additions"],
+            *product_patch["identity_reinforcement"],
+            *product_patch["composition_repair"],
+        ]
+    ).lower()
+    portrait_text = " ".join(portrait_patch["identity_reinforcement"]).lower()
+
+    assert "portrait_identity" not in contract["active_capability_ids"]
+    assert "same person's face geometry" not in product_text
+    assert "face geometry" not in product_text
+    assert "current prompt viewpoint" in product_text
+    assert "same person's face geometry" in portrait_text
 
 
 def test_reference_policy_registers_prompt_ownership_review_and_retry_codes(monkeypatch) -> None:

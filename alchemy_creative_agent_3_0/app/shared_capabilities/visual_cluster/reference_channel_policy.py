@@ -32,20 +32,53 @@ REFERENCE_CHANNELS = (
     "style_finish",
 )
 
-REFERENCE_CHANNEL_ISSUE_CODES = {
-    "source_hair_overinherited",
-    "source_makeup_overinherited",
-    "source_wardrobe_overinherited",
+REFERENCE_CHANNEL_COMMON_ISSUE_CODES = {
     "source_lighting_overinherited",
     "source_color_grade_overinherited",
     "source_scene_overinherited",
     "source_camera_overinherited",
     "source_whole_style_overinherited",
-    "reference_used_as_style_when_identity_only",
     "prompt_owned_channel_ignored",
     "selected_anchor_overrode_current_prompt",
     "structured_appearance_lock_misapplied",
 }
+
+REFERENCE_CHANNEL_PORTRAIT_ISSUE_CODES = {
+    "source_hair_overinherited",
+    "source_makeup_overinherited",
+    "source_wardrobe_overinherited",
+    "reference_used_as_style_when_identity_only",
+}
+
+REFERENCE_CHANNEL_ISSUE_CODES = {
+    *REFERENCE_CHANNEL_COMMON_ISSUE_CODES,
+    *REFERENCE_CHANNEL_PORTRAIT_ISSUE_CODES,
+}
+
+
+def reference_channel_issue_codes(package: Any) -> set[str]:
+    """Return only review vocabulary justified by the frozen reference roles.
+
+    Doc93's portrait-only language is meaningful for an ordinary portrait
+    reference, but nonsensical for a product, animal, or generic-object truth
+    source.  Keep the channel-boundary checks shared while letting the frozen
+    policy decide whether portrait-specific checks are available.
+    """
+
+    if isinstance(package, dict):
+        policies = package.get("policies") if isinstance(package.get("policies"), list) else []
+    else:
+        policies = getattr(package, "policies", []) or []
+    roles = {
+        str(policy.get("source_role") or "").strip().lower()
+        if isinstance(policy, dict)
+        else str(getattr(policy, "source_role", "") or "").strip().lower()
+        for policy in policies
+    }
+    issues = set(REFERENCE_CHANNEL_COMMON_ISSUE_CODES)
+    if "portrait_identity_reference" in roles:
+        issues.update(REFERENCE_CHANNEL_PORTRAIT_ISSUE_CODES)
+    return issues
 
 _EXPLICIT_PROMPT_CHANNEL_RULES = {
     "hair_direction": (
@@ -638,7 +671,11 @@ class ReferenceChannelPolicyModule:
         return summary or ["Reference roles were resolved for this generation."]
 
 
-def reference_channel_retry_patch(issue_codes: list[str] | tuple[str, ...] | set[str]) -> dict[str, list[str]]:
+def reference_channel_retry_patch(
+    issue_codes: list[str] | tuple[str, ...] | set[str],
+    *,
+    preserve_portrait_identity: bool = False,
+) -> dict[str, list[str]]:
     """Return one module-owned, channel-specific repair patch for Doc93/Doc103 issues."""
 
     codes = {str(item).strip() for item in issue_codes if str(item).strip()}
@@ -647,9 +684,11 @@ def reference_channel_retry_patch(issue_codes: list[str] | tuple[str, ...] | set
         "do not increase whole-image reference strength and do not let a selected generated output override uploaded truth or the current prompt.",
     ]
     negative_additions: list[str] = []
-    identity_reinforcement = [
-        "Keep the same person's face geometry and feature relationships while changing prompt-owned surface styling or environmental channels."
-    ]
+    identity_reinforcement = (
+        ["Keep the same person's face geometry and feature relationships while changing prompt-owned surface styling or environmental channels."]
+        if preserve_portrait_identity
+        else []
+    )
     composition_repair: list[str] = []
 
     if "source_hair_overinherited" in codes:
@@ -669,7 +708,7 @@ def reference_channel_retry_patch(issue_codes: list[str] | tuple[str, ...] | set
         negative_additions.extend(["source wardrobe leakage", "source accessory leakage", "misapplied outfit lock"])
     if "source_lighting_overinherited" in codes or "source_color_grade_overinherited" in codes:
         prompt_additions.append(
-            "Restore the current prompt light direction, exposure, color temperature, and color grade without altering identity geometry."
+            "Restore the current prompt light direction, exposure, color temperature, and color grade without altering the assigned subject or product truth."
         )
         negative_additions.extend(["source lighting copied", "source color grade copied"])
     if "source_scene_overinherited" in codes:
@@ -684,10 +723,16 @@ def reference_channel_retry_patch(issue_codes: list[str] | tuple[str, ...] | set
         negative_additions.append("source camera frame copied")
         composition_repair.append("Use the requested camera composition instead of cloning the reference frame.")
     if codes & {"source_whole_style_overinherited", "reference_used_as_style_when_identity_only"}:
-        prompt_additions.append(
-            "Use the identity-only reference for identity channels only and restore the current prompt mood, art direction, and finish."
-        )
-        negative_additions.extend(["identity reference used as a style template", "source whole-image finish copied"])
+        if preserve_portrait_identity:
+            prompt_additions.append(
+                "Use the identity-only reference for identity channels only and restore the current prompt mood, art direction, and finish."
+            )
+            negative_additions.append("identity reference used as a style template")
+        else:
+            prompt_additions.append(
+                "Use the reference only for its assigned truth channels and restore the current prompt mood, art direction, and finish."
+            )
+        negative_additions.append("source whole-image finish copied")
     if codes & {"prompt_owned_channel_ignored", "selected_anchor_overrode_current_prompt"}:
         prompt_additions.append(
             "Re-read every explicit current-prompt channel and make each requested change visibly dominant over conflicting reference pixels."

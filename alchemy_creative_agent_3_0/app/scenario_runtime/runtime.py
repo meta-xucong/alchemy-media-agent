@@ -385,6 +385,9 @@ class ScenarioRuntime:
             return
         if not brain_result.llm_used or brain_result.fallback_used:
             raise CapabilityActivationError("remote_creative_brain_required_for_template")
+        rejected_sections = brain_result.audit.get("remote_contract_rejected_sections")
+        if isinstance(rejected_sections, list) and "image_set_plan" in rejected_sections:
+            raise CapabilityActivationError("remote_creative_brain_image_set_plan_invalid")
         expected = self._requested_image_count_for_brain(request)
         image_plan = brain_result.image_set_plan
         directions = [str(item).strip() for item in image_plan.shot_plan if str(item).strip()]
@@ -420,6 +423,36 @@ class ScenarioRuntime:
         """
 
         metadata = dict(request.metadata or {})
+        # Planning and generation are separate runtime entries for one Job.
+        # Once Product API has persisted the normalized contract, generation
+        # must consume that exact count/size/text decision rather than
+        # recomputing it from mutable nested scenario parameters.  Otherwise a
+        # continuation can be planned for one output but rejected before the
+        # provider because a later-stage default says two.
+        frozen_payload = metadata.get("normalized_v3_job_intent")
+        if isinstance(frozen_payload, dict):
+            if not request.trusted_capability_plan_reuse:
+                raise CapabilityActivationError("untrusted_normalized_v3_job_intent")
+            try:
+                frozen = NormalizedV3JobIntent.model_validate(frozen_payload)
+            except ValidationError as exc:
+                raise CapabilityActivationError("normalized_v3_job_intent_invalid") from exc
+            template_id = self._template_id(request, resolution)
+            if frozen.template_id != template_id:
+                raise CapabilityActivationError("normalized_v3_job_intent_template_mismatch")
+            if frozen.scenario_id != resolution.manifest.scenario_id:
+                raise CapabilityActivationError("normalized_v3_job_intent_scenario_mismatch")
+            # Brain request construction reads these transport fields before
+            # looking at the nested Scenario Pack diagnostics.  Reassert the
+            # immutable values here so a stale continuation/default cannot
+            # cause the Brain plan and the frozen deliverable contract to
+            # disagree during generation.
+            metadata["requested_image_count"] = frozen.effective_image_count
+            metadata["requested_image_size"] = frozen.effective_image_size
+            metadata["normalized_v3_job_intent"] = frozen.model_dump(mode="json")
+            metadata["normalized_v3_job_intent_id"] = frozen.intent_id
+            request.metadata = metadata
+            return frozen
         parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
         raw_count = metadata.get("requested_image_count", parameters.get("requested_image_count", 2))
         try:
@@ -571,7 +604,11 @@ class ScenarioRuntime:
         directions = [str(item).strip() for item in brain_result.image_set_plan.shot_plan if str(item).strip()]
         expected = normalized_intent.effective_image_count
         if brain_result.image_set_plan.image_count != expected or len(directions) != expected:
-            raise CapabilityActivationError("template_deliverable_plan_output_count_mismatch")
+            raise CapabilityActivationError(
+                "template_deliverable_plan_output_count_mismatch"
+                f": expected={expected}; brain_image_count={brain_result.image_set_plan.image_count}; "
+                f"brain_direction_count={len(directions)}"
+            )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)

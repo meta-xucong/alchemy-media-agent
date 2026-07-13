@@ -370,6 +370,20 @@ def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch
     assert kwargs["base_url"] == "https://api.openai.com/v1"
 
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("https://gateway.example/v1/images/generations", "https://gateway.example/v1"),
+        ("https://gateway.example/v1/images/edits/", "https://gateway.example/v1"),
+        ("https://gateway.example/openai/v1/images/generations", "https://gateway.example/openai/v1"),
+    ],
+)
+def test_openai_sdk_client_kwargs_normalizes_pasted_images_endpoint_to_api_root(configured, expected):
+    kwargs = openai_sdk_client_kwargs(api_key="sk-test", base_url=configured)
+
+    assert kwargs["base_url"] == expected
+
+
 def test_openai_image_provider_passes_quality_to_sdk_call():
     provider = registry.image("openai_gpt_image")
     captured = {}

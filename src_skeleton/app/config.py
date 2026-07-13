@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
 
@@ -41,7 +42,18 @@ def _claude_env_value(name: str) -> str | None:
 def _normalize_openai_base_url(value: str | None) -> str | None:
     if not value:
         return None
-    stripped = value.rstrip("/")
+    parsed = urlsplit(value.strip())
+    path = parsed.path.rstrip("/")
+    # Operators occasionally paste a concrete Images endpoint into
+    # OPENAI_BASE_URL.  AsyncOpenAI treats base_url as a root and appends its
+    # own endpoint path, so retaining that suffix turns a valid reference
+    # edit into e.g. `/v1/images/generations/v1/images/edits`.  Normalize only
+    # the terminal standard Images routes and preserve any gateway prefix.
+    for suffix in ("/images/generations", "/images/edits"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)] or ""
+            break
+    stripped = urlunsplit((parsed.scheme, parsed.netloc, path, "", "")).rstrip("/")
     if stripped.endswith("/v1"):
         return stripped
     # OpenAI-compatible Python SDK endpoints are conventionally rooted at /v1.

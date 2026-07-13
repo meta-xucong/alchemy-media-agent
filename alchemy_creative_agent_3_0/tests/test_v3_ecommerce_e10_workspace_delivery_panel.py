@@ -41,6 +41,7 @@ def test_ecommerce_workspace_collects_facts_and_approved_copy_without_fixed_suit
     assert 'suite_slots_requested:' not in script
     assert 'suite_slot_request' not in script
     assert 'overlay_copy' not in script
+    assert 'renderV3EcommerceSuiteScopeHint' not in script
 
 
 def test_ecommerce_workspace_renders_remote_output_intents_and_opaque_delivery_ids() -> None:

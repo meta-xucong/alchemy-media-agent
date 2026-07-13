@@ -335,6 +335,7 @@ const v3State = {
   progressTimer: null,
   recoverPollTimer: null,
   recoverPollAttempt: 0,
+  projectRecoveryKey: "",
   longRunNoticeKey: "",
   presetByScenario: {
     general_creative: "campaign_poster",
@@ -2208,7 +2209,6 @@ function setV3Preset(presetId) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  renderV3EcommerceSuiteScopeHint();
 }
 
 function setV3VariationMode(mode) {
@@ -3165,6 +3165,10 @@ function v3ProjectOutputReason(item) {
   const text = v3ShortText(rawReason, 64);
   if (!text || ["accept", "accepted", "approved", "pass", "passed", "ok", "true"].includes(text.toLowerCase())) {
     return "已完成，可作为当前项目的后续方向继续使用";
+  }
+  if (text.toLowerCase() === "manual_review") return "图片已生成，自动复核建议人工确认细节";
+  if (["retry", "retry_recommended", "failed_after_retry"].includes(text.toLowerCase())) {
+    return "图片已生成，系统保留了可复核的调整记录";
   }
   return text;
 }
@@ -4525,7 +4529,11 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
     if (!v3JobDeliverySettled(job)) {
       v3State.currentJob = job;
-      return null;
+      // A background job has no delivery to restore yet, but it is still the
+      // authoritative result of opening this project.  Return it explicitly
+      // so the caller can start recovery without relying on transient UI
+      // state that may be redrawn while the project workspace opens.
+      return job;
     }
     if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
       v3State.currentJob = job;
@@ -4550,6 +4558,51 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
   return null;
 }
 
+function v3ProjectJobNeedsRecovery(job) {
+  const status = String(job?.status || "");
+  return Boolean(
+    job?.job_id
+    && !v3JobDeliverySettled(job)
+    && !["blocked", "failed", "not_found"].includes(status),
+  );
+}
+
+function resumeV3ActiveProjectJobRecovery(job = v3State.currentJob) {
+  const projectId = String(v3State.currentProject?.project_id || "");
+  const jobId = String(job?.job_id || "");
+  if (!projectId || !jobId || !v3ProjectJobNeedsRecovery(job)) return;
+  const recoveryKey = `${projectId}:${jobId}`;
+  if (v3State.projectRecoveryKey === recoveryKey) return;
+  v3State.projectRecoveryKey = recoveryKey;
+  const expectedCount = v3ExpectedImageCountForJob(job);
+  setV3Busy(true, "正在恢复后台生成...");
+  setV3Progress("recovering", "正在恢复仍在后台完成的图片任务，避免重复生成。", "info", { forceNotice: true });
+  void recoverV3GeneratedJob(projectId, jobId, new Error("v3_background_generation_pending"), {
+    expectedCount,
+    shouldContinue: () => (
+      v3State.projectRecoveryKey === recoveryKey
+      && v3State.currentProject?.project_id === projectId
+    ),
+  })
+    .then(async (generated) => {
+      if (v3State.currentProject?.project_id !== projectId) return;
+      await completeV3GeneratedJob(generated);
+    })
+    .catch((error) => {
+      if (v3State.currentProject?.project_id !== projectId) return;
+      if (String(error?.message || error) === "v3_project_recovery_replaced") return;
+      updateV3Notice(`V3 暂时没有读到完成结果：${friendlyError(error)}。项目已保留，页面会继续保持为可恢复状态。`, "warning");
+    })
+    .finally(() => {
+      if (v3State.projectRecoveryKey !== recoveryKey) return;
+      v3State.projectRecoveryKey = "";
+      if (v3State.currentProject?.project_id !== projectId) return;
+      clearV3RecoverPolling();
+      clearV3ProgressTimer();
+      setV3Busy(false);
+    });
+}
+
 async function openV3Project(projectId) {
   if (!projectId) return;
   if (v3State.projectOpening) return;
@@ -4563,6 +4616,7 @@ async function openV3Project(projectId) {
   renderV3ProjectOpeningState(projectId);
   setV3Busy(true, "正在进入项目...");
   updateV3Notice("正在打开项目。", "info");
+  let recoveryJob = null;
   try {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
     v3State.currentProject = payload.project || null;
@@ -4575,7 +4629,9 @@ async function openV3Project(projectId) {
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true, limit: 80 });
-    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+    const restoredJob = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+    recoveryJob = restoredJob || v3State.currentJob;
+    const resumingActiveJob = v3ProjectJobNeedsRecovery(recoveryJob);
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
     }
@@ -4585,7 +4641,10 @@ async function openV3Project(projectId) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
     }
     releaseV3ScrollLockIfNoModal();
-    updateV3Notice("项目已打开，可以继续同风格生成。", "success");
+    updateV3Notice(
+      resumingActiveJob ? "项目已打开，正在恢复后台图片任务。" : "项目已打开，可以继续同风格生成。",
+      resumingActiveJob ? "info" : "success",
+    );
   } catch (error) {
     updateV3Notice(`项目打开失败：${friendlyError(error)}`, "error");
   }
@@ -4593,6 +4652,7 @@ async function openV3Project(projectId) {
   if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
   setV3PageLoading(false);
   setV3Busy(false);
+  resumeV3ActiveProjectJobRecovery(recoveryJob);
 }
 
 function renderV3ProjectOpeningState(projectId) {
@@ -4978,7 +5038,7 @@ function v3CurrentGenerationSettings() {
 
 function v3AdvancedReferenceControlsPayload() {
   return {
-    preserve_person_identity: Boolean(els.v3PreservePersonIdentityInput?.checked),
+    preserve_person_identity: Boolean(els.v3PreservePersonIdentityInput?.checked) && v3HasPersonIdentityReferenceForAdvancedControls(),
     preserve_product_appearance: Boolean(els.v3PreserveProductAppearanceInput?.checked),
     preserve_scene_consistency: Boolean(els.v3PreserveSceneConsistencyInput?.checked),
   };
@@ -4986,7 +5046,7 @@ function v3AdvancedReferenceControlsPayload() {
 
 function v3EcommerceAdvancedReferenceControlsPayload() {
   return {
-    preserve_person_identity: Boolean(els.v3EcommercePreservePersonIdentityInput?.checked),
+    preserve_person_identity: Boolean(els.v3EcommercePreservePersonIdentityInput?.checked) && v3HasPersonIdentityReferenceForAdvancedControls(),
     preserve_product_appearance: Boolean(els.v3EcommercePreserveProductAppearanceInput?.checked),
     preserve_scene_consistency: Boolean(els.v3EcommercePreserveSceneConsistencyInput?.checked),
   };
@@ -5007,9 +5067,40 @@ function v3HasActiveReferenceForAdvancedControls() {
   );
 }
 
-function v3ReferencePriorityStatusText(controls, hasReference) {
+function v3HasPersonIdentityReferenceForAdvancedControls() {
+  const references = [
+    ...(Array.isArray(v3State.uploadedAssets) ? v3State.uploadedAssets : []),
+    ...v3UsefulReferenceItems(v3State.currentProject),
+  ];
+  const hasTypedPersonReference = references.some((item) => {
+    const text = [item?.role, item?.use_policy, item?.declared_role, item?.intended_use, item?.filename]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return /portrait|face|person|character|human|人像|人物|脸|面部/.test(text);
+  });
+  if (hasTypedPersonReference) return true;
+  const goal = els.v3PromptInput?.value || v3State.currentProject?.user_goal || "";
+  return Boolean(v3State.files?.length && v3LooksLikeHumanReferenceTask(goal));
+}
+
+function v3HasProductReferenceForAdvancedControls() {
+  if (v3ProjectHasProductReference(v3State.currentProject)) return true;
+  return [
+    ...(Array.isArray(v3State.uploadedAssets) ? v3State.uploadedAssets : []),
+    ...v3UsefulReferenceItems(v3State.currentProject),
+  ].some((item) => /product|商品|物品|logo|brand/.test([
+    item?.role,
+    item?.use_policy,
+    item?.declared_role,
+    item?.intended_use,
+  ].filter(Boolean).join(" ").toLowerCase()));
+}
+
+function v3ReferencePriorityStatusText(controls, hasReference, { hasProductReference = false } = {}) {
   if (!hasReference) return "上传参考图后，可优先保持人物、物品或场景一致";
   if (controls.preserve_person_identity) return "已保持同一个人的长相，造型和场景按本次要求";
+  if (hasProductReference) return "已保持参考物品的外观，场景和镜头按本次要求";
   if (controls.preserve_product_appearance || controls.preserve_scene_consistency) return "已开启参考图一致性";
   return "参考图会作为普通画面参考";
 }
@@ -5018,7 +5109,8 @@ function updateV3ReferencePriorityStatus() {
   if (!els.v3ReferencePriorityStatus) return;
   els.v3ReferencePriorityStatus.textContent = v3ReferencePriorityStatusText(
     v3AdvancedReferenceControlsPayload(),
-    v3HasActiveReferenceForAdvancedControls()
+    v3HasActiveReferenceForAdvancedControls(),
+    { hasProductReference: v3HasProductReferenceForAdvancedControls() },
   );
 }
 
@@ -5026,7 +5118,8 @@ function updateV3EcommerceReferencePriorityStatus() {
   if (!els.v3EcommerceReferencePriorityStatus) return;
   els.v3EcommerceReferencePriorityStatus.textContent = v3ReferencePriorityStatusText(
     v3EcommerceAdvancedReferenceControlsPayload(),
-    v3HasActiveReferenceForAdvancedControls()
+    v3HasActiveReferenceForAdvancedControls(),
+    { hasProductReference: v3HasProductReferenceForAdvancedControls() },
   );
 }
 
@@ -5238,14 +5331,21 @@ function v3IsSoftTimeout(error) {
   return String(error?.message || error || "").includes("v3_generation_soft_timeout");
 }
 
-async function recoverV3GeneratedJob(projectId, jobId, originalError, { expectedCount = null } = {}) {
+async function recoverV3GeneratedJob(projectId, jobId, originalError, { expectedCount = null, shouldContinue = null } = {}) {
   clearV3RecoverPolling();
   let lastError = originalError;
-  for (let attempt = 1; attempt <= v3RecoveryMaxAttempts; attempt += 1) {
+  let recoveryAttemptLimit = v3RecoveryMaxAttempts;
+  for (let attempt = 1; attempt <= recoveryAttemptLimit; attempt += 1) {
+    if (typeof shouldContinue === "function" && !shouldContinue()) {
+      throw new Error("v3_project_recovery_replaced");
+    }
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+      if (typeof shouldContinue === "function" && !shouldContinue()) {
+        throw new Error("v3_project_recovery_replaced");
+      }
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
         return job;
       }
@@ -5258,8 +5358,14 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         setV3Progress("failed", v3ProviderFailureUserMessage(job), "warning", { forceNotice: true });
         return job;
       }
+      recoveryAttemptLimit = Math.max(
+        recoveryAttemptLimit,
+        v3RecoveryAttemptLimitForServerWatchdog(job, attempt),
+      );
       if (v3JobProviderRetryActive(job)) {
         setV3Progress("recovering", "正在换一条线路重试。", "warning", { forceNotice: true });
+      } else if (v3JobAwaitingFinalDelivery(job)) {
+        setV3Progress("reviewing", "图片已返回，正在完成质量检查和最终交付。", "info", { forceNotice: attempt === 1 });
       }
       v3State.currentJob = job || v3State.currentJob;
       renderV3Job(v3State.currentJob);
@@ -5292,6 +5398,21 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     lastError = error;
   }
   throw lastError || originalError || new Error("V3 generation status could not be restored.");
+}
+
+function v3JobAwaitingFinalDelivery(job) {
+  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling);
+}
+
+function v3RecoveryAttemptLimitForServerWatchdog(job, completedAttempt) {
+  const watchdog = job?.metadata?.background_generation_watchdog;
+  const timeoutSeconds = Number(watchdog?.timeout_seconds);
+  const startedAt = Date.parse(String(watchdog?.started_at || ""));
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || !Number.isFinite(startedAt)) return 0;
+  const remainingMs = Math.max(0, (startedAt + (timeoutSeconds * 1000)) - Date.now());
+  const pollingIntervalMs = 2500;
+  const completionBufferAttempts = 4;
+  return completedAttempt + Math.ceil(remainingMs / pollingIntervalMs) + completionBufferAttempts;
 }
 
 function v3JobProviderRetrySummary(job) {
@@ -5828,6 +5949,17 @@ function renderV3Warnings(warnings) {
   });
 }
 
+function v3OutputDisplayPurpose(item, fallback = "") {
+  const direct = String(item?.purpose || item?.selling_point || "").trim();
+  if (direct) return direct;
+  const recommendation = String(item?.recommendation || "").trim().toLowerCase();
+  if (recommendation === "manual_review") return "图片已生成，自动复核建议人工确认细节。";
+  if (["retry", "retry_recommended", "failed_after_retry"].includes(recommendation)) {
+    return "图片已生成，系统保留了可复核的调整记录。";
+  }
+  return fallback;
+}
+
 function v3IsInternalWarning(item) {
   const text = String(item || "").trim().toLowerCase();
   if (!text) return true;
@@ -5926,9 +6058,11 @@ function renderV3ResultBoard(job) {
     const title = scenarioId === "ecommerce"
       ? v3EcommerceOutputLabel(outputId, index + 1)
       : item.asset_id || item.candidate_id || `candidate_${index + 1}`;
-    const purpose = item.purpose || item.recommendation || "商业视觉资产";
-    const cardPurpose = assetMetadata.ecommerce_creative_direction || item.selling_point || item.purpose || item.recommendation || (scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示");
-    const status = item.status || (item.selected ? "selected" : job.status);
+    const fallbackPurpose = scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示";
+    const purpose = v3OutputDisplayPurpose(item, "商业视觉资产");
+    const cardPurpose = assetMetadata.ecommerce_creative_direction || v3OutputDisplayPurpose(item, fallbackPurpose);
+    const itemStatus = String(item.status || "");
+    const status = isSelected ? "selected" : (itemStatus === "selected" ? job.status : (itemStatus || job.status));
     const imageCandidates = v3OutputImageCandidates(item);
     const downloadUrl = v3OutputDownloadUrl(item);
     const hasRealImage = imageCandidates.length > 0;

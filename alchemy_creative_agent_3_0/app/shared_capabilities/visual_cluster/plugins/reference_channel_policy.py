@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .base import BaseVisualCapabilityPlugin, VisualPluginContext, as_dict, string_list
-from ..reference_channel_policy import REFERENCE_CHANNEL_ISSUE_CODES
+from ..reference_channel_policy import reference_channel_issue_codes
 
 
 class ReferenceChannelPolicyPlugin(BaseVisualCapabilityPlugin):
@@ -11,7 +11,7 @@ class ReferenceChannelPolicyPlugin(BaseVisualCapabilityPlugin):
         package = as_dict(context.cluster.get("resolved_reference_policy_package"))
         if not package.get("applies"):
             return self.contribution(context)
-        issues = sorted(REFERENCE_CHANNEL_ISSUE_CODES)
+        issues = sorted(reference_channel_issue_codes(package))
         return self.contribution(
             context,
             prompt=string_list(package.get("provider_prompt_rules")),

@@ -171,6 +171,20 @@ class V3LLMBrainAdapter:
         ]:
             if isinstance(data.get(key), dict):
                 candidate = _merge_dict(payload.get(key, {}), data[key])
+                # A remote plan may be valid JSON while still violating the
+                # concrete output contract (for example, declaring one image
+                # but returning three directions).  Do not truncate it at a
+                # later delivery stage: keep the already-counted fallback
+                # plan for this section and make the partial fallback
+                # auditable.  Templates that require a remote creative Brain
+                # reject this marker in ScenarioRuntime rather than turning a
+                # malformed remote set into local E-Commerce directions.
+                if key == "image_set_plan" and not _matches_image_set_cardinality(
+                    candidate,
+                    expected_count=fallback.image_set_plan.image_count,
+                ):
+                    rejected_sections.append(key)
+                    continue
                 payload, accepted = _merge_validated_section(payload, key, candidate)
                 if not accepted:
                     rejected_sections.append(key)
@@ -268,6 +282,23 @@ def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
         if value is not None and value != "" and value != [] and value != {}:
             merged[key] = value
     return merged
+
+
+def _matches_image_set_cardinality(candidate: dict[str, Any], *, expected_count: int) -> bool:
+    """Require a remote image-set plan to be internally and request consistent.
+
+    The Pydantic shape accepts arbitrary list lengths, because it is also used
+    to read historical records.  New runtime plans must be stricter: one
+    requested output means exactly one natural-language direction.  This is a
+    validation boundary, never a request to slice or pad a remote plan.
+    """
+
+    try:
+        image_count = int(candidate.get("image_count"))
+    except (TypeError, ValueError):
+        return False
+    directions = [str(item).strip() for item in candidate.get("shot_plan", []) if str(item).strip()]
+    return image_count == expected_count and len(directions) == expected_count
 
 
 def _merge_validated_section(
