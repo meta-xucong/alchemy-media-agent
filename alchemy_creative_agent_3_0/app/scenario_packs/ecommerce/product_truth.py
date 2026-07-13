@@ -46,10 +46,6 @@ class ProductTruthLockBuilder:
             [
                 *as_list(product_profile.get("immutable_attributes")),
                 *visible_attributes,
-                "product shape and proportions",
-                "visible logo or label text",
-                "material and finish",
-                "included components and quantity",
             ]
         )
         evidence_sources = self._evidence_sources(product_profile, uploaded_asset_ids)
@@ -72,7 +68,6 @@ class ProductTruthLockBuilder:
                 "lighting polish",
                 "lifestyle environment",
                 "props that do not block the product",
-                "platform-safe overlay labels",
             ],
             forbidden_transformations=[
                 "changing product shape",
@@ -88,10 +83,10 @@ class ProductTruthLockBuilder:
                 "product_specs": 0.78 if product_profile else 0.0,
             },
             review_obligations=[
-                "Product silhouette remains recognizable in every slot.",
+                "Product silhouette remains recognizable in every output.",
                 "Logo, label, material, color, quantity, and visible components match supplied evidence.",
                 "Unsupported claims are removed or softened before export.",
-                "Overlay text does not cover key product details.",
+                "Any requested text is part of the complete provider image and is reviewed in final pixels.",
             ],
             warnings=warnings,
             metadata={

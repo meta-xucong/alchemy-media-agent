@@ -278,12 +278,12 @@ def test_memory_apply_preserves_generated_reference_platform_per_asset() -> None
     assert expected_platforms.issubset(set(updated.platform_history))
 
 
-def test_asset_pack_preserves_selected_vertical_pack_metadata_and_hook() -> None:
+def test_asset_pack_keeps_implicit_product_request_in_general_path() -> None:
     result = run_generation_loop("帮我做一组蓝牙耳机淘宝主图，要科技感、干净。")
 
-    assert result.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
-    assert result.asset_pack.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
-    assert result.metadata["vertical_evaluation_policy"]["pack"] == "ecommerce_agent_family"
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.asset_pack.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.metadata["vertical_evaluation_policy"]["pack"] == "default_commercial_pack"
 
 
 def test_generation_loop_runs_without_v2_imports() -> None:

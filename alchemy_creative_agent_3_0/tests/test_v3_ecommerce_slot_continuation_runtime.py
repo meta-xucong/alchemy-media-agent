@@ -10,10 +10,17 @@ import pytest
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.project_mode.service import EcommerceSlotContinuationError
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 from app.main import app
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _handlers(*, project_store=None) -> V3ProductRouteHandlers:
+    """Slot lineage tests use an explicit remote-Brain contract fixture."""
+
+    return V3ProductRouteHandlers(service=ecommerce_test_service(), project_store=project_store)
 
 
 def _png_base64() -> str:
@@ -50,7 +57,7 @@ def _ecommerce_root(handlers: V3ProductRouteHandlers) -> tuple[dict, dict]:
                 "target_platform": "amazon_us",
                 "core_selling_points": ["Adjustable metal shade"],
             },
-            "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
+            "metadata": {"requested_image_count": 3},
         },
     )
     assert root["status"] == "planned"
@@ -59,7 +66,7 @@ def _ecommerce_root(handlers: V3ProductRouteHandlers) -> tuple[dict, dict]:
 
 
 def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _handlers()
     project, root = _ecommerce_root(handlers)
     root_record = handlers.service.get_job_record(root["job_id"])
     assert root_record is not None
@@ -68,7 +75,7 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
     continuation = handlers.post_project_ecommerce_slot_continuation(
         project["project_id"],
         root["job_id"],
-        "feature_image_1",
+        "ecommerce_output_2",
         {"correction_note": "Make the feature angle cleaner and more legible.", "metadata": {"source": "ecommerce_workspace"}},
     )
 
@@ -77,7 +84,7 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
     assert continuation["child_job_id"] != root["job_id"]
     assert continuation["lineage"]["root_job_id"] == root["job_id"]
     assert continuation["lineage"]["parent_job_id"] == root["job_id"]
-    assert continuation["lineage"]["parent_slot_id"] == "feature_image_1"
+    assert continuation["lineage"]["parent_slot_id"] == "ecommerce_output_2"
     assert child_record.request.metadata["capability_activation_plan"] == parent_metadata["capability_activation_plan"]
     assert "capability_plan_amendment" not in child_record.request.metadata
     assert root_record.request.metadata == parent_metadata
@@ -85,16 +92,16 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
 
 
 def test_slot_delivery_uses_latest_successful_child_and_keeps_parent_history() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _handlers()
     project, root = _ecommerce_root(handlers)
     continuation = handlers.post_project_ecommerce_slot_continuation(
-        project["project_id"], root["job_id"], "feature_image_1", {"correction_note": "Use a closer product detail."}
+        project["project_id"], root["job_id"], "ecommerce_output_2", {"correction_note": "Use a closer product detail."}
     )
 
     generated_child = handlers.post_project_job_generate(
         project["project_id"], continuation["child_job_id"], {"quality_mode": "standard"}
     )
-    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "feature_image_1")
+    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "ecommerce_output_2")
 
     assert generated_child["status"] == "generated"
     assert delivery["current_delivery"]["job_id"] == continuation["child_job_id"]
@@ -109,14 +116,14 @@ def test_slot_delivery_uses_latest_successful_child_and_keeps_parent_history() -
 
 def test_slot_continuation_lineage_survives_project_store_reload(tmp_path) -> None:
     store_root = tmp_path / "projects"
-    first = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    first = _handlers(project_store=PersistentProjectStore(store_root))
     project, root = _ecommerce_root(first)
 
-    restarted = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    restarted = _handlers(project_store=PersistentProjectStore(store_root))
     continuation = restarted.post_project_ecommerce_slot_continuation(
-        project["project_id"], root["job_id"], "main_image", {"correction_note": "Keep the same product but improve framing."}
+        project["project_id"], root["job_id"], "ecommerce_output_1", {"correction_note": "Keep the same product but improve framing."}
     )
-    delivery = restarted.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "main_image")
+    delivery = restarted.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "ecommerce_output_1")
 
     assert continuation["lineage"]["root_job_id"] == root["job_id"]
     assert continuation["child_status"] == "planned"
@@ -124,7 +131,7 @@ def test_slot_continuation_lineage_survives_project_store_reload(tmp_path) -> No
 
 
 def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypatch) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _handlers()
     project, root = _ecommerce_root(handlers)
     later_evidence = _ready_product_upload(handlers, filename="later-evidence.png")
     handlers.post_project_reference(
@@ -157,7 +164,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
     amended = handlers.post_project_ecommerce_slot_continuation(
         project["project_id"],
         root["job_id"],
-        "feature_image_1",
+        "ecommerce_output_2",
         {"new_evidence_asset_ids": [later_evidence]},
     )
 
@@ -172,7 +179,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
         handlers.post_project_ecommerce_slot_continuation(
             project["project_id"],
             root["job_id"],
-            "feature_image_1",
+            "ecommerce_output_2",
             {"new_evidence_asset_ids": [newer_evidence]},
         )
     assert exhausted.value.code == "slot_plan_amendment_exhausted"

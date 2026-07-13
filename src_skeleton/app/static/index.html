@@ -1631,16 +1631,6 @@
                           <span>目标市场</span>
                           <input id="v3EcommerceMarketInput" type="text" maxlength="40" placeholder="可选，例如：美国 / 日本 / 中国" />
                         </label>
-                        <label class="field">
-                          <span>套图范围</span>
-                          <select id="v3EcommerceSuiteScopeInput">
-                            <option value="recommended">按当前快速目标推荐</option>
-                            <option value="listing_core">基础上架图（主图、卖点、场景、细节）</option>
-                            <option value="listing_full">完整上架套图（含第二卖点和信任图）</option>
-                            <option value="detail_supplement">补齐详情 / 场景图（不重复主图）</option>
-                          </select>
-                          <small id="v3EcommerceSuiteScopeHint" class="v3-field-hint" aria-live="polite">将按当前快速目标推荐套图内容。</small>
-                        </label>
                       </div>
                       <details id="v3EcommerceAdvanced" class="v3-optional-details">
                         <summary>
@@ -1688,9 +1678,9 @@
                             </select>
                           </label>
                           <label class="field">
-                            <span>指定短文案</span>
-                            <input id="v3EcommerceOverlayCopyInput" type="text" maxlength="140" placeholder="可选，例如：Adjustable angle" />
-                            <small class="v3-field-hint">只规划到允许加字的卖点或场景图；主图默认不加文字。</small>
+                            <span>已批准的原文文案</span>
+                            <input id="v3EcommerceApprovedCopyInput" type="text" maxlength="140" placeholder="可选；仅填写需要原样出现在最终图片中的文字" />
+                            <small class="v3-field-hint">中央大脑和生图模型决定是否及如何自然融入图片；不会使用本地叠字或固定版式。</small>
                           </label>
                         </div>
                         <label class="field">

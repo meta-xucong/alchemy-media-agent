@@ -721,6 +721,16 @@ class V3ProjectModeService:
         project = self._require_project(project_id)
         job_request = self._coerce_create_project_job_request(request)
         template_manifest = self._ensure_active_template(job_request.template_id)
+        if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID and (
+            job_request.suite_slot_request
+            or (
+                job_request.commerce_profile_patch is not None
+                and job_request.commerce_profile_patch.suite_slots_requested
+            )
+        ):
+            raise ValueError(
+                "ecommerce_static_slot_request_retired: the Central Brain decides the requested image set from facts and user intent."
+            )
         uploaded_asset_ids = list(dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids]))
         ecommerce_text_to_image_fallback = False
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
@@ -930,6 +940,10 @@ class V3ProjectModeService:
         child_metadata = {
             "source": source,
             "ecommerce_slot_lineage": lineage_payload.model_dump(mode="json"),
+            # A continuation is one revised provider image for the selected
+            # opaque output ID.  This is quantity/lineage transport, not a
+            # local creative slot recipe.
+            "requested_image_count": 1,
             "capability_activation_plan": frozen_plan.model_dump(mode="json"),
             "capability_activation_plan_id": frozen_plan.plan_id,
             "continuation_evidence_asset_ids": evidence_ids,
@@ -950,7 +964,6 @@ class V3ProjectModeService:
                     continuation_request.correction_note,
                 ),
                 "uploaded_asset_ids": self._continuation_product_evidence_ids(project, evidence_ids),
-                "suite_slot_request": [clean_slot_id],
                 "metadata": child_metadata,
             },
         )
@@ -2084,7 +2097,20 @@ class V3ProjectModeService:
 
     def _declared_ecommerce_slots(self, status: ProductJobStatus) -> list[str]:
         ecommerce = status.ecommerce
-        recipes = ecommerce.image_recipes if ecommerce is not None else []
+        if ecommerce is None:
+            return []
+        # New E-Commerce jobs have opaque, Brain-selected output IDs.  Keep
+        # the historical recipe read only as a migration fallback so Doc105
+        # continuation works without any fixed marketplace slot vocabulary.
+        output_intents = ecommerce.remote_brain_output_intents or []
+        declared = [
+            str(intent.get("slot_id") or "").strip()
+            for intent in output_intents
+            if isinstance(intent, dict) and str(intent.get("slot_id") or "").strip()
+        ]
+        if declared:
+            return list(dict.fromkeys(declared))
+        recipes = ecommerce.image_recipes
         return list(
             dict.fromkeys(
                 str(recipe.get("slot") or "").strip()
@@ -2396,7 +2422,6 @@ class V3ProjectModeService:
             "keyword_roots",
             "keywords",
             "competitor_notes",
-            "suite_slots_requested",
         ]
         for field in scalar_fields:
             value = patch_data.get(field)
@@ -2406,8 +2431,6 @@ class V3ProjectModeService:
             values = patch_data.get(field)
             if values:
                 data[field] = self._dedupe_text(values)
-        if request.suite_slot_request:
-            data["suite_slots_requested"] = self._dedupe_text(request.suite_slot_request)
         metadata = dict(data.get("metadata") or {})
         metadata.update(dict(patch_data.get("metadata") or {}))
         metadata.update(
@@ -2451,7 +2474,6 @@ class V3ProjectModeService:
                 "project_context_version": context.context_version,
                 "use_project_context": request.use_project_context,
                 "project_mode": True,
-                "suite_slot_request": list(request.suite_slot_request),
                 "has_product_reference": bool(has_product_reference),
                 "text_to_image_fallback": not bool(has_product_reference),
             }
@@ -2468,19 +2490,9 @@ class V3ProjectModeService:
             copy_locale = str(commerce_metadata.get("copy_locale") or "").strip()
             if copy_locale:
                 parameters["copy_locale"] = copy_locale
-            raw_overlay_copy = commerce_metadata.get("overlay_copy")
-            if isinstance(raw_overlay_copy, dict):
-                overlay_copy = {
-                    str(slot).strip(): str(copy).strip()
-                    for slot, copy in raw_overlay_copy.items()
-                    if str(slot).strip() and str(copy).strip()
-                }
-            elif isinstance(raw_overlay_copy, str) and raw_overlay_copy.strip():
-                overlay_copy = raw_overlay_copy.strip()
-            else:
-                overlay_copy = None
-            if overlay_copy:
-                parameters["overlay_copy"] = overlay_copy
+            approved_literal_copy = str(commerce_metadata.get("approved_literal_copy") or "").strip()
+            if approved_literal_copy:
+                parameters["approved_literal_copy"] = approved_literal_copy
             return {
                 "scenario_id": manifest.scenario_pack_id,
                 "mode_id": mode_id,
@@ -2589,7 +2601,6 @@ class V3ProjectModeService:
             "keyword_roots": list(profile.keyword_roots),
             "keywords": list(profile.keywords),
             "competitor_notes": list(profile.competitor_notes),
-            "suite_slots_requested": list(profile.suite_slots_requested or request.suite_slot_request),
             "has_product_reference": bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
             "text_to_image_fallback": not bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
         }

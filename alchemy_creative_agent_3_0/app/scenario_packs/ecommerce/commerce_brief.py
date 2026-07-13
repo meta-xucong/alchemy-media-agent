@@ -1,4 +1,8 @@
-"""Commerce brief synthesis for visual planning."""
+"""Seller-fact aggregation for E-Commerce Brain context.
+
+This module intentionally does not add category personas, buyer motivations,
+default selling points, keyword interpretations, or visual strategies.
+"""
 
 from __future__ import annotations
 
@@ -8,36 +12,8 @@ from .contracts import CommerceIntelligenceBrief, MarketplaceRuleProfile, Produc
 from .utils import as_list, clean_text, parameter_value, unique_preserve_order
 
 
-CATEGORY_DEFAULTS = {
-    "desk_lamp": {
-        "audience": ["home office users", "students", "gift buyers"],
-        "motivations": ["better task lighting", "desk organization", "eye-comfort perception", "room style upgrade"],
-        "pain": ["glare", "small workspace", "cheap-looking materials", "unclear size"],
-        "trust": ["material close-up", "stable base", "control details", "scale context"],
-    },
-    "headphones": {
-        "audience": ["commuters", "office users", "fitness users", "students"],
-        "motivations": ["noise reduction", "comfort", "battery confidence", "portable style"],
-        "pain": ["uncomfortable fit", "short battery life", "unclear compatibility", "weak build quality"],
-        "trust": ["fit detail", "case detail", "battery or feature callout", "lifestyle proof"],
-    },
-    "skincare": {
-        "audience": ["beauty shoppers", "gift buyers", "routine upgraders"],
-        "motivations": ["premium routine", "ingredient confidence", "skin-feel promise", "gift value"],
-        "pain": ["unclear ingredient proof", "messy texture", "cheap packaging", "overclaimed results"],
-        "trust": ["texture macro", "package clarity", "ingredient-safe wording", "premium lighting"],
-    },
-    "generic_product": {
-        "audience": ["comparison shoppers", "gift buyers", "repeat category buyers"],
-        "motivations": ["clear value", "quality confidence", "ease of use", "visual appeal"],
-        "pain": ["unclear size", "unclear material", "weak feature proof", "low trust"],
-        "trust": ["detail close-up", "scale cue", "feature proof", "package or warranty-safe trust cue"],
-    },
-}
-
-
 class CommerceBriefBuilder:
-    """Turn seller inputs into a conversion-oriented visual brief."""
+    """Preserve supplied commercial facts without creating an image recipe."""
 
     def build(
         self,
@@ -48,92 +24,42 @@ class CommerceBriefBuilder:
         product_truth: ProductTruthLock,
         marketplace_profile: MarketplaceRuleProfile,
     ) -> CommerceIntelligenceBrief:
-        defaults = CATEGORY_DEFAULTS.get(product_truth.product_category, CATEGORY_DEFAULTS["generic_product"])
-        keywords = self._keywords(product_profile, parameters)
-        selling_points = self._selling_points(product_profile, product_truth, keywords)
-        claim_warnings = [
-            warning
-            for warning in product_truth.warnings
-            if "claim" in warning.lower() or "evidence" in warning.lower()
+        claims = as_list(product_profile.get("claims"))
+        facts = [
+            item
+            for item in product_truth.visible_attributes
+            if item and "uploaded product/reference image" not in item.lower()
         ]
-        competitor_patterns = self._competitor_patterns(product_profile, parameters)
-        visual_strategy = [
-            f"Use {marketplace_profile.platform} policy evidence to frame buyer needs without hard-coding a visual recipe.",
-            "Cover product clarity, supported benefits, use context, and trust with distinct buyer-evidence goals.",
-            "When approved copy is present, let the LLM and image provider integrate it into the complete image; never create a local overlay.",
-        ]
-        if competitor_patterns:
-            visual_strategy.append("Borrow reusable visual grammar from references without copying content or claims.")
-
         return CommerceIntelligenceBrief(
-            target_audience=unique_preserve_order([*as_list(parameter_value(parameters, product_profile, "target_audience", "audience")), *defaults["audience"]])[:8],
-            buying_motivations=unique_preserve_order([*as_list(parameter_value(parameters, product_profile, "buying_motivations", "motivations")), *defaults["motivations"]])[:10],
-            pain_points=unique_preserve_order([*as_list(parameter_value(parameters, product_profile, "pain_points")), *defaults["pain"]])[:10],
-            trust_drivers=unique_preserve_order([*as_list(parameter_value(parameters, product_profile, "trust_drivers", "proof_points")), *defaults["trust"]])[:10],
-            keyword_intent_map=self._keyword_intent_map(keywords),
-            competitor_patterns=competitor_patterns,
-            differentiated_selling_points=selling_points,
-            visual_strategy=visual_strategy,
-            claim_risk_warnings=claim_warnings,
+            target_audience=self._values(parameters, product_profile, "target_audience", "audience"),
+            buying_motivations=self._values(parameters, product_profile, "buying_motivations", "motivations"),
+            pain_points=self._values(parameters, product_profile, "pain_points"),
+            trust_drivers=self._values(parameters, product_profile, "trust_drivers", "proof_points"),
+            keyword_intent_map=[{"keyword": item, "intent": "seller_supplied"} for item in self._values(parameters, product_profile, "keywords", "keyword_roots", "search_terms")],
+            competitor_patterns=self._values(parameters, product_profile, "competitor_references", "competitor_patterns", "listing_references", "style_references"),
+            differentiated_selling_points=unique_preserve_order([
+                *self._values(parameters, product_profile, "selling_points", "benefits", "features"),
+                *facts,
+            ])[:12],
+            visual_strategy=[],
+            claim_risk_warnings=[
+                warning
+                for warning in product_truth.warnings
+                if "claim" in warning.lower() or "evidence" in warning.lower()
+            ],
             metadata={
                 "source": "CommerceBriefBuilder",
                 "platform": marketplace_profile.platform,
                 "market": marketplace_profile.market,
                 "external_research_used": False,
                 "user_input_digest": clean_text(user_input)[:180],
+                "default_persona_or_selling_point_added": False,
+                "claims_supplied": claims,
             },
         )
 
-    def _keywords(self, profile: dict[str, Any], parameters: dict[str, Any]) -> list[str]:
+    def _values(self, parameters: dict[str, Any], profile: dict[str, Any], *fields: str) -> list[str]:
         values: list[str] = []
-        for field in ["keywords", "keyword_roots", "search_terms", "root_words"]:
+        for field in fields:
             values.extend(as_list(parameter_value(parameters, profile, field)))
-        return unique_preserve_order(values)[:30]
-
-    def _keyword_intent_map(self, keywords: list[str]) -> list[dict[str, str]]:
-        mapped: list[dict[str, str]] = []
-        for keyword in keywords[:20]:
-            lower = keyword.lower()
-            if any(token in lower for token in ["for ", "gift", "home", "office", "travel"]):
-                intent = "usage scene"
-            elif any(token in lower for token in ["waterproof", "fast", "wireless", "portable", "large", "small"]):
-                intent = "feature requirement"
-            elif any(token in lower for token in ["best", "premium", "cheap", "luxury"]):
-                intent = "value perception"
-            else:
-                intent = "category search"
-            mapped.append({"keyword": keyword, "intent": intent})
-        return mapped
-
-    def _selling_points(
-        self,
-        profile: dict[str, Any],
-        truth: ProductTruthLock,
-        keywords: list[str],
-    ) -> list[str]:
-        explicit = as_list(profile.get("selling_points") or profile.get("benefits") or profile.get("features"))
-        facts = [
-            item
-            for item in truth.visible_attributes
-            if (":" in item or len(item.split()) <= 8)
-            and "uploaded product/reference image" not in item.lower()
-        ]
-        keyword_points = [f"Matches shopper intent: {keyword}" for keyword in keywords[:4]]
-        defaults = [
-            "Clear product identity",
-            "Visible material and detail proof",
-            "Realistic usage scene",
-            "Scale or compatibility clarity",
-            "Trust cue without unsupported claims",
-        ]
-        return unique_preserve_order([*explicit, *facts, *keyword_points, *defaults])[:8]
-
-    def _competitor_patterns(self, profile: dict[str, Any], parameters: dict[str, Any]) -> list[str]:
-        raw = []
-        for field in ["competitor_references", "competitor_patterns", "listing_references", "style_references"]:
-            raw.extend(as_list(parameter_value(parameters, profile, field)))
-        if raw:
-            return unique_preserve_order(raw)[:8]
-        if as_list(parameter_value(parameters, profile, "competitor_asset_ids", "style_asset_ids")):
-            return ["Uploaded reference assets should guide reusable layout, palette, or scene grammar."]
-        return []
+        return unique_preserve_order(values)[:20]

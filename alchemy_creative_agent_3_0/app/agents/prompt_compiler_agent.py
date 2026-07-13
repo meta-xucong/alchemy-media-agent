@@ -66,9 +66,10 @@ class PromptCompilerAgent(BaseAgent):
         mode_execution_policy = asset_metadata.get("mode_execution_policy")
         if not isinstance(mode_execution_policy, dict):
             mode_execution_policy = {}
-        ecommerce_recipe = asset_metadata.get("ecommerce_recipe")
-        if not isinstance(ecommerce_recipe, dict):
-            ecommerce_recipe = None
+        # A stored pre-E17 recipe remains export/read compatibility metadata.
+        # It may never re-enter a prompt: a new or continued E-Commerce output
+        # must be directed only by the current remote Brain result.
+        ecommerce_recipe = None
         provider_text, provider_text_policy = self._provider_native_text_intent(layout_plan, ecommerce_recipe)
         provider_text_requested = bool(provider_text)
         ecommerce_prompt = self._ecommerce_recipe_prompt(ecommerce_recipe)
@@ -219,7 +220,7 @@ class PromptCompilerAgent(BaseAgent):
                 "layout_preference": brand_profile.layout_preference,
                 "asset_metadata": asset_metadata,
                 "ecommerce_slot": asset_metadata.get("ecommerce_slot"),
-                "ecommerce_recipe": ecommerce_recipe,
+                **({"ecommerce_recipe": ecommerce_recipe} if ecommerce_recipe else {}),
                 "ecommerce_visual_scene": asset_metadata.get("ecommerce_visual_scene"),
                 "mode_execution_policy": mode_execution_policy,
                 "mode_role_recipe": mode_role_recipe,
@@ -236,7 +237,7 @@ class PromptCompilerAgent(BaseAgent):
                 brand_consistency_metadata=True,
                 asset_metadata=asset_metadata,
                 ecommerce_slot=asset_metadata.get("ecommerce_slot"),
-                ecommerce_recipe=ecommerce_recipe,
+                **({"ecommerce_recipe": ecommerce_recipe} if ecommerce_recipe else {}),
                 mode_execution_policy=mode_execution_policy,
                 mode_role_recipe=mode_role_recipe,
                 mode_role_key=mode_role_recipe.get("role_key"),
@@ -362,6 +363,11 @@ class PromptCompilerAgent(BaseAgent):
         return value
 
     def _provider_native_text_intent(self, layout_plan: LayoutPlan, recipe: dict | None) -> tuple[list[str], str]:
+        asset_metadata = layout_plan.metadata.get("asset_metadata")
+        if isinstance(asset_metadata, dict):
+            approved_literal = asset_metadata.get("ecommerce_approved_literal_copy")
+            if isinstance(approved_literal, str) and approved_literal.strip():
+                return [approved_literal.strip()], "provider_native_text_requested"
         if recipe:
             copy_plan = recipe.get("metadata", {}).get("copy_plan") if isinstance(recipe.get("metadata"), dict) else {}
             policy = str(copy_plan.get("policy") or "") if isinstance(copy_plan, dict) else ""

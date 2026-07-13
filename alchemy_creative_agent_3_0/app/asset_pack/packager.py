@@ -55,7 +55,7 @@ class AssetPackager:
                     "render_manifest": render_entry,
                     "asset_metadata": dict(asset.metadata),
                     "ecommerce_slot": asset.metadata.get("ecommerce_slot"),
-                    "ecommerce_recipe": asset.metadata.get("ecommerce_recipe"),
+                    **self._legacy_ecommerce_recipe_metadata(asset.metadata),
                     "source_agent": "AssetPackager",
                 },
             )
@@ -128,7 +128,7 @@ class AssetPackager:
                     "render_manifest": render_entry,
                     "asset_metadata": dict(asset.metadata),
                     "ecommerce_slot": asset.metadata.get("ecommerce_slot"),
-                    "ecommerce_recipe": asset.metadata.get("ecommerce_recipe"),
+                    **self._legacy_ecommerce_recipe_metadata(asset.metadata),
                     "source_agent": "AssetPackager",
                     "selected_candidate_id": candidate.candidate_id if candidate else None,
                     "selected_candidate_provider": candidate.provider if candidate else None,
@@ -164,3 +164,15 @@ class AssetPackager:
                 "candidate_loop": True,
             },
         )
+
+    @staticmethod
+    def _legacy_ecommerce_recipe_metadata(asset_metadata: dict) -> dict:
+        """Expose a recipe only for an archived asset that already has one.
+
+        New E-Commerce jobs are directed by the remote Brain and never emit
+        this compatibility field.  Keeping an existing value readable avoids
+        rewriting historical records.
+        """
+
+        recipe = asset_metadata.get("ecommerce_recipe")
+        return {"ecommerce_recipe": recipe} if isinstance(recipe, dict) else {}

@@ -240,6 +240,7 @@ class ScenarioRuntime:
         specialized_plan = self._prepare_specialized_scenario_plan(request, resolution)
         if resolution.manifest.scenario_id == "photography" and mode != "enforced":
             raise CapabilityActivationError("Photography production activation requires enforced capability execution")
+        policy = self._resolve_template_capability_policy(request, resolution)
         if mode == "legacy":
             capability_run = self._run_shared_capabilities(request, resolution)
             brain_result = self._run_llm_brain(
@@ -249,6 +250,7 @@ class ScenarioRuntime:
                 stage=stage,
                 quality_mode=quality_mode,
             )
+            self._require_remote_creative_brain(request, policy, brain_result)
             return CapabilityPreparationResult(
                 brain_result=brain_result,
                 combined_capability_run=capability_run,
@@ -256,7 +258,6 @@ class ScenarioRuntime:
                 specialized_scenario_plan=specialized_plan,
             )
 
-        policy = self._resolve_template_capability_policy(request, resolution)
         pre_activation_run = self._run_pre_activation_capabilities(request, resolution)
         template_id = self._template_id(request, resolution)
         catalog = self.visual_capability_registry.catalog_snapshot(template_id, resolution.manifest.scenario_id)
@@ -271,6 +272,7 @@ class ScenarioRuntime:
                 quality_mode=quality_mode,
                 template_capability_policy=policy,
             )
+            self._require_remote_creative_brain(request, policy, brain_result)
             plan = self._reuse_or_build_activation_plan(
                 request,
                 resolution,
@@ -298,6 +300,7 @@ class ScenarioRuntime:
             pre_activation_capabilities=self._capability_metadata(pre_activation_run),
             template_capability_policy=policy,
         )
+        self._require_remote_creative_brain(request, policy, brain_result)
         plan = self._reuse_or_build_activation_plan(
             request,
             resolution,
@@ -317,6 +320,40 @@ class ScenarioRuntime:
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
         )
+
+    def _require_remote_creative_brain(
+        self,
+        request: ScenarioRuntimeRequest,
+        policy: TemplateCapabilityPolicy,
+        brain_result: BrainRunResult,
+    ) -> None:
+        """Fail closed for templates whose creative answer cannot be local.
+
+        General and Photography keep their current policy values.  The check
+        therefore adds no behavior to their planning/generation paths.
+        """
+
+        if not policy.requires_remote_creative_brain:
+            return
+        if not brain_result.llm_used or brain_result.fallback_used:
+            raise CapabilityActivationError("remote_creative_brain_required_for_template")
+        expected = self._requested_image_count_for_brain(request)
+        image_plan = brain_result.image_set_plan
+        directions = [str(item).strip() for item in image_plan.shot_plan if str(item).strip()]
+        if image_plan.image_count != expected or len(directions) != expected:
+            raise CapabilityActivationError("remote_creative_brain_output_count_mismatch")
+
+    def _requested_image_count_for_brain(self, request: ScenarioRuntimeRequest) -> int:
+        parameters = request.scenario_selection.parameters if request.scenario_selection else {}
+        raw = (
+            request.metadata.get("requested_image_count")
+            or (parameters.get("requested_image_count") if isinstance(parameters, dict) else None)
+            or 2
+        )
+        try:
+            return max(1, min(4, int(raw)))
+        except (TypeError, ValueError):
+            return 2
 
     def _prepare_specialized_scenario_plan(
         self,

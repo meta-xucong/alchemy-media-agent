@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
-from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -69,17 +69,14 @@ def test_doc69_product_and_ecommerce_receive_one_reference_truth_atoms() -> None
     assert "one product truth" in " ".join(atom["metadata"]["prompt_atom_product_truth_guard"])
     assert "flat studio-only repetition" in " ".join(atom["metadata"]["prompt_atom_negative_guard"])
 
-    created = V3ProductApiService().create_job(
+    created = ecommerce_test_service().create_job(
         {
             "user_input": "Create Aqua Tea ecommerce suite with main, detail, and outdoor cafe lifestyle images",
             "scenario_selection": {
                 "scenario_id": "ecommerce",
                 "mode_id": "one_click_product_set",
                 "platform_profile": "amazon_us",
-                "parameters": {
-                    "requested_image_count": 3,
-                    "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
-                },
+                "parameters": {"requested_image_count": 3},
             },
             "uploaded_asset_ids": ["product_aqua_tea_can"],
             "product_profile": {
@@ -90,16 +87,12 @@ def test_doc69_product_and_ecommerce_receive_one_reference_truth_atoms() -> None
             "metadata": {"requested_image_count": 3, "variation_mode": "delivery_suite"},
         }
     )
-    recipes = [
-        asset.metadata["asset_metadata"]["mode_role_recipe"]
-        for asset in created.asset_series
-    ]
-    scenario = next(recipe for recipe in recipes if recipe["role_key"] == "scenario_image")
+    roles = [asset.metadata["asset_metadata"]["mode_role_recipe"] for asset in created.asset_series]
 
-    assert scenario["metadata"].get("doc69_prompt_atom_recipe") is not True
-    assert scenario["metadata"].get("prompt_atom_recipe_library") is None
-    assert scenario["metadata"]["creative_owner"] == "llm_and_image_provider"
-    assert "LLM and image provider" in scenario["prompt_pressure"]
+    assert [role["role_key"] for role in roles] == ["ecommerce_output_1", "ecommerce_output_2", "ecommerce_output_3"]
+    assert all(role["metadata"].get("doc69_prompt_atom_recipe") is not True for role in roles)
+    assert all(role["metadata"].get("prompt_atom_recipe_library") is None for role in roles)
+    assert all(role["metadata"]["owner"] == "remote_v3_llm_brain" for role in roles)
 
 
 def test_doc69_provider_renders_prompt_atom_lines_from_metadata_only() -> None:

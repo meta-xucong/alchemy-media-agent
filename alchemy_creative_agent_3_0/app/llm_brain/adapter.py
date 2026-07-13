@@ -98,11 +98,36 @@ class V3LLMBrainAdapter:
         )
         scenario_parameters = as_dict(metadata.get("scenario_parameters"))
         provider_native_text_requirements = _provider_native_text_requirements(metadata, scenario_parameters)
+        ecommerce_creative_context = _ecommerce_creative_context(metadata, scenario_id)
+        approved_literal_copy = ecommerce_creative_context.get("approved_literal_copy")
+        if isinstance(approved_literal_copy, str) and approved_literal_copy.strip():
+            provider_native_text_requirements = list(
+                dict.fromkeys([*provider_native_text_requirements, approved_literal_copy.strip()])
+            )[:8]
         capability_hints = scenario_parameters.get("capabilities")
         if not isinstance(capability_hints, list):
             capability_hints = []
         specialized_plan = metadata.get("specialized_scenario_plan")
         specialized_plan_present = isinstance(specialized_plan, dict) and bool(specialized_plan.get("planning_id"))
+        request_metadata = {
+            "project_context_version": project_context.get("context_version"),
+            "negative_note_count": len(negative_notes_from_context(project_context)),
+            "positive_context_from_selected_outputs_only": True,
+            "require_real_images": bool(metadata.get("require_real_images") or metadata.get("real_image_generation")),
+            "quality_mode": clean_text(metadata.get("quality_mode"), 40) or None,
+            "requested_image_count": requested_count,
+            "requested_image_size": clean_text(metadata.get("requested_image_size"), 80) or None,
+            "variation_mode": variation_mode,
+            "effective_variation_mode": variation_mode,
+            "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
+            "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
+            "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
+            "provider_native_text_requirements": provider_native_text_requirements,
+            "specialized_scenario_plan_present": specialized_plan_present,
+        }
+        if ecommerce_creative_context:
+            # Deliberately absent from General and Photography requests.
+            request_metadata["ecommerce_creative_context"] = ecommerce_creative_context
         return BrainRunRequest(
             user_input=user_input,
             stage=stage,
@@ -118,28 +143,7 @@ class V3LLMBrainAdapter:
             requested_image_count=requested_count,
             requested_image_size=clean_text(metadata.get("requested_image_size"), 80) or None,
             reasoning_depth=_reasoning_depth(metadata),
-            metadata={
-                "project_context_version": project_context.get("context_version"),
-                "negative_note_count": len(negative_notes_from_context(project_context)),
-                "positive_context_from_selected_outputs_only": True,
-                "require_real_images": bool(metadata.get("require_real_images") or metadata.get("real_image_generation")),
-                "quality_mode": clean_text(metadata.get("quality_mode"), 40) or None,
-                "requested_image_count": requested_count,
-                "requested_image_size": clean_text(metadata.get("requested_image_size"), 80) or None,
-                "variation_mode": variation_mode,
-                "effective_variation_mode": variation_mode,
-                "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
-                "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
-                "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
-                # Literal approved copy belongs in the LLM/provider creative
-                # brief.  This deliberately carries no font, rectangle,
-                # template slot, or local-renderer instruction.
-                "provider_native_text_requirements": provider_native_text_requirements,
-                # Photography and future specialized planners remain opaque
-                # to Central Brain: only their confirmed presence crosses this
-                # boundary, while frozen direction stays in shared runtime.
-                "specialized_scenario_plan_present": specialized_plan_present,
-            },
+            metadata=request_metadata,
             capability_catalog=dict(capability_catalog or {}),
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),
             template_capability_policy=template_capability_policy or general_capability_policy(),
@@ -197,9 +201,6 @@ def _provider_native_text_requirements(metadata: dict[str, Any], scenario_parame
         metadata.get("provider_native_text_requirements")
         or scenario_parameters.get("provider_native_text")
         or scenario_parameters.get("approved_copy")
-        # Compatibility input only: this historic field is converted to a
-        # provider-native requirement and never to an overlay instruction.
-        or scenario_parameters.get("overlay_copy")
     )
     if isinstance(raw, dict):
         values = list(raw.values())
@@ -208,6 +209,30 @@ def _provider_native_text_requirements(metadata: dict[str, Any], scenario_parame
     else:
         values = [raw]
     return list(dict.fromkeys(str(value).strip() for value in values if str(value or "").strip()))[:8]
+
+
+def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
+    """Pass only the server-shaped factual context to the E-Commerce Brain."""
+
+    if str(scenario_id or "").strip().lower() != "ecommerce":
+        return {}
+    raw = metadata.get("ecommerce_creative_context")
+    if not isinstance(raw, dict):
+        return {}
+    allowed = {
+        "context_id",
+        "source_version",
+        "product_truth",
+        "platform_constraints",
+        "category_evidence_questions",
+        "seller_inputs",
+        "approved_literal_copy",
+        "copy_locale",
+        "claim_risk_warnings",
+        "warnings",
+        "metadata",
+    }
+    return {key: raw[key] for key in allowed if key in raw}
 
 
 def _enabled() -> bool:

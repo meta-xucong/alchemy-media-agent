@@ -599,12 +599,10 @@ const els = {
   v3EcommercePlatformInput: document.querySelector("#v3EcommercePlatformInput"),
   v3EcommerceCategoryInput: document.querySelector("#v3EcommerceCategoryInput"),
   v3EcommerceMarketInput: document.querySelector("#v3EcommerceMarketInput"),
-  v3EcommerceSuiteScopeInput: document.querySelector("#v3EcommerceSuiteScopeInput"),
-  v3EcommerceSuiteScopeHint: document.querySelector("#v3EcommerceSuiteScopeHint"),
   v3EcommerceSpecsInput: document.querySelector("#v3EcommerceSpecsInput"),
   v3EcommerceAudienceInput: document.querySelector("#v3EcommerceAudienceInput"),
   v3EcommerceCopyLocaleInput: document.querySelector("#v3EcommerceCopyLocaleInput"),
-  v3EcommerceOverlayCopyInput: document.querySelector("#v3EcommerceOverlayCopyInput"),
+  v3EcommerceApprovedCopyInput: document.querySelector("#v3EcommerceApprovedCopyInput"),
   v3EcommerceKeywordsInput: document.querySelector("#v3EcommerceKeywordsInput"),
   v3EcommerceCompetitorInput: document.querySelector("#v3EcommerceCompetitorInput"),
   v3EcommerceClaimsInput: document.querySelector("#v3EcommerceClaimsInput"),
@@ -1106,9 +1104,6 @@ function bindControls() {
   document.querySelectorAll("[data-v3-preset]").forEach((button) => {
     button.addEventListener("click", () => setV3Preset(button.dataset.v3Preset || "campaign_poster"));
   });
-  if (els.v3EcommerceSuiteScopeInput) {
-    els.v3EcommerceSuiteScopeInput.addEventListener("change", renderV3EcommerceSuiteScopeHint);
-  }
   document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
@@ -4924,11 +4919,6 @@ function v3ProjectHasProductReference(project) {
   return hasProductReference || uploadedRefs.some((item) => item?.asset_id);
 }
 
-function v3EcommerceSuiteScopeValue() {
-  const value = (els.v3EcommerceSuiteScopeInput?.value || "recommended").trim();
-  return ["recommended", "listing_core", "listing_full", "detail_supplement"].includes(value) ? value : "recommended";
-}
-
 function v3EcommerceCopyLocaleValue() {
   const value = (els.v3EcommerceCopyLocaleInput?.value || "").trim();
   return ["", "en-US", "zh-CN", "ru-RU"].includes(value) ? value : "";
@@ -4943,68 +4933,11 @@ function v3EcommerceCopyLocaleLabel(locale) {
   return labels[locale] || locale || "按平台和市场自动判断";
 }
 
-function v3EcommerceSuiteScopeLabel(scopeId, presetId = v3State.selectedPreset) {
-  const labels = {
-    listing_core: "基础上架图",
-    listing_full: "完整上架套图",
-    detail_supplement: "补齐详情和场景图",
-  };
-  if (scopeId !== "recommended") return labels[scopeId] || "已选套图范围";
-  const presetLabels = {
-    one_click_product_set: "一键电商套图",
-    marketplace_listing_set: "平台上架套图",
-    style_recreation_set: "参考风格复用套图",
-  };
-  return presetLabels[presetId] || "当前快速目标推荐的套图";
-}
-
-function v3SuiteSlotRequestForPreset(presetId, scopeId = v3EcommerceSuiteScopeValue()) {
-  if (scopeId === "listing_core") {
-    return ["main_image", "feature_image_1", "scenario_image", "detail_image"];
-  }
-  if (scopeId === "listing_full") {
-    return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "trust_comparison_image"];
-  }
-  if (scopeId === "detail_supplement") {
-    return ["feature_image_2", "scenario_image", "detail_image"];
-  }
-  if (presetId === "style_recreation_set") {
-    return ["main_image", "feature_image_1", "scenario_image", "detail_image"];
-  }
-  if (presetId === "marketplace_listing_set") {
-    return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "trust_comparison_image"];
-  }
-  return ["main_image", "feature_image_1", "feature_image_2", "scenario_image", "detail_image", "social_cover"];
-}
-
-function v3EcommerceSuiteSlotLabel(slotId) {
-  const labels = {
-    main_image: "商品主图",
-    feature_image_1: "核心卖点图",
-    feature_image_2: "补充卖点图",
-    scenario_image: "使用场景图",
-    detail_image: "细节证明图",
-    trust_comparison_image: "信任说明图",
-    social_cover: "内容封面图",
-  };
-  return labels[slotId] || "商品展示图";
-}
-
-function renderV3EcommerceSuiteScopeHint() {
-  if (!els.v3EcommerceSuiteScopeHint) return;
-  const scopeId = v3EcommerceSuiteScopeValue();
-  const slots = v3SuiteSlotRequestForPreset(v3State.selectedPreset, scopeId);
-  const slotLabels = uniqueNonEmpty(slots.map(v3EcommerceSuiteSlotLabel));
-  const scopeLabel = v3EcommerceSuiteScopeLabel(scopeId);
-  els.v3EcommerceSuiteScopeHint.textContent = `${scopeLabel}会优先准备：${slotLabels.join("、")}。`;
-}
-
 function v3EcommerceProfilePatch() {
   const keywordItems = v3CsvList(els.v3EcommerceKeywordsInput?.value || "");
   const sellingPoint = (els.v3BrandToneInput?.value || "").trim();
-  const suiteScope = v3EcommerceSuiteScopeValue();
   const copyLocale = v3EcommerceCopyLocaleValue();
-  const overlayCopy = (els.v3EcommerceOverlayCopyInput?.value || "").trim();
+  const approvedLiteralCopy = (els.v3EcommerceApprovedCopyInput?.value || "").trim();
   return {
     product_name: (els.v3BrandNameInput?.value || "").trim() || null,
     product_category: (els.v3EcommerceCategoryInput?.value || "").trim() || null,
@@ -5017,12 +4950,9 @@ function v3EcommerceProfilePatch() {
     keyword_roots: keywordItems,
     keywords: keywordItems,
     competitor_notes: v3CsvList(els.v3EcommerceCompetitorInput?.value || ""),
-    suite_slots_requested: v3SuiteSlotRequestForPreset(v3State.selectedPreset, suiteScope),
     metadata: {
-      suite_scope: suiteScope,
-      suite_scope_label: v3EcommerceSuiteScopeLabel(suiteScope),
       copy_locale: copyLocale || null,
-      overlay_copy: overlayCopy || null,
+      approved_literal_copy: approvedLiteralCopy || null,
     },
   };
 }
@@ -5145,9 +5075,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
   const advancedReferenceControls = v3AdvancedReferenceControlsPayloadForScenario(scenarioId);
-  const ecommerceSuiteScope = scenarioId === "ecommerce" ? v3EcommerceSuiteScopeValue() : "";
   const ecommerceCopyLocale = scenarioId === "ecommerce" ? v3EcommerceCopyLocaleValue() : "";
-  const ecommerceOverlayCopy = scenarioId === "ecommerce" ? (els.v3EcommerceOverlayCopyInput?.value || "").trim() : "";
+  const ecommerceApprovedLiteralCopy = scenarioId === "ecommerce" ? (els.v3EcommerceApprovedCopyInput?.value || "").trim() : "";
   const photographerProfile = scenarioId === "photography"
     ? (v3State.photographerProfiles || []).find((item) => item.profile_id === v3State.selectedPhotographerProfileId)
     : null;
@@ -5183,10 +5112,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       requested_aspect_label: generationSettings.sizeLabel,
       has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,
       ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
-      ecommerce_suite_scope: ecommerceSuiteScope || undefined,
-      ecommerce_suite_scope_label: ecommerceSuiteScope ? v3EcommerceSuiteScopeLabel(ecommerceSuiteScope) : undefined,
       ecommerce_copy_locale: ecommerceCopyLocale || undefined,
-      ecommerce_overlay_copy: ecommerceOverlayCopy || undefined,
+      ecommerce_approved_literal_copy: ecommerceApprovedLiteralCopy || undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -5199,7 +5126,6 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   };
   if (scenarioId === "ecommerce") {
     payload.commerce_profile_patch = v3EcommerceProfilePatch();
-    payload.suite_slot_request = payload.commerce_profile_patch.suite_slots_requested;
   }
   return payload;
 }
@@ -5469,11 +5395,10 @@ function resetV3Workspace() {
   if (els.v3EcommercePlatformInput) els.v3EcommercePlatformInput.value = "generic";
   if (els.v3EcommerceCategoryInput) els.v3EcommerceCategoryInput.value = "";
   if (els.v3EcommerceMarketInput) els.v3EcommerceMarketInput.value = "";
-  if (els.v3EcommerceSuiteScopeInput) els.v3EcommerceSuiteScopeInput.value = "recommended";
   if (els.v3EcommerceSpecsInput) els.v3EcommerceSpecsInput.value = "";
   if (els.v3EcommerceAudienceInput) els.v3EcommerceAudienceInput.value = "";
   if (els.v3EcommerceCopyLocaleInput) els.v3EcommerceCopyLocaleInput.value = "";
-  if (els.v3EcommerceOverlayCopyInput) els.v3EcommerceOverlayCopyInput.value = "";
+  if (els.v3EcommerceApprovedCopyInput) els.v3EcommerceApprovedCopyInput.value = "";
   if (els.v3EcommerceKeywordsInput) els.v3EcommerceKeywordsInput.value = "";
   if (els.v3EcommerceCompetitorInput) els.v3EcommerceCompetitorInput.value = "";
   if (els.v3EcommerceClaimsInput) els.v3EcommerceClaimsInput.value = "";
@@ -5743,26 +5668,22 @@ function v3EcommerceCategoryLabel(categoryId) {
 }
 
 function renderV3EcommerceSummary(summary, metadata = null) {
-  const categoryId = (Array.isArray(summary?.image_recipes) ? summary.image_recipes : [])
-    .map((recipe) => recipe?.metadata?.category_id)
-    .find((category) => category && category !== "generic_product") || summary?.product_truth?.product_category;
+  const categoryId = summary?.creative_context?.metadata?.category_id || summary?.product_truth?.product_category;
   const categoryLabel = v3EcommerceCategoryLabel(categoryId);
   const targetAudience = Array.isArray(summary?.target_audience) ? summary.target_audience.filter(Boolean).slice(0, 2) : [];
-  const suiteScope = String(metadata?.ecommerce_suite_scope || "").trim();
-  const suiteScopeLabel = suiteScope ? v3EcommerceSuiteScopeLabel(suiteScope, metadata?.selected_preset_id) : "";
   const copyLocale = String(metadata?.ecommerce_copy_locale || "").trim();
-  const overlayCopy = String(metadata?.ecommerce_overlay_copy || "").trim();
-  const copyPlanningLabel = copyLocale || overlayCopy ? v3EcommerceCopyLocaleLabel(copyLocale || summary?.export_package?.metadata?.copy_locale) : "";
+  const approvedCopy = String(summary?.creative_context?.approved_literal_copy || metadata?.ecommerce_approved_literal_copy || "").trim();
+  const copyPlanningLabel = copyLocale || approvedCopy ? v3EcommerceCopyLocaleLabel(copyLocale || summary?.creative_context?.copy_locale || summary?.export_package?.metadata?.copy_locale) : "";
+  const outputIntents = Array.isArray(summary?.remote_brain_output_intents) ? summary.remote_brain_output_intents : [];
   const entries = [
-    "已识别商品主体和必须保留的信息",
-    ...(summary?.platform ? [`本次按 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的套图规划准备`] : []),
-    ...(categoryLabel ? [`已按 ${categoryLabel} 类目安排展示证据和套图顺序`] : []),
-    ...(suiteScopeLabel ? [`本次选择 ${suiteScopeLabel}`] : []),
-    ...(copyPlanningLabel ? [`已按 ${copyPlanningLabel} 规划允许加字的图片；主图保持无文字`] : []),
+    "已整理商品事实、参考图和不可违背的约束",
+    ...(summary?.platform ? [`已附上 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的版本化发布约束，发布前仍需核验最新规则`] : []),
+    ...(categoryLabel ? [`已向中央大脑提供 ${categoryLabel} 类目的证据问题，不会套用固定类别模板`] : []),
+    ...(outputIntents.length ? [`中央大脑已为本次请求决定 ${outputIntents.length} 个具体输出方向`] : ["中央大脑将根据本次商品和目标决定完整输出集合"]),
+    ...(copyPlanningLabel && approvedCopy ? [`已将批准原文按 ${copyPlanningLabel} 交给生图模型处理，不使用本地叠字`] : []),
     ...(targetAudience.length ? [`已优先考虑：${targetAudience.join(" / ")}`] : []),
-    "已把套图拆成主图、卖点图、场景图和信任图",
-    "已为每张图安排不同用途",
-    "已避免乱加文字、徽章和未经确认的宣传说法",
+    "每张输出的画面意图由中央大脑按本次上下文决定",
+    "文字、构图和排版仅在完整的模型生图中完成，并在最终像素层审查",
   ];
   const sellingPoints = Array.isArray(summary?.selling_points) ? summary.selling_points.filter(Boolean).slice(0, 2) : [];
   if (sellingPoints.length) entries.push(`重点卖点：${sellingPoints.join(" / ")}`);
@@ -5827,25 +5748,21 @@ function v3ProgressElapsedLabel() {
 
 function renderV3EcommercePlanList(summary) {
   if (!els.v3EcommercePlanList) return;
-  const recipes = Array.isArray(summary?.image_recipes) ? summary.image_recipes : [];
+  const intents = Array.isArray(summary?.remote_brain_output_intents) ? summary.remote_brain_output_intents : [];
   els.v3EcommercePlanList.innerHTML = "";
-  if (!recipes.length) {
+  if (!intents.length) {
     els.v3EcommercePlanList.hidden = true;
     return;
   }
   els.v3EcommercePlanList.hidden = false;
-  recipes.slice(0, 6).forEach((recipe, index) => {
+  intents.slice(0, 6).forEach((intent, index) => {
     const row = document.createElement("div");
     row.className = "v3-commerce-plan-row";
-    const slotLabel = v3EcommerceSlotLabel(recipe.slot || "") || `套图 ${index + 1}`;
-    const purpose = recipe.selling_point || v3CommercePurposeLabel(recipe.business_goal) || recipe.visual_scene || "用于展示商品卖点";
-    const evidence = Array.isArray(recipe?.metadata?.category_evidence_targets)
-      ? recipe.metadata.category_evidence_targets.filter(Boolean).join(" / ")
-      : "";
+    const outputLabel = v3EcommerceOutputLabel(intent.slot_id, index + 1);
+    const purpose = intent.intent || "中央大脑正在确定这张图的具体意图";
     row.innerHTML = `
-      <strong>${escapeHtml(index + 1)}. ${escapeHtml(slotLabel)}</strong>
+      <strong>${escapeHtml(index + 1)}. ${escapeHtml(outputLabel)}</strong>
       <span>${escapeHtml(purpose)}</span>
-      ${evidence ? `<small>重点证明：${escapeHtml(evidence)}</small>` : ""}
     `;
     els.v3EcommercePlanList.appendChild(row);
   });
@@ -5868,16 +5785,12 @@ function renderV3EcommerceExportList(summary) {
   const profile = metadata.marketplace_profile_version ? `规则版本 ${metadata.marketplace_profile_version}` : "规则版本待确认";
   const attention = checks.filter((check) => check?.status === "attention");
   const fileRows = files.slice(0, 6).map((file, index) => {
-    const slotLabel = v3EcommerceSlotLabel(file.slot || "") || `套图 ${index + 1}`;
-    const copyState = file.claim_review_required
-      ? "文案需核验"
-      : file.copy_review_required
-        ? "语言需复核"
-        : "文案已规划";
+    const slotLabel = v3EcommerceOutputLabel(file.opaque_output_id || file.slot, index + 1);
+    const copyState = file.provider_native_complete_image ? "模型原生完整图片" : "等待模型最终图片";
     return `
       <div class="v3-commerce-export-row">
         <strong>${escapeHtml(slotLabel)}</strong>
-        <span>${escapeHtml(file.dimension_hint || "尺寸待确认")} · ${escapeHtml(copyState)}</span>
+        <span>${escapeHtml(file.intent || file.dimension_hint || "输出意图待确认")} · ${escapeHtml(copyState)}</span>
       </div>
     `;
   });
@@ -6009,12 +5922,12 @@ function renderV3ResultBoard(job) {
     card.className = `v3-result-card${isSelected ? " selected" : ""}`;
     const metadata = item.metadata || {};
     const assetMetadata = metadata.asset_metadata || {};
-    const recipe = v3EcommerceRecipeForItem(item);
-    const slot = item.slot || metadata.ecommerce_slot || assetMetadata.ecommerce_slot || recipe.slot || "";
-    const title = v3EcommerceSlotLabel(slot) || item.asset_id || item.candidate_id || `candidate_${index + 1}`;
-    const purpose = recipe.visual_scene || item.purpose || item.recommendation || "商业视觉资产";
-    const cardPurpose = recipe.selling_point || assetMetadata.ecommerce_selling_point || item.selling_point || item.purpose || item.recommendation || (scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示");
-    const overlayText = item.overlay_text || recipe.overlay_text || "";
+    const outputId = item.slot || metadata.ecommerce_slot || assetMetadata.ecommerce_slot || "";
+    const title = scenarioId === "ecommerce"
+      ? v3EcommerceOutputLabel(outputId, index + 1)
+      : item.asset_id || item.candidate_id || `candidate_${index + 1}`;
+    const purpose = item.purpose || item.recommendation || "商业视觉资产";
+    const cardPurpose = assetMetadata.ecommerce_creative_direction || item.selling_point || item.purpose || item.recommendation || (scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示");
     const status = item.status || (item.selected ? "selected" : job.status);
     const imageCandidates = v3OutputImageCandidates(item);
     const downloadUrl = v3OutputDownloadUrl(item);
@@ -6031,7 +5944,6 @@ function renderV3ResultBoard(job) {
       </div>
       <p>${escapeHtml(cardPurpose)}</p>
       ${purpose && purpose !== cardPurpose ? `<p class="v3-result-scene">${escapeHtml(purpose)}</p>` : ""}
-      ${overlayText ? `<p class="v3-overlay-copy">${escapeHtml(overlayText)}</p>` : ""}
       <div class="v3-result-meta">
         ${item.overall_score ? `<span>${Math.round(Number(item.overall_score) * 100)}%</span>` : ""}
         ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
@@ -6179,30 +6091,10 @@ function v3ReadableTitle(value) {
   return String(value || "").replace(/^asset_/, "").replace(/^candidate_/, "候选 ").replace(/[_-]+/g, " ");
 }
 
-function v3EcommerceRecipeForItem(item) {
-  const metadata = item?.metadata || {};
-  const assetMetadata = metadata.asset_metadata || {};
-  return item?.ecommerce_recipe || metadata.ecommerce_recipe || assetMetadata.ecommerce_recipe || {};
-}
-
-function v3EcommerceSlotLabel(slot) {
-  const labels = {
-    main_image: "电商主图",
-    hero_image: "商品首图",
-    feature_image_1: "卖点图 1",
-    feature_image_2: "卖点图 2",
-    benefit_image: "利益点图",
-    benefit_hook: "广告钩子图",
-    detail_image: "细节证明图",
-    scenario_image: "场景图",
-    size_spec_image: "尺寸规格图",
-    trust_image: "信任背书图",
-    trust_comparison_image: "对比信任图",
-    ad_cover: "投放封面",
-    store_banner: "店铺横幅",
-    collection_cover: "合集封面",
-  };
-  return labels[slot] || "";
+function v3EcommerceOutputLabel(outputId, fallbackIndex) {
+  const match = String(outputId || "").match(/^ecommerce_output_(\d+)$/);
+  const index = match?.[1] || fallbackIndex;
+  return `中央大脑输出 ${index}`;
 }
 
 function v3CommercePurposeLabel(goal) {

@@ -1,12 +1,12 @@
-"""Metadata critic for e-commerce image set plans."""
+"""Factual preflight checks for remote-Brain E-Commerce work."""
 
 from __future__ import annotations
 
-from .contracts import CommerceCriticReport, CommerceIntelligenceBrief, EcommerceAssetRecipe, MarketplaceRuleProfile, ProductTruthLock
+from .contracts import CommerceCriticReport, CommerceIntelligenceBrief, EcommerceAssetRecipe, EcommerceCreativeContext, MarketplaceRuleProfile, ProductTruthLock
 
 
 class CommerceCritic:
-    """Review recipes for product correctness, clarity, trust, and platform fit."""
+    """Observe factual readiness; never grade or assemble a local image suite."""
 
     def review(
         self,
@@ -16,127 +16,72 @@ class CommerceCritic:
         marketplace_profile: MarketplaceRuleProfile,
         recipes: list[EcommerceAssetRecipe],
     ) -> CommerceCriticReport:
-        checks: list[dict] = []
-        warnings: list[str] = []
-        checks.append(self._check("product_truth", bool(truth.immutable_attributes), "Product truth facts are available."))
-        checks.append(self._check("slot_coverage", len(recipes) >= 5, f"{len(recipes)} image slot(s) planned."))
-        checks.append(
-            self._check(
-                "selling_point_mapping",
-                all(recipe.selling_point for recipe in recipes),
-                "Every planned image has one primary selling point.",
-            )
-        )
-        profile_lineage = marketplace_profile.metadata
-        checks.append(
-            self._check(
-                "platform_profile_lineage",
-                bool(profile_lineage.get("profile_id") and profile_lineage.get("profile_version") and profile_lineage.get("profile_status")),
-                "Platform profile identifier, version, and status are frozen for the planned suite.",
-            )
-        )
-        category_coverage = self._category_coverage(recipes)
-        if category_coverage is not None:
-            checks.append(
-                self._check(
-                    "category_evidence_coverage",
-                    not category_coverage["missing"],
-                    "Selected slots cover the category evidence required for this suite scope.",
-                )
-            )
-        duplicate_pairs = self._duplicate_pairs(recipes)
-        checks.append(
-            self._check(
-                "suite_differentiation",
-                not duplicate_pairs,
-                "Every selected slot has a distinct buyer-facing job and selling-point direction.",
-            )
-        )
-        forbidden_text_request = [
-            recipe
-            for recipe in recipes
-            if (recipe.metadata.get("copy_plan") or {}).get("policy") == "text_forbidden" and recipe.provider_native_text
-        ]
-        checks.append(
-            self._check(
-                "main_image_text_policy",
-                not forbidden_text_request,
-                "Text-forbidden slots do not request provider-native copy.",
-            )
-        )
-        localization_review_slots = [
-            recipe.slot
-            for recipe in recipes
-            if bool((recipe.metadata.get("copy_plan") or {}).get("needs_localization_review"))
-        ]
-        checks.append(
-            self._check(
-                "localization_review",
-                not localization_review_slots,
-                "Localized provider-native copy is user-supplied or has passed the current metadata review gate.",
-            )
-        )
-        claim_review_slots = [
-            recipe.slot
-            for recipe in recipes
-            if bool((recipe.metadata.get("copy_plan") or {}).get("claim_review_required"))
-        ]
-        checks.append(
-            self._check(
-                "overlay_claim_review",
-                not claim_review_slots,
-                "Requested provider-native copy does not contain a claim that needs supplied evidence or publication review.",
-            )
-        )
-        checks.append(
-            self._check(
-                "platform_profile",
-                bool(marketplace_profile.image_slots and marketplace_profile.canvas_rules),
-                f"Marketplace profile is available for {marketplace_profile.platform}.",
-            )
-        )
-        checks.append(
-            self._check(
-                "claim_risk",
-                not brief.claim_risk_warnings,
-                "Unsupported claims require softer copy or evidence before export.",
-            )
-        )
-        if truth.warnings:
-            warnings.extend(truth.warnings)
-        if marketplace_profile.warnings:
-            warnings.extend(marketplace_profile.warnings)
-        if brief.claim_risk_warnings:
-            warnings.extend(brief.claim_risk_warnings)
-        if localization_review_slots:
-            warnings.append(
-                "Provider-native copy requires native-language review before export: " + ", ".join(localization_review_slots)
-            )
-        if claim_review_slots:
-            warnings.append("Provider-native copy requires claim review before export: " + ", ".join(claim_review_slots))
-        if category_coverage and category_coverage["missing"]:
-            warnings.append(
-                "Selected suite does not yet cover category evidence: " + ", ".join(category_coverage["missing"])
-            )
-        if duplicate_pairs:
-            warnings.append(
-                "Selected suite has overlapping roles that need a distinct selling point or scene: "
-                + ", ".join(f"{left}/{right}" for left, right in duplicate_pairs)
-            )
+        """Historical input compatibility with no recipe-level creative logic."""
 
-        status = "attention" if any(check["status"] == "attention" for check in checks) else "ready"
+        del recipes
+        context = EcommerceCreativeContext(
+            context_id="historical_ecommerce_context",
+            product_truth=truth,
+            platform_constraints={"platform": marketplace_profile.platform, "market": marketplace_profile.market},
+            claim_risk_warnings=list(brief.claim_risk_warnings),
+        )
+        report = self.review_context(context=context, marketplace_profile=marketplace_profile, brief=brief)
+        return report.model_copy(
+            update={
+                "metadata": {
+                    **dict(report.metadata),
+                    "historical_recipe_input_ignored": True,
+                    "creative_recipe_present": False,
+                }
+            }
+        )
+
+    def review_context(
+        self,
+        *,
+        context: EcommerceCreativeContext,
+        marketplace_profile: MarketplaceRuleProfile,
+        brief: CommerceIntelligenceBrief,
+    ) -> CommerceCriticReport:
+        """Check evidence before a remote Brain creates visual intent."""
+
+        profile = dict(marketplace_profile.metadata or {})
+        has_lineage = bool(
+            profile.get("profile_id")
+            and profile.get("profile_version")
+            and profile.get("profile_status")
+        )
+        checks = [
+            self._check(
+                "product_truth",
+                bool(context.product_truth.immutable_attributes),
+                "Supplied product facts and reference evidence are available to the remote Brain.",
+            ),
+            self._check(
+                "platform_constraint_lineage",
+                has_lineage,
+                "Platform constraints retain an identifier, version, and source status.",
+            ),
+            self._check(
+                "approved_copy_claim_risk",
+                not context.claim_risk_warnings,
+                "Approved literal copy and claims have no unresolved evidence warning.",
+            ),
+            self._check(
+                "creative_direction_owner",
+                True,
+                "A remote Brain, not a local slot planner, must choose the output intents.",
+            ),
+        ]
+        warnings = [*context.warnings, *brief.claim_risk_warnings]
         return CommerceCriticReport(
-            status=status,
+            status="attention" if any(check["status"] == "attention" for check in checks) else "ready",
             checks=checks,
             warnings=list(dict.fromkeys(warnings)),
             metadata={
-                "source": "CommerceCritic",
-                "metadata_only_review": True,
-                "recipe_count": len(recipes),
-                "localization_review_slots": localization_review_slots,
-                "claim_review_slots": claim_review_slots,
-                "category_evidence": category_coverage,
-                "duplicate_slot_pairs": duplicate_pairs,
+                "source": "CommerceCritic.review_context",
+                "creative_recipe_present": False,
+                "ecommerce_context_id": context.context_id,
             },
         )
 
@@ -147,33 +92,3 @@ class CommerceCritic:
             "status": "done" if passed else "attention",
             "detail": detail,
         }
-
-    def _category_coverage(self, recipes: list[EcommerceAssetRecipe]) -> dict[str, list[str]] | None:
-        category_id = ""
-        required: list[str] = []
-        covered: list[str] = []
-        for recipe in recipes:
-            metadata = recipe.metadata
-            category_id = category_id or str(metadata.get("category_id") or "")
-            required.extend(str(item) for item in metadata.get("required_evidence") or [])
-            covered.extend(str(item) for item in metadata.get("category_evidence_targets") or [])
-        required = list(dict.fromkeys(required))
-        covered = list(dict.fromkeys(covered))
-        if not category_id or category_id == "generic_product" or not required:
-            return None
-        return {
-            "category_id": category_id,
-            "required": required,
-            "covered": covered,
-            "missing": [item for item in required if item not in covered],
-        }
-
-    def _duplicate_pairs(self, recipes: list[EcommerceAssetRecipe]) -> list[tuple[str, str]]:
-        pairs: list[tuple[str, str]] = []
-        for index, recipe in enumerate(recipes):
-            signature = (recipe.business_goal, recipe.selling_point.strip().lower())
-            for other in recipes[index + 1 :]:
-                other_signature = (other.business_goal, other.selling_point.strip().lower())
-                if signature == other_signature:
-                    pairs.append((recipe.slot, other.slot))
-        return pairs

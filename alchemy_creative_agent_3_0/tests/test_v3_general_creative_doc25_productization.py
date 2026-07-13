@@ -121,7 +121,9 @@ def test_general_creative_summary_is_not_used_for_active_ecommerce(tmp_path) -> 
         }
     )
 
-    assert ecommerce.status == ProductJobStatusValue.PLANNED
+    # E-Commerce deliberately fails closed until its remote creative Brain is
+    # available; it must not borrow General's local/fallback direction.
+    assert ecommerce.status == ProductJobStatusValue.BLOCKED
     assert ecommerce.general_creative is None
     assert ecommerce.ecommerce is not None
 

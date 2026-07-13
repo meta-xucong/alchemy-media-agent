@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ...creative_core.rules import stable_id
-from .contracts import CommerceCriticReport, EcommerceAssetRecipe, EcommerceExportPackage, MarketplaceRuleProfile
+from .contracts import CommerceCriticReport, EcommerceAssetRecipe, EcommerceCreativeContext, EcommerceExportPackage, MarketplaceRuleProfile
 
 
 class EcommerceExportPackager:
@@ -17,56 +17,11 @@ class EcommerceExportPackager:
         recipes: list[EcommerceAssetRecipe],
         critic: CommerceCriticReport | None = None,
     ) -> EcommerceExportPackage:
-        export_rules = marketplace_profile.export_rules
-        naming = str(export_rules.get("naming") or "{slot}_{index}_{platform}.png")
-        dimension_hint = str(export_rules.get("dimension_hint") or "1200x1200")
-        files = []
+        # Kept to deserialize historic calls only.  New jobs must bind files
+        # after the provider produces opaque Brain-selected outputs.
+        del recipes
         localization_review_required = False
-        claim_review_required = False
-        category_ids = list(
-            dict.fromkeys(
-                str(recipe.metadata.get("category_id"))
-                for recipe in recipes
-                if recipe.metadata.get("category_id")
-            )
-        )
-        category_profile_versions = list(
-            dict.fromkeys(
-                str(recipe.metadata.get("category_profile_version"))
-                for recipe in recipes
-                if recipe.metadata.get("category_profile_version")
-            )
-        )
-        for index, recipe in enumerate(recipes, start=1):
-            copy_plan = recipe.metadata.get("copy_plan") or {}
-            copy_review_required = bool(copy_plan.get("needs_localization_review"))
-            copy_claim_review_required = bool(copy_plan.get("claim_review_required"))
-            localization_review_required = localization_review_required or copy_review_required
-            claim_review_required = claim_review_required or copy_claim_review_required
-            filename = naming.format(
-                slot=recipe.slot,
-                index=f"{index:02d}",
-                platform=marketplace_profile.platform,
-                market=marketplace_profile.market.lower(),
-            )
-            files.append(
-                {
-                    "slot": recipe.slot,
-                    "filename": filename,
-                    "dimension_hint": dimension_hint,
-                    "format": export_rules.get("format", "png"),
-                    "business_goal": recipe.business_goal,
-                    "review_status": "needs_pixel_review",
-                    "overlay_text": recipe.overlay_text,
-                    "provider_native_text": recipe.provider_native_text,
-                    "copy_locale": copy_plan.get("copy_locale"),
-                    "copy_source": copy_plan.get("source"),
-                    "copy_review_required": copy_review_required,
-                    "claim_review_required": copy_claim_review_required,
-                    "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
-                    "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
-                }
-            )
+        claim_review_required = bool(critic and critic.status == "attention")
         publish_checks = self._publish_checks(
             marketplace_profile=marketplace_profile,
             critic=critic,
@@ -77,13 +32,13 @@ class EcommerceExportPackager:
             package_id=stable_id("ecommerce_export", job_key, marketplace_profile.platform, marketplace_profile.market),
             platform=marketplace_profile.platform,
             market=marketplace_profile.market,
-            files=files,
-            naming_pattern=naming,
-            dimensions={recipe.slot: dimension_hint for recipe in recipes},
-            review_status="attention" if any(check["status"] == "attention" for check in publish_checks) else "metadata_ready",
+            files=[],
+            naming_pattern="{opaque_output_id}.png",
+            dimensions={},
+            review_status="attention",
             metadata={
                 "source": "EcommerceExportPackager",
-                "file_count": len(files),
+                "file_count": 0,
                 "pixel_assets_required_before_download": True,
                 "copy_locale": marketplace_profile.metadata.get("copy_locale"),
                 "localization_review_required": localization_review_required,
@@ -92,10 +47,48 @@ class EcommerceExportPackager:
                 "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
                 "marketplace_profile_status": marketplace_profile.metadata.get("profile_status"),
                 "marketplace_profile_source_notes": marketplace_profile.metadata.get("profile_source_notes"),
-                "category_ids": category_ids,
-                "category_profile_versions": category_profile_versions,
+                "historical_recipe_input_ignored": True,
+                "creative_recipe_present": False,
                 "publish_checks": publish_checks,
-                "publish_summary": self._publish_summary(files, publish_checks),
+                "publish_summary": self._publish_summary([], publish_checks),
+            },
+        )
+
+    def package_context(
+        self,
+        *,
+        job_key: str,
+        context: EcommerceCreativeContext,
+        marketplace_profile: MarketplaceRuleProfile,
+        critic: CommerceCriticReport | None = None,
+    ) -> EcommerceExportPackage:
+        """Return pre-generation metadata without inventing export files."""
+
+        publish_checks = self._publish_checks(
+            marketplace_profile=marketplace_profile,
+            critic=critic,
+            localization_review_required=bool(context.approved_literal_copy),
+            claim_review_required=bool(context.claim_risk_warnings),
+        )
+        return EcommerceExportPackage(
+            package_id=stable_id("ecommerce_export", job_key, marketplace_profile.platform, marketplace_profile.market),
+            platform=marketplace_profile.platform,
+            market=marketplace_profile.market,
+            files=[],
+            naming_pattern="{opaque_output_id}.png",
+            dimensions={},
+            review_status="attention",
+            metadata={
+                "source": "EcommerceExportPackager.package_context",
+                "ecommerce_context_id": context.context_id,
+                "creative_recipe_present": False,
+                "pixel_assets_required_before_download": True,
+                "marketplace_profile_id": marketplace_profile.metadata.get("profile_id"),
+                "marketplace_profile_version": marketplace_profile.metadata.get("profile_version"),
+                "marketplace_profile_status": marketplace_profile.metadata.get("profile_status"),
+                "copy_locale": context.copy_locale,
+                "publish_checks": publish_checks,
+                "publish_summary": "Remote Brain direction and provider-rendered final pixels are required before export.",
             },
         )
 
@@ -124,7 +117,7 @@ class EcommerceExportPackager:
                 {
                     "id": "localized_copy",
                     "status": "attention",
-                    "message": "Have a native-language reviewer confirm the overlay copy before rendering or export.",
+                    "message": "Have a native-language reviewer confirm requested provider-native copy in the final image before export.",
                 }
             )
         if claim_review_required:
@@ -132,7 +125,7 @@ class EcommerceExportPackager:
                 {
                     "id": "claim_evidence",
                     "status": "attention",
-                    "message": "Verify evidence and platform eligibility for overlay claims before publishing.",
+                    "message": "Verify evidence and platform eligibility for requested claims before publishing.",
                 }
             )
         if critic:

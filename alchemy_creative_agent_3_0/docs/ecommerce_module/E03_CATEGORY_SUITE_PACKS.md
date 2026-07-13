@@ -1,82 +1,58 @@
-# E03 Category Suite Packs and Evidence Maps
+# E03 Category Evidence Contexts
 
-## Category pack contract
+## Category context contract
 
-Each category pack declares:
+Each category record declares:
 
 ```text
 category_id
 display_name
 buyer_questions
-required_evidence
-optional_evidence
-default_slot_roles
-human_presence_policy
-text_roles
-product_truth_fields
+required_product_facts
+claim_risk_cues
 review_checks
+source_version
 ```
 
-It defines what must be shown, not merely a visual style.
+It helps the remote Brain and final review understand what a shopper may need
+to judge. It must not prescribe scenes, cameras, angles, people, copy,
+layouts, output roles, or output order.
 
-## First-release category packs
+## First-release evidence records
 
-| Category | Required evidence | Default roles |
-| --- | --- | --- |
-| Apparel/shoes/bags | fit, front/back/side, material, scale, wear context | hero, front, back, worn, detail, size, styling |
-| Beauty/skincare | package, texture, application, usage boundary, ingredients if confirmed | hero, texture, application, benefit, package, routine, detail |
-| Electronics/3C | silhouette, ports, dimensions, included items, real use | hero, angle, ports, hand-scale, desk/use, accessories, spec |
-| Home/kitchen | size, material, capacity, function, cleaning/storage | hero, space, size, material, function, capacity, use |
-| Food/beverage | package, serving, contents, portion, truthful ingredient cues | hero, serving, detail, portion, use, package, trust |
+| Category | Example buyer questions |
+| --- | --- |
+| Apparel/shoes/bags | Can fit, material, scale, and relevant sides be judged truthfully? |
+| Beauty/skincare | Can package, texture/application, and only confirmed usage facts be judged? |
+| Electronics/3C | Are silhouette, ports, dimensions, included items, and real use intelligible? |
+| Home/kitchen | Are size, material, capacity, function, and storage/use facts intelligible? |
+| Food/beverage | Are package, serving, contents, portion, and confirmed ingredients truthful? |
 
-Second-wave packs may include jewelry/accessories, furniture/decor,
-sports/outdoor, pet, and baby products after the first five pass review.
-
-## Shared slot vocabulary
-
-```text
-main_image
-feature_highlight
-angle_or_back
-detail_proof
-usage_scene
-scale_or_size
-comparison_or_trust
-package_or_accessories
-social_cover
-```
-
-Category packs may rename a role for the UI, but internal slot IDs stay stable.
-Each selected slot must be mapped to one business goal such as `click`,
-`understand`, `trust`, `compare`, `desire`, or `remember`.
+Jewellery, furniture, sports/outdoor, pet, and baby categories are added only
+after the same evidence-first review; they are not a new set of local shot
+recipes.
 
 ## Product-category adaptation
 
-The pack must be evidence-aware. Examples:
+- If a size, capacity, ingredient, compatibility, or quantity is unconfirmed,
+  the context says it is unknown. Neither the E-Commerce module nor the Brain
+  may claim it as fact.
+- If human use is relevant, the Brain may decide whether a person is useful.
+  Any visible person still uses the shared Human Realism capability; E-Commerce
+  does not implement a person-rendering branch.
+- If source packaging text is unreadable, preserve its visual evidence without
+  inventing legible copy or a specification.
 
-- If no confirmed size exists, do not generate a measurement diagram with
-  invented numbers; use a relative-scale scene or mark the slot unavailable.
-- If a product has no confirmed human-use context, a person may demonstrate
-  generic interaction but must not imply a medical, safety, or performance claim.
-- If packaging text is unreadable in the source, preserve the visible design
-  without fabricating legible copy.
+## Requested-count behaviour
 
-## Suite count behavior
+The user controls the requested count. The remote Brain must return exactly
+one distinct natural-language intent per requested output. A mismatch is a
+planning error and fails closed; local code may not rank, trim, expand, or fill
+the image set from a category default.
 
-Default count is category/platform dependent, but user-requested count wins.
-When count is smaller than the default, select the highest-value roles using:
+## Differentiation review
 
-```text
-platform necessity
-→ product evidence coverage
-→ buyer uncertainty reduction
-→ visual differentiation
-```
-
-When count is larger, add optional roles without duplicating the same scene.
-
-## Suite differentiation gate
-
-Within one suite, two images fail differentiation when they share the same
-purpose, camera relationship, scene logic, and selling point without a clear
-reason. Variation means useful evidence variation, not random decoration.
+Review can flag redundant evidence or indistinguishable outputs. The shared
+provider-native revision path gives that observation back to the Brain/provider
+within its bounded retry contract. E-Commerce never substitutes a local role
+or shot to repair the set.

@@ -155,6 +155,7 @@ class TemplateCapabilityPolicy(V3BaseModel):
     deliverable_role_owner: str = "general_template"
     review_threshold_profile: str = "balanced"
     brain_activation_enabled: bool = True
+    requires_remote_creative_brain: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

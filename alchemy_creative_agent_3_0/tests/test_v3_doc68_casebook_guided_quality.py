@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
-from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -123,8 +123,8 @@ def test_doc68_product_delivery_suite_strengthens_lifestyle_and_detail_roles() -
     assert "detail/material proof frame" in detail.prompt_pressure
 
 
-def test_doc68_ecommerce_vertical_pack_reuses_casebook_without_losing_pack_ownership() -> None:
-    service = V3ProductApiService()
+def test_doc68_ecommerce_uses_brain_intents_without_casebook_or_static_roles() -> None:
+    service = ecommerce_test_service()
     created = service.create_job(
         {
             "user_input": "Create Aqua Tea ecommerce images: main image, feature image, and outdoor cafe lifestyle scene",
@@ -132,10 +132,7 @@ def test_doc68_ecommerce_vertical_pack_reuses_casebook_without_losing_pack_owner
                 "scenario_id": "ecommerce",
                 "mode_id": "one_click_product_set",
                 "platform_profile": "amazon_us",
-                "parameters": {
-                    "requested_image_count": 3,
-                    "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
-                },
+                "parameters": {"requested_image_count": 3},
             },
             "uploaded_asset_ids": ["product_aqua_tea_can"],
             "product_profile": {
@@ -146,18 +143,12 @@ def test_doc68_ecommerce_vertical_pack_reuses_casebook_without_losing_pack_owner
             "metadata": {"requested_image_count": 3, "variation_mode": "delivery_suite"},
         }
     )
-    recipes = [
-        asset.metadata["asset_metadata"]["mode_role_recipe"]
-        for asset in created.asset_series
-    ]
-    scenario = next(recipe for recipe in recipes if recipe["role_key"] == "scenario_image")
+    roles = [asset.metadata["asset_metadata"]["mode_role_recipe"] for asset in created.asset_series]
 
-    assert all(recipe["metadata"]["owned_by"] == "ecommerce_vertical_pack" for recipe in recipes)
-    assert all(recipe["metadata"].get("doc68_casebook_recipe") is not True for recipe in recipes)
-    assert scenario["metadata"].get("casebook_recipe_library") is None
-    assert scenario["metadata"]["creative_owner"] == "llm_and_image_provider"
-    assert "LLM and image provider" in scenario["prompt_pressure"]
-    assert "preserve product shape" in " ".join(scenario["must_keep_rules"])
+    assert [role["role_key"] for role in roles] == ["ecommerce_output_1", "ecommerce_output_2", "ecommerce_output_3"]
+    assert all(role["metadata"]["owner"] == "remote_v3_llm_brain" for role in roles)
+    assert all(role["metadata"].get("doc68_casebook_recipe") is not True for role in roles)
+    assert all("Remote Brain test output" in role["purpose"] for role in roles)
 
 
 def test_doc68_strong_reference_closure_adds_identity_truth_without_clone_pressure() -> None:

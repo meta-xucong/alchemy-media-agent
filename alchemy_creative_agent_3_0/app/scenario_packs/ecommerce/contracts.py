@@ -46,6 +46,26 @@ class MarketplaceRuleProfile(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class EcommerceCreativeContext(V3BaseModel):
+    """Factual, versioned input to the remote Brain for a new job.
+
+    This is deliberately not an image recipe.  It contains no slot order,
+    camera, crop, scene, typography, or renderer instruction.
+    """
+
+    context_id: str
+    source_version: str = "ecommerce_creative_context_v1"
+    product_truth: ProductTruthLock
+    platform_constraints: dict[str, Any] = Field(default_factory=dict)
+    category_evidence_questions: list[str] = Field(default_factory=list)
+    seller_inputs: dict[str, Any] = Field(default_factory=dict)
+    approved_literal_copy: str | None = None
+    copy_locale: str | None = None
+    claim_risk_warnings: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class EcommerceAssetRecipe(V3BaseModel):
     slot: str
     business_goal: str
@@ -87,5 +107,6 @@ class EcommercePackOutput(V3BaseModel):
     recipes: list[EcommerceAssetRecipe] = Field(default_factory=list)
     critic: CommerceCriticReport
     export_package: EcommerceExportPackage
+    creative_context: EcommerceCreativeContext | None = None
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

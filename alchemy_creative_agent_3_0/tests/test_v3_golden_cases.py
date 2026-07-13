@@ -80,7 +80,7 @@ def test_golden_ecommerce_taobao_headphones() -> None:
     assert {"tech", "clean"}.issubset(set(result.commercial_brief.visual_tone))
     assert {"noise cancellation", "battery life"}.issubset(set(result.commercial_brief.selling_points))
     assert result.series_plan.assets[0].aspect_ratio == "1:1"
-    assert result.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
 
 
 def test_golden_minimal_input_defaults() -> None:

@@ -262,12 +262,12 @@ def test_accepted_output_can_apply_memory_update_when_explicit() -> None:
     assert update.applied is True
 
 
-def test_brand_memory_preserves_selected_vertical_pack_metadata() -> None:
+def test_brand_memory_keeps_implicit_product_requests_in_general_path() -> None:
     result = run_creative_planning("帮我做一组蓝牙耳机淘宝主图，要科技感、干净。")
 
-    assert result.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
-    assert result.creative_plan.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
-    assert result.asset_pack.metadata["selected_vertical_pack"] == "ecommerce_agent_family"
+    assert result.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.creative_plan.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert result.asset_pack.metadata["selected_vertical_pack"] == "default_commercial_pack"
     assert result.brand_profile.industry == IndustryCategory.ECOMMERCE_PRODUCT
 
 

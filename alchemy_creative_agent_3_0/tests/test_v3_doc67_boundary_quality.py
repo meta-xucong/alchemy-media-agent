@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     HumanPhotorealismLayer,
     ModeQualityProfileBuilder,
@@ -24,8 +24,8 @@ def test_doc67_boundary_keeps_visual_child_modules_out_of_central_and_fallback_b
     assert "human_variation.py" not in fallback
 
 
-def test_doc67_ecommerce_role_metadata_is_owned_by_ecommerce_pack_not_central_brain() -> None:
-    service = V3ProductApiService()
+def test_doc67_ecommerce_outputs_are_owned_by_remote_brain_not_static_pack() -> None:
+    service = ecommerce_test_service()
     created = service.create_job(
         {
             "user_input": "Create an Aqua Tea marketplace set with main image, freshness feature image, and real summer cafe scene",
@@ -33,10 +33,7 @@ def test_doc67_ecommerce_role_metadata_is_owned_by_ecommerce_pack_not_central_br
                 "scenario_id": "ecommerce",
                 "mode_id": "one_click_product_set",
                 "platform_profile": "amazon_us",
-                "parameters": {
-                    "requested_image_count": 3,
-                    "suite_slot_request": ["main_image", "feature_image_1", "scenario_image"],
-                },
+                "parameters": {"requested_image_count": 3},
             },
             "uploaded_asset_ids": ["product_aqua_tea_can"],
             "product_profile": {
@@ -48,12 +45,9 @@ def test_doc67_ecommerce_role_metadata_is_owned_by_ecommerce_pack_not_central_br
         }
     )
 
-    slots = [item.metadata["asset_metadata"]["mode_role_recipe"]["role_key"] for item in created.asset_series]
-    assert slots == ["main_image", "feature_image_1", "scenario_image"]
-    assert all(
-        item.metadata["asset_metadata"]["mode_role_recipe"]["metadata"]["owned_by"] == "ecommerce_vertical_pack"
-        for item in created.asset_series
-    )
+    slots = [item.metadata["ecommerce_slot"] for item in created.asset_series]
+    assert slots == ["ecommerce_output_1", "ecommerce_output_2", "ecommerce_output_3"]
+    assert all(item.metadata["asset_metadata"]["ecommerce_llm_directed"] for item in created.asset_series)
 
     generated = service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {"requested_image_count": 3}})
     visual_cluster = generated.metadata.get("visual_cluster") or generated.metadata["shared_capabilities"]["visual_cluster"]
@@ -62,13 +56,11 @@ def test_doc67_ecommerce_role_metadata_is_owned_by_ecommerce_pack_not_central_br
     record = service.job_store.get(created.job_id)
     feature_prompt = record.generation_result.prompt_compilations[1].visual_prompt
 
-    assert role_plan["metadata"]["doc"] == "60"
-    assert role_plan["metadata"]["doc67_boundary_cleanup"] is True
-    assert role_plan["metadata"]["owned_by"] == "ecommerce_vertical_pack"
+    assert role_plan["metadata"]["owner"] == "remote_v3_llm_brain"
     assert [recipe["role_key"] for recipe in role_plan["role_recipes"]] == slots
     assert candidate_role_keys == slots
-    assert "Planned ecommerce slot 2 (feature_image_1)" in feature_prompt
-    assert "Planned image role 3 (detail_image)" not in feature_prompt
+    assert "Remote Brain test output 2" in feature_prompt
+    assert "main_image" not in feature_prompt
 
 
 def test_doc67_human_photorealism_contract_gets_real_photo_detail_without_clone_pressure() -> None:

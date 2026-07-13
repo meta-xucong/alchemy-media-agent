@@ -1,5 +1,32 @@
 # E09 Implementation Log and Parallel-Safe Delivery Record
 
+> Historical-record notice: E1-E18 below accurately record the earlier static
+> profile/slot/recipe and local-text exploration. Their forward-execution
+> claims are superseded for new E-Commerce jobs by Doc111 and E17. Retain them
+> only for audit and legacy-read compatibility; do not revive a static suite,
+> slot-safe copy plan, deterministic typography, or local OCR path from this
+> log.
+
+## E19 — LLM-native architecture correction
+
+Status: in progress on `codex/ecommerce-llm-architecture-correction`.
+
+Delivered direction:
+
+- convert platform/category material into factual, versioned Brain context;
+- retire static role, scene, camera, crop, slot, and default-copy direction
+  for new jobs;
+- bind Brain-returned intents to opaque output identities and continuation
+  lineage;
+- require a real remote Brain in production and use clearly labelled test
+  doubles only in tests;
+- retire local text rendering/OCR/compositing from the executable path;
+- prove that General and Photography Brain payloads do not gain E-Commerce
+  semantics.
+
+The final test evidence and commit are recorded only after the migration branch
+passes the full V3 regression suite.
+
 ## Purpose
 
 Record independently deliverable E-Commerce milestones, their boundary, test

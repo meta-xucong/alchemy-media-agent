@@ -7,7 +7,8 @@ def test_general_and_ecommerce_own_different_policy_profiles() -> None:
     general = registry.get_manifest("general_template").capability_policy
     ecommerce = registry.get_manifest("ecommerce_template").capability_policy
     assert general.deliverable_role_owner == "general_template"
-    assert ecommerce.deliverable_role_owner == "ecommerce_scenario_pack"
+    assert ecommerce.deliverable_role_owner == "remote_v3_llm_brain"
+    assert ecommerce.requires_remote_creative_brain is True
     assert ecommerce.review_threshold_profile == "commercial_strict"
 
 

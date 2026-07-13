@@ -1,4 +1,8 @@
-"""Versioned marketplace profile hints for E-Commerce recipes."""
+"""Versioned marketplace constraints for remote-Brain reasoning.
+
+These records are evidence/provenance only.  They deliberately contain no
+automatic suite slots, camera recipes, composition defaults, or text regions.
+"""
 
 from __future__ import annotations
 
@@ -9,41 +13,34 @@ from .localization import resolve_localization
 from .utils import clean_text
 
 
-PROFILE_VERSION = "v3_ecommerce_rules_2026_06_28"
-PROFILE_UPDATED_AT = "2026-06-28"
+PROFILE_VERSION = "v3_ecommerce_constraints_2026_07_13"
+PROFILE_UPDATED_AT = "2026-07-13"
 PROFILE_STATUS = "internal_draft"
 
 PROFILE_SOURCE_NOTES = {
-    "amazon": "Internal strategic draft; confirm current Seller Central requirements before publishing.",
-    "ozon": "Internal strategic draft; confirm current Ozon seller requirements before publishing.",
-    "taobao": "Internal strategic draft; confirm current Taobao/Tmall requirements before publishing.",
-    "jd": "Internal strategic draft; confirm current JD requirements before publishing.",
-    "pinduoduo": "Internal strategic draft; confirm current Pinduoduo requirements before publishing.",
-    "tiktok_shop": "Internal strategic draft; confirm current TikTok Shop requirements before publishing.",
-    "shopify": "Internal store-design profile, not a third-party marketplace policy.",
-    "generic": "Internal generic commerce profile; no marketplace policy is implied.",
+    "amazon": "Internal strategic evidence; confirm current Seller Central requirements before publishing.",
+    "ozon": "Internal strategic evidence; confirm current Ozon seller requirements before publishing.",
+    "taobao": "Internal strategic evidence; confirm current Taobao/Tmall requirements before publishing.",
+    "jd": "Internal strategic evidence; confirm current JD requirements before publishing.",
+    "pinduoduo": "Internal strategic evidence; confirm current Pinduoduo requirements before publishing.",
+    "tiktok_shop": "Internal strategic evidence; confirm current TikTok Shop requirements before publishing.",
+    "shopify": "Internal store-design evidence, not a third-party marketplace policy.",
+    "generic": "Internal generic commerce evidence; no marketplace policy is implied.",
 }
 
 PLATFORM_ALIASES = {
-    "amazon_us": ("amazon", "US"),
-    "amazon": ("amazon", "US"),
-    "ozon": ("ozon", "RU"),
-    "shopify": ("shopify", "global"),
-    "tiktok_shop": ("tiktok_shop", "global"),
-    "tiktok": ("tiktok_shop", "global"),
-    "taobao": ("taobao", "CN"),
-    "tmall": ("taobao", "CN"),
-    "jd": ("jd", "CN"),
-    "jingdong": ("jd", "CN"),
-    "pdd": ("pinduoduo", "CN"),
-    "pinduoduo": ("pinduoduo", "CN"),
-    "generic": ("generic", "global"),
-    "ecommerce_generic": ("generic", "global"),
+    "amazon_us": ("amazon", "US"), "amazon": ("amazon", "US"),
+    "ozon": ("ozon", "RU"), "shopify": ("shopify", "global"),
+    "tiktok_shop": ("tiktok_shop", "global"), "tiktok": ("tiktok_shop", "global"),
+    "taobao": ("taobao", "CN"), "tmall": ("taobao", "CN"),
+    "jd": ("jd", "CN"), "jingdong": ("jd", "CN"),
+    "pdd": ("pinduoduo", "CN"), "pinduoduo": ("pinduoduo", "CN"),
+    "generic": ("generic", "global"), "ecommerce_generic": ("generic", "global"),
 }
 
 
 class MarketplaceRuleEngine:
-    """Return stable first-pass platform guidance without pretending it is live policy."""
+    """Return platform constraints without deciding what images to make."""
 
     def profile(
         self,
@@ -62,27 +59,19 @@ class MarketplaceRuleEngine:
         ).lower()
         platform, default_market = PLATFORM_ALIASES.get(raw_platform, (raw_platform or "generic", "global"))
         market = clean_text(parameters.get("market") or product_profile.get("market") or default_market) or default_market
-        image_slots = self._slots_for(platform)
-        canvas_rules = self._canvas_rules(platform)
-        content_rules = self._content_rules(platform)
-        export_rules = self._export_rules(platform)
-        text_policy = self._text_policy(platform, image_slots)
         localization = resolve_localization(
             platform=platform,
             market=market,
             requested_locale=parameters.get("copy_locale") or parameters.get("locale"),
         )
-        warnings = [
-            "Marketplace policy guidance is versioned first-pass metadata, not live legal or platform-policy advice."
-        ]
         return MarketplaceRuleProfile(
             platform=platform,
             market=market,
-            image_slots=image_slots,
-            canvas_rules=canvas_rules,
-            content_rules=content_rules,
-            export_rules=export_rules,
-            warnings=warnings,
+            image_slots=[],
+            canvas_rules=self._canvas_constraints(platform),
+            content_rules=self._content_constraints(platform),
+            export_rules=self._export_rules(platform),
+            warnings=["Marketplace guidance is versioned evidence, not live legal or platform-policy advice."],
             metadata={
                 "source": "MarketplaceRuleEngine",
                 "profile_id": f"ecommerce_{platform}_{market.lower()}",
@@ -92,99 +81,68 @@ class MarketplaceRuleEngine:
                 "profile_source_notes": PROFILE_SOURCE_NOTES.get(platform, PROFILE_SOURCE_NOTES["generic"]),
                 "raw_platform_profile": raw_platform,
                 "live_policy_lookup": False,
-                "text_policy": text_policy,
+                "text_policy": self._text_constraint(platform),
+                "creative_slot_map_present": False,
                 **localization.metadata(),
             },
         )
 
-    def _slots_for(self, platform: str) -> list[str]:
-        if platform == "amazon":
-            return [
-                "main_image",
-                "feature_image_1",
-                "feature_image_2",
-                "scenario_image",
-                "size_spec_image",
-                "trust_comparison_image",
-                "ad_cover",
-            ]
-        if platform == "ozon":
-            return [
-                "main_image",
-                "scenario_image",
-                "benefit_image",
-                "detail_image",
-                "size_spec_image",
-                "trust_image",
-            ]
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            return [
-                "main_image",
-                "benefit_image",
-                "detail_image",
-                "scenario_image",
-                "size_spec_image",
-                "trust_image",
-                "store_banner",
-            ]
-        if platform == "tiktok_shop":
-            return ["ad_cover", "main_image", "benefit_hook", "scenario_image", "trust_image"]
-        if platform == "shopify":
-            return ["hero_image", "feature_image_1", "detail_image", "scenario_image", "trust_image", "collection_cover"]
-        return [
-            "main_image",
-            "feature_image_1",
-            "feature_image_2",
-            "scenario_image",
-            "size_spec_image",
-            "trust_comparison_image",
-            "ad_cover",
-        ]
+    def _canvas_constraints(self, platform: str) -> dict[str, Any]:
+        hints = {
+            "ozon": ("1:1", "3:4"),
+            "tiktok_shop": ("4:5", "1:1"),
+            "taobao": ("1:1", "3:4"),
+            "jd": ("1:1", "3:4"),
+            "pinduoduo": ("1:1", "3:4"),
+            "shopify": ("4:5", "16:9"),
+        }
+        primary, alternate = hints.get(platform, ("1:1", "4:5"))
+        return {
+            "preferred_delivery_aspect_ratios": [primary, alternate],
+            "constraint_type": "technical_delivery_hint",
+            "creative_composition_owner": "remote_llm_and_image_provider",
+        }
 
-    def _canvas_rules(self, platform: str) -> dict[str, Any]:
-        if platform == "ozon":
-            return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "3:4", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform == "tiktok_shop":
-            return {"primary_aspect_ratio": "4:5", "secondary_aspect_ratio": "1:1", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "3:4", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        if platform == "shopify":
-            return {"primary_aspect_ratio": "4:5", "secondary_aspect_ratio": "16:9", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-        return {"primary_aspect_ratio": "1:1", "secondary_aspect_ratio": "4:5", "crop_safety_guidance": "keep the primary product evidence comfortably inside the canvas"}
-
-    def _content_rules(self, platform: str) -> list[str]:
+    def _content_constraints(self, platform: str) -> list[str]:
         rules = [
-            "Product remains clear, large, and unobstructed.",
-            "Claims must be supported by supplied facts or softened.",
-            "Any requested in-image copy must be generated by the image provider and pass final-pixel review.",
-            "Set uses a consistent product identity across all slots.",
+            "Keep supported product facts and visible identity faithful to supplied evidence.",
+            "Do not make unsupported claims, certifications, awards, ingredients, compatibility, or performance promises.",
+            "If literal copy is explicitly approved, render it only as part of the complete provider image and inspect final pixels.",
+            "Keep output treatment responsive to the current product, request, and platform constraints rather than a fixed marketplace template.",
         ]
-        if platform == "amazon":
-            rules.insert(0, "Main image should stay product-first with minimal distractions.")
-        if platform == "ozon":
-            rules.insert(0, "Main image should make the product immediately understandable on a mobile listing.")
-            rules.append("Russian provider-native copy needs final-pixel readability review when explicitly requested.")
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            rules.append("Detail and trust images may communicate supported evidence with provider-native creative treatment when requested.")
-        if platform == "tiktok_shop":
-            rules.append("Ad cover should communicate one hook within thumbnail viewing distance.")
+        platform_notes = {
+            "amazon": "Confirm current category-specific primary-listing requirements before publication; the Brain must not assume a reusable Amazon shot recipe.",
+            "ozon": "Confirm current Ozon listing requirements for the market before publication; Russian requested copy needs final-pixel review.",
+            "taobao": "Confirm current Taobao/Tmall listing requirements before publication; do not infer a fixed detail-page sequence.",
+            "jd": "Confirm current JD listing requirements before publication; do not infer a fixed detail-page sequence.",
+            "pinduoduo": "Confirm current Pinduoduo listing requirements before publication.",
+            "tiktok_shop": "Confirm current TikTok Shop listing and advertising requirements before publication.",
+            "shopify": "Use seller/store requirements as the authority; no third-party marketplace policy is implied.",
+        }
+        if platform in platform_notes:
+            rules.append(platform_notes[platform])
         return rules
 
     def _export_rules(self, platform: str) -> dict[str, Any]:
-        if platform == "ozon":
-            return {"format": "png", "naming": "{slot}_{index}_ozon.png", "dimension_hint": "1200x1200"}
-        if platform == "tiktok_shop":
-            return {"format": "png", "naming": "{slot}_{index}_tiktok_shop.png", "dimension_hint": "1080x1350"}
-        if platform in {"taobao", "jd", "pinduoduo"}:
-            return {"format": "png", "naming": "{slot}_{index}_{platform}.png", "dimension_hint": "1200x1200"}
-        if platform == "shopify":
-            return {"format": "png", "naming": "{slot}_{index}_shopify.png", "dimension_hint": "1600x2000"}
-        return {"format": "png", "naming": "{slot}_{index}_{platform}.png", "dimension_hint": "1200x1200"}
-
-    def _text_policy(self, platform: str, image_slots: list[str]) -> dict[str, list[str]]:
-        forbidden = [slot for slot in image_slots if slot in {"main_image", "hero_image"}]
+        dimensions = {
+            "ozon": "1200x1200", "tiktok_shop": "1080x1350",
+            "taobao": "1200x1200", "jd": "1200x1200", "pinduoduo": "1200x1200",
+            "shopify": "1600x2000",
+        }
         return {
-            "text_forbidden_slots": forbidden,
-            "text_enabled_slots": [slot for slot in image_slots if slot not in forbidden],
-            "policy_owner": f"ecommerce_{platform}_profile",
+            "format": "png",
+            "naming": "{opaque_output_id}.png",
+            "dimension_hint": dimensions.get(platform, "1200x1200"),
+            "creative_slot_map_present": False,
+        }
+
+    def _text_constraint(self, platform: str) -> dict[str, str]:
+        return {
+            "default": "provider_native_only",
+            "primary_listing_requirement": (
+                "verify_current_platform_policy_before_publication"
+                if platform in {"amazon", "ozon", "taobao", "jd", "pinduoduo", "tiktok_shop"}
+                else "seller_decides"
+            ),
+            "local_renderer": "forbidden",
         }

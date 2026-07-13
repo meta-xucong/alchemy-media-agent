@@ -4,12 +4,7 @@ from .base import BaseVisualCapabilityPlugin, VisualPluginContext
 
 
 class TextPixelDeliveryPlugin(BaseVisualCapabilityPlugin):
-    """Declare only the frozen shared review/retry vocabulary.
-
-    Composition itself is a post-generation delivery stage.  It has no prompt
-    contribution and therefore cannot cause a model to claim that it rendered
-    final copy pixels.
-    """
+    """Historical vocabulary only; provider-native text is the forward path."""
 
     capability_id = "text_pixel_delivery"
 
@@ -31,5 +26,5 @@ class TextPixelDeliveryPlugin(BaseVisualCapabilityPlugin):
                 "max_generation_retries": 1,
                 "requires_existing_shared_retry": True,
             },
-            stages=["post_generation_review", "retry_patch", "deterministic_composition"],
+            stages=["post_generation_review", "shared_retry", "provider_native_complete_image"],
         )

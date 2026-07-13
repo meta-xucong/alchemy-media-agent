@@ -1,4 +1,9 @@
-"""Additive contracts for deterministic final-pixel text delivery."""
+"""Historical decode contracts for retired deterministic text delivery.
+
+They exist solely so archived records can be read and receive a
+``provider_native_required`` result.  New work must pass approved literal copy
+to the remote Brain/provider and must not create these plans.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ ClaimReviewState = Literal["approved", "requires_review", "blocked"]
 
 
 class NormalizedSafeArea(V3BaseModel):
-    """Resolution-independent geometry for an approved text layer."""
+    """Archived geometry only; it must never drive new-image composition."""
 
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
@@ -56,7 +61,7 @@ class CopyRenderSourceLineage(V3BaseModel):
 
 
 class CopyRenderPlan(V3BaseModel):
-    """Scenario-neutral, frozen-plan-compatible intent for final text pixels."""
+    """Archived deterministic-plan shape, accepted only for read compatibility."""
 
     schema_version: str = "v3_copy_render_plan_v1"
     plan_id: str = ""
@@ -111,7 +116,7 @@ class CopyRenderPlan(V3BaseModel):
         return self
 
     def bind_to_frozen_plan(self, activation_plan_id: str) -> "CopyRenderPlan":
-        """Return the job-bound plan after activation has frozen.
+        """Preserve historical binding data; this does not activate delivery.
 
         Templates may supply internal copy intent before the activation planner
         creates an ID.  The Product API binds it once, before generation; the
