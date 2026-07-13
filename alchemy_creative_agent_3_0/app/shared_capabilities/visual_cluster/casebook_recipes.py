@@ -35,7 +35,7 @@ def human_photorealism_casebook(
         "camera perspective with real facial planes, lens falloff, and depth of field rather than a flat render mask",
         "real camera medium with mild lens softness, believable highlight roll-off, and a little physical imperfection when the style allows",
         "real fabric wrinkles, clothing drape, fine hair separation, and environment contact instead of a clean synthetic mannequin finish",
-        "soft 35mm or CCD-inspired capture imperfection: fine grain, subtle halation, slight edge softness, and mild handheld framing imperfection",
+        "style-compatible real-camera capture imperfection: fine grain when appropriate, subtle halation, slight edge softness, and non-mechanical framing",
         "skin tonal variation around nose, eyelids, under-eye area, neck, and shoulder; not one uniform beauty-app surface",
         "tiny human asymmetries, smile-line hints, and a candid mouth/eye tension that feels caught in one real frame",
         "professional retouching that preserves human texture and avoids plastic smoothing",
@@ -376,7 +376,7 @@ def _provider_prompt_atom_lines(metadata: dict[str, Any]) -> list[str]:
 
 def _portrait_prompt_atom_recipe(*, mode: str, role_key: str, index: int) -> dict[str, Any]:
     camera = [
-        "soft 35mm or CCD-inspired real-camera imperfection with fine grain, slight edge softness, and mild candid framing",
+        "style-compatible real-camera imperfection with fine grain when appropriate, slight edge softness, and candid non-mechanical framing",
         "real lens perspective with natural face planes and believable depth falloff",
         "specific shutter moment rather than a rendered beauty mask",
         _portrait_camera_atom(mode=mode, role_key=role_key, index=index),

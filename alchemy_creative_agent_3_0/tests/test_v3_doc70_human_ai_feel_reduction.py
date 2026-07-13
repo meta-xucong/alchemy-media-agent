@@ -58,7 +58,7 @@ def test_doc70_human_guidance_adds_real_camera_and_anti_beauty_app_rules() -> No
 
     assert guidance.metadata["doc70_human_real_camera_tuning"] is True
     assert guidance.metadata["human_real_camera_tuning_library"] == VISUAL_HUMAN_REAL_CAMERA_TUNING_ID
-    assert "soft 35mm or CCD-inspired" in positives
+    assert "style-compatible real-camera capture imperfection" in positives
     assert "under-eye texture" in positives
     assert "beauty-app face" in negatives
     assert "idol photocard polish" in negatives
@@ -116,7 +116,7 @@ def test_doc70_provider_prompt_renders_real_camera_ai_feel_reduction_atoms() -> 
     helper_text = "\n".join(provider_casebook_prompt_lines(recipe))
 
     assert "Prompt atom camera stack:" in helper_text
-    assert "soft 35mm or CCD-inspired" in helper_text
+    assert "style-compatible real-camera imperfection" in helper_text
     assert "Prompt atom negative guard:" in helper_text
     assert "beauty-app face" in helper_text
 
@@ -162,7 +162,7 @@ def test_doc70_provider_prompt_renders_real_camera_ai_feel_reduction_atoms() -> 
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert "soft 35mm or CCD-inspired" in final_prompt
+    assert "style-compatible real-camera imperfection" in final_prompt
     assert "camera-real, directly usable creative image asset for a human photo" in final_prompt
     assert "Polish interpretation:" in final_prompt
     assert "beauty-app face" in final_prompt

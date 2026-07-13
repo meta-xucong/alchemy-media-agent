@@ -312,6 +312,10 @@ _ANTI_AI_FACE_ISSUES = {
     "same_expression_repetition",
     "same_head_angle_repetition",
     "same_pose_repetition",
+    "flat_scene_lighting",
+    "airbrushed_background_texture",
+    "synthetic_material_response",
+    "frozen_centered_pose",
     "doll_like_child_face",
     "adultified_child_model",
     "synthetic_child_skin",
@@ -398,7 +402,7 @@ class HumanPhotorealismLayer:
             "realistic hairline, baby hairs, flyaway hair, and non-perfect hair strands",
             "natural eye moisture and catchlights; avoid glassy or uncanny eyes",
             "skin responds to light like real skin, with soft but not plastic highlights",
-            "soft 35mm or CCD-inspired real-camera imperfections: fine grain, slight edge softness, subtle halation, and mild handheld framing",
+            "subtle real-camera imperfections compatible with the requested camera treatment: fine grain when appropriate, slight edge softness, restrained halation, and non-mechanical framing",
             "skin tone is not perfectly uniform; preserve under-eye texture, eyelid detail, neck/shoulder tonal variation, and tiny smile-line hints",
             "attractive commercial portrait, but grounded in a real captured moment rather than a beauty-app or idol photocard finish",
             "commercial polish means camera-ready human realism, not skin blur, face slimming, enlarged eyes, or liquified facial geometry",
@@ -406,8 +410,11 @@ class HumanPhotorealismLayer:
             "prefer quiet neutral expression or imperfect half-smile over a sweet template smile unless the user explicitly asks for a big smile",
             "preserve the subject's natural complexion direction from the reference or explicit prompt; exposure and color grading must not accidentally gray, darken, bleach, tan, or flatten the skin",
             "preserve the requested or referenced age band through age-consistent facial and body relationships without adultification, infantilization, or doll-like morphology",
+            "express an explicit age direction through age-consistent skin, facial proportions, body scale, and relaxed expression rather than high-gloss generic advertising beauty styling",
             "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop in close portraits",
             "keep harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle without beauty-filter reshaping",
+            "treat pose and expression as a caught photographic moment, with natural gaze, mouth tension, shoulder balance, and small asymmetries instead of a centered front-facing presentation pose",
+            "keep person, garment or props, surfaces, and background in one physically coherent photographed space with matched light direction, local falloff, depth, contact shadow, and non-uniform texture",
         ]
         positives.extend(_rendering_positive_fragments(rendering_profile))
         if has_identity_reference:
@@ -485,6 +492,11 @@ class HumanPhotorealismLayer:
             "age-inappropriate facial morphology",
             "adultification or infantilization",
             "age-inappropriate beauty retouching",
+            "age-inappropriate high-gloss advertising beauty styling",
+            "flat evenly lit backdrop with no depth or contact shadow",
+            "airbrushed background or surface texture that looks rendered rather than photographed",
+            "synthetic uniform material response across skin, garment, props, and background",
+            "front-facing centered mannequin pose repeated across outputs",
         ]
         negatives.extend(_rendering_negative_fragments(rendering_profile))
         negatives.extend(_string_list(casebook.get("negative_prompt_fragments")))
@@ -514,6 +526,9 @@ class HumanPhotorealismLayer:
             "exposure and color grading preserve the reference or explicitly requested complexion rather than imposing a demographic default",
             "facial and body morphology remain consistent with the requested or referenced age band",
             "close crops keep natural head, neck, shoulder, and upper-body proportions",
+            "age appearance follows explicit prompt or reference evidence without generic advertising-beauty substitution",
+            "person, visible materials, props, and background share coherent light direction, depth, contact shadow, and photographed texture",
+            "multi-output people have distinct natural shutter moments rather than repeated centered front-facing poses",
         ]
         review_targets.extend(_rendering_review_targets(rendering_profile))
         review_targets.extend(_string_list(casebook.get("review_targets")))
@@ -530,6 +545,8 @@ class HumanPhotorealismLayer:
                 "repair exposure or color-cast drift while preserving the reference or explicitly requested complexion direction; avoid whitening masks, forced tanning, skin smoothing, or face replacement",
                 "repair age drift toward the requested or referenced age band with age-consistent face, eyes, cheeks, teeth, neck, shoulders, expression, and skin response",
                 "repair close portrait framing so the head-to-body ratio, neck, shoulders, and upper-body crop look natural and flattering",
+                "repair the photographed scene as one physical light environment: align local falloff, depth, contact shadows, and material response across person, visible surfaces, props, and background without changing the requested mood",
+                "repair repeated centered presentation posing toward a natural shutter moment with prompt-consistent variation in gaze, mouth tension, head angle, shoulders, and body orientation",
                 *_rendering_retry_fragments(rendering_profile),
                 *_string_list(casebook_retry.get("artifact_repair")),
             ],
@@ -815,7 +832,7 @@ class HumanPhotorealismLayer:
         if "product_with_human_signal" in reason_codes:
             reason_codes.append("product_on_person_detected")
 
-        explicit_age_signal = _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS)
+        explicit_age_signal = _has_explicit_age_direction(text)
         is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
         face_is_explicitly_excluded = _contains_any(
             text,
@@ -894,7 +911,9 @@ class HumanPhotorealismLayer:
             return ["keep photographic realism even while exploring a bolder scene, wardrobe, or mood"]
         if mode in {"layout_adaptation", "format_layout_adaptation"}:
             return ["adapt crop and layout while preserving natural face scale, skin texture, and believable expression"]
-        return ["make the set feel like a directed real photoshoot with varied but coherent human moments"]
+        return [
+            "when multiple people are rendered, make the set feel like a directed real photoshoot with distinct but coherent shutter moments in expression, gaze, head angle, and body orientation; do not repeat one centered front-facing presentation pose"
+        ]
 
 
 def _contains_any(text: str, terms: set[str]) -> bool:
@@ -909,6 +928,19 @@ def _contains_any(text: str, terms: set[str]) -> bool:
         elif candidate in normalized:
             return True
     return False
+
+
+def _has_explicit_age_direction(text: str) -> bool:
+    """Recognize explicit age declarations without inferring age from appearance."""
+
+    if _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS):
+        return True
+    normalized = str(text or "").lower()
+    return bool(
+        re.search(r"\b(?:age|aged)\s*\d{1,2}\b", normalized)
+        or re.search(r"\b\d{1,2}\s*(?:-| )?year(?:s)?[- ]old\b", normalized)
+        or re.search(r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*岁", normalized)
+    )
 
 
 def _combined_activation_text(
@@ -1010,6 +1042,11 @@ def _universal_rendering_profile(text: str, *, metadata: dict[str, Any]) -> dict
         "complexion_policy": complexion_policy,
         "age_fidelity": age_fidelity,
         "identity_priority": str(explicit.get("identity_priority") or "normal"),
+        "scene_photographic_coherence": str(
+            explicit.get("scene_photographic_coherence")
+            or metadata.get("scene_photographic_coherence")
+            or "preserve_physical_light_depth_contact"
+        ),
         "doc": "94",
     }
 

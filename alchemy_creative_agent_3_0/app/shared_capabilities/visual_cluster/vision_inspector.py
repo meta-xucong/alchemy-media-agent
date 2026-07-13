@@ -1399,7 +1399,7 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "render the person as a real camera photograph with natural skin texture, subtle pores, and believable expression",
                     "preserve identity while varying expression, gaze, head angle, pose, and camera angle naturally",
                     "add natural camera, skin, hair, fabric, and environment imperfections while keeping a polished professional finish",
-                    "reduce beauty-app polish with soft 35mm or CCD-like capture, skin tone variation, eyelid/under-eye detail, loose hair, and candid mouth tension",
+                    "reduce beauty-app polish with style-compatible real-camera capture, skin tone variation, eyelid/under-eye detail, loose hair, and candid mouth tension",
                     "preserve individual facial geometry without face-slimming, enlarged beauty eyes, perfect V-shaped chin, or generic AI-beauty proportions",
                     "restore attractive prompt-consistent facial exposure and color balance while preserving the reference or explicitly requested complexion direction and visible skin texture",
                 ]
