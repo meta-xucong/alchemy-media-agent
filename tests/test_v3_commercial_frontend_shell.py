@@ -821,6 +821,24 @@ def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypat
     assert background_calls == [(project_id, job_id, {"quality_mode": "standard"})]
 
 
+def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(monkeypatch) -> None:
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", True)
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
+
+    assert app_main._v3_gateway_managed_background_timeout_seconds(
+        {"quality_mode": "standard", "metadata": {"requested_image_count": 2}}
+    ) == 2655.0
+    assert app_main._v3_gateway_managed_background_timeout_seconds(
+        {
+            "quality_mode": "standard",
+            "metadata": {"requested_image_count": 2, "disable_visual_auto_retry": True},
+        }
+    ) == 1335.0
+    assert app_main._v3_gateway_managed_background_timeout_seconds(
+        {"quality_mode": "strict", "metadata": {"requested_image_count": 3}}
+    ) == 5955.0
+
+
 def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_path) -> None:
     v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
     v3_route_handlers.service.job_store = InMemoryProductJobStore()

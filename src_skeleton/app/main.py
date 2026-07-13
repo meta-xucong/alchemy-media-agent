@@ -295,13 +295,61 @@ def _run_v3_project_generation_background(project_id: str, job_id: str, payload:
                     watchdog.cancel()
 
 
-def _v3_gateway_managed_background_timeout_seconds() -> float | None:
+def _v3_bounded_background_output_count(payload: dict | None) -> int:
+    """Return the number of provider renders planned for one generation pass.
+
+    GPT Image 2 requests are materialized one role at a time so each image can
+    retain its own prompt and reference contract.  The background watchdog
+    therefore cannot treat a multi-image job as though it contained just one
+    upstream request.
+    """
+
+    metadata = dict((payload or {}).get("metadata") or {})
+    raw_count = metadata.get("requested_image_count")
+    if raw_count is None or raw_count == "":
+        raw_count = (payload or {}).get("requested_image_count")
+    try:
+        return max(1, min(4, int(raw_count or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _v3_bounded_background_visual_retry_count(payload: dict | None) -> int:
+    """Mirror the public bounded quality-retry contract for watchdog sizing."""
+
+    request = dict(payload or {})
+    metadata = dict(request.get("metadata") or {})
+    if bool(metadata.get("disable_visual_auto_retry")):
+        return 0
+    quality_mode = str(request.get("quality_mode") or "standard").strip().lower()
+    mode_limit = {"standard": 1, "strict": 2, "explore": 0}.get(quality_mode, 1)
+    if quality_mode == "explore" and bool(metadata.get("enable_visual_auto_retry_in_explore")):
+        mode_limit = 1
+    requested = metadata.get("max_visual_retry_attempts")
+    if requested is None or requested == "":
+        return mode_limit
+    try:
+        return max(0, min(int(requested), mode_limit))
+    except (TypeError, ValueError):
+        return mode_limit
+
+
+def _v3_gateway_managed_background_timeout_seconds(payload: dict | None = None) -> float | None:
     if not bool(getattr(settings, "openai_image_gateway_managed_failover", False)):
         return None
-    # The provider's own boundary is gateway budget plus a small conversion
-    # margin. This separate watchdog exists only when that lower layer never
-    # returns a terminal outcome, so it receives one further short margin.
-    return max(1.0, float(settings.openai_image_gateway_managed_failover_timeout_seconds) + 15.0)
+    # The provider boundary applies to one upstream render.  V3 deliberately
+    # serializes role-specific images so their prompts and reference bindings
+    # remain independent, and a bounded visual retry can add one or two full
+    # passes.  Budget the whole known plan; otherwise a later valid render can
+    # land on disk after the lifecycle has already been terminally blocked.
+    render_count = _v3_bounded_background_output_count(payload)
+    retry_count = _v3_bounded_background_visual_retry_count(payload)
+    provider_request_budget = render_count * (1 + retry_count)
+    provider_timeout = float(settings.openai_image_gateway_managed_failover_timeout_seconds)
+    # This watchdog is only a recovery boundary when the lower transport never
+    # returns.  Keep a small one-time conversion margin rather than shortening
+    # every individual gateway request.
+    return max(1.0, (provider_timeout * provider_request_budget) + 15.0)
 
 
 def _timeout_v3_project_generation_background(
@@ -334,7 +382,7 @@ def _timeout_v3_project_generation_background(
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
     background_attempt_id = uuid4().hex
-    timeout_seconds = _v3_gateway_managed_background_timeout_seconds()
+    timeout_seconds = _v3_gateway_managed_background_timeout_seconds(payload)
     with _v3_background_generation_jobs_lock:
         if key in _v3_background_generation_jobs:
             return False
