@@ -111,9 +111,13 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "尺寸/版式适配模式" in index.text
     assert "图片用途（可选）" not in index.text
     assert "v3EcommercePresetRow" in index.text
+    assert "v3PhotographyPresetRow" in index.text
     assert "v3EcommerceAdvanced" in index.text
     assert "v3EcommerceFields" in index.text
     assert "one_click_product_set" in index.text
+    assert 'data-v3-preset="single_hero" data-v3-preset-scope="photography"' in index.text
+    assert 'data-v3-preset="reference_reshoot" data-v3-preset-scope="photography"' in index.text
+    assert 'data-v3-preset="professional_set" data-v3-preset-scope="photography"' in index.text
     assert 'id="v3ProgressPanel"' in index.text
     assert 'id="v3ProgressFill"' in index.text
     assert 'id="v3ProjectHistoryModal"' in index.text
@@ -314,6 +318,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3ProjectHomePageSize = 9" in script.text
     assert "/history?limit=24" not in script.text
     assert "function openV3Home" in script.text
+    assert "function v3HomeTemplateCopy" in script.text
+    assert 'if (templateId === "photographer_template")' in script.text
+    assert 'photography: "single_hero"' in script.text
+    assert "v3PhotographyPresetRow" in script.text
     assert "function openV3ScenarioWorkspace" in script.text
     assert "async function loadV3Projects" in script.text
     assert "async function loadV3ProjectOutputs" in script.text

@@ -563,6 +563,7 @@ const els = {
   v3VariationModeRow: document.querySelector("#v3VariationModeRow"),
   v3GeneralPresetRow: document.querySelector("#v3GeneralPresetRow"),
   v3EcommercePresetRow: document.querySelector("#v3EcommercePresetRow"),
+  v3PhotographyPresetRow: document.querySelector("#v3PhotographyPresetRow"),
   v3PromptLabel: document.querySelector("#v3PromptLabel"),
   v3PromptHint: document.querySelector("#v3PromptHint"),
   v3PromptInput: document.querySelector("#v3PromptInput"),
@@ -1733,7 +1734,7 @@ function v3DefaultPresetForScenario(scenarioId) {
   const defaults = {
     general_creative: "campaign_poster",
     ecommerce: "one_click_product_set",
-    photography: "",
+    photography: "single_hero",
   };
   return defaults[scenarioId] || "campaign_poster";
 }
@@ -1828,6 +1829,16 @@ function clearV3SelectedBrandMemory() {
 }
 
 function v3HomeTemplateCopy(templateId) {
+  if (templateId === "photographer_template") {
+    return {
+      title: "摄影创作项目",
+      intro: "适合人像、风景、静物和动物摄影。先说明主体、场景与希望的摄影感，进入项目后再选单张、参考重拍或三张专业套图。",
+      goalLabel: "这组摄影想拍什么",
+      goalHint: "先写一句拍摄目标即可。参考图、拍摄方式与具名摄影师档案都在项目里明确确认。",
+      button: "创建摄影创作项目",
+      placeholder: "例如：在清晨山谷里拍一组安静、有空气感的自然风景摄影作品",
+    };
+  }
   if (templateId === "ecommerce_template") {
     return {
       title: "电商套图项目",
@@ -2111,6 +2122,7 @@ function renderV3ScenarioState() {
   if (els.v3VariationModeRow) els.v3VariationModeRow.hidden = selected !== "general_creative";
   if (els.v3GeneralPresetRow) els.v3GeneralPresetRow.hidden = selected !== "general_creative";
   if (els.v3EcommercePresetRow) els.v3EcommercePresetRow.hidden = selected !== "ecommerce";
+  if (els.v3PhotographyPresetRow) els.v3PhotographyPresetRow.hidden = selected !== "photography";
   if (els.v3CreateJobBtn && !v3State.loading) els.v3CreateJobBtn.textContent = copy.createLabel;
   if (els.v3GenerateBtn) els.v3GenerateBtn.textContent = copy.generateLabel;
   if (els.v3SelectBtn) els.v3SelectBtn.textContent = copy.selectLabel;
