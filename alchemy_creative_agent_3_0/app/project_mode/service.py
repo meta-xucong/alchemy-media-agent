@@ -81,6 +81,7 @@ from .contracts import (
     ProjectTimelineItem,
     ProjectTimelineResponse,
     PROJECT_API_SOURCE,
+    PHOTOGRAPHER_TEMPLATE_ID,
     TemplateCard,
     TimelineItemType,
 )
@@ -4845,6 +4846,8 @@ class V3ProjectModeService:
     def _template_label(self, template_id: str | None) -> str:
         if template_id == ECOMMERCE_TEMPLATE_ID:
             return "电商模板"
+        if template_id == PHOTOGRAPHER_TEMPLATE_ID:
+            return "摄影师模板"
         return "通用模板"
 
     def _next_actions(self, project: ProjectRecord) -> list[str]:

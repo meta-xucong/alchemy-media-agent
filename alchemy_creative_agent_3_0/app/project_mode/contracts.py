@@ -15,6 +15,7 @@ PROJECT_API_SOURCE = "V3ProjectModeService"
 GENERAL_TEMPLATE_ID = "general_template"
 GENERAL_SCENARIO_ID = "general_creative"
 ECOMMERCE_TEMPLATE_ID = "ecommerce_template"
+PHOTOGRAPHER_TEMPLATE_ID = "photographer_template"
 
 
 class ProjectModeBase(V3BaseModel):

@@ -24,7 +24,12 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
 
 
-def _project_and_root(handlers: V3ProductRouteHandlers, *, profile: dict | None = None) -> tuple[dict, dict]:
+def _project_and_root(
+    handlers: V3ProductRouteHandlers,
+    *,
+    profile: dict | None = None,
+    mode_id: str = "professional_set",
+) -> tuple[dict, dict]:
     project = handlers.post_projects(
         {
             "primary_template_id": "photographer_template",
@@ -38,7 +43,7 @@ def _project_and_root(handlers: V3ProductRouteHandlers, *, profile: dict | None 
             "user_input": "Create a professional portrait session of a ceramic artist in her studio.",
             "photographer_profile_id": profile.get("profile_id") if profile else None,
             "photographer_profile_selection_source": profile.get("selection_source") if profile else None,
-            "metadata": {"selected_mode_id": "professional_set", "scene_domain": "portrait"},
+            "metadata": {"selected_mode_id": mode_id, "scene_domain": "portrait"},
         },
     )
     assert root["status"] == "planned"
@@ -95,6 +100,41 @@ def test_professional_set_executes_three_frozen_roles_and_resolves_one_winner_pe
         assert delivery["current_delivery"]["job_id"] == root["job_id"]
         assert delivery["current_delivery"]["role_id"] == role_id
         assert delivery["metadata"]["final_role_winner_only"] is True
+
+
+def test_photography_project_summary_and_terminal_delivery_keep_the_photographer_binding(monkeypatch) -> None:
+    """A Photography project must never be summarized as General after a terminal job."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers = V3ProductRouteHandlers()
+    project, root = _project_and_root(handlers, mode_id="single_hero")
+
+    assert project["primary_template_id"] == "photographer_template"
+    assert project["memory_summary"]["active_template_label"] == "摄影师模板"
+    assert root["scenario"]["scenario_id"] == "photography"
+    assert root["metadata"]["template_id"] == "photographer_template"
+
+    generated = handlers.post_project_job_generate(project["project_id"], root["job_id"], {"quality_mode": "standard"})
+    assert generated["status"] == "generated"
+    assert generated["scenario"]["scenario_id"] == "photography"
+    assert len(generated["asset_series"]) == 1
+    assert all(item["output_id"] for item in generated["asset_series"])
+
+    reopened = handlers.get_project(project["project_id"])["project"]
+    recent = handlers.get_projects(limit=10)
+    summary = next(item for item in recent["projects"] if item["project_id"] == project["project_id"])
+    terminal = handlers.get_job(root["job_id"])
+    timeline = handlers.get_project_timeline(project["project_id"])["items"]
+
+    assert reopened["primary_template_id"] == "photographer_template"
+    assert reopened["memory_summary"]["active_template_label"] == "摄影师模板"
+    assert summary["active_template_label"] == "摄影师模板"
+    assert terminal["status"] == "generated"
+    assert terminal["scenario"]["scenario_id"] == "photography"
+    assert len(terminal["asset_series"]) == 1
+    assert terminal["asset_series"][0]["output_id"]
+    assert terminal["asset_series"][0]["preview_url"]
+    assert any(item["item_type"] == "job_generated" and item["job_id"] == root["job_id"] for item in timeline)
 
 
 def test_role_continuation_is_append_only_and_reuses_the_exact_frozen_plan(monkeypatch) -> None:
