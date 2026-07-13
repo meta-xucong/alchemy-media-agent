@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from ...creative_core.rules import stable_id
+from ..apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from .contracts import GeneratedOutputResolution, VisualInspectionReport
 from .vision_provider import (
     VisionInspectionProvider,
@@ -175,6 +176,7 @@ RETRYABLE_ISSUE_CODES = {
     "unrelated_object",
     "unrelated_product",
     "product_identity_drift",
+    *APPAREL_CONSTRUCTION_REVIEW_ISSUES.values(),
     "nonhuman_subject_identity_drift",
     "nonhuman_subject_marking_drift",
     "nonhuman_subject_proportion_drift",
@@ -905,6 +907,13 @@ def _issue_message(code: str) -> str:
         "unrelated_object": "An unrelated object may have appeared.",
         "unrelated_product": "An unrelated subject or object may have appeared.",
         "product_identity_drift": "A referenced subject or object may have drifted.",
+        "product_silhouette_drift": "The supplied garment silhouette or proportion may have changed.",
+        "product_pattern_registration_drift": "The supplied garment print, pattern placement, or scale may have changed.",
+        "product_layer_topology_drift": "The supplied garment layer, mesh, or transparency structure may have changed.",
+        "product_construction_detail_drift": "The supplied garment seam, hem, trim, fastening, or construction detail may have changed.",
+        "product_material_response_drift": "The supplied garment material weight or surface response may have changed.",
+        "product_drape_behavior_drift": "The supplied garment's gravity, fold tension, or drape behaviour may have changed.",
+        "delivery_evidence_dimension_mismatch": "This output may not visibly demonstrate the template-owned evidence assigned to it.",
         "product_label_drift": "The visible product label or logo may have changed from the reference.",
         "product_label_unreadable": "The visible product label or logo may be too unclear for a product image.",
         "product_logo_or_label_obscured": "The product label or logo may be covered, cropped, darkened, or hidden.",
@@ -1196,6 +1205,19 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                 negative_additions.extend(["reference scene replaced", "background space drift", "camera mood drift"])
         elif code in {"product_identity_drift", "brand_asset_drift"}:
             product_reinforcement.append("preserve the supplied product or brand asset truth source exactly: same instance, shape, colors, material, proportions, surface finish, packaging silhouette, and logo/label placement")
+        elif code in set(APPAREL_CONSTRUCTION_REVIEW_ISSUES.values()):
+            product_reinforcement.append(
+                "repair only the supplied garment construction truth: preserve its silhouette, print placement and scale, layer topology, seam/hem/trim detail, material response, and gravity-consistent drape while allowing only the frozen fact's stated variation boundary"
+            )
+            negative_additions.extend(
+                [
+                    "changed garment silhouette",
+                    "shifted print placement or scale",
+                    "invented or removed mesh layer",
+                    "changed garment construction detail",
+                    "different fabric weight or surface response",
+                ]
+            )
         elif code in {"product_label_drift", "product_label_unreadable", "product_logo_or_label_obscured"}:
             product_reinforcement.append(
                 "preserve the existing product label/logo exactly from the reference when visible; keep it readable, high-contrast, and unobscured"
@@ -1462,14 +1484,15 @@ def _retry_patch_for_issues(issue_codes: list[str]) -> dict[str, Any]:
                     "beauty-app glow",
                 ]
             )
-        elif code in {"deliverable_intent_mismatch", "delivery_set_role_mismatch"}:
+        elif code in {"deliverable_intent_mismatch", "delivery_set_role_mismatch", "delivery_evidence_dimension_mismatch"}:
             prompt_additions.append("preserve this output's requested delivery intent and do not substitute a different image role")
-            composition_repair.append("separate the requested image roles clearly across the delivery set")
+            composition_repair.append("make the assigned evidence visibly distinct across the delivery set without substituting a static role recipe")
             negative_additions.extend(
                 [
                     "wrong requested image role",
                     "requested delivery intent ignored",
                     "one role replaced by another",
+                    "assigned evidence dimension missing",
                 ]
             )
     return {

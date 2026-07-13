@@ -1271,6 +1271,7 @@ class ScenarioRuntime:
             for key, value in dict(request.product_profile or {}).items()
             if value not in (None, "", [], {})
         }
+        template_evidence_retry_contract = self._template_delivery_evidence_retry_contract(resolved_deliverables)
         retry_patch = self._server_resolved_retry_patch(request, plan)
         provider_projection = {
             "projection_version": "resolved_constraint_ledger_v1",
@@ -1335,7 +1336,10 @@ class ScenarioRuntime:
                 "conflict_count": len(conflicts),
             },
             review_contracts=list(composed.review_contracts),
-            retry_contracts=list(composed.retry_contracts),
+            retry_contracts=[
+                *list(composed.retry_contracts),
+                *([template_evidence_retry_contract] if template_evidence_retry_contract else []),
+            ],
             hard_semantic_contract=hard_semantic_contract,
             provenance=[
                 {
@@ -1345,6 +1349,47 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _template_delivery_evidence_retry_contract(deliverables: list[dict[str, Any]]) -> dict[str, Any]:
+        """Publish an owner-local retry contract for Brain-declared evidence.
+
+        This derives no role, shot, pose, camera, or static suite.  It exists
+        only when a specialized template has already frozen distinct evidence
+        dimensions into its Brain-owned deliverables.
+        """
+
+        evidence_rows = []
+        for deliverable in deliverables:
+            metadata = deliverable.get("metadata") if isinstance(deliverable.get("metadata"), dict) else {}
+            dimensions = [str(item).strip() for item in metadata.get("brain_evidence_dimensions", []) if str(item).strip()]
+            if dimensions:
+                evidence_rows.append(
+                    {
+                        "deliverable_id": str(deliverable.get("deliverable_id") or ""),
+                        "output_index": deliverable.get("output_index"),
+                        "dimensions": list(dict.fromkeys(dimensions)),
+                    }
+                )
+        if not evidence_rows:
+            return {}
+        return {
+            "capability_id": "template_deliverable_owner",
+            "issue_codes": ["delivery_evidence_dimension_mismatch"],
+            "templates": {
+                "prompt_additions": [
+                    "preserve the frozen template-owned delivery intent and visibly demonstrate this output's assigned evidence dimension without replacing it with a stock role or static recipe"
+                ],
+                "composition_repair": [
+                    "make the evidence assigned to each output visibly distinct while keeping the already-frozen Brain direction"
+                ],
+            },
+            "metadata": {
+                "source": "resolved_constraint_ledger.template_deliverables",
+                "static_recipe_present": False,
+                "brain_evidence_rows": evidence_rows,
+            },
+        }
 
     @staticmethod
     def _server_resolved_retry_patch(

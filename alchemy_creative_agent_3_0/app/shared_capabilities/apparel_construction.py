@@ -23,6 +23,18 @@ APPAREL_CONSTRUCTION_CHANNELS = (
     "product_drape_behavior",
 )
 
+# These are generic product-truth review outcomes, not a child, fashion, or
+# template route.  They are emitted only when an explicit typed construction
+# fact is present in the frozen ledger.
+APPAREL_CONSTRUCTION_REVIEW_ISSUES: dict[str, str] = {
+    "product_silhouette": "product_silhouette_drift",
+    "product_pattern_registration": "product_pattern_registration_drift",
+    "product_layer_topology": "product_layer_topology_drift",
+    "product_construction_detail": "product_construction_detail_drift",
+    "product_material_response": "product_material_response_drift",
+    "product_drape_behavior": "product_drape_behavior_drift",
+}
+
 _APPAREL_CATEGORY_TOKENS = (
     "apparel",
     "clothing",
@@ -135,6 +147,53 @@ class ApparelConstructionFacts(V3BaseModel):
 
     def provider_projection(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+def apparel_construction_review_contract(projection: dict[str, Any] | None) -> dict[str, Any]:
+    """Derive pixel-review obligations from the already-frozen apparel facts.
+
+    The caller may pass provider-projection JSON rather than a model.  Only
+    hard/strong facts are review obligations: soft declared signals remain
+    prompt guidance and must not be overclaimed as pixel-verifiable truth.
+    """
+
+    payload = dict(projection or {})
+    if not bool(payload.get("applies")):
+        return {
+            "applies": False,
+            "facts": [],
+            "issue_codes": [],
+            "score_dimensions": [],
+            "source_summary": "no_apparel_construction_evidence",
+        }
+
+    facts: list[dict[str, Any]] = []
+    issue_codes: list[str] = []
+    for raw_fact in payload.get("facts", []):
+        if not isinstance(raw_fact, dict):
+            continue
+        channel = str(raw_fact.get("channel") or "").strip()
+        strength = str(raw_fact.get("strength") or "soft").strip()
+        values = _as_strings(raw_fact.get("values"))
+        if channel not in APPAREL_CONSTRUCTION_REVIEW_ISSUES or strength not in {"hard", "strong"} or not values:
+            continue
+        issue_codes.append(APPAREL_CONSTRUCTION_REVIEW_ISSUES[channel])
+        facts.append(
+            {
+                "channel": channel,
+                "values": values,
+                "strength": strength,
+                "evidence_mode": str(raw_fact.get("evidence_mode") or "declared_signal"),
+                "allowed_variation": str(raw_fact.get("allowed_variation") or ""),
+            }
+        )
+    return {
+        "applies": bool(facts),
+        "facts": facts,
+        "issue_codes": _unique(issue_codes),
+        "score_dimensions": ["product_fidelity", "apparel_construction_fidelity"] if facts else [],
+        "source_summary": str(payload.get("source_summary") or "apparel_construction_evidence"),
+    }
 
 
 def extract_apparel_construction_facts(
