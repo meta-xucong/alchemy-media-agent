@@ -282,12 +282,15 @@ class OpenAIGPTImageProvider:
         reference_paths = self._provider_reference_paths(reference_paths)
         repair_mask = self._identity_repair_mask_path(plan)
         self._assert_reference_transport_supported(len(reference_paths))
+        timeout_seconds = self._client_timeout_seconds(image_edit=bool(reference_paths))
+        transport_client = self._gateway_managed_transport_client(timeout_seconds=timeout_seconds)
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
-                timeout=self._client_timeout_seconds(image_edit=bool(reference_paths)),
+                timeout=timeout_seconds,
                 max_retries=self._sdk_max_retries(),
+                http_client=transport_client,
             )
         )
         # The upstream image gateway may enforce account-level concurrency. Keep
@@ -312,7 +315,7 @@ class OpenAIGPTImageProvider:
                     if len(outputs) >= output_count:
                         break
         finally:
-            await self._close_async_client(client)
+            await self._close_async_client(client, transport_client=transport_client)
         outputs = outputs[:output_count]
         return ImageGenerationResult(
             provider=self.name,
@@ -656,12 +659,15 @@ class OpenAIGPTImageProvider:
         except ModuleNotFoundError as exc:
             raise ProviderNotConfiguredError("The openai package is not installed.", provider=self.name) from exc
 
+        timeout_seconds = self._client_timeout_seconds(image_edit=True)
+        transport_client = self._gateway_managed_transport_client(timeout_seconds=timeout_seconds)
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
-                timeout=self._client_timeout_seconds(image_edit=True),
+                timeout=timeout_seconds,
                 max_retries=self._sdk_max_retries(),
+                http_client=transport_client,
             )
         )
         plan = request.prompt_plan
@@ -670,7 +676,7 @@ class OpenAIGPTImageProvider:
             async with _openai_image_generation_lock:
                 outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
         finally:
-            await self._close_async_client(client)
+            await self._close_async_client(client, transport_client=transport_client)
         outputs = outputs[:1]
         return ImageGenerationResult(
             provider=self.name,
@@ -1111,25 +1117,64 @@ class OpenAIGPTImageProvider:
             ),
             "effective_client_timeout_seconds": self._client_timeout_seconds(image_edit=image_edit),
             "sdk_max_retries": self._sdk_max_retries(),
+            "environment_proxy_bypassed": self._bypasses_environment_proxy(),
             "operation": "image_edit" if image_edit else "image_generate",
         }
 
     def _uses_gateway_managed_failover(self) -> bool:
         return bool(getattr(settings, "openai_image_gateway_managed_failover", False))
 
+    def _bypasses_environment_proxy(self) -> bool:
+        return self._uses_gateway_managed_failover() and bool(
+            getattr(settings, "openai_image_gateway_managed_failover_bypass_env_proxy", True)
+        )
+
+    def _gateway_managed_transport_client(self, *, timeout_seconds: float):
+        """Use a direct image-gateway transport when its own router owns retry.
+
+        `httpx` trusts HTTP_PROXY/HTTPS_PROXY by default.  A local desktop
+        proxy can silently impose a shorter read timeout, cancel a valid
+        gateway line-switch sequence, and make the gateway report a misleading
+        client-side 499.  Keep the bypass scoped to the explicit managed
+        gateway contract and leave an opt-out for deployments that require a
+        proxy route.
+        """
+
+        if not self._bypasses_environment_proxy():
+            return None
+        try:
+            import httpx
+        except ModuleNotFoundError as exc:
+            raise ProviderNotConfiguredError(
+                "The httpx package is required for direct gateway image transport.",
+                provider=self.name,
+            ) from exc
+        return httpx.AsyncClient(timeout=timeout_seconds, trust_env=False)
+
     async def _call_with_timeout(self, awaitable, *, image_edit: bool, timeout_seconds: float | None = None):
         timeout = self._client_timeout_seconds(image_edit=image_edit) if timeout_seconds is None else timeout_seconds
         return await asyncio.wait_for(awaitable, timeout=timeout)
 
-    async def _close_async_client(self, client) -> None:
-        for method_name in ("close", "aclose"):
-            close = getattr(client, method_name, None)
-            if close is None:
-                continue
-            result = close()
-            if inspect.isawaitable(result):
-                await result
-            return
+    async def _close_async_client(self, client, *, transport_client=None) -> None:
+        try:
+            for method_name in ("close", "aclose"):
+                close = getattr(client, method_name, None)
+                if close is None:
+                    continue
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+                break
+        finally:
+            # OpenAI closes a supplied httpx client itself.  A second close is
+            # idempotent, and also closes it for lightweight test doubles that
+            # implement only the OpenAI surface.
+            if transport_client is not None:
+                close = getattr(transport_client, "aclose", None) or getattr(transport_client, "close", None)
+                if close is not None:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
 
     def _provider_reference_paths(self, reference_paths: list) -> list:
         return prepare_provider_reference_images(reference_paths)

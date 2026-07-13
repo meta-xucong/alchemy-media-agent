@@ -196,6 +196,13 @@ class Settings(BaseModel):
     openai_image_gateway_managed_failover_timeout_seconds: float = _float_env(
         "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER_TIMEOUT_SECONDS", 660.0
     )
+    # A gateway-managed image request can legitimately outlive ordinary API
+    # traffic.  Do not let an ambient desktop proxy add an undocumented,
+    # shorter read deadline between V3 and that gateway.  Deployments that
+    # intentionally require a proxy can explicitly opt back in.
+    openai_image_gateway_managed_failover_bypass_env_proxy: bool = os.getenv(
+        "OPENAI_IMAGE_GATEWAY_MANAGED_FAILOVER_BYPASS_ENV_PROXY", "true"
+    ).lower() in {"1", "true", "yes", "on"}
     openai_image_edit_transient_cooldown_seconds: float = _float_env("OPENAI_IMAGE_EDIT_TRANSIENT_COOLDOWN_SECONDS", 12.0)
     openai_image_reference_max_upload_bytes: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_UPLOAD_BYTES", 1_200_000)
     openai_image_reference_max_edge: int = _int_env("OPENAI_IMAGE_REFERENCE_MAX_EDGE", 1024)

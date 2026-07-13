@@ -277,6 +277,7 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
         "gateway_managed_failover_timeout_seconds": 420.0,
         "effective_client_timeout_seconds": 660.0,
         "sdk_max_retries": 0,
+        "environment_proxy_bypassed": True,
         "operation": "image_generate",
     }
     capabilities = asyncio.run(provider.capabilities())
@@ -284,6 +285,13 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
     assert capabilities.limits["effective_client_timeout_seconds"] == 660.0
     assert capabilities.limits["effective_image_edit_client_timeout_seconds"] == 660.0
     assert capabilities.limits["sdk_max_retries"] == 0
+    assert capabilities.limits["environment_proxy_bypassed"] is True
+    transport_client = provider._gateway_managed_transport_client(timeout_seconds=660.0)  # noqa: SLF001
+    try:
+        assert transport_client is not None
+        assert transport_client._trust_env is False  # noqa: SLF001
+    finally:
+        asyncio.run(transport_client.aclose())
     assert provider._client_timeout_seconds(image_edit=False) == 660.0  # noqa: SLF001
     assert provider._client_timeout_seconds(image_edit=True) == 660.0  # noqa: SLF001
     assert provider._sdk_max_retries() == 0  # noqa: SLF001
