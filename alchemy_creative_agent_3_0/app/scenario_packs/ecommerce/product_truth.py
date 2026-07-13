@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...shared_capabilities.apparel_construction import extract_apparel_construction_facts
 from .contracts import ProductTruthLock
 from .utils import as_list, clean_text, first_non_empty, unique_preserve_order
 
@@ -41,6 +42,10 @@ class ProductTruthLockBuilder:
         parameters: dict[str, Any],
     ) -> ProductTruthLock:
         category = self._category(user_input, product_profile, parameters)
+        apparel_construction = extract_apparel_construction_facts(
+            product_profile,
+            has_reference_evidence=bool(uploaded_asset_ids),
+        )
         visible_attributes = self._visible_attributes(product_profile, uploaded_asset_ids)
         immutable_attributes = unique_preserve_order(
             [
@@ -58,9 +63,20 @@ class ProductTruthLockBuilder:
         warnings = [f"Claim needs evidence before visual use: {claim}" for claim in unsupported_claims]
         if not uploaded_asset_ids:
             warnings.append("No product image was supplied; product truth must be reviewed manually.")
+        review_obligations = [
+            "Product silhouette remains recognizable in every output.",
+            "Logo, label, material, color, quantity, and visible components match supplied evidence.",
+            "Unsupported claims are removed or softened before export.",
+            "Any requested text is part of the complete provider image and is reviewed in final pixels.",
+        ]
+        if apparel_construction.facts:
+            review_obligations.append(
+                "Supplied garment silhouette, pattern placement, layers, construction, material response, and drape remain faithful where evidenced."
+            )
 
         return ProductTruthLock(
             product_category=category,
+            apparel_construction=apparel_construction if apparel_construction.applies else None,
             visible_attributes=visible_attributes,
             immutable_attributes=immutable_attributes,
             allowed_scene_changes=[
@@ -82,17 +98,13 @@ class ProductTruthLockBuilder:
                 "user_text": 0.68 if clean_text(user_input) else 0.0,
                 "product_specs": 0.78 if product_profile else 0.0,
             },
-            review_obligations=[
-                "Product silhouette remains recognizable in every output.",
-                "Logo, label, material, color, quantity, and visible components match supplied evidence.",
-                "Unsupported claims are removed or softened before export.",
-                "Any requested text is part of the complete provider image and is reviewed in final pixels.",
-            ],
+            review_obligations=review_obligations,
             warnings=warnings,
             metadata={
                 "source": "ProductTruthLockBuilder",
                 "unsupported_claims": unsupported_claims,
                 "uploaded_asset_count": len(uploaded_asset_ids),
+                "apparel_construction_source": apparel_construction.source_summary,
             },
         )
 

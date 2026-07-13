@@ -7,10 +7,12 @@ from typing import Any
 from pydantic import Field
 
 from ...schemas.models import V3BaseModel
+from ...shared_capabilities.apparel_construction import ApparelConstructionFacts
 
 
 class ProductTruthLock(V3BaseModel):
     product_category: str = "generic_product"
+    apparel_construction: ApparelConstructionFacts | None = None
     visible_attributes: list[str] = Field(default_factory=list)
     immutable_attributes: list[str] = Field(default_factory=list)
     allowed_scene_changes: list[str] = Field(default_factory=list)

@@ -21,6 +21,7 @@ from ..shared_capabilities import (
     SharedCapabilityRegistry,
     UploadedAssetInfo,
 )
+from ..shared_capabilities.apparel_construction import extract_apparel_construction_facts
 from ..shared_capabilities.activation import (
     CapabilityActivationError,
     CapabilityActivationIntent,
@@ -1095,6 +1096,10 @@ class ScenarioRuntime:
                         "constraint_ids": [entries[2].constraint_id, constraint_id],
                     }
                 )
+        apparel_construction = extract_apparel_construction_facts(
+            request.product_profile,
+            has_reference_evidence=bool(self._uploaded_assets(request)),
+        )
         for key, value in sorted(dict(request.product_profile or {}).items()):
             if value in (None, "", [], {}):
                 continue
@@ -1109,6 +1114,32 @@ class ScenarioRuntime:
                     resolved_value=value,
                     resolution="accepted",
                     provenance=[{"source": "product_profile", "field": key}],
+                )
+            )
+        for fact in apparel_construction.facts:
+            resolved_value = {
+                "values": list(fact.values),
+                "evidence_mode": fact.evidence_mode,
+                "source_fields": list(fact.source_fields),
+                "allowed_variation": fact.allowed_variation,
+            }
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", normalized_intent.intent_id, fact.channel, fact.source_fields),
+                    channel=fact.channel,
+                    owner="product_identity",
+                    strength=fact.strength,
+                    precedence=92,
+                    requested_value=list(fact.values),
+                    resolved_value=resolved_value,
+                    resolution="accepted",
+                    provenance=[
+                        {
+                            "source": fact.source,
+                            "fields": list(fact.source_fields),
+                            "evidence_mode": fact.evidence_mode,
+                        }
+                    ],
                 )
             )
         for capability_id, fragment in enumerate(composed.prompt_additions, 1):
@@ -1182,6 +1213,7 @@ class ScenarioRuntime:
             "visible_text_policy": normalized_intent.visible_text_policy,
             "deliverables": resolved_deliverables,
             "product_truth": product_truth,
+            "apparel_construction": apparel_construction.provider_projection(),
             "quality_guidance": [
                 entry.resolved_value
                 for entry in entries
