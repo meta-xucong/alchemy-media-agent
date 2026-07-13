@@ -90,5 +90,5 @@ Before reopening P10 quality certification, prove:
 4. Run the P10 text-only quality matrix only when the real remote Brain and
    shared real-pixel reviewer are both available, and preserve its provenance.
 5. After `/images/edits` and Gate D, run the reference-reshoot and nonhuman
-   identity matrix.
+    identity matrix.
 6. Only then request the production deployment gate.

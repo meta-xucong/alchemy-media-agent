@@ -28,7 +28,6 @@ reuse E-Commerce suite ownership.
 > stays off by default. P10 execution closure is verified, but real-pixel
 > review and visual-quality acceptance remain required. P11 records the
 > LLM-first and real-pixel production correction before further release work.
-
 > Current shared-boundary note (Docs113/117): a P10 terminal image is not a
 > photography quality pass unless its result surface shows `vision_model` or
 > `hybrid` provenance and a certifying final verdict. `metadata_only`,
