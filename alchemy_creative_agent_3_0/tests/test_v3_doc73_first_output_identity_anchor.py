@@ -119,3 +119,38 @@ def test_doc73_user_selected_reference_has_priority_over_auto_first_output(tmp_p
     assert len(second_metadata["reference_assets"]) == 1
     assert second_metadata["reference_assets"][0]["asset_id"] == "user_selected_identity_ref"
     assert second_metadata["reference_assets"][0]["file_path"] == str(selected_reference)
+
+
+def test_doc73_product_profile_does_not_turn_a_no_reference_set_into_an_edit_chain(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "Create a clean glass product model still-life set with three translucent spheres on a neutral surface.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "llm_brain": {
+                "visual_task_profile": {
+                    "subject_entities": [
+                        {"entity_id": "product_1", "entity_type": "product", "confidence": 0.95}
+                    ]
+                }
+            },
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    first_metadata = provider.requests[0]["metadata"]
+    second_metadata = provider.requests[1]["metadata"]
+    assert first_metadata["auto_batch_identity_anchor_policy"]["enabled"] is False
+    assert second_metadata.get("auto_batch_identity_anchor_applied") is not True
+    assert not any(
+        item.get("source_type") == "generated_first_output"
+        for item in second_metadata.get("reference_assets", [])
+    )

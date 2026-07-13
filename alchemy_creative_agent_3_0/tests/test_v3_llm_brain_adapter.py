@@ -5,7 +5,7 @@ from pathlib import Path
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
-from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
@@ -427,3 +427,40 @@ def test_selected_generated_output_context_contains_reusable_file_path(tmp_path)
     assert context_ref["source_type"] == "generated_selected"
     assert context_ref["file_path"] == record.file_path
     assert context_ref["output_id"] == record.output_id
+
+
+def test_project_can_select_a_persisted_partial_output_while_the_job_record_remains_blocked(tmp_path) -> None:
+    project_store = PersistentProjectStore(tmp_path / "v3_projects")
+    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs")
+    service = V3ProductApiService(output_store=output_store)
+    handlers = V3ProductRouteHandlers(service=service, project_store=project_store)
+    project = handlers.post_projects({"user_goal": "Create a clean glass still-life project"})["project"]
+    job = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Create a two-image clean glass still-life set."},
+    )
+    job_record = service.job_store.get(job["job_id"])
+    assert job_record is not None
+    job_record.status = ProductJobStatusValue.BLOCKED
+    job_record.warnings.append("later_role_provider_failure")
+    service.job_store.save(job_record)
+    output = output_store.save_base64_output(
+        job_id=job["job_id"],
+        candidate_id="candidate_partial_project_output",
+        asset_id="asset_partial_project_output",
+        provider="test_provider",
+        model="gpt-image-2",
+        encoded_image=_png_base64(),
+        mime_type="image/png",
+        output_format="png",
+    )
+
+    selected = handlers.post_project_job_select(
+        project["project_id"],
+        job["job_id"],
+        {"selected_candidate_id": "candidate_partial_project_output"},
+    )
+
+    assert selected["status"] == "selected"
+    assert selected["job_status"]["metadata"]["selected_from_restored_outputs"] is True
+    assert selected["context"]["selected_output_assets"][0]["output_id"] == output.output_id

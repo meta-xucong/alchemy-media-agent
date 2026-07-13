@@ -1460,11 +1460,21 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
-        selected = self.product_service.select_result(job_id, payload)
-        if selected.status == ProductJobStatusValue.NOT_FOUND:
-            restored_status = self.product_service.get_job(job_id)
-            if restored_status.status == ProductJobStatusValue.GENERATED:
-                selected = self._selection_from_restored_status(restored_status, payload)
+        if current_status.status == ProductJobStatusValue.GENERATED and (
+            current_status.metadata.get("restored_from_output_store")
+            or current_status.metadata.get("partial_generation_recovery")
+        ):
+            # A partial recovery is a durable real output, even though the
+            # append-only job record remains blocked for the later failed role.
+            # Select exactly that output; never fabricate a candidate from the
+            # unfinished role.
+            selected = self._selection_from_restored_status(current_status, payload)
+        else:
+            selected = self.product_service.select_result(job_id, payload)
+            if selected.status == ProductJobStatusValue.NOT_FOUND:
+                restored_status = self.product_service.get_job(job_id)
+                if restored_status.status == ProductJobStatusValue.GENERATED:
+                    selected = self._selection_from_restored_status(restored_status, payload)
         refs, unresolved_refs = self._output_refs_from_selection(project, selected)
         if not refs:
             return self._selection_hold_response(

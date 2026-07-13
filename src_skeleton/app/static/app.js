@@ -5932,6 +5932,9 @@ function v3IsInternalWarning(item) {
 function v3PlainWarningText(item) {
   const text = String(item || "").trim();
   const lower = text.toLowerCase();
+  if (lower.includes("recoverable partial result") || lower.includes("partial_output_preserved")) {
+    return "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或设为后续参考。";
+  }
   const looksLikeMissingConfig =
     lower.includes("api key") ||
     lower.includes("base url") ||

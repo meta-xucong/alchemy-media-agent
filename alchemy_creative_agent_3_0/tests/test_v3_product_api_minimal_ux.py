@@ -1,7 +1,10 @@
+import base64
+from io import BytesIO
 from pathlib import Path
 import shutil
 from uuid import uuid4
 
+from PIL import Image
 import pytest
 from pydantic import ValidationError
 
@@ -20,6 +23,7 @@ from alchemy_creative_agent_3_0.app.product_api import (
     SelectResultRequest,
     V3ProductApiService,
 )
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 
@@ -129,6 +133,56 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     assert timed_out.metadata["generation_lifecycle_timeout"]["timeout_seconds"] == 675
     assert "gateway_managed_lifecycle_timeout" in " ".join(timed_out.warnings)
     assert late_worker.status == ProductJobStatusValue.BLOCKED
+
+
+def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_job() -> None:
+    output_store = V3GeneratedOutputStore(storage_root=_test_store_root("partial_output") / "outputs")
+    brand_service = BrandProfileService(BrandProfileStore(_test_store_root("partial_output_brand")))
+    service = V3ProductApiService(
+        brand_profile_service=brand_service,
+        balance_adapter=TrackingBalanceAdapter(),
+        output_store=output_store,
+    )
+    created = service.create_job(
+        {
+            "user_input": "Create a two-image clean glass still-life set.",
+            "metadata": {"requested_image_count": 2},
+        }
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.warnings.append("later_role_provider_failure")
+    service.job_store.save(record)
+
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), color=(190, 210, 220)).save(buffer, format="PNG")
+    persisted = output_store.save_base64_output(
+        job_id=created.job_id,
+        candidate_id="candidate_partial_first_role",
+        asset_id="asset_partial_first_role",
+        provider="test_provider",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(buffer.getvalue()).decode("ascii"),
+        mime_type="image/png",
+        output_format="png",
+    )
+
+    recovered = service.get_job(created.job_id)
+    history = service.list_history()
+
+    assert recovered.status == ProductJobStatusValue.GENERATED
+    assert [candidate.output_id for candidate in recovered.candidates] == [persisted.output_id]
+    assert recovered.metadata["partial_generation_recovery"] == {
+        "status": "partial_output_preserved",
+        "source_record_status": "blocked",
+        "delivered_output_count": 1,
+        "remaining_roles_failed": True,
+        "append_only_history_preserved": True,
+    }
+    assert any("recoverable partial result" in warning for warning in recovered.warnings)
+    assert history.items[0].status == ProductJobStatusValue.GENERATED
+    assert history.items[0].candidate_count == 1
 
 
 def test_job_polling_closes_an_expired_background_watchdog_when_timer_delivery_is_lost() -> None:

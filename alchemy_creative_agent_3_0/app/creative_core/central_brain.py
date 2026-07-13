@@ -691,6 +691,16 @@ class CentralCreativeBrain:
         asset_count = len(context.series_plan.assets) if context.series_plan is not None else 0
         if max(requested_count, asset_count) < 2:
             return False
+        profile_subject_types = self._llm_profile_subject_entity_types(context)
+        if profile_subject_types:
+            # The frozen task profile is the best available statement of what
+            # the image set is about.  In particular, do not let incidental
+            # words from generic prompt guidance (for example, "model") turn a
+            # product or still-life delivery into an image-edit continuation.
+            return bool(
+                profile_subject_types
+                & {"person", "human", "character", "portrait", "portrait_subject", "human_subject"}
+            )
         role_plan = self._role_specific_generation_plan_metadata(context)
         recipes = role_plan.get("role_recipes")
         if isinstance(recipes, list):
@@ -717,7 +727,6 @@ class CentralCreativeBrain:
             "same woman",
             "woman",
             "girl",
-            "model",
             "beauty portrait",
             "face",
             "\u4eba\u50cf",
@@ -731,6 +740,26 @@ class CentralCreativeBrain:
         )
         stylized_terms = ("anime", "manga", "cartoon", "illustration", "\u52a8\u6f2b", "\u6f2b\u753b", "\u63d2\u753b", "\u5361\u901a")
         return any(term in text for term in human_terms) and not any(term in text for term in stylized_terms)
+
+    def _llm_profile_subject_entity_types(self, context: PipelineContext) -> set[str]:
+        """Return non-empty subject types from the frozen central-brain profile.
+
+        Profiles are intentionally open-ended under Doc102.  This helper only
+        exposes their normalized names; callers decide which known types are
+        relevant to a particular shared capability.
+        """
+
+        profile = self._llm_brain_metadata(context).get("visual_task_profile")
+        if not isinstance(profile, dict):
+            return set()
+        entities = profile.get("subject_entities")
+        if not isinstance(entities, list):
+            return set()
+        return {
+            str(entity.get("entity_type") or "").strip().lower()
+            for entity in entities
+            if isinstance(entity, dict) and str(entity.get("entity_type") or "").strip()
+        }
 
     def _with_auto_identity_anchor_reference(
         self,

@@ -679,7 +679,7 @@ class V3ProductApiService:
             restored = self._status_from_output_store(job_id)
             return restored or self._not_found_status(job_id)
         self._expire_background_generation_if_due(record)
-        return self._status_from_record(record)
+        return self._partial_output_recovery_status(record) or self._status_from_record(record)
 
     def mark_job_generating(
         self,
@@ -4078,14 +4078,14 @@ class V3ProductApiService:
         )
 
     def _history_item_from_record(self, record: ProductJobRecord) -> V3JobHistoryItem:
-        status = self._status_from_record(record)
+        status = self._partial_output_recovery_status(record) or self._status_from_record(record)
         scenario_id = status.scenario.scenario_id if status.scenario else None
         scenario_label = status.scenario.display_name if status.scenario else None
         selected_preset_id = status.scenario.selected_preset_id if status.scenario else None
         selected_asset_count = len(record.selected_result.selected_asset_ids) if record.selected_result else 0
         return V3JobHistoryItem(
             job_id=record.job_id,
-            status=record.status,
+            status=status.status,
             scenario_id=scenario_id,
             scenario_label=scenario_label,
             selected_preset_id=selected_preset_id,
@@ -4102,7 +4102,67 @@ class V3ProductApiService:
                 "v3_history_owned": True,
                 "imports_v1_v2_runtime": False,
                 "imports_lab_runtime": False,
+                "partial_generation_recovery": status.metadata.get("partial_generation_recovery"),
             },
+        )
+
+    def _partial_output_recovery_status(self, record: ProductJobRecord) -> ProductJobStatus | None:
+        """Expose durable earlier deliveries when a later set role fails.
+
+        The worker can persist a reviewed first output before a later role
+        reaches a provider failure.  Treating the whole job as empty then made
+        the browser hide a real image after refresh.  Keep the original job
+        record append-only and blocked for diagnostics, while presenting the
+        durable delivery as an explicitly marked partial result.
+        """
+
+        if record.status not in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
+            return None
+        if record.generation_result is not None:
+            return None
+        restored = self._status_from_output_store(record.job_id)
+        if restored is None:
+            return None
+        result = record.planning_result
+        output_count = len(restored.candidates)
+        partial_metadata = {
+            "status": "partial_output_preserved",
+            "source_record_status": record.status.value,
+            "delivered_output_count": output_count,
+            "remaining_roles_failed": True,
+            "append_only_history_preserved": True,
+        }
+        warnings = list(
+            dict.fromkeys(
+                [
+                    *record.warnings,
+                    "A generated image was preserved after a later set role failed; it is available as a recoverable partial result.",
+                ]
+            )
+        )
+        return restored.model_copy(
+            update={
+                "brand_id": result.brand_profile.brand_id if result is not None else restored.brand_id,
+                "planning_result_id": result.planning_result_id if result is not None else restored.planning_result_id,
+                "asset_pack_id": result.asset_pack.asset_pack_id if result is not None else restored.asset_pack_id,
+                "scenario": self._scenario_summary(record),
+                "campaign": self._campaign_summary(record, result) if result is not None else restored.campaign,
+                "style_continuation": self._style_continuation_summary(record, result)
+                if result is not None
+                else restored.style_continuation,
+                "general_creative": self._general_creative_summary(record),
+                "ecommerce": self._ecommerce_summary(record),
+                "balance_estimate": dict(record.balance_estimate),
+                "warnings": warnings,
+                "metadata": {
+                    **dict(restored.metadata or {}),
+                    "partial_generation_recovery": partial_metadata,
+                    "lifecycle": self._lifecycle_summary(record),
+                    "continuation_available": True,
+                    **self._project_mode_status_metadata(record),
+                },
+            },
+            deep=True,
         )
 
     def _history_items_from_output_store(self, limit: int) -> list[V3JobHistoryItem]:
