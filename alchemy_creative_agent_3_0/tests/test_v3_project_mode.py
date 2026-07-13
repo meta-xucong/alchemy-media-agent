@@ -1775,3 +1775,7 @@ def test_general_project_job_infers_explicit_wide_canvas_from_user_input() -> No
 
     assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 1
     assert job["metadata"]["scenario_parameters"]["requested_image_size"] == "1536x1024"
+    record = handlers.service.job_store.get(job["job_id"])
+    assert record is not None
+    assert record.request.metadata["requested_image_count"] == 1
+    assert record.request.metadata["requested_image_size"] == "1536x1024"

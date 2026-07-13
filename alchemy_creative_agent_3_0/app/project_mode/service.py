@@ -769,6 +769,7 @@ class V3ProjectModeService:
             commerce_profile=commerce_profile,
             advanced_reference_controls=advanced_reference_controls,
         )
+        scenario_parameters = dict(scenario_selection.get("parameters") or {})
         project_job_sequence = len(project.job_ids) + 1
         create_payload = {
             "user_input": user_input,
@@ -785,7 +786,22 @@ class V3ProjectModeService:
                 "template_manifest_id": template_manifest.template_id,
                 "project_job_sequence": project_job_sequence,
                 "scenario_pack_id": template_manifest.scenario_pack_id,
-                "scenario_parameters": scenario_selection.get("parameters") or {},
+                "scenario_parameters": scenario_parameters,
+                # Central Brain consumes these normalized values from the job
+                # metadata, not from the nested Scenario Pack diagnostic
+                # snapshot.  Preserve the explicit General canvas/count there
+                # so a default social asset cannot silently overwrite a user
+                # request such as 3:2 / 1536x1024 at materialization time.
+                **(
+                    {"requested_image_count": scenario_parameters["requested_image_count"]}
+                    if "requested_image_count" in scenario_parameters
+                    else {}
+                ),
+                **(
+                    {"requested_image_size": scenario_parameters["requested_image_size"]}
+                    if "requested_image_size" in scenario_parameters
+                    else {}
+                ),
                 "selected_mode_id": scenario_selection.get("mode_id"),
                 "selected_preset_id": scenario_selection.get("preset_id"),
                 "project_context_version": context.context_version,
