@@ -50,7 +50,11 @@ class V3LLMBrainAdapter:
             return fallback
         try:
             data = self.provider.run(request)
-            result = self._merge_remote_result(fallback, data)
+            result = self._merge_remote_result(
+                fallback,
+                data,
+                requires_complete_image_set=request.template_capability_policy.requires_remote_creative_brain,
+            )
             result.llm_used = True
             result.fallback_used = False
             result.provider = self.provider.provider
@@ -156,7 +160,13 @@ class V3LLMBrainAdapter:
             return True
         return request.template_capability_policy.policy_id != "general_template_capabilities"
 
-    def _merge_remote_result(self, fallback: BrainRunResult, data: dict[str, Any]) -> BrainRunResult:
+    def _merge_remote_result(
+        self,
+        fallback: BrainRunResult,
+        data: dict[str, Any],
+        *,
+        requires_complete_image_set: bool = False,
+    ) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
         for key in [
@@ -169,8 +179,20 @@ class V3LLMBrainAdapter:
             "visual_task_profile",
             "capability_activation_intent",
         ]:
-            if isinstance(data.get(key), dict):
-                candidate = _merge_dict(payload.get(key, {}), data[key])
+            remote_section = data.get(key)
+            if key == "image_set_plan" and requires_complete_image_set:
+                # Validate the raw remote section before merging it with the
+                # contract-shaped fallback.  Otherwise an empty remote list
+                # would be ignored by _merge_dict and the fallback directions
+                # could be mistaken for a real E-Commerce decision.
+                if not isinstance(remote_section, dict) or not _matches_image_set_cardinality(
+                    remote_section,
+                    expected_count=fallback.image_set_plan.image_count,
+                ):
+                    rejected_sections.append(key)
+                    continue
+            if isinstance(remote_section, dict):
+                candidate = _merge_dict(payload.get(key, {}), remote_section)
                 # A remote plan may be valid JSON while still violating the
                 # concrete output contract (for example, declaring one image
                 # but returning three directions).  Do not truncate it at a

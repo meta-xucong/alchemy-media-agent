@@ -55,3 +55,14 @@ def test_ecommerce_workspace_renders_remote_output_intents_and_opaque_delivery_i
     assert "provider_native_complete_image" in script
     assert "v3EcommerceSlotLabel" not in script
     assert "v3EcommerceRecipeForItem" not in script
+
+
+def test_ecommerce_workspace_explains_fail_closed_recovery_and_production_gate() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+
+    assert "function v3EcommerceFailureMessage(job)" in script
+    assert "ecommerce_runtime_provenance" in script
+    assert "requested_image_count_not_supported_by_declared_contract" in script
+    assert "remote_creative_brain_image_set_plan_invalid" in script
+    assert "production_ready" in script
+    assert "renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata, job)" in script

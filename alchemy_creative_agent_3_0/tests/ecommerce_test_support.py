@@ -7,6 +7,8 @@ contract-shaped substitute.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
@@ -17,12 +19,36 @@ class EcommerceRemoteBrainTestProvider:
     provider = "ecommerce_remote_brain_test_double"
     model = "contract-fixture-v1"
 
+    def __init__(self, *, fault: str | None = None) -> None:
+        self.fault = fault
+        self.requests: list[dict] = []
+
     def available(self, *, force: bool = False) -> bool:
-        return True
+        return self.fault != "unavailable"
 
     def run(self, request) -> dict:
+        self.requests.append(deepcopy(request.model_dump(mode="json")))
         payload = build_fallback_result(request).model_dump(mode="json")
         count = request.requested_image_count
+        if self.fault == "missing_image_set_plan":
+            payload.pop("image_set_plan", None)
+            return payload
+        if self.fault == "empty_image_set_plan":
+            payload["image_set_plan"] = {
+                "set_goal": "Incomplete remote result",
+                "image_count": count,
+                "size": request.requested_image_size,
+                "shot_plan": [],
+            }
+            return payload
+        if self.fault == "mismatched_image_set_plan":
+            payload["image_set_plan"] = {
+                "set_goal": "Incomplete remote result",
+                "image_count": count,
+                "size": request.requested_image_size,
+                "shot_plan": ["Only a partial remote direction"],
+            }
+            return payload
         payload["image_set_plan"] = {
             "set_goal": "Test-only remote Brain product image set",
             "image_count": count,
@@ -42,8 +68,12 @@ class EcommerceRemoteBrainTestProvider:
         return payload
 
 
-def ecommerce_test_service(**service_kwargs) -> V3ProductApiService:
+def ecommerce_test_service(
+    *,
+    brain_provider: EcommerceRemoteBrainTestProvider | None = None,
+    **service_kwargs,
+) -> V3ProductApiService:
     runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+        llm_brain_adapter=V3LLMBrainAdapter(provider=brain_provider or EcommerceRemoteBrainTestProvider())
     )
     return V3ProductApiService(scenario_runtime=runtime, **service_kwargs)

@@ -137,6 +137,38 @@ _PUBLIC_WARNING_USER_ACTION_MARKERS = (
     "policy",
 )
 
+# These historical fields may stay on restored records so operators can read
+# them, but they are not creative input for a new E-Commerce Brain run.  The
+# list deliberately contains only retired E-Commerce execution concepts; it
+# has no effect on General or Photography metadata.
+_ECOMMERCE_RETIRED_EXECUTION_FIELDS = frozenset(
+    {
+        "ecommerce_recipe",
+        "ecommerce_recipes",
+        "image_recipes",
+        "suite_slot_request",
+        "suite_slots_requested",
+        "ecommerce_business_goal",
+        "ecommerce_selling_point",
+        "ecommerce_buyer_intent",
+        "ecommerce_visual_scene",
+        "overlay_copy",
+        "overlay_text",
+        "copy_render_plan",
+        "copy_render_plans",
+        "text_pixel_delivery_internal",
+        "text_pixel_delivery",
+        "text_pixel_delivery_batch",
+        "role_specific_generation_plan",
+        "mode_execution_policy",
+        "mode_role_recipe",
+        "mode_role_key",
+        "mode_role_label",
+        "specialized_scenario_plan",
+        "specialized_execution_summary",
+    }
+)
+
 VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "weak_aesthetic_finish",
     "generic_stock_photo_finish",
@@ -590,6 +622,7 @@ class V3ProductApiService:
                 trusted_capability_plan_reuse=trusted_capability_plan_reuse,
             )
         )
+        self._record_ecommerce_runtime_provenance(create_request, runtime_result, stage="planning")
         planning_result = runtime_result.planning_result
         estimate = self._estimate_for_result(planning_result) if planning_result else self._empty_balance_estimate()
         status = ProductJobStatusValue.PLANNED if planning_result else ProductJobStatusValue.BLOCKED
@@ -935,6 +968,7 @@ class V3ProductApiService:
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
+        self._record_ecommerce_runtime_provenance(record.request, generation_runtime_result, stage="generation")
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         if generation_runtime_result.generation_result is None:
@@ -4029,6 +4063,7 @@ class V3ProductApiService:
                 "continuation_available": not delivery_settling,
                 **self._workflow_artifacts_metadata(record, result),
                 **self._project_mode_status_metadata(record),
+                **self._ecommerce_runtime_provenance_status_metadata(record),
             },
         )
 
@@ -4055,8 +4090,17 @@ class V3ProductApiService:
                 "shared_capabilities": self._capability_run_summary(record.capability_run),
                 "lifecycle": self._lifecycle_summary(record),
                 **self._project_mode_status_metadata(record),
+                **self._ecommerce_runtime_provenance_status_metadata(record),
             },
         )
+
+    @staticmethod
+    def _ecommerce_runtime_provenance_status_metadata(record: ProductJobRecord) -> dict[str, Any]:
+        scenario_id = record.scenario_resolution.manifest.scenario_id if record.scenario_resolution else None
+        if scenario_id != "ecommerce":
+            return {}
+        provenance = record.request.metadata.get("ecommerce_runtime_provenance")
+        return {"ecommerce_runtime_provenance": dict(provenance)} if isinstance(provenance, dict) else {}
 
     def _project_mode_status_metadata(self, record: ProductJobRecord) -> dict[str, Any]:
         request_metadata = dict(record.request.metadata or {})
@@ -5462,19 +5506,64 @@ class V3ProductApiService:
         trusted_capability_plan_reuse: bool | None = None,
     ) -> dict[str, Any]:
         self._prepare_ecommerce_creative_context(request)
-        metadata = dict(request.metadata or {})
+        metadata = self._runtime_metadata_without_retired_ecommerce_execution(request)
+        scenario_selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
         has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
         trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
         return {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,
-            "scenario_selection": request.scenario_selection,
+            "scenario_selection": scenario_selection,
             "uploaded_asset_ids": list(request.uploaded_asset_ids),
             "uploaded_assets": self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids)),
             "product_profile": dict(request.product_profile),
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
         }
+
+    def _is_ecommerce_request(self, request: CreateCreativeJobRequest) -> bool:
+        resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
+        return resolution.manifest.scenario_id == "ecommerce"
+
+    @staticmethod
+    def _normalise_ecommerce_execution_key(value: Any) -> str:
+        return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _retired_ecommerce_execution_fields(self, values: dict[str, Any]) -> list[str]:
+        return sorted(
+            str(key)
+            for key in dict(values or {})
+            if self._normalise_ecommerce_execution_key(key) in _ECOMMERCE_RETIRED_EXECUTION_FIELDS
+        )
+
+    def _without_retired_ecommerce_execution_fields(self, values: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in dict(values or {}).items()
+            if self._normalise_ecommerce_execution_key(key) not in _ECOMMERCE_RETIRED_EXECUTION_FIELDS
+        }
+
+    def _runtime_metadata_without_retired_ecommerce_execution(
+        self,
+        request: CreateCreativeJobRequest,
+    ) -> dict[str, Any]:
+        metadata = dict(request.metadata or {})
+        if not self._is_ecommerce_request(request):
+            return metadata
+        return self._without_retired_ecommerce_execution_fields(metadata)
+
+    def _runtime_scenario_selection_without_retired_ecommerce_execution(
+        self,
+        request: CreateCreativeJobRequest,
+    ):
+        selection = request.scenario_selection
+        if selection is None or not self._is_ecommerce_request(request):
+            return selection
+        return selection.model_copy(
+            update={
+                "parameters": self._without_retired_ecommerce_execution_fields(dict(selection.parameters or {})),
+            }
+        )
 
     _SERVER_OWNED_RUNTIME_METADATA = frozenset(
         {
@@ -5605,10 +5694,21 @@ class V3ProductApiService:
         if resolution.manifest.scenario_id != "ecommerce":
             return
         selection = request.scenario_selection
-        parameters = dict(selection.parameters) if selection is not None else {}
+        supplied_parameters = dict(selection.parameters) if selection is not None else {}
+        parameters = self._without_retired_ecommerce_execution_fields(supplied_parameters)
         parameters.setdefault("mode", resolution.selected_mode_id)
         parameters.setdefault("preset", resolution.selected_preset_id)
         metadata = dict(request.metadata or {})
+        ignored_fields = sorted(
+            set(self._retired_ecommerce_execution_fields(metadata))
+            | set(self._retired_ecommerce_execution_fields(supplied_parameters))
+        )
+        if ignored_fields:
+            metadata["ecommerce_legacy_execution_ignored"] = {
+                "source": "V3ProductApiService",
+                "status": "read_compatible_not_executed",
+                "fields": ignored_fields,
+            }
         job_key = str(metadata.get("job_id") or "").strip() or stable_id(
             "ecommerce_context_job",
             request.user_input,
@@ -5626,6 +5726,69 @@ class V3ProductApiService:
         metadata["ecommerce_creative_context"] = context.model_dump(mode="json")
         metadata["ecommerce_creative_context_server_owned"] = True
         request.metadata = metadata
+
+    def _record_ecommerce_runtime_provenance(self, request: CreateCreativeJobRequest, runtime_result: Any, *, stage: str) -> None:
+        """Persist factual inputs and fail-closed reasons without replaying a recipe.
+
+        This is an E-Commerce-only audit envelope.  It makes the source of a
+        blocked state queryable from project/history recovery while keeping the
+        actual Brain request free of legacy recipe, slot, and overlay values.
+        """
+
+        if not self._is_ecommerce_request(request):
+            return
+        metadata = dict(request.metadata or {})
+        context = metadata.get("ecommerce_creative_context")
+        context = dict(context) if isinstance(context, dict) else {}
+        product_truth = context.get("product_truth")
+        product_truth = dict(product_truth) if isinstance(product_truth, dict) else {}
+        platform = context.get("platform_constraints")
+        platform = dict(platform) if isinstance(platform, dict) else {}
+        seller_inputs = context.get("seller_inputs")
+        seller_inputs = dict(seller_inputs) if isinstance(seller_inputs, dict) else {}
+        status = getattr(getattr(runtime_result, "status", None), "value", str(getattr(runtime_result, "status", "unknown")))
+        warnings = list(getattr(runtime_result, "warnings", []) or [])
+        reason_codes = self._ecommerce_failure_reason_codes(warnings) if status == "blocked" else []
+        event = {
+            "stage": stage,
+            "runtime_status": status,
+            "fail_closed": status == "blocked",
+            "failure_reason_codes": reason_codes,
+        }
+        prior = metadata.get("ecommerce_runtime_provenance")
+        prior_events = list(prior.get("events") or []) if isinstance(prior, dict) else []
+        metadata["ecommerce_runtime_provenance"] = {
+            "schema_version": "ecommerce_runtime_provenance_v1",
+            "source": "V3ProductApiService",
+            "factual_context": {
+                "context_id": context.get("context_id"),
+                "source_version": context.get("source_version"),
+                "product_evidence_sources": list(product_truth.get("evidence_sources") or []),
+                "seller_input_fields": sorted(
+                    key for key in seller_inputs if not str(key).endswith("_source")
+                ),
+                "platform_profile_id": platform.get("profile_id"),
+                "platform_profile_version": platform.get("profile_version"),
+                "platform_profile_status": platform.get("profile_status"),
+            },
+            "legacy_execution": dict(metadata.get("ecommerce_legacy_execution_ignored") or {}),
+            "events": [*prior_events, event][-8:],
+        }
+        request.metadata = metadata
+
+    @staticmethod
+    def _ecommerce_failure_reason_codes(warnings: list[Any]) -> list[str]:
+        codes: list[str] = []
+        for warning in warnings:
+            text = str(warning or "").strip()
+            if not text:
+                continue
+            if text.startswith("capability_activation_failed:"):
+                text = text.split(":", 1)[1].strip()
+            code = text.split(":", 1)[0].strip()
+            if code and " " not in code:
+                codes.append(code)
+        return list(dict.fromkeys(codes))
 
     def _bind_internal_copy_render_plan(self, request: CreateCreativeJobRequest) -> None:
         """Mark a legacy plan as read-compatible without binding or executing it."""
