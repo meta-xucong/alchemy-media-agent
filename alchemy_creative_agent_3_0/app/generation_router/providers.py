@@ -151,6 +151,23 @@ class GenerationProvider:
 
     def _role_specific_generation_plan(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
+            ledger = self._resolved_constraint_ledger(request)
+            projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            deliverables = projection.get("deliverables") if isinstance(projection, dict) else None
+            priority = getattr(request.asset_spec, "priority", None) if request.asset_spec is not None else None
+            try:
+                index = max(1, int(priority or 1))
+            except (TypeError, ValueError):
+                index = 1
+            item = deliverables[index - 1] if isinstance(deliverables, list) and index <= len(deliverables) else None
+            metadata = item.get("metadata") if isinstance(item, dict) and isinstance(item.get("metadata"), dict) else {}
+            if isinstance(metadata.get("specialized_role_contract"), dict):
+                # A specialized Template already froze the role that this
+                # deliverable must perform.  The shared Suite Director cannot
+                # append an older generic cover/context/detail recipe on top
+                # of that contract.  Shared identity and Human Realism
+                # capabilities are consumed through their own contributions.
+                return {}
             if not self._active_capability(request, "suite_direction"):
                 return {}
             cluster = self._visual_cluster(request)

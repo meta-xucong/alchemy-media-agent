@@ -13,6 +13,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationRequest,
     GenerationResponse,
     GenerationRouter,
+    ProductionImageGenerationProvider,
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -205,6 +206,15 @@ def test_professional_set_t2i_executes_three_frozen_roles_without_generated_imag
         request.metadata["capability_execution_envelope"]["activation_plan"]["activation_mode"] == "enforced"
         for request in provider.requests
     )
+    rendered_prompts = [
+        ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
+        for request in provider.requests
+    ]
+    assert "This image role: Session Hero" in rendered_prompts[0]
+    assert "This image role: Environmental Context" in rendered_prompts[1]
+    assert "This image role: Detail Or Moment" in rendered_prompts[2]
+    assert all("Suite director rules:" not in prompt for prompt in rendered_prompts)
+    assert all("Cover hero" not in prompt for prompt in rendered_prompts)
     summary = generated["metadata"]["specialized_execution_summary"]
     assert summary["status"] == "complete"
     assert [item["role_key"] for item in summary["roles"]] == [
