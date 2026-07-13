@@ -765,6 +765,59 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
     assert Path(records[0].file_path).is_relative_to(tmp_path / "product_api_outputs")
 
 
+def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_mock(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        assert provider_name == "openai_gpt_image"
+        return ImageGenerationResult(
+            provider="openai_gpt_image",
+            model="test-image-model",
+            outputs=[
+                {"b64_json": _png_base64(128, 128), "mime_type": "image/png", "format": "png", "width": 128, "height": 128},
+            ],
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    store = V3GeneratedOutputStore(tmp_path / "product_api_outputs")
+    service = V3ProductApiService(output_store=store)
+    try:
+        created = service.create_job(
+            {
+                "user_input": "Create a clean text-led poster",
+                "scenario_selection": {"scenario_id": "general_creative", "preset_id": "social_cover"},
+                "metadata": {
+                    "require_real_images": True,
+                    "requested_image_count": 1,
+                    "requested_image_size": "1024x1024",
+                },
+            }
+        )
+        generated = service.generate_job(
+            created.job_id,
+            {
+                "quality_mode": "standard",
+                # This mirrors Project Mode's normal later generate request:
+                # it cannot relax the frozen real-provider intent.
+                "metadata": {"requested_image_count": 1, "require_real_images": False},
+            },
+        )
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    records = store.list_by_job(created.job_id)
+    assert generated.status == "generated"
+    assert len(records) == 1
+    assert records[0].provider == "openai_gpt_image"
+    assert records[0].metadata.get("mock_contract_fixture") is not True
+
+
 def test_product_api_restores_generated_history_from_output_store(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(

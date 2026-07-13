@@ -1046,8 +1046,22 @@ class V3ProductApiService:
         record: ProductJobRecord,
         generate_request: GenerateJobRequest,
     ) -> ProviderStrategy:
-        metadata = dict(generate_request.metadata)
-        require_real_images = bool(metadata.get("require_real_images") or metadata.get("real_image_generation"))
+        # A project/job can freeze its real-provider requirement when it is
+        # created, while the later generate request normally contains only
+        # per-attempt controls.  Choosing a strategy from the latter alone
+        # silently downgraded an already-required real image job to the mock
+        # fixture.  Persisted job intent is therefore a hard baseline; a
+        # per-attempt request may require real generation too, but cannot
+        # relax a persisted real-provider requirement.
+        frozen_metadata = dict(record.request.metadata)
+        attempt_metadata = dict(generate_request.metadata)
+        metadata = {**frozen_metadata, **attempt_metadata}
+        require_real_images = bool(
+            frozen_metadata.get("require_real_images")
+            or frozen_metadata.get("real_image_generation")
+            or attempt_metadata.get("require_real_images")
+            or attempt_metadata.get("real_image_generation")
+        )
         if not require_real_images:
             return ProviderStrategy.MOCK_GENERATION
         project_context = record.request.metadata.get("project_context_snapshot")
