@@ -5265,6 +5265,13 @@ async function createV3Job() {
       await completeV3GeneratedJob(generated, uploadedAssets, copy);
       return;
     }
+    if (created.status === "blocked") {
+      const ecommerceFailure = v3EcommerceFailureMessage(created);
+      if (ecommerceFailure) {
+        updateV3Notice(ecommerceFailure, "warning");
+        return;
+      }
+    }
     updateV3Notice(created.status === "blocked" ? "当前生成暂时受阻，请检查输入后再试。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
   } catch (error) {
     updateV3Notice(`V3 暂时没有读到完成结果：${friendlyError(error)}。项目已保留，可以稍后刷新。`, "warning");
@@ -5289,6 +5296,13 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   await maybePersistV3UploadedReferences(uploadedAssets);
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
+  }
+  if (generated?.status === "blocked") {
+    const ecommerceFailure = v3EcommerceFailureMessage(generated);
+    if (ecommerceFailure) {
+      updateV3Notice(ecommerceFailure, "warning");
+      return;
+    }
   }
   updateV3Notice(
     generated?.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice,
@@ -5426,7 +5440,33 @@ function v3JobProviderRetryActive(job) {
   return Boolean(summary && Number(summary.executed_count || 0) > 0 && !["succeeded", "failed"].includes(finalStatus));
 }
 
+function v3EcommerceFailureMessage(job) {
+  const scenarioId = String(job?.scenario?.scenario_id || "").trim().toLowerCase();
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (scenarioId !== "ecommerce" || !["blocked", "failed"].includes(status)) return "";
+  const provenance = job?.metadata?.ecommerce_runtime_provenance;
+  const events = Array.isArray(provenance?.events) ? provenance.events : [];
+  const codes = events.flatMap((event) => Array.isArray(event?.failure_reason_codes) ? event.failure_reason_codes : []);
+  const warnings = Array.isArray(job?.warnings) ? job.warnings : [];
+  const detail = `${codes.join(" ")} ${warnings.join(" ")}`.toLowerCase();
+  if (detail.includes("requested_image_count_not_supported_by_declared_contract")) {
+    return "\u5f53\u524d\u5e73\u53f0\u6216\u751f\u56fe\u80fd\u529b\u4e0d\u652f\u6301\u4f60\u8bf7\u6c42\u7684\u51fa\u56fe\u6570\u91cf\uff0c\u5df2\u4fdd\u7559\u9879\u76ee\uff1b\u8bf7\u8c03\u6574\u6570\u91cf\u540e\u91cd\u8bd5\u3002";
+  }
+  if (detail.includes("remote_creative_brain_output_count_mismatch") || detail.includes("template_deliverable_plan_output_count_mismatch")) {
+    return "\u4e2d\u592e\u5927\u8111\u8fd4\u56de\u7684\u56fe\u50cf\u610f\u56fe\u6570\u91cf\u4e0e\u8bf7\u6c42\u4e0d\u4e00\u81f4\uff0c\u672c\u6b21\u5df2\u4e25\u683c\u963b\u65ad\uff0c\u4e0d\u4f1a\u8865\u51fa\u672c\u5730\u5957\u56fe\u3002";
+  }
+  if (detail.includes("remote_creative_brain_image_set_plan_invalid") || detail.includes("remote_creative_brain_image_set_missing")) {
+    return "\u4e2d\u592e\u5927\u8111\u6ca1\u6709\u8fd4\u56de\u5b8c\u6574\u7684\u7535\u5546\u56fe\u50cf\u610f\u56fe\u96c6\u5408\uff0c\u672c\u6b21\u5df2\u4e25\u683c\u963b\u65ad\uff0c\u4e0d\u4f1a\u7528\u672c\u5730\u89c4\u5219\u964d\u7ea7\u51fa\u56fe\u3002";
+  }
+  if (detail.includes("remote_creative_brain_required")) {
+    return "\u7535\u5546\u521b\u610f\u4e2d\u67a2\u6682\u4e0d\u53ef\u7528\uff0c\u672c\u6b21\u5df2\u4e25\u683c\u963b\u65ad\uff1b\u7cfb\u7edf\u4e0d\u4f1a\u56de\u9000\u5230\u56fa\u5b9a\u5957\u56fe\u3002";
+  }
+  return "\u7535\u5546\u56fe\u50cf\u96c6\u672a\u8fbe\u5230\u53ef\u4ea4\u4ed8\u7684\u8fdc\u7a0b\u521b\u610f\u8ba1\u5212\u5408\u540c\uff0c\u5df2\u4fdd\u7559\u9879\u76ee\u548c\u5931\u8d25\u539f\u56e0\u3002";
+}
+
 function v3ProviderFailureUserMessage(job) {
+  const ecommerceFailure = v3EcommerceFailureMessage(job);
+  if (ecommerceFailure) return ecommerceFailure;
   const summary = v3JobProviderRetrySummary(job);
   const executed = Number(summary.executed_count || 0);
   const warnings = Array.isArray(job?.warnings) ? job.warnings.join(" ") : "";
@@ -5746,7 +5786,7 @@ function renderV3Job(job) {
   renderV3ProjectNextActions();
   const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
   if (job?.ecommerce || scenarioId === "ecommerce") {
-    renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata);
+    renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata, job);
   } else {
     renderV3GeneralSummary(job?.general_creative || null);
   }
@@ -5788,7 +5828,7 @@ function v3EcommerceCategoryLabel(categoryId) {
   return labels[category] || category;
 }
 
-function renderV3EcommerceSummary(summary, metadata = null) {
+function renderV3EcommerceSummary(summary, metadata = null, job = null) {
   const categoryId = summary?.creative_context?.metadata?.category_id || summary?.product_truth?.product_category;
   const categoryLabel = v3EcommerceCategoryLabel(categoryId);
   const targetAudience = Array.isArray(summary?.target_audience) ? summary.target_audience.filter(Boolean).slice(0, 2) : [];
@@ -5796,7 +5836,11 @@ function renderV3EcommerceSummary(summary, metadata = null) {
   const approvedCopy = String(summary?.creative_context?.approved_literal_copy || metadata?.ecommerce_approved_literal_copy || "").trim();
   const copyPlanningLabel = copyLocale || approvedCopy ? v3EcommerceCopyLocaleLabel(copyLocale || summary?.creative_context?.copy_locale || summary?.export_package?.metadata?.copy_locale) : "";
   const outputIntents = Array.isArray(summary?.remote_brain_output_intents) ? summary.remote_brain_output_intents : [];
+  const failureMessage = v3EcommerceFailureMessage(job);
+  const productionGatePassed = summary?.metadata?.production_ready === true;
   const entries = [
+    ...(failureMessage ? [failureMessage, "\u672a\u751f\u6210\u4efb\u4f55\u672c\u5730\u964d\u7ea7\u56fe\u6216\u9759\u6001\u5957\u56fe\u3002"] : []),
+    ...(!productionGatePassed ? ["\u751f\u4ea7\u4ea4\u4ed8\u95e8\u7981\u5c1a\u672a\u901a\u8fc7\uff1a\u9700\u5b8c\u6210\u771f\u5b9e Provider Gate C/D \u548c\u5546\u54c1\u53c2\u8003\u56fe\u9a8c\u6536\u3002"] : []),
     "已整理商品事实、参考图和不可违背的约束",
     ...(summary?.platform ? [`已附上 ${summary.platform}${summary.market ? ` / ${summary.market}` : ""} 的版本化发布约束，发布前仍需核验最新规则`] : []),
     ...(categoryLabel ? [`已向中央大脑提供 ${categoryLabel} 类目的证据问题，不会套用固定类别模板`] : []),
@@ -5812,7 +5856,7 @@ function renderV3EcommerceSummary(summary, metadata = null) {
   if (trustDrivers.length) entries.push(`已考虑信任背书：${trustDrivers.join(" / ")}`);
   renderV3OutcomeItems(entries);
   renderV3ClosureChecks([]);
-  renderV3Warnings(summary?.warnings || []);
+  renderV3Warnings([...(summary?.warnings || []), ...(job?.warnings || [])]);
   renderV3EcommercePlanList(summary);
   renderV3EcommerceExportList(summary);
 }

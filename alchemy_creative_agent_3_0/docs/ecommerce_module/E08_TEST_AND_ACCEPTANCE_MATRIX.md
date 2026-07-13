@@ -8,7 +8,8 @@
 - new jobs contain no local role, slot, camera, crop, scene, or default-copy direction;
 - protected facts and approved literal copy remain unchanged;
 - export records profile/category evidence versions and opaque output IDs;
-- public requests reject provider-level controls and retired static slot input.
+- public requests reject provider-level controls; retired static-slot input is
+  read-compatible only and non-executable for a new E-Commerce run.
 
 ## Remote-Brain tests
 
@@ -18,6 +19,12 @@
 - explicit labelled test doubles are the only test exception;
 - the vertical pack binds Brain intents to opaque IDs but never fills a missing purpose, role, or scene;
 - General and Photography payloads/role plans contain no E-Commerce context.
+- a missing remote `image_set_plan` is rejected just like an invalid or
+  cardinality-mismatched plan; a contract-shaped local fallback is never
+  accepted as a remote E-Commerce decision.
+- requests for 1, 2, 4, and 7 images remain exact through planning,
+  generation, and export; a declared platform/provider capacity produces a
+  structured block rather than a truncated delivery.
 
 ## Isolation tests
 
@@ -26,6 +33,9 @@
 - no marketplace terms in General Template UI or prompt defaults;
 - shared Human Realism/Product Identity stays in the shared cluster;
 - historical jobs remain readable but cannot restart through static planning;
+- legacy recipe, semantic slot, overlay, CopyRenderPlan, and local-text fields
+  are recorded as read-compatible only and removed before any new E-Commerce
+  runtime/Brain execution or prompt compilation;
 - retired text-pixel inputs return a provider-native-required result and cannot reach a font, OCR, canvas, compositor, or private retry loop.
 
 ## Review, retry, and export tests
@@ -45,6 +55,11 @@
 - no suite scope, role selector, static slot preview, overlay-copy mode, or local typography control is rendered;
 - one opaque output can continue without disturbing other current results;
 - General Template renders none of the E-Commerce UI;
+- blocked E-Commerce jobs explain remote-Brain/count-contract failure without
+  claiming a fallback image was generated; restored projects retain the same
+  queryable failure provenance;
+- the workspace states that real Provider Gate C/D is still required before a
+  production delivery claim;
 - mobile board remains image-first.
 
 ## Real-output fixture matrix
@@ -53,4 +68,4 @@ Run real product references across the first release categories and, where suppo
 
 ## Activation gate
 
-E-Commerce may be marked active only when E00-E08 and E17 are accepted; all context, Brain, isolation, review, retry, UI, and full V3 regressions pass; real provider fixtures pass manual review; project/reference boundaries are enforced; evidence versions are frozen; General/Photography remain unaffected; and no platform-compliance or typography guarantee is claimed.
+E-Commerce may be marked active only when E00-E08, E17, and E18 are accepted; all context, Brain, isolation, review, retry, UI, and full V3 regressions pass; real provider fixtures pass manual review; project/reference boundaries are enforced; evidence versions are frozen; General/Photography remain unaffected; and no platform-compliance or typography guarantee is claimed.
