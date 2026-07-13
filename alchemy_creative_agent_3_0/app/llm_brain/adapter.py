@@ -99,6 +99,7 @@ class V3LLMBrainAdapter:
         scenario_parameters = as_dict(metadata.get("scenario_parameters"))
         provider_native_text_requirements = _provider_native_text_requirements(metadata, scenario_parameters)
         ecommerce_creative_context = _ecommerce_creative_context(metadata, scenario_id)
+        photography_creative_context = _photography_creative_context(metadata, scenario_id)
         approved_literal_copy = ecommerce_creative_context.get("approved_literal_copy")
         if isinstance(approved_literal_copy, str) and approved_literal_copy.strip():
             provider_native_text_requirements = list(
@@ -128,6 +129,12 @@ class V3LLMBrainAdapter:
         if ecommerce_creative_context:
             # Deliberately absent from General and Photography requests.
             request_metadata["ecommerce_creative_context"] = ecommerce_creative_context
+        if photography_creative_context:
+            # Deliberately absent from General and E-Commerce requests.  This
+            # is a non-creative contract: it lets the remote Brain bind one
+            # original direction to each frozen Photography role without
+            # inheriting a local shot/camera/lighting recipe.
+            request_metadata["photography_creative_context"] = photography_creative_context
         return BrainRunRequest(
             user_input=user_input,
             stage=stage,
@@ -247,6 +254,69 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
         "metadata",
     }
     return {key: raw[key] for key in allowed if key in raw}
+
+
+def _photography_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
+    """Expose only Photography's frozen, non-creative contract to the Brain."""
+
+    if str(scenario_id or "").strip().lower() != "photography":
+        return {}
+    specialized = metadata.get("specialized_scenario_plan")
+    if not isinstance(specialized, dict):
+        return {}
+    execution = specialized.get("execution_plan")
+    if not isinstance(execution, dict):
+        return {}
+    recipes = execution.get("role_recipes")
+    if not isinstance(recipes, list):
+        return {}
+    role_ids = [
+        str(item.get("role_key") or "").strip()
+        for item in recipes
+        if isinstance(item, dict) and str(item.get("role_key") or "").strip()
+    ]
+    if not role_ids:
+        return {}
+
+    binding = metadata.get("photographer_profile_binding")
+    binding = binding if isinstance(binding, dict) else {}
+    parameters = as_dict(metadata.get("scenario_parameters"))
+    explicit_controls = {
+        key: parameters[key]
+        for key in (
+            "input_mode",
+            "delivery_mode",
+            "scene_domain",
+            "reshoot_strength",
+            "preservation_controls",
+            "aspect_ratio",
+        )
+        if parameters.get(key) not in (None, "", [], {})
+    }
+    facts = specialized.get("capability_contribution_draft")
+    facts = facts.get("facts") if isinstance(facts, dict) and isinstance(facts.get("facts"), dict) else {}
+    reference_policy = facts.get("reference_policy") if isinstance(facts, dict) else {}
+    reference_policy = dict(reference_policy) if isinstance(reference_policy, dict) else {}
+    return {
+        "contract_version": "photography_llm_first_v1",
+        "template_id": "photographer_template",
+        "scenario_id": "photography",
+        "role_ids": role_ids,
+        "role_count": len(role_ids),
+        "pinned_profile_checksum": clean_text(binding.get("technique_package_checksum"), 180) or None,
+        "reference_channel_ownership": reference_policy,
+        "explicit_controls": explicit_controls,
+        "forbidden_cross_template_roles": [
+            "general_suite_direction",
+            "general_cover_hero",
+            "ecommerce_deliverable_role",
+        ],
+        "creative_direction_requirement": (
+            "Return exactly one original natural-language whole-image direction per role ID. "
+            "The role IDs are structural bindings only; do not reuse local camera, crop, pose, lighting, "
+            "scene, overlay, or slot recipes."
+        ),
+    }
 
 
 def _enabled() -> bool:

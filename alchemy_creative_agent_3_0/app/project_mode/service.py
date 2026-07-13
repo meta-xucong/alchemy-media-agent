@@ -1981,10 +1981,11 @@ class V3ProjectModeService:
                 "photography_role_continuation_not_supported",
                 "The frozen professional-set role recipe is unavailable.",
             )
-        if correction_note:
-            recipe["prompt_pressure"] = (
-                f"{str(recipe.get('prompt_pressure') or '').strip()} User correction: {correction_note}"
-            ).strip()
+        # The role remains a structural lineage binding.  The child job's
+        # explicit correction stays in user_input for a fresh remote-Brain
+        # direction; never turn it into a local Photography prompt recipe.
+        recipe["purpose"] = ""
+        recipe["prompt_pressure"] = ""
         execution_metadata = dict(execution.get("metadata") or {})
         execution_metadata.update(
             {
@@ -1999,8 +2000,8 @@ class V3ProjectModeService:
                 "plan_id": stable_id("photography_role_execution_child", execution.get("plan_id"), role_id, correction_note),
                 "requested_image_count": 1,
                 "role_recipes": [recipe],
-                "prompt_additions": [f"Photography role {role_id}: {recipe.get('prompt_pressure') or ''}".strip()],
-                "negative_additions": list(recipe.get("negative_pressure") or []),
+                "prompt_additions": [],
+                "negative_additions": [],
                 "metadata": execution_metadata,
             }
         )

@@ -12,7 +12,6 @@ from typing import Any, Protocol
 from ..creative_core.rules import stable_id
 from ..scenario_packs.photography import (
     PhotographyScenarioPackPlanner,
-    PhotographySceneDomain,
     PhotographyUserControls,
 )
 from ..shared_capabilities import AssetRole
@@ -66,7 +65,7 @@ class PhotographyScenarioPlanningAdapter:
             # swapped for General Photography or reselected by the planner.
             raise SpecializedScenarioPlanningError(str(exc)) from exc
 
-        required = self._nonhuman_identity_requirements(context, output.brief.scene_domain, controls)
+        required = self._nonhuman_identity_requirements(context, controls)
         contribution = self._direction_contribution(context, output, binding)
         return SpecializedScenarioPlanningResult(
             planning_id=stable_id(
@@ -93,7 +92,7 @@ class PhotographyScenarioPlanningAdapter:
                 "delivery_mode": controls.delivery_mode.value,
             },
             metadata={
-                "contract_version": "photography_mainline_003_v1",
+                "contract_version": "photography_llm_first_mainline_005_v1",
                 "planner_output_id": output.brief.brief_id,
                 "planning_fingerprint": contribution.metadata.get("planning_fingerprint"),
                 "source": self.planner_id,
@@ -101,10 +100,11 @@ class PhotographyScenarioPlanningAdapter:
                 "owns_visual_review": False,
                 "owns_retry": False,
                 "owns_result_selection": False,
-                # Server-pinned internal evidence used only when Project Mode
-                # asks the Photography module to validate a role continuation.
-                # It is intentionally absent from all public summaries.
+                # Legacy P6 continuation validation still reads this opaque
+                # record.  It is never a provider prompt source, capability
+                # contribution, or substitute for a remote creative result.
                 "photography_pack_output": output.model_dump(mode="json"),
+                "photography_pack_output_use": "continuation_validation_only",
             },
         )
 
@@ -131,12 +131,13 @@ class PhotographyScenarioPlanningAdapter:
         return PhotographyUserControls.model_validate(controls)
 
     def _execution_plan(self, context, output, binding: dict[str, Any]) -> dict[str, Any]:
-        """Translate frozen Photography shots into the shared role contract.
+        """Translate frozen Photography roles into a non-creative ledger.
 
-        The role recipe is deliberately the generic runtime shape already used
-        by the shared Prompt/Provider/Review path.  Photography contributes
-        professional art direction only; it does not acquire a private image
-        loop or result selector.
+        The specialized template owns only role cardinality, immutable profile
+        provenance, reference/safety boundaries, and append-only lineage.  It
+        must not materialize a local scene, camera, crop, lighting, pose, or
+        visual recipe: the remote Central Brain binds that direction later in
+        the TemplateDeliverablePlan.
         """
 
         is_set = output.professional_set_plan is not None
@@ -148,41 +149,25 @@ class PhotographyScenarioPlanningAdapter:
                     "index": shot.sequence_index,
                     "role_key": shot.role,
                     "label": shot.role.replace("_", " ").title(),
-                    "purpose": shot.subject_and_decisive_moment,
-                    "shot_family": "professional photography role",
-                    "camera_distance": shot.camera_position_and_perspective_effect,
-                    "angle_rule": shot.camera_position_and_perspective_effect,
-                    "crop_rule": shot.framing_and_crop,
-                    "scene_rule": shot.subject_direction,
-                    "variation_axes": list(shot.metadata.get("differentiated_dimensions") or []),
+                    "purpose": "",
+                    "shot_family": "frozen photography delivery role",
+                    "variation_axes": [],
                     "must_keep_rules": [
-                        *list(shot.immutable_reference_truth),
                         "preserve the frozen photographer profile checksum and shared color/finish anchor",
                     ],
-                    "must_not_rules": list(shot.negative_constraints),
-                    "prompt_pressure": " ".join(
-                        item
-                        for item in (
-                            shot.subject_and_decisive_moment,
-                            shot.depth_and_focus_behavior,
-                            shot.motion_behavior,
-                            shot.lighting_map_and_exposure_key,
-                            shot.palette_and_tone_curve,
-                            shot.surface_texture_and_grain,
-                            shot.retouch_direction,
-                        )
-                        if item
-                    ),
-                    "negative_pressure": list(shot.negative_constraints),
-                    "review_checks": list(shot.review_profile.get("issue_codes") or []),
-                    "user_visible_summary": [shot.subject_and_decisive_moment],
+                    "must_not_rules": [],
+                    "prompt_pressure": "",
+                    "negative_pressure": [],
+                    "review_checks": [],
+                    "user_visible_summary": [],
                     "metadata": {
                         "owner": "photography_scenario_pack",
                         "photography_role": shot.role,
                         "photography_shot_id": shot.shot_id,
                         "photography_profile_checksum": binding.get("technique_package_checksum"),
-                        "immutable_reference_truth": list(shot.immutable_reference_truth),
-                        "allowed_changes": list(shot.allowed_changes),
+                        "creative_direction_owner": "remote_v3_llm_brain",
+                        "frozen_contract_only": True,
+                        "static_recipe_present": False,
                     },
                 }
             )
@@ -208,8 +193,8 @@ class PhotographyScenarioPlanningAdapter:
                 "anchor_strength": "frozen_profile_color_and_reference_truth",
                 "scene_change_allowed": bool(is_set),
                 "role_strategy": "photography_professional_roles",
-                "role_difference_requirement": "each frozen Photography role must retain its own composition and camera duty",
-                "review_priority": "role coverage, profile fidelity, reference truth, real-camera finish",
+                "role_difference_requirement": "each output must remain bound to its own frozen Photography role ID",
+                "review_priority": "role coverage, profile fidelity, reference truth, real-pixel quality",
                 # A text-to-image professional set has no user-supplied
                 # identity evidence to turn into an image-edit chain.  The
                 # shared executor must therefore render each frozen role as
@@ -223,13 +208,8 @@ class PhotographyScenarioPlanningAdapter:
                 "metadata": {"owner": "shared_runtime", "scenario_id": "photography"},
             },
             "role_recipes": role_recipes,
-            "prompt_additions": [
-                f"Photography role {recipe['role_key']}: {recipe['prompt_pressure']}"
-                for recipe in role_recipes
-            ],
-            "negative_additions": _dedupe(
-                item for recipe in role_recipes for item in recipe["negative_pressure"]
-            ),
+            "prompt_additions": [],
+            "negative_additions": [],
             "user_visible_summary": [
                 "Prepared frozen professional photography role directions for shared execution."
             ],
@@ -237,6 +217,8 @@ class PhotographyScenarioPlanningAdapter:
                 "owner": "photography_scenario_pack",
                 "scenario_id": "photography",
                 "execution_owner": "shared_generation_review_retry",
+                "creative_direction_owner": "remote_v3_llm_brain",
+                "frozen_contract_only": True,
                 "professional_set": is_set,
                 "photography_set_id": set_plan.set_id if set_plan is not None else None,
                 "role_order": role_order,
@@ -260,14 +242,14 @@ class PhotographyScenarioPlanningAdapter:
                 # provider failure so the shared Product API can record every
                 # role's terminal state and withhold an incomplete set from
                 # normal project delivery.
-                "require_independent_role_terminal_states": bool(is_set),
+                "require_independent_role_terminal_states": True,
+                "requires_real_pixel_review": True,
             },
         }
 
     def _nonhuman_identity_requirements(
         self,
         context: SpecializedScenarioPlanningContext,
-        scene_domain: PhotographySceneDomain,
         controls: PhotographyUserControls,
     ) -> list[str]:
         typed = [
@@ -282,8 +264,8 @@ class PhotographyScenarioPlanningAdapter:
             for marker in ("same pet", "same animal", "same dog", "same cat", "this pet", "this animal")
         )
         needs_identity = bool(typed) or explicit_identity_request or (
-            scene_domain == PhotographySceneDomain.ANIMAL
-            and controls.input_mode.value == "reference_to_professional_reshoot"
+            controls.input_mode.value == "reference_to_professional_reshoot"
+            and any(marker in context.user_input.lower() for marker in ("same pet", "same animal", "same dog", "same cat", "this pet", "this animal"))
         )
         if not needs_identity:
             return []
@@ -294,18 +276,8 @@ class PhotographyScenarioPlanningAdapter:
         return ["nonhuman_subject_identity"]
 
     def _direction_contribution(self, context, output, binding: dict[str, Any]) -> CapabilityContribution:
-        planned = [*output.technique_contributions, *output.scene_contributions]
-        prompt_additions = _dedupe(
-            value for contribution in planned for value in contribution.prompt_additions
-        )
-        negative_additions = _dedupe(
-            value for contribution in planned for value in contribution.negative_additions
-        )
-        issue_codes = _dedupe(
-            value
-            for contribution in planned
-            for value in contribution.review_contract.get("issue_codes", [])
-        )
+        """Keep a validator contribution without local art-direction prose."""
+
         fingerprint = stable_id(
             "photography_direction",
             context.job_key,
@@ -313,8 +285,6 @@ class PhotographyScenarioPlanningAdapter:
             binding.get("profile_id"),
             binding.get("profile_version"),
             binding.get("technique_package_checksum"),
-            *prompt_additions,
-            *negative_additions,
         )
         return CapabilityContribution(
             capability_id=PHOTOGRAPHY_DIRECTION_CAPABILITY_ID,
@@ -325,14 +295,16 @@ class PhotographyScenarioPlanningAdapter:
                 "commission_intent": output.brief.commission_intent.value,
                 "delivery_roles": list(output.brief.delivery_roles),
                 "reference_policy": dict(output.brief.reference_policy_summary),
+                "creative_direction_owner": "remote_v3_llm_brain",
+                "frozen_contract_only": True,
             },
-            prompt_additions=prompt_additions,
-            negative_additions=negative_additions,
+            prompt_additions=[],
+            negative_additions=[],
             provider_input_requirements=[],
             review_contract={
                 "owner": "shared_visual_review",
                 "planning_expectations_only": True,
-                "issue_codes": issue_codes,
+                "issue_codes": [],
                 "named_profile_fidelity_active": str(binding.get("binding_mode") or "") == "named",
             },
             retry_contract={
@@ -347,11 +319,9 @@ class PhotographyScenarioPlanningAdapter:
                 "planning_fingerprint": fingerprint,
                 "profile_binding_checksum": binding.get("technique_package_checksum"),
                 "profile_name_in_prompt": False,
+                "creative_direction_owner": "remote_v3_llm_brain",
+                "static_recipe_present": False,
                 "direct_provider_call": False,
                 "shared_execution_only": True,
             },
         )
-
-
-def _dedupe(values) -> list[str]:
-    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
