@@ -3,9 +3,11 @@
 ## Status
 
 **Required corrective specification. Slices A and B, plus Slice C's
-deterministic review/activation contract, are implemented on mainline pending
-full regression. The live Gate D rerun remains open and is the only acceptance
-authority for real browser and real-pixel evidence.**
+deterministic review/activation contract, are implemented on mainline. The
+live Gate D rerun was completed on 2026-07-14 with real browser, Provider,
+final-pixel-review, and controlled-restart evidence. That acceptance closes
+this General Project Mode corrective gate; it does not by itself activate any
+specialized template for production.**
 
 This document turns the failed 2026-07-12 Doc104 Gate D live General-project
 run into a bounded mainline implementation plan. It is not an E-Commerce,
@@ -25,10 +27,12 @@ photographers, and specialist terminology remain outside General.
 
 ## 1. Decision
 
-Doc104 Gate D is **failed, not pending and not passed**. The manual browser
-run proved project persistence and media storage, but it also proved that the
-current continuation contract can use the wrong image, report completion too
-early, and misrepresent the result board.
+The original 2026-07-12 Doc104 Gate D run **failed**. It proved project
+persistence and media storage, but it also showed that the continuation
+contract could use the wrong image, report completion too early, and
+misrepresent the result board. The 2026-07-14 rerun recorded in Section 10
+supersedes that acceptance outcome: Gate D now passes while retaining the
+original failure as the reason for this corrective specification.
 
 No specialized template may claim production readiness from the prior Gate D
 preflight. E-Commerce remains behind its activation gate.
@@ -381,24 +385,25 @@ This corrective phase is complete only when:
    verdict; and
 7. the live Gate D rerun passes with recorded evidence.
 
-Until then, V3 foundation is improving but not fully closed for specialized
-production activation.
+These conditions now have recorded Gate D evidence. V3 foundation still has
+separate specialized-template gates; this General-project result alone does
+not activate E-Commerce, Photography, or provider-native text production.
 
 ## 9. 2026-07-13 Mainline Implementation Record
 
-This record describes the implemented contract, not a production-readiness
-claim. Doc104 Gate D remains failed until the real browser and live-pixel
-rerun in Section 6 passes.
+This record describes the implementation that preceded the real acceptance.
+The formerly failed Gate D is now closed by the evidence in Section 10; this
+does not turn it into a specialist-template production-readiness claim.
 
-| Area | Implemented mainline behavior | Remaining evidence |
+| Area | Implemented mainline behavior | Recorded Gate D evidence |
 | --- | --- | --- |
-| Canonical selected output | Selection now resolves an exact materialized V3 output record before writing a positive project reference. The persisted binding carries the output ID, all media URIs, file path, and a SHA-256 source identity. Missing or ambiguous records return an explicit held state; they cannot fall back to another candidate or an upload. | Live continuation request audit with a rights-clear source. |
-| Provider input | Project continuations put project references ahead of duplicate upload paths, deduplicate by content and role, and retain a provider-resolution audit with retained, suppressed, and unresolved sources. A required project selected-output source that is not canonical/materialized blocks the request. | Inspect the frozen record from the Gate D continuation. |
-| Lifecycle and delivery | Background generation is persisted as `generating`; rendered candidates are `finalizing` while shared review/retry settles; only then may the job become `generated`. In-flight jobs expose no selectable cards and Project Mode holds selection. | Browser timing observation across a real review/retry run. |
-| Gateway-managed terminal timeout | When the gateway-managed path outlives its configured provider deadline plus a short conversion margin, a background watchdog records one `blocked` terminal result with a bounded timeout audit and no V3 replay. The timeout is attempt-bound: a delayed worker cannot overwrite it, and a later deliberate run cannot be closed by an old watchdog. | Live upstream evidence that a non-returning request closes at the recorded deadline and leaves no duplicate gateway request. |
-| Project result surfaces | Project-output APIs and desktop/mobile boards expose final-delivery media only. Retry/process artifacts stay append-only in storage/audit rather than being counted or rendered as delivery cards. Legacy asset-only records remain readable but are suppressed from continuation context. | Manual reopening and count verification in Gate D. |
-| Refresh behavior | The desktop output request has one in-flight coordinator and opening a project performs one authoritative output refresh rather than a short/long overlapping pair. Recovery does not promote a known `generating` or `finalizing` job from a local output URL. | Browser open/switch/leave polling observation. |
-| Pixel-review truthfulness | Reference-conditioned real generation requests a live vision route. `metadata_only` now returns non-certifying `manual_review` with explicit unverifiable dimensions. When the user has rejected a visual direction, live review must return a feedback verdict and, when a selected generated reference is attached, a distinct/near-duplicate verdict; a missing verdict is held for manual review rather than reported as a pass. | A live provider response and final pixels showing feedback compliance and meaningful distinction. |
+| Canonical selected output | Selection now resolves an exact materialized V3 output record before writing a positive project reference. The persisted binding carries the output ID, all media URIs, file path, and a SHA-256 source identity. Missing or ambiguous records return an explicit held state; they cannot fall back to another candidate or an upload. | Browser selection persisted `v3_output_1ab82ddf4f5e4adcb57f` with its canonical file and media binding. |
+| Provider input | Project continuations put project references ahead of duplicate upload paths, deduplicate by content and role, and retain a provider-resolution audit with retained, suppressed, and unresolved sources. A required project selected-output source that is not canonical/materialized blocks the request. | `job_331dffa1db` recorded `image_edit_with_reference_images`, retained the exact selected output, and did not substitute a different uploaded file. |
+| Lifecycle and delivery | Background generation is persisted as `generating`; rendered candidates are `finalizing` while shared review/retry settles; only then may the job become `generated`. In-flight jobs expose no selectable cards and Project Mode holds selection. | The browser observed `generating` then `finalizing`; only terminal `generated` exposed the two continuation delivery cards. |
+| Gateway-managed terminal timeout | When the gateway-managed path outlives its configured provider deadline plus a short conversion margin, a background watchdog records one `blocked` terminal result with a bounded timeout audit and no V3 replay. The timeout is attempt-bound: a delayed worker cannot overwrite it, and a later deliberate run cannot be closed by an old watchdog. | This successful continuation did not exercise the timeout terminal path; its single logical request completed without V3 replay. |
+| Project result surfaces | Project-output APIs and desktop/mobile boards expose final-delivery media only. Retry/process artifacts stay append-only in storage/audit rather than being counted or rendered as delivery cards. Legacy asset-only records remain readable but are suppressed from continuation context. | Controlled restart and browser reopen restored four media-backed cards; no placeholder or asset-only selected reference was rendered as a delivery card. |
+| Refresh behavior | The desktop output request has one in-flight coordinator and opening a project performs one authoritative output refresh rather than a short/long overlapping pair. Recovery does not promote a known `generating` or `finalizing` job from a local output URL. | Browser return, reload, controlled service restart, and project reopen each recovered the persisted terminal records without initiating a new generation. |
+| Pixel-review truthfulness | Reference-conditioned real generation requests a live vision route. `metadata_only` now returns non-certifying `manual_review` with explicit unverifiable dimensions. When the user has rejected a visual direction, live review must return a feedback verdict and, when a selected generated reference is attached, a distinct/near-duplicate verdict; a missing verdict is held for manual review rather than reported as a pass. | Both final continuation outputs were `pass` under hybrid `openai_compatible_vision` review, with final pixels visibly cooler, wider, and free of generated text/brand marks. |
 
 Focused regression coverage is in
 `test_v3_doc109_project_delivery_closure.py`, together with the amended
@@ -409,3 +414,23 @@ final-delivery-only rendering, metadata-only non-certification, active-plan
 isolation, and bounded feedback/near-duplicate review verdicts. It does not
 replace the live-pixel feedback/near-duplicate acceptance evidence required by
 Gate D.
+
+## 10. 2026-07-14 Gate D Accepted Live Evidence
+
+The controlled local acceptance instance was run with a rights-clear,
+unbranded glass-sphere reference in `project_dbc3ecab02`. No production
+default gate was changed.
+
+| Gate requirement | Recorded result |
+| --- | --- |
+| Browser project workflow | Created/continued a General project through the real V3 workspace; the project held the uploaded product reference and two persisted rejected-direction notes. |
+| Materialized source selection | The browser selected exactly `v3_output_1ab82ddf4f5e4adcb57f`; its project binding persisted its output ID, media routes, file path, and source-integrity hash. |
+| Exact Provider reference | Continuation job `job_331dffa1db` recorded `image_edit_with_reference_images`. Its frozen provider-input plan retained the selected output plus the uploaded product-truth source and its approved product crop; no selected-output substitution occurred. |
+| Lifecycle | The continuation moved through `generating` and `finalizing` before `generated`; no second V3 logical request was made. |
+| Final pixels and review | Two final `gpt-image-2` images (`v3_output_5e43ce13cba946e18744`, `v3_output_a4e375fc362c48e69e19`) preserved the glass sphere, removed the rejected warm/reference-like room direction, and had no generated text, logo, watermark, or extra objects. Both received `pass` from hybrid review with `openai_compatible_vision`, not `metadata_only`. |
+| Return, restart, and reopen | After a controlled acceptance-instance restart, the project restored four media-backed delivery records, the exact selected source, both active references, both rejection notes, and terminal job `generated`. The browser reopened the project with one clear continuation CTA. |
+
+The first two candidates in the run were visibly reviewed as needing a
+directional correction; their recorded feedback evidence was deliberately
+carried into the subsequent selected-output continuation. The accepted
+continuation is the final pixel and reference-fidelity evidence for this gate.

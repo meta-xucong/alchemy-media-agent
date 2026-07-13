@@ -424,15 +424,19 @@ text-pixel production gate remains open.
 Pass only when the Section 8 path is recorded against a live General project
 and its restored state is correct.
 
-2026-07-12 update: the real manual browser sequence was run, including upload,
-selection, rejection, restoration, and continuation. Gate D **failed** rather
-than passed: a selected generated result lacked a canonical output binding and
-the next request supplied the uploaded source twice; user-visible completion
-also preceded bounded review/retry settlement, and the General board counted
-an unresolved reference as an image. The source files and media route worked,
-so this is not a provider-storage failure. Doc109 is the required corrective
-contract and rerun matrix. Gate D remains closed until that document's live
-pixel-review rerun passes.
+2026-07-12 update: the original real manual browser sequence failed. A selected
+generated result lacked a canonical output binding and the next request
+supplied the uploaded source twice; user-visible completion also preceded
+bounded review/retry settlement, and the General board counted an unresolved
+reference as an image. The source files and media route worked, so this was
+not a provider-storage failure.
+
+2026-07-14 update: Doc109's fresh live-pixel rerun passed. It recorded a
+browser-selected canonical output, exact `image_edit_with_reference_images`
+input, persisted negative feedback, hybrid real-vision final review, and a
+controlled-restart/reopen recovery. Gate D is accepted. This result does not
+pass the independent real-product E-Commerce Gate C or enable E-Commerce
+production delivery.
 
 ### Gate E: E-Commerce Template Activation
 
