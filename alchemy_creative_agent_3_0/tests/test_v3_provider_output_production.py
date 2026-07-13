@@ -726,6 +726,61 @@ def test_v3_output_store_creates_preview_thumbnail_and_download(tmp_path) -> Non
     assert store.file_for_variant(record.output_id, "thumbnail")[1] == "image/png"
 
 
+def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(tmp_path, monkeypatch) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    first = store.save_base64_output(
+        job_id="job_cached_outputs",
+        candidate_id="candidate_cached_outputs",
+        asset_id="asset_cached_outputs",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(96, 64),
+    )
+    scans = 0
+    original_signature = store._record_paths_signature  # noqa: SLF001
+
+    def observe_signature():
+        nonlocal scans
+        scans += 1
+        return original_signature()
+
+    monkeypatch.setattr(store, "_record_paths_signature", observe_signature)
+
+    assert [record.output_id for record in store.list_by_job(first.job_id)] == [first.output_id]
+    assert [record.output_id for record in store.list_by_job(first.job_id)] == [first.output_id]
+    assert scans == 1
+
+    second = store.save_base64_output(
+        job_id="job_cached_outputs",
+        candidate_id="candidate_cached_outputs_2",
+        asset_id="asset_cached_outputs_2",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(96, 64),
+    )
+
+    assert {record.output_id for record in store.list_by_job(first.job_id)} == {first.output_id, second.output_id}
+    assert scans == 2
+
+
+def test_v3_output_store_observes_a_write_from_another_store_instance(tmp_path) -> None:
+    root = tmp_path / "outputs"
+    reader = V3GeneratedOutputStore(root)
+    writer = V3GeneratedOutputStore(root)
+
+    assert reader.list_outputs() == []
+    record = writer.save_base64_output(
+        job_id="job_external_output",
+        candidate_id="candidate_external_output",
+        asset_id="asset_external_output",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(96, 64),
+    )
+
+    assert [item.output_id for item in reader.list_by_job(record.job_id)] == [record.output_id]
+
+
 def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

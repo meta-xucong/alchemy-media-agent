@@ -51,7 +51,7 @@ class V3GeneratedOutputStore:
     def __init__(self, storage_root: str | Path | None = None) -> None:
         self.storage_root = Path(storage_root) if storage_root else _default_storage_root()
         self._cache_lock = threading.RLock()
-        self._records_cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._records_cache_revision: tuple[int, int] | None = None
         self._records_cache: list[V3GeneratedOutputRecord] | None = None
         self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
 
@@ -166,6 +166,7 @@ class V3GeneratedOutputStore:
             self._invalidate_cache()
             return False
         _safe_remove_tree(self.storage_root, output_dir)
+        self._mark_storage_mutation()
         self._invalidate_cache()
         return True
 
@@ -184,15 +185,43 @@ class V3GeneratedOutputStore:
         temp = path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(record.to_json_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
+        self._mark_storage_mutation()
+
+    def _mark_storage_mutation(self) -> None:
+        """Advance the cheap cross-instance cache revision after a local write."""
+
+        try:
+            self.storage_root.touch(exist_ok=True)
+        except OSError:
+            # The write itself remains authoritative.  A later reader will
+            # rebuild its cache if it cannot observe the directory revision.
+            pass
 
     def _record_path(self, output_id: str) -> Path:
         return self.storage_root / output_id / "output.json"
 
     def _invalidate_cache(self) -> None:
         with self._cache_lock:
-            self._records_cache_signature = None
+            self._records_cache_revision = None
             self._records_cache = None
             self._records_by_job_cache = None
+
+    def _storage_revision(self) -> tuple[int, int] | None:
+        """Return a constant-time revision for the output directory.
+
+        Earlier versions restatted every ``output.json`` on every lookup.  A
+        project page can make dozens of lookups, so a long-lived local output
+        store made that path scale with *all* historical images.  Writes made
+        through this store update the root directory timestamp, which lets a
+        separate process still discover new records without repeatedly
+        traversing the full history.
+        """
+
+        try:
+            stat = self.storage_root.stat()
+        except OSError:
+            return None
+        return int(stat.st_mtime_ns), int(stat.st_ctime_ns)
 
     def _record_paths_signature(self) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int], ...]]:
         paths = sorted(self.storage_root.glob("v3_output_*/output.json"))
@@ -206,10 +235,12 @@ class V3GeneratedOutputStore:
         return tuple(paths), tuple(signature_items)
 
     def _read_records_cached(self) -> list[V3GeneratedOutputRecord]:
-        paths, signature = self._record_paths_signature()
+        revision = self._storage_revision()
         with self._cache_lock:
-            if signature == self._records_cache_signature and self._records_cache is not None:
+            if revision == self._records_cache_revision and self._records_cache is not None:
                 return list(self._records_cache)
+
+        paths, _signature = self._record_paths_signature()
 
         records: list[V3GeneratedOutputRecord] = []
         for path in paths:
@@ -224,7 +255,7 @@ class V3GeneratedOutputStore:
             by_job.setdefault(str(record.job_id or ""), []).append(record)
 
         with self._cache_lock:
-            self._records_cache_signature = signature
+            self._records_cache_revision = revision
             self._records_cache = list(records)
             self._records_by_job_cache = {key: list(value) for key, value in by_job.items()}
         return list(records)
