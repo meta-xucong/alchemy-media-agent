@@ -117,6 +117,27 @@ def test_specialized_remote_provider_error_projects_only_a_safe_error_class() ->
     }
 
 
+class _ContentPolicyRemoteBrain:
+    provider = "fixture"
+    model = "fixture"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request):
+        raise BrainProviderError("remote brain provider failed: Error code: 400 - content_policy_violation")
+
+
+def test_specialized_http_failure_projects_only_safe_status_and_category() -> None:
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_ContentPolicyRemoteBrain())).plan_job(_request(count=1))
+
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["outcome_class"] == "remote_provider_error"
+    assert outcome["remote_error_class"] == "content_policy"
+    assert outcome["remote_http_status_code"] == 400
+    assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
+
+
 def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy() -> None:
     service = ecommerce_test_service()
     created = service.create_job(_request(count=2, approved_copy="Adjustable warm light"))

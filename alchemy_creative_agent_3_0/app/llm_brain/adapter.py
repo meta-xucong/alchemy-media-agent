@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -68,10 +69,16 @@ class V3LLMBrainAdapter:
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
             fallback.warnings.append(str(exc))
+            remote_http_status_code = _remote_provider_http_status_code(exc)
             fallback.audit = {
                 **fallback.audit,
                 "remote_provider_error": str(exc)[:260],
                 "remote_provider_error_class": _remote_provider_error_class(exc),
+                **(
+                    {"remote_provider_http_status_code": remote_http_status_code}
+                    if remote_http_status_code is not None
+                    else {}
+                ),
             }
             return fallback
 
@@ -363,15 +370,29 @@ def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
     text = str(exc or "").lower()
+    if "content_policy" in text or "content policy" in text:
+        return "content_policy"
     if any(token in text for token in ("timed out", "timeout", "readtimeout", "connecttimeout")):
         return "timeout"
     if any(token in text for token in ("context canceled", "cancelled", "canceled")):
         return "canceled"
     if any(token in text for token in ("non-json", "empty output", "json")):
         return "invalid_response"
-    if any(token in text for token in ("status code", "http", "502", "503", "504")):
+    if _remote_provider_http_status_code(exc) is not None or any(
+        token in text for token in ("status code", "error code", "http")
+    ):
         return "upstream_http_error"
     return "provider_error"
+
+
+def _remote_provider_http_status_code(exc: Exception) -> int | None:
+    """Extract only an HTTP status code; never persist the raw provider error."""
+
+    match = re.search(r"(?:status|error)\s+code\s*[:=]?\s*(\d{3})", str(exc or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    code = int(match.group(1))
+    return code if 100 <= code <= 599 else None
 
 
 def _reasoning_depth(metadata: dict[str, Any]) -> str:

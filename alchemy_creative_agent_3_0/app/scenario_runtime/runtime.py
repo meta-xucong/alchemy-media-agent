@@ -459,6 +459,12 @@ class ScenarioRuntime:
                 if audit.get("remote_provider_error_class")
                 else {}
             ),
+            **(
+                {"remote_http_status_code": int(audit["remote_provider_http_status_code"])}
+                if isinstance(audit.get("remote_provider_http_status_code"), int)
+                and 100 <= int(audit["remote_provider_http_status_code"]) <= 599
+                else {}
+            ),
             **{
                 key: value
                 for key, value in details.items()
