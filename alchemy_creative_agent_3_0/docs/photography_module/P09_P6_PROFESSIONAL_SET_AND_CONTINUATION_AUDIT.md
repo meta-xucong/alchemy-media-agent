@@ -1,5 +1,10 @@
 # P09: P6 Professional Set And Continuation Audit
 
+> Historical status: the execution blocker documented here was resolved by
+> mainline `1578cbc`. The prompt-ownership correction is `364a1c8`. Retain
+> this file as evidence of the former failure; do not use it as current
+> production behavior. P11 is the active correction authority.
+
 ## Status
 
 ```text

@@ -1,5 +1,10 @@
 # P08: PHOTOGRAPHY-MAINLINE-003 Production-Activation Handoff
 
+> Historical status: this document describes the initial 003 seam. Its
+> professional-set limitation was superseded by mainline `1578cbc`; specialized
+> role prompt ownership was corrected by `364a1c8`. Current release authority
+> is P11 plus the active shared runtime contracts.
+
 ## Status
 
 ```text
