@@ -257,7 +257,55 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
         and item["metadata"].get("execution_diagnostic") == "specialized_role_coverage_incomplete"
         for item in root_items
     )
+    assert handlers.get_project_photography_role_delivery(
+        project["project_id"], root["job_id"], "session_hero"
+    )["current_delivery"]["job_id"] == root["job_id"]
+    assert handlers.get_project_photography_role_delivery(
+        project["project_id"], root["job_id"], "detail_or_moment"
+    )["current_delivery"]["job_id"] == root["job_id"]
+    assert handlers.get_project_photography_role_delivery(
+        project["project_id"], root["job_id"], "environmental_context"
+    )["current_delivery"] is None
     assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+
+def test_professional_set_aggregates_three_certified_role_winners_after_child_recovery(monkeypatch, tmp_path) -> None:
+    """A child recovery completes the root set; it never becomes a one-image delivery."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path, fail_role="environmental_context")
+    project, root = _project_and_root(handlers)
+    blocked = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"require_real_images": True}},
+    )
+    assert blocked["status"] == "blocked"
+    assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+    provider.fail_role = None
+    continuation = handlers.post_project_photography_role_continuation(
+        project["project_id"],
+        root["job_id"],
+        "environmental_context",
+        {"correction_note": "Complete the missing environmental frame."},
+    )
+    child = handlers.post_project_job_generate(
+        project["project_id"],
+        continuation["child_job_id"],
+        {"quality_mode": "standard"},
+    )
+    assert child["status"] == "generated"
+
+    outputs = handlers.get_project_outputs(project_id=project["project_id"])["items"]
+    assert len(outputs) == 3
+    assert {item["metadata"]["photography_role_id"] for item in outputs} == {
+        "session_hero",
+        "environmental_context",
+        "detail_or_moment",
+    }
+    assert all(item["metadata"]["role_final_winner"] is True for item in outputs)
+    assert {item["job_id"] for item in outputs} == {root["job_id"], continuation["child_job_id"]}
 
 
 def test_metadata_only_photography_project_withholds_pixels_and_records_safe_review_state(monkeypatch) -> None:
@@ -402,6 +450,55 @@ def test_role_continuation_is_append_only_and_reuses_the_exact_frozen_plan(monke
     delivery = handlers.get_project_photography_role_delivery(project["project_id"], root["job_id"], "environmental_context")
     assert delivery["current_delivery"]["job_id"] == continuation["child_job_id"]
     assert [attempt["job_id"] for attempt in delivery["attempts"]] == [root["job_id"], continuation["child_job_id"]]
+
+
+def test_role_continuation_preserves_frozen_real_provider_and_pixel_review_controls(monkeypatch, tmp_path) -> None:
+    """A real-provider root must never degrade to mock pixels on a role continuation."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path)
+    project, root = _project_and_root(handlers)
+    root_generated = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "require_real_images": True,
+                "requested_image_size": "1536x1024",
+                "vision_inspection_mode": "hybrid",
+                "vision_inspection_max_attempts": 1,
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+    assert root_generated["status"] == "generated"
+    continuation = handlers.post_project_photography_role_continuation(
+        project["project_id"],
+        root["job_id"],
+        "detail_or_moment",
+        {"correction_note": "Create a fresh detail frame while preserving the frozen session."},
+    )
+    child_record = handlers.service.get_job_record(continuation["child_job_id"])
+    assert child_record is not None
+    assert child_record.request.metadata["require_real_images"] is True
+    assert child_record.request.metadata["requested_image_size"] == "1536x1024"
+    assert child_record.request.metadata["vision_inspection_mode"] == "hybrid"
+    assert child_record.request.metadata["vision_inspection_max_attempts"] == 1
+    assert child_record.request.metadata["max_visual_retry_attempts"] == 1
+    assert child_record.request.metadata["requested_image_count"] == 1
+
+    child_generated = handlers.post_project_job_generate(
+        project["project_id"],
+        continuation["child_job_id"],
+        {"quality_mode": "standard"},
+    )
+    assert child_generated["status"] == "generated"
+    assert len(provider.requests) == 4
+    child_output = handlers.service.output_store.list_by_job(continuation["child_job_id"])
+    assert len(child_output) == 1
+    assert child_output[0].provider == provider.provider_name
+    assert child_output[0].metadata.get("mock_contract_fixture") is not True
 
 
 def test_named_profile_continuation_requires_exact_explicit_reconfirmation(monkeypatch) -> None:

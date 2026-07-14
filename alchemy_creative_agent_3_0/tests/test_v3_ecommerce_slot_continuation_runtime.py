@@ -91,6 +91,40 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
     assert continuation["metadata"]["generation_route"].endswith(f"/jobs/{continuation['child_job_id']}/generate")
 
 
+def test_slot_continuation_preserves_durable_real_execution_controls() -> None:
+    """An E-Commerce redo must not weaken a parent real-provider/review contract."""
+
+    handlers = _handlers()
+    project, root = _ecommerce_root(handlers)
+    root_record = handlers.service.get_job_record(root["job_id"])
+    assert root_record is not None
+    root_record.request.metadata.update(
+        {
+            "require_real_images": True,
+            "requested_image_size": "1536x1024",
+            "vision_inspection_mode": "hybrid",
+            "vision_inspection_max_attempts": 1,
+            "max_visual_retry_attempts": 1,
+        }
+    )
+    handlers.service.job_store.save(root_record)
+
+    continuation = handlers.post_project_ecommerce_slot_continuation(
+        project["project_id"],
+        root["job_id"],
+        "ecommerce_output_2",
+        {"correction_note": "Regenerate this one selected delivery."},
+    )
+    child_record = handlers.service.get_job_record(continuation["child_job_id"])
+    assert child_record is not None
+    assert child_record.request.metadata["require_real_images"] is True
+    assert child_record.request.metadata["requested_image_size"] == "1536x1024"
+    assert child_record.request.metadata["vision_inspection_mode"] == "hybrid"
+    assert child_record.request.metadata["vision_inspection_max_attempts"] == 1
+    assert child_record.request.metadata["max_visual_retry_attempts"] == 1
+    assert child_record.request.metadata["requested_image_count"] == 1
+
+
 def test_slot_delivery_uses_latest_successful_child_and_keeps_parent_history() -> None:
     handlers = _handlers()
     project, root = _ecommerce_root(handlers)

@@ -943,6 +943,9 @@ class V3ProjectModeService:
         source = self._continuation_source(continuation_request.metadata)
         child_metadata = {
             "source": source,
+            **self._frozen_continuation_execution_controls(
+                self._continuation_parent_request(parent_job_id, anchor)
+            ),
             "ecommerce_slot_lineage": lineage_payload.model_dump(mode="json"),
             # A continuation is one revised provider image for the selected
             # opaque output ID.  This is quantity/lineage transport, not a
@@ -1149,10 +1152,11 @@ class V3ProjectModeService:
             plan_amendment_id=amendment.amendment_id if amendment else None,
             created_at=_utc_now_iso(),
         )
-        parent_request = dict(anchor["planning_request"])
+        parent_request = self._continuation_parent_request(parent_job_id, anchor)
         parent_metadata = dict(parent_request.get("metadata") or {})
         child_metadata = {
             "source": self._photography_continuation_source(continuation_request.metadata),
+            **self._frozen_continuation_execution_controls(parent_request),
             "photographer_profile_binding": dict(parent_metadata["photographer_profile_binding"]),
             "specialized_scenario_plan": child_specialized,
             "photography_role_lineage": lineage_payload.model_dump(mode="json"),
@@ -1268,7 +1272,11 @@ class V3ProjectModeService:
                     },
                 )
             )
-            if status.status == ProductJobStatusValue.GENERATED and candidates:
+            if candidates and self._photography_role_has_certified_delivery(
+                status,
+                clean_role_id,
+                is_root_attempt=is_root_attempt,
+            ):
                 candidate = candidates[0]
                 current_delivery = PhotographyRoleCurrentDelivery(
                     root_job_id=root_job_id,
@@ -1300,6 +1308,42 @@ class V3ProjectModeService:
                 "failed_or_blocked_children_preserve_previous_delivery": True,
                 "final_role_winner_only": True,
             },
+        )
+
+    @staticmethod
+    def _photography_role_has_certified_delivery(
+        status: ProductJobStatus,
+        role_id: str,
+        *,
+        is_root_attempt: bool,
+    ) -> bool:
+        """Keep certified root-role winners when another role blocks the set.
+
+        A professional-set root is terminally blocked when any frozen role is
+        missing.  That is the correct set-level delivery decision, but it must
+        not erase the independently certified pixels for the other roles:
+        role continuation needs those winners to complete the same append-only
+        set later.  This exception is deliberately limited to the root's
+        explicit ``incomplete`` specialized execution contract; ordinary
+        blocked jobs and non-certifying/manual-review results remain withheld.
+        """
+
+        if status.status == ProductJobStatusValue.GENERATED:
+            return True
+        if not is_root_attempt:
+            return False
+        metadata = dict(status.metadata or {})
+        execution = metadata.get("specialized_execution_summary")
+        if not isinstance(execution, dict) or str(execution.get("status") or "").lower() != "incomplete":
+            return False
+        certification = metadata.get("review_certification")
+        if not isinstance(certification, dict):
+            return False
+        return any(
+            isinstance(item, dict)
+            and str(item.get("role_key") or "") == role_id
+            and str(item.get("state") or "").lower() == "certified"
+            for item in certification.get("roles") or []
         )
 
     def generate_project_job(self, project_id: str, job_id: str, request: dict[str, Any] | None = None) -> ProductJobStatus:
@@ -2110,6 +2154,53 @@ class V3ProjectModeService:
     def _photography_continuation_source(self, metadata: dict[str, Any]) -> str:
         source = str(dict(metadata or {}).get("source") or "photography_workspace").strip()
         return source[:120] or "photography_workspace"
+
+    def _continuation_parent_request(self, parent_job_id: str, anchor: dict[str, Any]) -> dict[str, Any]:
+        """Return the durable parent request, with anchor data only as history fallback.
+
+        Generation-time controls are legitimately persisted after a job has
+        been planned (for example a controlled acceptance run may elevate it
+        to a real image provider).  The Project Mode anchor is immutable
+        planning evidence, not a replacement for that durable execution
+        record.  A continuation must therefore inherit the latter.
+        """
+
+        record = self.product_service.get_job_record(parent_job_id)
+        if record is not None:
+            return record.request.model_dump(mode="json")
+        return dict(anchor.get("planning_request") or {})
+
+    @staticmethod
+    def _frozen_continuation_execution_controls(parent_request: dict[str, Any]) -> dict[str, Any]:
+        """Copy only non-creative delivery controls into an append-only child.
+
+        A role/slot continuation gets a fresh remote-Brain direction, but it
+        must never silently weaken the parent job's actual execution contract.
+        In particular, dropping ``require_real_images`` caused a real-provider
+        acceptance job to materialize a deterministic mock fixture on its
+        continuation path.  This allow-list deliberately excludes creative,
+        template, platform, and legacy metadata: those remain owned by the
+        frozen envelope and the child specialized plan.
+        """
+
+        metadata = dict(parent_request.get("metadata") or {}) if isinstance(parent_request, dict) else {}
+        inherited: dict[str, Any] = {}
+        if bool(metadata.get("require_real_images")):
+            inherited["require_real_images"] = True
+        if bool(metadata.get("real_image_generation")):
+            inherited["real_image_generation"] = True
+        for key in (
+            "requested_image_size",
+            "vision_inspection_mode",
+            "vision_inspection_max_attempts",
+            "max_visual_retry_attempts",
+            "disable_visual_auto_retry",
+            "enable_visual_auto_retry_in_explore",
+        ):
+            value = metadata.get(key)
+            if value is not None:
+                inherited[key] = value
+        return inherited
 
     def _photography_role_continuation_instruction(
         self,
@@ -4842,6 +4933,16 @@ class V3ProjectModeService:
         if output_store is None:
             return []
         state_map = self._selected_output_state_map(project)
+        if not include_hidden:
+            specialized_items = self._professional_photography_set_output_items(
+                project,
+                output_store=output_store,
+                state_map=state_map,
+                owner_user_id=owner_user_id,
+                compact=compact,
+            )
+            if specialized_items is not None:
+                return specialized_items[: max(1, int(limit or 60))]
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for job_id in reversed(project.job_ids):
@@ -4884,6 +4985,90 @@ class V3ProjectModeService:
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
+
+    def _professional_photography_set_output_items(
+        self,
+        project: ProjectRecord,
+        *,
+        output_store: Any,
+        state_map: dict[str, ProjectOutputSelectionStateValue],
+        owner_user_id: int | None,
+        compact: bool,
+    ) -> list[dict[str, Any]] | None:
+        """Resolve a Photography professional set as one role-complete delivery.
+
+        Project boards must never expose a partial set merely because a child
+        continuation finished.  Conversely, once every frozen role has a
+        certified current winner, the board must show exactly those winners,
+        including root-role results that predate a failed sibling role.
+        """
+
+        roots: list[tuple[str, list[str]]] = []
+        for job_id in project.job_ids:
+            anchor = self._photography_role_anchor(project, job_id)
+            if not isinstance(anchor, dict):
+                continue
+            lineage = anchor.get("lineage")
+            if not isinstance(lineage, dict):
+                continue
+            if (
+                str(lineage.get("root_job_id") or "") != job_id
+                or str(lineage.get("continuation_kind") or "") != "photography_professional_set_root"
+            ):
+                continue
+            declared_roles = self._declared_photography_roles(anchor)
+            if len(declared_roles) >= 2:
+                roots.append((job_id, declared_roles))
+        if not roots:
+            return None
+
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for root_job_id, declared_roles in roots:
+            resolved: list[tuple[str, Any, Any]] = []
+            for role_id in declared_roles:
+                delivery = self.resolve_photography_role_delivery(project.project_id, root_job_id, role_id)
+                current = delivery.current_delivery
+                if current is None or not current.output_id:
+                    resolved = []
+                    break
+                record = output_store.get_output(current.output_id)
+                if record is None or not self._output_record_visible_to_owner(record, owner_user_id):
+                    resolved = []
+                    break
+                resolved.append((role_id, current, record))
+            # A set with any unresolved role remains entirely withheld.  Its
+            # provider records stay in append-only history, not the result UI.
+            if len(resolved) != len(declared_roles):
+                continue
+            for role_id, current, record in resolved:
+                identity = self._output_record_identity(record)
+                if not identity or identity in seen:
+                    continue
+                seen.add(identity)
+                state = self._output_state_for_record(state_map, record)
+                if state in {
+                    ProjectOutputSelectionStateValue.UNSELECTED,
+                    ProjectOutputSelectionStateValue.REJECTED,
+                }:
+                    continue
+                items.append(
+                    self._output_item_from_record(
+                        project,
+                        record,
+                        state,
+                        compact=compact,
+                        delivery={
+                            "delivery_state": "final_delivery",
+                            "photography_role_id": role_id,
+                            "photography_root_job_id": root_job_id,
+                            "role_final_winner": True,
+                            "append_only_history": True,
+                            "resolved_from_job_id": current.job_id,
+                        },
+                    )
+                )
+        return items
 
     def _project_job_delivery_is_settled(self, job_id: str) -> bool:
         """Known in-flight jobs must not leak process outputs onto project boards."""
