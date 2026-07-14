@@ -435,6 +435,105 @@ def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None
     assert "doll-like morphology" in patch_text
 
 
+def test_human_realism_retry_is_scoped_to_observed_plastic_skin() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = layer.build(
+        project_id="project_scoped_skin_retry",
+        job_id="job_scoped_skin_retry",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input="Create a real-camera portrait of a person in a garden under soft daylight.",
+        subject_type="character",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+    )
+
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_scoped_skin_retry",
+        job_id="job_scoped_skin_retry",
+        issue_codes=["plastic_skin"],
+    )
+    patch_text = " ".join(
+        [
+            *review.retry_patch["prompt_additions"],
+            *review.retry_patch["negative_additions"],
+            *review.retry_patch["artifact_repair"],
+        ]
+    ).lower()
+
+    assert review.status == "retry_recommended"
+    assert "repair only the face and skin" in patch_text
+    assert "poreless porcelain glow" in patch_text
+    assert "finger count" not in patch_text
+    assert "adultification" not in patch_text
+    assert "cut-out subject" not in patch_text
+
+
+def test_human_realism_retry_scopes_hand_anatomy_without_face_beauty_rewrite() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = layer.build(
+        project_id="project_scoped_hand_retry",
+        job_id="job_scoped_hand_retry",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input="Create a real-camera person holding a cup in a garden.",
+        subject_type="character",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+    )
+
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_scoped_hand_retry",
+        job_id="job_scoped_hand_retry",
+        issue_codes=["bad_hands_or_body"],
+    )
+    patch_text = " ".join(
+        [
+            *review.retry_patch["prompt_additions"],
+            *review.retry_patch["negative_additions"],
+            *review.retry_patch["artifact_repair"],
+        ]
+    ).lower()
+
+    assert review.status == "retry_recommended"
+    assert "coherent finger count" in patch_text
+    assert "extra, fused, missing, or misjointed fingers" in patch_text
+    assert "poreless porcelain glow" not in patch_text
+
+
+def test_human_realism_retry_treats_face_artifacts_as_face_only() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = layer.build(
+        project_id="project_scoped_face_artifact",
+        job_id="job_scoped_face_artifact",
+        scenario_id="general_creative",
+        template_id="general_template",
+        user_input="Create a real-camera portrait of a person in a garden.",
+        subject_type="character",
+        variation_mode="selection_candidates",
+        has_identity_reference=False,
+    )
+
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_scoped_face_artifact",
+        job_id="job_scoped_face_artifact",
+        issue_codes=["face_artifact"],
+    )
+    patch_text = " ".join(
+        [
+            *review.retry_patch["prompt_additions"],
+            *review.retry_patch["negative_additions"],
+            *review.retry_patch["artifact_repair"],
+        ]
+    ).lower()
+
+    assert "repair only the face and skin" in patch_text
+    assert "finger count" not in patch_text
+
+
 def test_doc92_child_model_retry_patch_does_not_depend_on_moody_traditional_style() -> None:
     layer = HumanPhotorealismLayer()
 

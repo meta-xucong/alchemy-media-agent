@@ -265,6 +265,8 @@ _CHINESE_HIGH_KEY_TERMS = {
 }
 
 _ANTI_AI_FACE_ISSUES = {
+    "bad_hands_or_body",
+    "face_artifact",
     "ai_face_render",
     "plastic_skin",
     "over_smoothed_skin",
@@ -708,7 +710,7 @@ class HumanPhotorealismLayer:
                 status="not_applicable",
                 metadata={"doc": "65", **dict(metadata or {})},
             )
-        retry_patch = dict(guidance.retry_patch_templates) if issue_codes else {}
+        retry_patch = self._retry_patch_for_detected_issues(guidance, issue_codes) if issue_codes else {}
         plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
         hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         return AntiAIFaceReviewResult(
@@ -731,6 +733,129 @@ class HumanPhotorealismLayer:
             ),
             metadata={"doc": "65", **dict(metadata or {})},
         )
+
+    def _retry_patch_for_detected_issues(
+        self,
+        guidance: HumanPhotorealismGuidance,
+        issue_codes: list[str],
+    ) -> dict[str, list[str]]:
+        """Return the smallest shared repair set that addresses observed pixels.
+
+        A Human Realism retry must not turn one observed defect into a broad
+        rewrite of age, anatomy, scene, or pose.  The final provider request
+        still receives the frozen ledger; this method supplies only the
+        correction channel selected by the real-pixel issue code.
+        """
+
+        codes = set(_dedupe(issue_codes))
+        age_codes = {
+            "doll_like_child_face",
+            "adultified_child_model",
+            "synthetic_child_skin",
+            "pageant_polish_child_face",
+            "frozen_child_smile",
+            "unreal_child_eyes",
+            "unreal_child_teeth",
+            "child_face_ai_render",
+            "age_identity_drift",
+            "age_inappropriate_rendering",
+        }
+        anatomy_codes = {
+            "bad_hands_or_body",
+            "head_body_proportion_distortion",
+            "oversized_head",
+            "compressed_neck_shoulders",
+        }
+        scene_codes = {
+            "flat_scene_lighting",
+            "airbrushed_background_texture",
+            "synthetic_material_response",
+        }
+        pose_codes = {
+            "frozen_centered_pose",
+            "same_expression_repetition",
+            "same_head_angle_repetition",
+            "same_pose_repetition",
+        }
+        special_codes = age_codes | anatomy_codes | scene_codes | pose_codes
+        face_or_skin_codes = codes - special_codes
+        profile = dict(guidance.metadata.get("universal_rendering_profile") or {})
+
+        prompt_additions: list[str] = []
+        negative_additions: list[str] = []
+        artifact_repair: list[str] = []
+        identity_reinforcement: list[str] = []
+
+        if face_or_skin_codes:
+            prompt_additions.extend(
+                [
+                    "repair only the face and skin toward a real camera photograph with natural human skin texture, subtle pores, natural tonal variation, believable eyes, and relaxed micro-expression",
+                    "keep the current subject, age direction, garment, scene, composition, and lighting intent while removing beauty-filter polish rather than redesigning the person",
+                ]
+            )
+            negative_additions.extend(
+                [
+                    "plastic skin or over-smoothed skin",
+                    "airbrushed beauty-filter face",
+                    "poreless porcelain glow",
+                    "glassy beauty-filter eyes",
+                    "face-slimming or liquified facial geometry",
+                ]
+            )
+            artifact_repair.extend(
+                [
+                    "repair the face away from AI-beauty rendering toward real photographed skin, natural asymmetry, realistic eyes, non-waxy highlights, and unforced mouth tension",
+                    "retain visible eyelid, under-eye, lip, and fine skin detail without making the face tired, harsh, or less attractive",
+                    *_rendering_retry_fragments(profile),
+                ]
+            )
+
+        if codes.intersection(age_codes):
+            prompt_additions.append(
+                "repair only age fidelity toward the requested or referenced age band with age-consistent face, eyes, teeth, body scale, expression, and skin response"
+            )
+            negative_additions.extend(["adultification", "infantilization", "doll-like morphology", "age-inappropriate beauty retouching"])
+            artifact_repair.append(
+                "preserve the current scene and garment while correcting age-inconsistent facial or body rendering without generic advertising-beauty substitution"
+            )
+
+        if codes.intersection(anatomy_codes):
+            prompt_additions.append(
+                "repair only visible anatomy: coherent finger count, joints, nail scale, relaxed grip, limb connection, head-to-body proportion, and neck-shoulder balance"
+            )
+            negative_additions.extend(["extra, fused, missing, or misjointed fingers", "impossible grip or limb connection", "warped head-body proportion"])
+            artifact_repair.append(
+                "repair visible hands and body in their existing pose with physically credible contact, proportions, and joint structure; do not replace the person or scene"
+            )
+
+        if codes.intersection(scene_codes):
+            prompt_additions.append(
+                "repair only subject-environment integration so person, garment, surfaces, and background share light direction, color response, depth, material behavior, and contact shadows"
+            )
+            negative_additions.extend(["cut-out subject", "mismatched environmental light", "airbrushed background texture", "flat synthetic material response"])
+            artifact_repair.append(
+                "preserve the requested mood while repairing the existing physical light environment: local falloff, depth, contact shadow, and photographed texture across the scene"
+            )
+
+        if codes.intersection(pose_codes):
+            prompt_additions.append(
+                "repair only pose and expression toward a natural shutter moment with relaxed gaze, mouth tension, head angle, shoulders, and body orientation"
+            )
+            negative_additions.extend(["frozen centered presentation pose", "template smile", "repeated expression or head angle"])
+            artifact_repair.append(
+                "keep the subject and scene while replacing the stiff presentation pose with a prompt-consistent, physically relaxed photographic moment"
+            )
+
+        if guidance.metadata.get("has_identity_reference"):
+            identity_reinforcement.append(
+                "preserve the reference person's identity-critical facial relationships while repairing only the observed rendering defect"
+            )
+        return {
+            "prompt_additions": _dedupe(prompt_additions),
+            "negative_additions": _dedupe(negative_additions),
+            "artifact_repair": _dedupe(artifact_repair),
+            "identity_reinforcement": _dedupe(identity_reinforcement),
+        }
 
     @classmethod
     def is_human_realism_issue_code(cls, issue_code: str) -> bool:
