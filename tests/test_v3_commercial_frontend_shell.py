@@ -53,6 +53,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3WorkspaceView" class="v3-workspace-view" hidden' in index.text
     assert 'id="v3TemplateChooser"' in index.text
     assert 'id="v3TemplateCreatePanel"' in index.text
+
     assert 'id="v3SelectedTemplateTitle"' in index.text
     assert 'id="v3SelectedBrandMemoryBar"' in index.text
     assert 'id="v3NewProjectGoalInput"' in index.text
@@ -161,6 +162,19 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "v3-link-tab" in h5.text
     assert "V3 creative OS" in h5.text
     assert h5.text.find("v3-link-tab") < h5.text.find("lab-tab")
+
+
+def test_v3_routes_report_non_utf8_json_as_a_client_error() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v3/creative-agent/jobs",
+        content=b'{"user_input":"caf\xe9"}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_v3_json"
 
 
 def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
