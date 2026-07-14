@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from json import JSONDecodeError
 from typing import Any
 
 from pydantic import ValidationError
@@ -369,7 +370,10 @@ def _remote_allowed_for_request(request: BrainRunRequest) -> bool:
 def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
-    text = str(exc or "").lower()
+    chain = _exception_chain(exc)
+    if any(isinstance(item, JSONDecodeError) for item in chain):
+        return "invalid_response"
+    text = " ".join(str(item or "") for item in chain).lower()
     if "content_policy" in text or "content policy" in text:
         return "content_policy"
     if any(token in text for token in ("timed out", "timeout", "readtimeout", "connecttimeout")):
@@ -388,11 +392,27 @@ def _remote_provider_error_class(exc: Exception) -> str:
 def _remote_provider_http_status_code(exc: Exception) -> int | None:
     """Extract only an HTTP status code; never persist the raw provider error."""
 
-    match = re.search(r"(?:status|error)\s+code\s*[:=]?\s*(\d{3})", str(exc or ""), flags=re.IGNORECASE)
-    if not match:
-        return None
-    code = int(match.group(1))
-    return code if 100 <= code <= 599 else None
+    for item in _exception_chain(exc):
+        match = re.search(r"(?:status|error)\s+code\s*[:=]?\s*(\d{3})", str(item or ""), flags=re.IGNORECASE)
+        if not match:
+            continue
+        code = int(match.group(1))
+        if 100 <= code <= 599:
+            return code
+    return None
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return a finite exception chain without persisting its raw details."""
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
 
 
 def _reasoning_depth(metadata: dict[str, Any]) -> str:

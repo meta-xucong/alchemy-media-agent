@@ -109,6 +109,7 @@ class V3LLMBrainProvider:
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 response_format={"type": "json_object"},
+                temperature=0,
                 timeout=self.timeout,
                 max_tokens=self.max_tokens,
             )

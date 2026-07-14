@@ -51,36 +51,13 @@ def _compact_required_remote_creative_schema() -> dict:
     large and can turn a valid remote Brain into a transport timeout.
     """
 
+    # The frozen template plan and shared evidence runtime already own
+    # capability gating.  The remote specialist must contribute precisely its
+    # irreplaceable work: one creative image direction per frozen output.  Do
+    # not make the model restate task-profile or capability bookkeeping; that
+    # made compatible providers produce a large, fragile JSON envelope without
+    # adding creative evidence.
     return {
-        "visual_task_profile": {
-            "subject_entities": [
-                {
-                    "entity_id": "string",
-                    "entity_type": "open string",
-                    "role": "string",
-                    "source_asset_ids": ["string"],
-                    "visible_in_target": "boolean",
-                    "preservation_level": "string",
-                    "confidence": "number 0-1",
-                }
-            ],
-            "requested_deliverable_roles": ["string"],
-            "visual_intent_tags": ["string"],
-            "unknown_requirements": ["string"],
-        },
-        "capability_activation_intent": {
-            "requested_capabilities": [
-                {
-                    "capability_id": "catalog ID only",
-                    "activation_mode": "required|recommended|optional|forbidden",
-                    "reason_codes": ["string"],
-                    "evidence_ids": ["string"],
-                    "confidence": "number 0-1",
-                }
-            ],
-            "rejected_capabilities": ["string"],
-            "unresolved_signals": ["string"],
-        },
         "image_set_plan": {
             "set_goal": "string",
             "image_count": "integer exactly equal to requested_image_count",
@@ -272,8 +249,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ]
         payload["return_schema"] = compact_schema
         payload["remote_response_contract"] = (
-            "Return only this compact schema. Every image_set_plan field and "
-            "prompt_guidance.optimized_direction is required. Do not add hidden "
-            "reasoning, project-history summaries, or UI copy."
+            "Return only this compact schema as strictly valid JSON. Every "
+            "image_set_plan field and prompt_guidance.optimized_direction is "
+            "required. Escape quotation marks inside JSON strings. Do not add "
+            "hidden reasoning, project-history summaries, UI copy, or any "
+            "additional top-level sections."
         )
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)

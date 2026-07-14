@@ -138,6 +138,27 @@ def test_specialized_http_failure_projects_only_safe_status_and_category() -> No
     assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
 
 
+class _MalformedJsonRemoteBrain:
+    provider = "fixture"
+    model = "fixture"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request):
+        parse_error = json.JSONDecodeError("Expecting ',' delimiter", '{"broken": true "next": false}', 16)
+        raise BrainProviderError("remote brain provider failed") from parse_error
+
+
+def test_specialized_malformed_remote_json_projects_a_safe_invalid_response_category() -> None:
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_MalformedJsonRemoteBrain())).plan_job(_request(count=1))
+
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["outcome_class"] == "remote_provider_error"
+    assert outcome["remote_error_class"] == "invalid_response"
+    assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
+
+
 def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy() -> None:
     service = ecommerce_test_service()
     created = service.create_job(_request(count=2, approved_copy="Adjustable warm light"))

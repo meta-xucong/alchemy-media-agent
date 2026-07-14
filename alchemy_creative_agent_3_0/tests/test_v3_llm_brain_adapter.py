@@ -124,18 +124,16 @@ def test_required_remote_photography_contract_uses_compact_schema() -> None:
 
     payload = json.loads(build_remote_payload(request))
 
-    assert set(payload["return_schema"]) == {
-        "visual_task_profile",
-        "capability_activation_intent",
-        "image_set_plan",
-        "prompt_guidance",
-    }
+    assert set(payload["return_schema"]) == {"image_set_plan", "prompt_guidance"}
     assert payload["return_schema"]["image_set_plan"]["image_count"] == "integer exactly equal to requested_image_count"
+    assert "visual_task_profile" not in payload["return_schema"]
+    assert "capability_activation_intent" not in payload["return_schema"]
     assert "project_memory_digest" not in payload["return_schema"]
     assert "prompt_review" not in payload["return_schema"]
     assert "user_visible_summary" not in payload["return_schema"]
     assert "ecommerce_creative_context" not in payload
     assert "compact schema" in payload["remote_response_contract"]
+    assert "strictly valid JSON" in payload["remote_response_contract"]
 
 
 def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) -> None:
@@ -431,6 +429,7 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert isinstance(chat_kwargs, dict)
     assert chat_kwargs["model"] == "deepseek-primary"
     assert chat_kwargs["response_format"] == {"type": "json_object"}
+    assert chat_kwargs["temperature"] == 0
 
 
 def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:
