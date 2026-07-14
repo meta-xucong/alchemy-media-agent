@@ -15,10 +15,11 @@ or Provider request failed.
 2. If the plan is blocked, show the public-safe reason and stop.  Do not switch
    to another template, a web renderer, a provider, or a local workaround.
 3. For every returned output, make exactly one Codex built-in image-generation
-   call using its `imagegen_prompt`, `hard_constraints`, `text_policy`, and
-   `reference_instructions`.  When an instruction requires a conversation
-   attachment, use that exact attachment; never substitute a path or another
-   image.
+   call using its `imagegen_prompt` as the whole-image direction. Preserve
+   `hard_constraints`, `text_policy`, and `reference_instructions` as
+   guardrails, but never paste them as a structured keyword stack or add a
+   local recipe. When an instruction requires a conversation attachment, use
+   that exact attachment; never substitute a path or another image.
 4. If the built-in image tool is unavailable, stop with
    `codex_native_imagegen_tool_unavailable`.  Do not call an external renderer
    and do not try to recover an image file from Codex internals.

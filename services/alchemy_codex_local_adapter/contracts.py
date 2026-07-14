@@ -19,9 +19,10 @@ _ALLOWED_TOP_LEVEL_FIELDS = {
     "requested_image_size",
     "reference_declarations",
 }
-_ALLOWED_REFERENCE_FIELDS = {"channel", "attached_in_current_codex_conversation", "required"}
+_ALLOWED_REFERENCE_FIELDS = {"channel", "attached_in_current_codex_conversation"}
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
+_HARD_REFERENCE_CHANNELS = frozenset({"portrait_identity", "product_truth", "nonhuman_identity"})
 
 
 class CodexNativeImageGenError(RuntimeError):
@@ -72,14 +73,19 @@ class NativeReferenceDeclaration:
 
     channel: str
     attached_in_current_codex_conversation: bool
-    required: bool
+
+    @property
+    def required(self) -> bool:
+        """Hard truth channels are a contract, never a caller-selected flag."""
+
+        return self.channel in _HARD_REFERENCE_CHANNELS
 
     @classmethod
     def from_value(cls, value: Any) -> "NativeReferenceDeclaration":
         if not isinstance(value, dict) or set(value) - _ALLOWED_REFERENCE_FIELDS:
             raise CodexNativeImageGenError(
                 "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declarations may contain only channel, attachment state, and required.",
+                "Reference declarations may contain only channel and attachment state.",
             )
         _reject_sensitive_structured_keys(value)
         channel = str(value.get("channel") or "").strip().lower()
@@ -94,14 +100,7 @@ class NativeReferenceDeclaration:
                 "codex_native_imagegen_reference_declaration_invalid",
                 "Reference declaration attachment state must be boolean.",
             )
-        default_required = channel in {"portrait_identity", "product_truth", "nonhuman_identity"}
-        required = value.get("required", default_required)
-        if not isinstance(required, bool):
-            raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declaration required must be boolean when supplied.",
-            )
-        return cls(channel=channel, attached_in_current_codex_conversation=attached, required=required)
+        return cls(channel=channel, attached_in_current_codex_conversation=attached)
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,9 @@
 # Alchemy Codex Native ImageGen Mode
 
 This isolated Doc118 plugin gives an interactive Codex agent one local stdio
-MCP planning tool: `prepare_native_imagegen_plan`.  It does not create images,
-open a listener, start a background worker, control Codex, or change Web Mode.
+MCP planning tool: `prepare_native_imagegen_plan`. It does not create images,
+open a listener, start a background worker, control Codex, call the configured
+Web Brain or image Provider, or change Web Mode.
 
 The flow is intentionally one-way:
 
@@ -17,14 +18,31 @@ continuation surface.
 
 ## Input boundary
 
-The planning tool accepts only user input, an explicit template ID, requested
-count/size, and declarations about attachments already visible in the current
-Codex conversation.  It never receives a file path, local artifact, project or
-job ID, provider setting, capability envelope, or credential.
+The planning tool currently enables only `general_template`. E-Commerce and
+Photography are deliberately blocked until their independent LLM-first and
+reference contracts can be proved without weakening them.
 
-For every successful output, Codex uses the returned whole-image prompt and
-hard constraints in exactly one built-in image-generation call.  If planning
-is blocked or the built-in tool is unavailable, stop without a fallback.
+It accepts only user input, General, requested count/size, and declarations
+about attachments already visible in the current Codex conversation. It never
+receives a file path, local artifact, project or job ID, provider setting,
+capability envelope, or credential. `portrait_identity`, `product_truth`, and
+`nonhuman_identity` are always hard channels: callers cannot set a flag to
+downgrade them.
+
+For every successful output, Codex uses the returned whole-image prompt in
+exactly one built-in image-generation call. Preserve the returned constraints
+as guardrails, but do not turn them into a keyword list or add a structured
+prompt recipe. If planning is blocked or the built-in tool is unavailable,
+stop without a fallback.
+
+## Local repository setup
+
+The plugin cache intentionally does not contain a second copy of Alchemy V3.
+When the plugin runs from a cached install, set the non-secret environment
+variable `ALCHEMY_CODEX_LOCAL_REPO_ROOT` to the root of this checked-out
+repository, then restart Codex. The launcher validates that path before it
+imports anything. If it cannot find the repository, the MCP stays unavailable;
+it never falls back to a Web route or Platform API.
 
 ## Provenance
 

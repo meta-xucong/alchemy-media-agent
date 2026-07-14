@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 
 from .contracts import (
@@ -15,11 +16,8 @@ from .contracts import (
 from .provenance import native_plan_provenance
 
 
-_TEMPLATE_SCENARIOS = {
-    "general_template": "general_creative",
-    "ecommerce_template": "ecommerce",
-    "photographer_template": "photography",
-}
+_TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
+_DEFERRED_TEMPLATE_IDS = frozenset({"ecommerce_template", "photographer_template"})
 
 
 class PlanningOnlyGenerationRouter:
@@ -27,6 +25,19 @@ class PlanningOnlyGenerationRouter:
 
     def generate(self, *_: Any, **__: Any) -> Any:
         raise RuntimeError("Doc118 planning-only facade must never call a generation provider")
+
+
+class NativePlanningNoRemoteBrainProvider:
+    """Keep Local Mode independent from Web Mode's configured remote Brain."""
+
+    provider = "codex_native_no_remote_brain"
+    model = "not-applicable"
+
+    def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
+        return False
+
+    def run(self, *_: Any, **__: Any) -> Any:
+        raise RuntimeError("Doc118 Local Mode must never call a remote Central Brain")
 
 
 class CodexNativeImageGenPlanner:
@@ -40,9 +51,17 @@ class CodexNativeImageGenPlanner:
         # ScenarioRuntime otherwise supplies GenerationRouter(), whose default
         # constructor includes the production renderer.  Planning never needs
         # it, so provide a fail-closed sentinel instead.
-        return ScenarioRuntime(generation_router=PlanningOnlyGenerationRouter())
+        return ScenarioRuntime(
+            generation_router=PlanningOnlyGenerationRouter(),
+            llm_brain_adapter=V3LLMBrainAdapter(provider=NativePlanningNoRemoteBrainProvider()),
+        )
 
     def prepare_native_imagegen_plan(self, request: NativeImageGenPlanRequest) -> dict[str, Any]:
+        if request.template_id in _DEFERRED_TEMPLATE_IDS:
+            return self._blocked(
+                "codex_native_imagegen_template_not_enabled",
+                "This specialized template is not enabled for Codex Native ImageGen Mode.",
+            )
         scenario_id = _TEMPLATE_SCENARIOS.get(request.template_id)
         if scenario_id is None:
             return self._blocked("codex_native_imagegen_template_invalid", "The selected template is unavailable for Codex Native ImageGen Mode.")
@@ -69,7 +88,6 @@ class CodexNativeImageGenPlanner:
                         {
                             "channel": item.channel,
                             "attached_in_current_codex_conversation": item.attached_in_current_codex_conversation,
-                            "required": item.required,
                         }
                         for item in request.reference_declarations
                     ],

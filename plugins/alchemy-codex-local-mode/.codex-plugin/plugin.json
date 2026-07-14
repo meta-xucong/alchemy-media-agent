@@ -1,6 +1,6 @@
 {
   "name": "alchemy-codex-local-mode",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Explicit Codex-native image planning for conversation-only results",
   "author": {
     "name": "Local developer"

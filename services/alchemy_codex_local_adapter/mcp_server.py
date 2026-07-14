@@ -33,7 +33,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "properties": {
                             "channel": {"type": "string"},
                             "attached_in_current_codex_conversation": {"type": "boolean"},
-                            "required": {"type": "boolean"},
                         },
                     },
                 },
@@ -65,7 +64,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.3.0-doc118-n1"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.3.1-doc118-n1"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -54,6 +55,15 @@ def _call_tool(adapter: CodexNativeImageGenFacade, name: str, arguments: dict[st
     return response["result"]
 
 
+def _load_plugin_launcher() -> Any:
+    path = ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py"
+    spec = importlib.util.spec_from_file_location("doc118_start_mcp", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_disabled_mode_has_no_web_runtime_import_or_provider_behavior() -> None:
     adapter = CodexNativeImageGenFacade(enabled=False)
     with pytest.raises(CodexNativeImageGenError) as failure:
@@ -75,6 +85,10 @@ def test_mcp_exposes_only_native_planning_and_rejects_retired_b2_tool() -> None:
         "reference_declarations",
     }
     assert schema["additionalProperties"] is False
+    assert set(schema["properties"]["reference_declarations"]["items"]["properties"]) == {
+        "channel",
+        "attached_in_current_codex_conversation",
+    }
 
     result = _call_tool(CodexNativeImageGenFacade(enabled=True), "render_platform_candidate", _arguments())
     assert result["isError"] is True
@@ -115,6 +129,25 @@ def test_general_plan_has_exact_frozen_count_and_conversation_only_provenance(mo
     assert "ecommerce_creative_context" not in serialized
     assert "copy_render_plan" not in serialized
     assert "photography" not in serialized.lower()
+
+
+def test_native_planning_never_constructs_or_calls_the_web_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.adapter as brain_adapter
+
+    class _DefaultProviderMustNotBeConstructed:
+        def __init__(self, *_: object, **__: object) -> None:
+            raise AssertionError("Doc118 must not construct Web Mode's default remote Brain provider")
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    monkeypatch.setattr(brain_adapter, "V3LLMBrainProvider", _DefaultProviderMustNotBeConstructed)
+
+    result = CodexNativeImageGenFacade(enabled=True).prepare_native_imagegen_plan(
+        NativeImageGenPlanRequest.from_mcp_arguments(_arguments(requested_image_count=1))
+    )
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert result["provenance"]["fallback_used"] is True
 
 
 def test_native_plan_does_not_create_files_or_a_delivery_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,11 +209,10 @@ def test_invalid_template_and_specialized_template_gates_fail_closed() -> None:
     )
     assert invalid["code"] == "codex_native_imagegen_template_invalid"
     assert ecommerce["status"] == photography["status"] == "blocked"
-    assert ecommerce["code"] == "codex_native_imagegen_remote_creative_brain_required_for_template"
-    assert photography["code"] == "codex_native_imagegen_planning_blocked"
+    assert ecommerce["code"] == photography["code"] == "codex_native_imagegen_template_not_enabled"
 
 
-def test_specialized_role_count_mismatch_blocks_instead_of_downgrading_to_general() -> None:
+def test_general_role_count_mismatch_blocks_instead_of_silently_truncating() -> None:
     prompt = SimpleNamespace(visual_prompt="One whole-image native prompt.", hard_constraints=["Preserve declared truth."], text_policy="provider_native_text_forbidden")
     planned_result = SimpleNamespace(prompt_compilations=[prompt])
     runtime_result = SimpleNamespace(
@@ -197,7 +229,7 @@ def test_specialized_role_count_mismatch_blocks_instead_of_downgrading_to_genera
     planner = CodexNativeImageGenPlanner(runtime_factory=lambda: runtime)
     result = planner.prepare_native_imagegen_plan(
         NativeImageGenPlanRequest.from_mcp_arguments(
-            _arguments(template_id="ecommerce_template", requested_image_count=2)
+            _arguments(template_id="general_template", requested_image_count=2)
         )
     )
     assert result["status"] == "blocked"
@@ -211,6 +243,7 @@ def test_public_contract_rejects_private_paths_jobs_provider_metadata_and_struct
         {"base_url": "https://not-accepted.invalid"},
         {"reference_declarations": [{"channel": "product_truth", "attached_in_current_codex_conversation": True, "path": "C:/private.png"}]},
         {"reference_declarations": [{"channel": "product_truth", "attached_in_current_codex_conversation": True, "api_key": "must-not-leak"}]},
+        {"reference_declarations": [{"channel": "portrait_identity", "attached_in_current_codex_conversation": False, "required": False}]},
     ]
     for extra in forbidden_inputs:
         with pytest.raises(CodexNativeImageGenError) as failure:
@@ -274,14 +307,13 @@ def test_reference_instructions_are_attachment_only_and_never_local_paths() -> N
 
 
 def test_active_native_source_has_no_b2_renderer_or_web_control_path() -> None:
-    active_paths = [
+    executable_paths = [
         *(ROOT / "services" / "alchemy_codex_local_adapter").glob("*.py"),
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".codex-plugin" / "plugin.json",
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".mcp.json",
-        ROOT / "plugins" / "alchemy-codex-local-mode" / "README.md",
-        ROOT / "plugins" / "alchemy-codex-local-mode" / "skills" / "alchemy-local-run" / "SKILL.md",
+        ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py",
     ]
-    active_source = "\n".join(path.read_text(encoding="utf-8") for path in active_paths)
+    active_source = "\n".join(path.read_text(encoding="utf-8") for path in executable_paths)
     for forbidden in (
         "api.openai.com",
         "OPENAI_API_KEY",
@@ -302,3 +334,20 @@ def test_active_native_source_has_no_b2_renderer_or_web_control_path() -> None:
     assert not (ROOT / "services" / "alchemy_codex_local_adapter" / "artifact_import.py").exists()
     assert not (ROOT / "tests" / "test_doc117_codex_local_mode.py").exists()
     assert ".codex-local-mode-storage/" not in (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_plugin_launcher_uses_an_explicit_non_secret_repository_root_and_cache_safe_config(tmp_path: Path) -> None:
+    launcher = _load_plugin_launcher()
+    resolved = launcher.resolve_repository_root(
+        environ={"ALCHEMY_CODEX_LOCAL_REPO_ROOT": str(ROOT)},
+        cwd=tmp_path,
+    )
+    assert resolved == ROOT
+    with pytest.raises(RuntimeError, match="ALCHEMY_CODEX_LOCAL_REPO_ROOT"):
+        launcher.resolve_repository_root(environ={}, cwd=tmp_path)
+
+    config = json.loads((ROOT / "plugins" / "alchemy-codex-local-mode" / ".mcp.json").read_text(encoding="utf-8"))
+    server = config["mcpServers"]["alchemy_local_mode"]
+    assert server["args"] == ["scripts/start_mcp.py", "--enable-native-imagegen"]
+    assert server["cwd"] == "."
+    assert server["env_vars"] == ["ALCHEMY_CODEX_LOCAL_REPO_ROOT"]

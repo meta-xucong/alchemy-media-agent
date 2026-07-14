@@ -3,11 +3,13 @@
     "alchemy_local_mode": {
       "command": "python",
       "args": [
-        "-m",
-        "services.alchemy_codex_local_adapter.mcp_server",
+        "scripts/start_mcp.py",
         "--enable-native-imagegen"
       ],
-      "cwd": "../.."
+      "cwd": ".",
+      "env_vars": [
+        "ALCHEMY_CODEX_LOCAL_REPO_ROOT"
+      ]
     }
   }
 }
