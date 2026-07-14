@@ -7,6 +7,7 @@ from pathlib import Path
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
@@ -14,6 +15,7 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import photography_capability_policy
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -206,6 +208,40 @@ def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) ->
     assert "natural professional variation in expression" in addons
     assert "same exact expression in every image" in negatives
     assert "human identity and natural variation balanced" in result.prompt_review.checks
+
+
+def test_nonhuman_multiframe_project_context_does_not_invent_person_or_product_evidence(monkeypatch) -> None:
+    """A generic Project Mode transport record is not semantic subject truth."""
+
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
+    adapter = V3LLMBrainAdapter()
+    request = adapter.build_request(
+        user_input=(
+            "Create a three-image dawn landscape photography set of a misty lake "
+            "and distant forest; no people or visible text."
+        ),
+        stage="plan",
+        scenario_id="photography",
+        template_id="photographer_template",
+        metadata={"requested_image_count": 3},
+        product_profile={
+            "brand_or_project_name": "P10 landscape acceptance",
+            "project_goal": "A quiet non-human landscape study.",
+            "project_context": {"template_id": "photographer_template"},
+        },
+        template_capability_policy=photography_capability_policy(),
+    )
+
+    result = build_fallback_result(request)
+
+    assert [entity.entity_type for entity in result.visual_task_profile.subject_entities] == ["scene"]
+    requested = {item.capability_id for item in result.capability_activation_intent.requested_capabilities}
+    assert "product_identity" not in requested
+    assert "suite_direction" in requested
+    assert result.audit["human_natural_variation"]["applies"] is False
+    assert result.audit["human_identity_anchor"] == {}
+    joined = " ".join(result.prompt_guidance.visual_direction_addons + result.prompt_guidance.hard_constraints)
+    assert "same recognizable person" not in joined
 
 
 def test_brain_request_excludes_retired_internal_copy_render_plans() -> None:

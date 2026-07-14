@@ -52,6 +52,26 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
     selected_outputs = list(request.selected_output_assets or [])
     uploaded_refs = list(request.uploaded_assets or [])
     reference_assets = list(request.reference_assets or [])
+    # Establish semantic subject evidence before fallback prose.  This is the
+    # same profile persisted in the result and prevents a non-human multi-image
+    # task from inheriting a fictitious person anchor from generic suite logic.
+    task_profile, activation_intent = build_task_profile_and_intent(
+        user_input=request.user_input,
+        job_id=stable_id("capability_job", request.project_id, request.user_input, request.stage),
+        project_id=request.project_id,
+        template_id=request.template_id or "general_template",
+        scenario_id=request.scenario_id or "general_creative",
+        uploaded_assets=list(request.uploaded_assets or []),
+        reference_assets=list(request.reference_assets or []),
+        product_profile=dict(request.product_profile or {}),
+        metadata={
+            **dict(request.metadata or {}),
+            "requested_image_count": request.requested_image_count,
+            "requested_image_size": request.requested_image_size,
+        },
+        template_policy=request.template_capability_policy,
+    )
+    human_subject_evidenced = any(entity.entity_type == "person" for entity in task_profile.subject_entities)
     negative_notes = clean_text_list(
         [
             *project_context.get("rejected_style_tags", []),
@@ -82,11 +102,17 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
     variation_rules = _variation_mode_rules(variation_mode)
     human_anchor = _cluster_human_identity_anchor(visual_cluster)
     human_variation = _cluster_human_variation_plan(visual_cluster)
+    if not human_subject_evidenced:
+        # A legacy/project cluster is not authority to inject human identity
+        # into a landscape, still life, animal, or product-only task.
+        human_anchor = {}
+        human_variation = {}
     if not human_variation:
         human_anchor, human_variation = _fallback_human_variation_contract(
             request=request,
             variation_mode=variation_mode,
             allow_product_language=allow_product_language,
+            human_subject_evidenced=human_subject_evidenced,
         )
     human_variation_applies = bool(human_variation.get("applies"))
     human_prompt_addons = _string_values(human_variation.get("prompt_additions")) if human_variation_applies else []
@@ -270,22 +296,6 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
         human_variation_applies=human_variation_applies,
         warning=warning,
     )
-    task_profile, activation_intent = build_task_profile_and_intent(
-        user_input=request.user_input,
-        job_id=stable_id("capability_job", request.project_id, request.user_input, request.stage),
-        project_id=request.project_id,
-        template_id=request.template_id or "general_template",
-        scenario_id=request.scenario_id or "general_creative",
-        uploaded_assets=list(request.uploaded_assets or []),
-        reference_assets=list(request.reference_assets or []),
-        product_profile=dict(request.product_profile or {}),
-        metadata={
-            **dict(request.metadata or {}),
-            "requested_image_count": request.requested_image_count,
-            "requested_image_size": request.requested_image_size,
-        },
-        template_policy=request.template_capability_policy,
-    )
     checkpoints.insert(
         1 if checkpoints else 0,
         BrainCheckpoint(
@@ -411,8 +421,13 @@ def _fallback_human_variation_contract(
     request: BrainRunRequest,
     variation_mode: str,
     allow_product_language: bool,
+    human_subject_evidenced: bool,
 ) -> tuple[dict, dict]:
-    applies = bool(request.requested_image_count >= 2 and not allow_product_language)
+    applies = bool(
+        request.requested_image_count >= 2
+        and not allow_product_language
+        and human_subject_evidenced
+    )
     if not applies:
         return {}, {"applies": False, "variation_mode": variation_mode, "metadata": {"source": "fallback_no_cluster"}}
     anchor = {

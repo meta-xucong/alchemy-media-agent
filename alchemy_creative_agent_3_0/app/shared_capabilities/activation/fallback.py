@@ -61,6 +61,16 @@ PRODUCT_SIGNALS = ("product", "packshot", "listing", "商品", "产品", "包装
 SCENE_SIGNALS = ("landscape", "interior", "architecture", "cityscape", "风景", "室内", "建筑", "场景", "空间")
 LAYOUT_SIGNALS = ("poster", "banner", "carousel", "layout", "headline", "海报", "横幅", "轮播", "排版", "标题", "文字")
 
+# Product Mode also uses ``product_profile`` as a historical transport field
+# for generic Project context.  Project title/goal/context alone are not
+# product evidence outside an explicit E-Commerce task.
+PRODUCT_FACT_FIELDS = {
+    "product_name", "product_category", "product_type", "category", "sku",
+    "brand", "brand_name", "material", "materials", "color", "colors",
+    "dimensions", "size", "features", "selling_points", "claims",
+    "must_keep_facts", "product_facts", "appearance",
+}
+
 
 def build_task_profile_and_intent(
     *,
@@ -115,8 +125,12 @@ def build_task_profile_and_intent(
     ]
     # A typed non-human identity reference is explicit subject evidence.  It
     # wins over ambiguous photographic vocabulary such as "portrait".
-    person_text = any(signal in text for signal in PERSON_SIGNALS) and not bool(nonhuman_assets)
-    human_surface_text = _has_human_surface_signal(text) and not bool(nonhuman_assets)
+    person_text = _has_non_negated_person_signal(text) and not bool(nonhuman_assets)
+    human_surface_text = (
+        _has_human_surface_signal(text)
+        and not _explicitly_excludes_humans(text)
+        and not bool(nonhuman_assets)
+    )
     visible_human_text = person_text or human_surface_text
     stylized_person = any(signal in text for signal in STYLIZED_PERSON_SIGNALS)
     portrait_assets = [
@@ -128,7 +142,12 @@ def build_task_profile_and_intent(
     ]
     product_assets = [asset_id for role, ids in asset_roles.items() if "product" in role or "商品" in role for asset_id in ids if asset_id]
     scene_assets = [asset_id for role, ids in asset_roles.items() if any(key in role for key in ("scene", "background", "composition")) for asset_id in ids if asset_id]
-    product_text = scenario_id == "ecommerce" or bool(product_profile) or any(signal in text for signal in PRODUCT_SIGNALS)
+    product_text = (
+        scenario_id == "ecommerce"
+        or bool(product_assets)
+        or _has_product_facts(product_profile)
+        or any(signal in text for signal in PRODUCT_SIGNALS)
+    )
     scene_text = any(signal in text for signal in SCENE_SIGNALS)
     layout_text = any(signal in text for signal in LAYOUT_SIGNALS)
 
@@ -253,6 +272,29 @@ def _has_human_surface_signal(text: str) -> bool:
         elif signal in text:
             return True
     return False
+
+
+def _explicitly_excludes_humans(text: str) -> bool:
+    """Negative wording must never become positive person evidence."""
+
+    normalized = " ".join(str(text or "").casefold().split())
+    markers = (
+        "no people", "no person", "no humans", "without people",
+        "without a person", "without human", "no model", "no portrait",
+        "无人", "无人物", "没有人物", "无模特", "无人像",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _has_non_negated_person_signal(text: str) -> bool:
+    return not _explicitly_excludes_humans(text) and any(signal in text for signal in PERSON_SIGNALS)
+
+
+def _has_product_facts(product_profile: dict[str, Any]) -> bool:
+    return isinstance(product_profile, dict) and any(
+        key in PRODUCT_FACT_FIELDS and value not in (None, "", [], {})
+        for key, value in product_profile.items()
+    )
 
 
 def _dedupe_requested(items: list[RequestedCapability]) -> list[RequestedCapability]:

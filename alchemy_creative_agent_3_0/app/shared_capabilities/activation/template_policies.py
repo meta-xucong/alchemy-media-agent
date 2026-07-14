@@ -57,6 +57,9 @@ def ecommerce_capability_policy() -> TemplateCapabilityPolicy:
         deliverable_role_owner="ecommerce_template",
         review_threshold_profile="commercial_strict",
         requires_remote_creative_brain=True,
+        # Multiple outputs do not grant the General Suite Director ownership
+        # of an E-Commerce deliverable contract.
+        forbidden_capabilities=["suite_direction"],
         metadata={"creative_direction_owner": "remote_v3_llm_brain"},
     )
 
@@ -81,6 +84,9 @@ def photography_capability_policy() -> TemplateCapabilityPolicy:
         ],
         deliverable_role_owner="photography_scenario_pack",
         review_threshold_profile="commercial_strict",
+        # Photography role IDs are structural bindings; a General suite
+        # contribution would reintroduce local cover/context/detail recipes.
+        forbidden_capabilities=["suite_direction"],
         # A Photography role is an auditable delivery binding, not a local
         # camera/lighting/pose recipe.  Its natural-language image intention
         # must therefore come from the remote Central Brain just as it does

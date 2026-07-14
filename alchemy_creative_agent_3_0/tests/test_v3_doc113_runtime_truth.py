@@ -284,3 +284,4 @@ def test_ecommerce_policy_never_activates_general_suite_direction() -> None:
     ]
 
     assert "suite_direction" not in bindings
+    assert "suite_direction" in policy.forbidden_capabilities

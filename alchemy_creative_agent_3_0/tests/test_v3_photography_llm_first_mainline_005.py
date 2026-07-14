@@ -68,6 +68,7 @@ def test_photography_policy_requires_remote_brain_and_names_it_as_creative_owner
 
     assert policy.requires_remote_creative_brain is True
     assert policy.metadata["creative_direction_owner"] == "remote_v3_llm_brain"
+    assert "suite_direction" in policy.forbidden_capabilities
 
 
 def test_photography_blocks_when_remote_brain_is_unavailable_or_role_count_is_invalid(monkeypatch) -> None:
@@ -106,6 +107,7 @@ def test_photography_brain_receives_only_noncreative_contract_and_owns_each_dire
     result = runtime.plan_job(_request())
 
     assert result.status == ScenarioRuntimeStatus.PLANNED
+    assert "suite_direction" not in result.metadata["capability_activation_plan"]["dependency_order"]
     brain_request = provider.requests[0]
     context = brain_request.metadata["photography_creative_context"]
     assert context["role_ids"] == ["session_hero", "environmental_context", "detail_or_moment"]
