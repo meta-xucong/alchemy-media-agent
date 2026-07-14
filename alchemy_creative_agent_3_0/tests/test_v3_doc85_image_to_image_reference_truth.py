@@ -250,6 +250,8 @@ def test_doc85_provider_asset_plan_dedupes_duplicate_product_source_inputs(tmp_p
     assert input_plan["original_reference_asset_ids"] == ["uploaded_product_truth"]
     assert input_plan["reference_image_count"] == 2
     assert input_plan["reference_truth_package"]["provider_reference_image_count"] == 2
+    assert input_plan["reference_truth_package"]["source_order"] == ["uploaded_product_truth"]
+    assert input_plan["reference_truth_package"]["truth_source_ids"] == ["uploaded_product_truth"]
 
 
 def test_doc104_known_source_artifact_uses_truth_derivative_without_full_frame(tmp_path) -> None:

@@ -565,6 +565,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         reference_truth_package = provider_input_plan.get("reference_truth_package") if isinstance(provider_input_plan.get("reference_truth_package"), dict) else {}
         provider_reference_assets = self._provider_reference_asset_summary(asset_plan)
         provider_reference_resolution_audit = asset_plan.get("provider_reference_resolution_audit", {})
+        reference_asset_ids = _dedupe([str(asset.get("asset_id") or "") for asset in reference_assets])
+        reference_asset_count = len(reference_asset_ids)
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
@@ -638,7 +640,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "provider_version": self.provider_version,
                     "prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                     "condition_plan_id": request.condition_plan.condition_plan_id,
-                    "reference_asset_count": len(reference_assets),
+                    "reference_asset_count": reference_asset_count,
                     "provider_reference_image_count": provider_reference_image_count,
                     "provider_input_plan": provider_input_plan,
                     "reference_truth_package": reference_truth_package,
@@ -658,7 +660,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "llm_brain_consistency_strategy": request.prompt_compilation.provider_notes.get("llm_brain_consistency_strategy"),
                     "shared_capabilities": shared_capabilities,
                     "visual_capability_cluster": visual_cluster,
-                    "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                    "reference_asset_ids": reference_asset_ids,
                     "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                     "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
@@ -716,7 +718,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "format": record.output_format,
                         "width": record.width,
                         "height": record.height,
-                        "reference_asset_count": len(reference_assets),
+                        "reference_asset_count": reference_asset_count,
                         "provider_reference_image_count": provider_reference_image_count,
                         "provider_input_plan": provider_input_plan,
                         "reference_truth_package": reference_truth_package,
@@ -736,7 +738,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "llm_brain_consistency_strategy": request.prompt_compilation.provider_notes.get("llm_brain_consistency_strategy"),
                         "shared_capabilities": shared_capabilities,
                         "visual_capability_cluster": visual_cluster,
-                        "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                        "reference_asset_ids": reference_asset_ids,
                         "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                         "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                         "provider_failure_retry": provider_failure_retry,
@@ -781,13 +783,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "runtime_mode": "production_image_generation",
                 "actual_provider": str(getattr(result, "provider", provider_name)),
                 "actual_model": str(getattr(result, "model", "") or ""),
-                "reference_asset_count": len(reference_assets),
+                "reference_asset_count": reference_asset_count,
                 "provider_reference_image_count": provider_reference_image_count,
                 "provider_input_plan": provider_input_plan,
                 "reference_truth_package": reference_truth_package,
                 "provider_reference_assets": provider_reference_assets,
                 "provider_reference_resolution_audit": provider_reference_resolution_audit,
-                "reference_asset_ids": [asset.get("asset_id") for asset in reference_assets],
+                "reference_asset_ids": reference_asset_ids,
                 "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                 "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                 "final_provider_prompt_chars": len(final_provider_prompt),
@@ -1994,8 +1996,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return {
             "version": "doc85_reference_truth_v1",
             "active": bool(sources),
-            "source_order": source_order,
-            "truth_source_ids": truth_source_ids,
+            "source_order": _dedupe(source_order),
+            "truth_source_ids": _dedupe(truth_source_ids),
             "truth_derivative_ids": [],
             "sources": sources,
             "priority_rules": [
