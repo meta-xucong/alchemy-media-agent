@@ -334,6 +334,39 @@ _ANTI_AI_FACE_ISSUES = {
     "unflattering_skin_color_cast",
 }
 
+_HUMAN_REALISM_AGE_ISSUES = {
+    "doll_like_child_face",
+    "adultified_child_model",
+    "synthetic_child_skin",
+    "pageant_polish_child_face",
+    "frozen_child_smile",
+    "unreal_child_eyes",
+    "unreal_child_teeth",
+    "child_face_ai_render",
+    "age_identity_drift",
+    "age_inappropriate_rendering",
+}
+
+_HUMAN_REALISM_ANATOMY_ISSUES = {
+    "bad_hands_or_body",
+    "head_body_proportion_distortion",
+    "oversized_head",
+    "compressed_neck_shoulders",
+}
+
+_HUMAN_REALISM_SCENE_ISSUES = {
+    "flat_scene_lighting",
+    "airbrushed_background_texture",
+    "synthetic_material_response",
+}
+
+_HUMAN_REALISM_POSE_ISSUES = {
+    "frozen_centered_pose",
+    "same_expression_repetition",
+    "same_head_angle_repetition",
+    "same_pose_repetition",
+}
+
 
 class HumanPhotorealismLayer:
     """Build reusable prompt/review guidance for photoreal human outputs."""
@@ -565,7 +598,7 @@ class HumanPhotorealismLayer:
             ],
             "identity_reinforcement": _dedupe([*preserve, *_string_list(casebook_retry.get("identity_reinforcement"))]),
         }
-        return HumanPhotorealismGuidance(
+        guidance = HumanPhotorealismGuidance(
             guidance_id=guidance_id,
             project_id=project_id,
             job_id=job_id,
@@ -604,6 +637,7 @@ class HumanPhotorealismLayer:
                 "human_east_asian_fair_complexion_guard_library": VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID,
             },
         )
+        return self._with_issue_scoped_retry_templates(guidance)
 
     def _hand_or_skin_guidance(
         self,
@@ -657,7 +691,7 @@ class HumanPhotorealismLayer:
             ],
             "identity_reinforcement": [],
         }
-        return HumanPhotorealismGuidance(
+        guidance = HumanPhotorealismGuidance(
             guidance_id=guidance_id,
             project_id=project_id,
             job_id=job_id,
@@ -689,6 +723,40 @@ class HumanPhotorealismLayer:
                 "doc70_human_real_camera_tuning": True,
             },
         )
+        return self._with_issue_scoped_retry_templates(guidance)
+
+    def _with_issue_scoped_retry_templates(
+        self,
+        guidance: HumanPhotorealismGuidance,
+    ) -> HumanPhotorealismGuidance:
+        """Freeze a small, issue-scoped retry map with the active guidance.
+
+        The immutable execution envelope must carry the repair material it
+        authorizes.  Grouping the issue codes keeps that contract compact while
+        ensuring a real-pixel skin finding cannot activate unrelated anatomy,
+        age, scene, or pose instructions.
+        """
+
+        grouped_issue_codes = {
+            "face_skin": _ANTI_AI_FACE_ISSUES
+            - _HUMAN_REALISM_AGE_ISSUES
+            - _HUMAN_REALISM_ANATOMY_ISSUES
+            - _HUMAN_REALISM_SCENE_ISSUES
+            - _HUMAN_REALISM_POSE_ISSUES,
+            "age": _HUMAN_REALISM_AGE_ISSUES,
+            "anatomy": _HUMAN_REALISM_ANATOMY_ISSUES,
+            "scene_integration": _HUMAN_REALISM_SCENE_ISSUES,
+            "pose_expression": _HUMAN_REALISM_POSE_ISSUES,
+        }
+        templates_by_issue = {
+            group: {
+                "issue_codes": sorted(issue_codes),
+                "templates": self._retry_patch_for_detected_issues(guidance, sorted(issue_codes)),
+            }
+            for group, issue_codes in grouped_issue_codes.items()
+            if issue_codes
+        }
+        return guidance.model_copy(update={"retry_patch_templates_by_issue": templates_by_issue})
 
     def review(
         self,
@@ -748,35 +816,10 @@ class HumanPhotorealismLayer:
         """
 
         codes = set(_dedupe(issue_codes))
-        age_codes = {
-            "doll_like_child_face",
-            "adultified_child_model",
-            "synthetic_child_skin",
-            "pageant_polish_child_face",
-            "frozen_child_smile",
-            "unreal_child_eyes",
-            "unreal_child_teeth",
-            "child_face_ai_render",
-            "age_identity_drift",
-            "age_inappropriate_rendering",
-        }
-        anatomy_codes = {
-            "bad_hands_or_body",
-            "head_body_proportion_distortion",
-            "oversized_head",
-            "compressed_neck_shoulders",
-        }
-        scene_codes = {
-            "flat_scene_lighting",
-            "airbrushed_background_texture",
-            "synthetic_material_response",
-        }
-        pose_codes = {
-            "frozen_centered_pose",
-            "same_expression_repetition",
-            "same_head_angle_repetition",
-            "same_pose_repetition",
-        }
+        age_codes = _HUMAN_REALISM_AGE_ISSUES
+        anatomy_codes = _HUMAN_REALISM_ANATOMY_ISSUES
+        scene_codes = _HUMAN_REALISM_SCENE_ISSUES
+        pose_codes = _HUMAN_REALISM_POSE_ISSUES
         special_codes = age_codes | anatomy_codes | scene_codes | pose_codes
         face_or_skin_codes = codes - special_codes
         profile = dict(guidance.metadata.get("universal_rendering_profile") or {})
@@ -785,30 +828,51 @@ class HumanPhotorealismLayer:
         negative_additions: list[str] = []
         artifact_repair: list[str] = []
         identity_reinforcement: list[str] = []
+        plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
+        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
 
         if face_or_skin_codes:
-            prompt_additions.extend(
-                [
-                    "repair only the face and skin toward a real camera photograph with natural human skin texture, subtle pores, natural tonal variation, believable eyes, and relaxed micro-expression",
-                    "keep the current subject, age direction, garment, scene, composition, and lighting intent while removing beauty-filter polish rather than redesigning the person",
-                ]
-            )
-            negative_additions.extend(
-                [
-                    "plastic skin or over-smoothed skin",
-                    "airbrushed beauty-filter face",
-                    "poreless porcelain glow",
-                    "glassy beauty-filter eyes",
-                    "face-slimming or liquified facial geometry",
-                ]
-            )
-            artifact_repair.extend(
-                [
-                    "repair the face away from AI-beauty rendering toward real photographed skin, natural asymmetry, realistic eyes, non-waxy highlights, and unforced mouth tension",
-                    "retain visible eyelid, under-eye, lip, and fine skin detail without making the face tired, harsh, or less attractive",
-                    *_rendering_retry_fragments(profile),
-                ]
-            )
+            if hand_detail:
+                prompt_additions.extend(
+                    [
+                        "repair only the visible hand or forearm skin toward a real camera detail with subtle pores, natural tonal variation, believable knuckle creases, and non-plastic highlights",
+                        "keep the current hand-only crop, object, grip, scene, composition, and lighting intent without introducing a face",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "plastic or over-smoothed hand skin",
+                        "waxy hand highlights",
+                        "mannequin hand surface",
+                        "unrequested face in a hand-only crop",
+                    ]
+                )
+                artifact_repair.append(
+                    "repair the visible hand skin toward natural photographed texture and light response while preserving the existing crop, object contact, and requested face-out-of-frame framing"
+                )
+            else:
+                prompt_additions.extend(
+                    [
+                        "repair only the face and skin toward a real camera photograph with natural human skin texture, subtle pores, natural tonal variation, believable eyes, and relaxed micro-expression",
+                        "keep the current subject, age direction, garment, scene, composition, and lighting intent while removing beauty-filter polish rather than redesigning the person",
+                    ]
+                )
+                negative_additions.extend(
+                    [
+                        "plastic skin or over-smoothed skin",
+                        "airbrushed beauty-filter face",
+                        "poreless porcelain glow",
+                        "glassy beauty-filter eyes",
+                        "face-slimming or liquified facial geometry",
+                    ]
+                )
+                artifact_repair.extend(
+                    [
+                        "repair the face away from AI-beauty rendering toward real photographed skin, natural asymmetry, realistic eyes, non-waxy highlights, and unforced mouth tension",
+                        "retain visible eyelid, under-eye, lip, and fine skin detail without making the face tired, harsh, or less attractive",
+                        *_rendering_retry_fragments(profile),
+                    ]
+                )
 
         if codes.intersection(age_codes):
             prompt_additions.append(

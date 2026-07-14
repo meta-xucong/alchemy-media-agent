@@ -2774,6 +2774,16 @@ class V3ProductApiService:
                 if capability_id != owner and code not in contract_codes:
                     if not (owner is None and code in VISUAL_AUTO_RETRY_RETRYABLE_ISSUES and capability_id == "universal_visual_quality"):
                         continue
+                scoped_templates = self._frozen_issue_scoped_retry_templates(contract, code)
+                if scoped_templates is not None:
+                    # New enforced capability envelopes freeze the permitted
+                    # repair channel by observed issue group.  Do not fall
+                    # through to a generic capability-wide template: that is
+                    # how one plastic-skin finding used to rewrite hands, age,
+                    # pose, and scene in the same retry.
+                    if scoped_templates:
+                        patches.append(scoped_templates)
+                    continue
                 templates = contract.get("templates")
                 if isinstance(templates, dict):
                     patches.append(dict(templates))
@@ -2781,6 +2791,32 @@ class V3ProductApiService:
         if template_evidence_patch:
             patches.append(template_evidence_patch)
         return self._merge_visual_retry_patches(patches)
+
+    @staticmethod
+    def _frozen_issue_scoped_retry_templates(
+        contract: dict[str, Any],
+        issue_code: str,
+    ) -> dict[str, Any] | None:
+        """Return a frozen scoped retry map, or ``None`` for legacy plans.
+
+        The explicit ``None`` distinction preserves old read-only Job history:
+        only envelopes created before the scoped-map contract may use the
+        historical broad template.  New envelopes with no matching group are
+        intentionally fail-closed rather than borrowing another issue's text.
+        """
+
+        grouped = contract.get("templates_by_issue")
+        if not isinstance(grouped, dict):
+            return None
+        for group in grouped.values():
+            if not isinstance(group, dict):
+                continue
+            issue_codes = {str(value).strip() for value in group.get("issue_codes", []) if str(value).strip()}
+            if str(issue_code).strip() not in issue_codes:
+                continue
+            templates = group.get("templates")
+            return dict(templates) if isinstance(templates, dict) else {}
+        return {}
 
     def _frozen_template_evidence_retry_patch(
         self,

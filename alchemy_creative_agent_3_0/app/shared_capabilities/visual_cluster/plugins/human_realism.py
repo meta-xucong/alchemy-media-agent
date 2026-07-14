@@ -30,6 +30,12 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             prompt=string_list(guidance.get("positive_prompt_fragments")),
             negative=string_list(guidance.get("negative_prompt_fragments")),
             review={"issue_codes": issues, "score_dimensions": ["human_realism", "anatomy"]},
-            retry={"templates": as_dict(guidance.get("retry_patch_templates"))},
+            retry={
+                "templates": as_dict(guidance.get("retry_patch_templates")),
+                # The broad template remains only for frozen historical plans.
+                # New enforced envelopes select one of these frozen, issue-scoped
+                # maps so a skin finding cannot rewrite anatomy, age, or scene.
+                "templates_by_issue": as_dict(guidance.get("retry_patch_templates_by_issue")),
+            },
             stages=["generation_prompt", "negative_prompt", "post_generation_review", "retry_patch"],
         )

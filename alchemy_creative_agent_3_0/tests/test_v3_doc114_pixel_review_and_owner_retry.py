@@ -207,3 +207,69 @@ def test_generic_human_realism_issues_route_back_to_their_active_owner(monkeypat
     assert codes == ["flat_scene_lighting", "frozen_centered_pose"]
     assert patch["prompt_additions"]
     assert "ignored_out_of_scope_issue_codes" not in result.metadata.get("capability_activation_audit", {})
+
+
+def test_enforced_human_realism_retry_uses_frozen_issue_scoped_templates(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create a natural real-camera portrait of a person in a garden under soft daylight.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1},
+        }
+    ).planning_result
+
+    codes, patch, _ = V3ProductApiService()._activation_filtered_retry_signal(
+        result,
+        ["ai_face_render", "plastic_skin"],
+        {},
+        "doc114_scoped_human_retry",
+    )
+    patch_text = " ".join(
+        [
+            *patch["prompt_additions"],
+            *patch["negative_additions"],
+            *patch["artifact_repair"],
+        ]
+    ).lower()
+    ledger_contracts = result.metadata["resolved_constraint_ledger"]["retry_contracts"]
+    human_contract = next(item for item in ledger_contracts if item["capability_id"] == "human_realism")
+
+    assert codes == ["ai_face_render", "plastic_skin"]
+    assert "templates_by_issue" in human_contract
+    assert "repair only the face and skin" in patch_text
+    assert "finger count" not in patch_text
+    assert "adultification" not in patch_text
+    assert "cut-out subject" not in patch_text
+
+
+def test_issue_scoped_retry_templates_keep_legacy_read_compatibility() -> None:
+    service = V3ProductApiService()
+
+    assert service._frozen_issue_scoped_retry_templates(
+        {"templates": {"prompt_additions": ["legacy broad repair"]}},
+        "plastic_skin",
+    ) is None
+    assert service._frozen_issue_scoped_retry_templates(
+        {
+            "templates_by_issue": {
+                "face_skin": {
+                    "issue_codes": ["plastic_skin"],
+                    "templates": {"prompt_additions": ["face-only repair"]},
+                }
+            }
+        },
+        "plastic_skin",
+    ) == {"prompt_additions": ["face-only repair"]}
+    assert service._frozen_issue_scoped_retry_templates(
+        {
+            "templates_by_issue": {
+                "face_skin": {
+                    "issue_codes": ["plastic_skin"],
+                    "templates": {"prompt_additions": ["face-only repair"]},
+                }
+            }
+        },
+        "bad_hands_or_body",
+    ) == {}

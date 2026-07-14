@@ -357,6 +357,7 @@ class HumanPhotorealismGuidance(V3BaseModel):
     reference_do_not_inherit_rules: list[str] = Field(default_factory=list)
     review_targets: list[str] = Field(default_factory=list)
     retry_patch_templates: dict[str, list[str]] = Field(default_factory=dict)
+    retry_patch_templates_by_issue: dict[str, dict[str, Any]] = Field(default_factory=dict)
     user_visible_summary: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
