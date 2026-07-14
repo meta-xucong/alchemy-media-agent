@@ -248,6 +248,60 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert records[0].metadata["style_notes"] == ["premium", "clean"]
 
 
+def test_production_provider_empty_result_is_auditable_single_request_failure(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = True
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        return ImageGenerationResult(
+            provider="openai_gpt_image",
+            model="test-image-model",
+            outputs=[],
+            raw_response_summary={
+                "output_count": 0,
+                "requests": 1,
+                "gateway_managed_failover": True,
+                "sdk_max_retries": 0,
+                "client_timeout_seconds": 660.0,
+                "private_raw_value": "must_not_persist",
+            },
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(_generation_request())
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
+
+    assert calls == ["openai_gpt_image"]
+    assert exc_info.value.provider == "openai_gpt_image"
+    summary = exc_info.value.provider_failure_retry
+    assert summary["fresh_upstream_requests"] == 1
+    assert summary["executed_count"] == 0
+    assert summary["final_status"] == "failed"
+    assert summary["final_classification"] == "empty_provider_output"
+    assert summary["attempts"][-1]["classification"] == "empty_provider_output"
+    assert summary["provider_response_summary"] == {
+        "output_count": 0,
+        "requests": 1,
+        "gateway_managed_failover": True,
+        "sdk_max_retries": 0,
+        "client_timeout_seconds": 660.0,
+    }
+
+
 def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
@@ -783,11 +837,38 @@ def test_v3_output_store_observes_a_write_from_another_store_instance(tmp_path) 
 
 def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkeypatch) -> None:
     from app.config import settings
+    from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter
+    from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+    from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 
     old_key = settings.openai_api_key
     old_provider = settings.default_image_provider
     settings.openai_api_key = "test-key"
     settings.default_image_provider = "openai_gpt_image"
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+
+    class CompleteRemoteBrain:
+        provider = "remote-fixture"
+        model = "remote-fixture-v1"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            return {
+                "image_set_plan": {
+                    "set_goal": "one clean summer portrait social cover",
+                    "image_count": request.requested_image_count,
+                    "shot_plan": [
+                        "one clean summer portrait social cover with natural light"
+                        for _ in range(request.requested_image_count)
+                    ],
+                },
+                "prompt_guidance": {
+                    "optimized_direction": "clean summer portrait with natural light",
+                },
+            }
 
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
         assert provider_name == "openai_gpt_image"
@@ -801,7 +882,13 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
 
     monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
     store = V3GeneratedOutputStore(tmp_path / "product_api_outputs")
-    service = V3ProductApiService(output_store=store)
+    service = V3ProductApiService(
+        output_store=store,
+        scenario_runtime=ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(provider=CompleteRemoteBrain()),
+            generation_router=GenerationRouter(production_provider=ProductionImageGenerationProvider(output_store=store)),
+        ),
+    )
     try:
         created = service.create_job(
             {
@@ -830,11 +917,38 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
 
 def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_mock(tmp_path, monkeypatch) -> None:
     from app.config import settings
+    from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter
+    from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+    from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 
     old_key = settings.openai_api_key
     old_provider = settings.default_image_provider
     settings.openai_api_key = "test-key"
     settings.default_image_provider = "openai_gpt_image"
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+
+    class CompleteRemoteBrain:
+        provider = "remote-fixture"
+        model = "remote-fixture-v1"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            return {
+                "image_set_plan": {
+                    "set_goal": "one clean summer portrait social cover",
+                    "image_count": request.requested_image_count,
+                    "shot_plan": [
+                        "one clean summer portrait social cover with natural light"
+                        for _ in range(request.requested_image_count)
+                    ],
+                },
+                "prompt_guidance": {
+                    "optimized_direction": "clean summer portrait with natural light",
+                },
+            }
 
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
         assert provider_name == "openai_gpt_image"
@@ -848,7 +962,13 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
 
     monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
     store = V3GeneratedOutputStore(tmp_path / "product_api_outputs")
-    service = V3ProductApiService(output_store=store)
+    service = V3ProductApiService(
+        output_store=store,
+        scenario_runtime=ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(provider=CompleteRemoteBrain()),
+            generation_router=GenerationRouter(production_provider=ProductionImageGenerationProvider(output_store=store)),
+        ),
+    )
     try:
         created = service.create_job(
             {

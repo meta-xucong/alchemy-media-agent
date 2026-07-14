@@ -605,7 +605,70 @@ class ProductionImageGenerationProvider(GenerationProvider):
         requested_group_count = self._group_count_for_request(request)
         retry_attempt = self._retry_attempt(request)
         if not outputs:
-            raise ValueError("V3 production provider returned no image outputs.")
+            # A transport can complete without raising while returning an
+            # empty OpenAI-compatible ``data`` array.  That is still one
+            # failed upstream request, not a successful generation and not a
+            # reason for V3 to replay a gateway-managed call. Preserve a safe
+            # response summary so the job record distinguishes this from a
+            # local lifecycle error or a visual-review rejection.
+            from app.providers.base import ProviderRuntimeError
+
+            raw_summary = getattr(result, "raw_response_summary", {})
+            safe_summary = {
+                str(key): value
+                for key, value in dict(raw_summary or {}).items()
+                if str(key)
+                in {
+                    "output_count",
+                    "requests",
+                    "gateway_managed_failover",
+                    "sdk_max_retries",
+                    "client_timeout_seconds",
+                }
+                and isinstance(value, (str, int, float, bool, type(None)))
+            }
+            failed_attempts = [dict(item) for item in provider_failure_retry.get("attempts", []) if isinstance(item, dict)]
+            if failed_attempts:
+                failed_attempts[-1] = {
+                    **failed_attempts[-1],
+                    "status": "failed",
+                    "classification": "empty_provider_output",
+                    "error_type": "ProviderRuntimeError",
+                    "message": "OpenAI-compatible image provider returned no image outputs.",
+                    "retryable": True,
+                }
+            else:
+                failed_attempts = [
+                    {
+                        "attempt": 1,
+                        "status": "failed",
+                        "classification": "empty_provider_output",
+                        "error_type": "ProviderRuntimeError",
+                        "message": "OpenAI-compatible image provider returned no image outputs.",
+                        "retryable": True,
+                    }
+                ]
+            provider_failure_retry = {
+                **provider_failure_retry,
+                "executed_count": 0,
+                "fresh_upstream_requests": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
+                "final_status": "failed",
+                "final_classification": "empty_provider_output",
+                "attempts": failed_attempts,
+                "provider_response_summary": safe_summary,
+            }
+            self._last_provider_failure_retry_summary = dict(provider_failure_retry)
+            error = ProviderRuntimeError(
+                "OpenAI-compatible image provider returned no image outputs.",
+                provider=str(getattr(result, "provider", provider_name) or provider_name),
+                detail={
+                    "provider_response_summary": safe_summary,
+                    "requested_output_count": requested_group_count,
+                    "runtime_transport": provider_failure_retry.get("execution_audit", {}),
+                },
+            )
+            setattr(error, "provider_failure_retry", dict(provider_failure_retry))
+            raise error
         for index, output in enumerate(outputs):
             encoded = output.get("b64_json")
             if not encoded:
