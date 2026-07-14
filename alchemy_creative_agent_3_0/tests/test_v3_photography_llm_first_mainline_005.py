@@ -158,3 +158,49 @@ def test_metadata_only_photography_review_withholds_terminal_delivery(monkeypatc
     assert summary["noncertifying_role_keys"] == ["hero_photograph"]
     assert summary["final_delivery_withheld"] is True
     assert "real-pixel review" in " ".join(generated.warnings).lower()
+
+    certification = generated.metadata["review_certification"]
+    assert certification == {
+        "schema_version": "v3_review_certification_v1",
+        "scenario_id": "photography",
+        "state": "blocked",
+        "automatic_delivery_certified": False,
+        "manual_confirmation_required": False,
+        "final_delivery_withheld": True,
+        "roles": [
+            {
+                "role_key": "hero_photograph",
+                "state": "blocked",
+                "review_mode": "metadata_only",
+                "review_status": "manual_review",
+                "verification_state": "unverified",
+            }
+        ],
+    }
+    assert "candidate_id" not in json.dumps(certification)
+
+
+def test_legacy_photography_summary_can_only_be_projected_to_withhold_not_recertified(monkeypatch) -> None:
+    """Pre-Doc116 records retain review truth without gaining certification."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    service = photography_test_service()
+    create_request = _request(mode_id="single_hero")
+    create_request["metadata"] = {"template_id": "photographer_template"}
+    created = service.create_job(create_request)
+    service.generate_job(created.job_id, {"metadata": {"vision_inspection_mode": "metadata_only"}})
+
+    record = service.get_job_record(created.job_id)
+    assert record is not None
+    legacy_summary = dict(record.request.metadata["specialized_execution_summary"])
+    legacy_summary.pop("review_certification", None)
+    record.request.metadata["specialized_execution_summary"] = legacy_summary
+    record.request.metadata.pop("review_certification", None)
+    service.job_store.save(record)
+
+    restored = service.get_job(created.job_id)
+    certification = restored.metadata["review_certification"]
+    assert certification["state"] == "blocked"
+    assert certification["automatic_delivery_certified"] is False
+    assert certification["final_delivery_withheld"] is True
+    assert "candidate_id" not in json.dumps(certification)

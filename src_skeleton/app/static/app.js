@@ -2976,9 +2976,48 @@ function v3CurrentJobImageItems(job = v3State.currentJob) {
   return v3DeliveryDisplayItems(visible);
 }
 
+function v3ReviewCertification(job = v3State.currentJob) {
+  const certification = job?.metadata?.review_certification;
+  if (!certification || typeof certification !== "object") return null;
+  return certification.scenario_id === "photography" ? certification : null;
+}
+
+function v3JobDeliveryWithheld(job = v3State.currentJob) {
+  const certification = v3ReviewCertification(job);
+  if (certification?.final_delivery_withheld) return true;
+  return Boolean(job?.metadata?.specialized_execution_summary?.final_delivery_withheld);
+}
+
+function v3ReviewCertificationModes(certification) {
+  const roles = Array.isArray(certification?.roles) ? certification.roles : [];
+  const modes = roles
+    .map((role) => String(role?.review_mode || "").trim())
+    .filter(Boolean);
+  return [...new Set(modes)].join(" / ") || "unknown";
+}
+
+function v3ReviewCertificationLabel(certification) {
+  const state = String(certification?.state || "blocked");
+  if (state === "certified") return "真实像素审查已认证";
+  if (state === "manual_confirmation_required") return "需要人工确认";
+  return "真实像素审查未自动认证";
+}
+
+function v3ReviewCertificationNotice(certification) {
+  const label = v3ReviewCertificationLabel(certification);
+  const modes = v3ReviewCertificationModes(certification);
+  if (String(certification?.state || "") === "manual_confirmation_required") {
+    return `${label}（${modes}）。本次不计入自动验收通过，也不会作为最终交付。`;
+  }
+  if (String(certification?.state || "") === "certified") {
+    return `${label}（${modes}）。该结果可作为摄影任务的最终交付。`;
+  }
+  return `${label}（${modes}）。像素仅保留在过程历史中，未作为最终交付。`;
+}
+
 function v3JobDeliverySettled(job) {
   const status = String(job?.status || "");
-  return status === "generated" || status === "selected";
+  return (status === "generated" || status === "selected") && !v3JobDeliveryWithheld(job);
 }
 
 function v3CurrentJobRealImageItems(job = v3State.currentJob) {
@@ -4366,12 +4405,17 @@ function renderV3ProjectTimeline() {
   items.slice(-5).reverse().forEach((item) => {
     const row = document.createElement("div");
     row.className = "v3-project-timeline-row";
+    const certification = item?.metadata?.review_certification;
+    const certificationNotice = certification && typeof certification === "object"
+      ? `<p class="v3-result-scene">${escapeHtml(v3ReviewCertificationNotice(certification))}</p>`
+      : "";
     row.innerHTML = `
       <div class="v3-history-meta">
         <span>${escapeHtml(item.title || "项目动作")}</span>
         <span>${escapeHtml(formatDate(item.created_at))}</span>
       </div>
       <p>${escapeHtml(item.summary || "V3 已更新项目进度。")}</p>
+      ${certificationNotice}
     `;
     els.v3ProjectTimeline.appendChild(row);
   });
@@ -6071,13 +6115,39 @@ function renderV3ResultBoard(job) {
     els.v3ResultBoard.textContent = copy.emptyResult;
     return;
   }
+  const reviewCertification = v3ReviewCertification(job);
   if (!v3JobDeliverySettled(job)) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
+    if (v3JobDeliveryWithheld(job) && reviewCertification) {
+      const notice = document.createElement("article");
+      notice.className = "v3-result-card";
+      notice.innerHTML = `
+        <div class="v3-card-head">
+          <strong>${escapeHtml(v3ReviewCertificationLabel(reviewCertification))}</strong>
+          <span class="mini-pill">未交付</span>
+        </div>
+        <p>${escapeHtml(v3ReviewCertificationNotice(reviewCertification))}</p>
+      `;
+      els.v3ResultBoard.appendChild(notice);
+      return;
+    }
     els.v3ResultBoard.textContent = job.status === "finalizing"
       ? "图片正在完成质量检查和最终交付，请稍候。"
       : "图片正在生成中，请稍候。";
     return;
+  }
+  if (reviewCertification) {
+    const notice = document.createElement("article");
+    notice.className = "v3-result-card";
+    notice.innerHTML = `
+      <div class="v3-card-head">
+        <strong>${escapeHtml(v3ReviewCertificationLabel(reviewCertification))}</strong>
+        <span class="mini-pill">${escapeHtml(v3ReviewCertificationModes(reviewCertification))}</span>
+      </div>
+      <p>${escapeHtml(v3ReviewCertificationNotice(reviewCertification))}</p>
+    `;
+    els.v3ResultBoard.appendChild(notice);
   }
   const rawItems = candidates.length ? candidates : recipes.length ? recipes : assets;
   const visibleItems = rawItems
