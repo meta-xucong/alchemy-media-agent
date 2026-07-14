@@ -378,7 +378,11 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ecommerce_context=ecommerce_context if isinstance(ecommerce_context, dict) else None,
             photography_context=photography_context if isinstance(photography_context, dict) else None,
         )
-    if not request.capability_catalog:
+    # LLM-first specialized templates replace the broad payload with their
+    # compact contract above.  That compact envelope deliberately has no
+    # ``return_schema`` until the specialized schema is installed below, so
+    # the generic catalog-pruning branch must not index it first.
+    if not request.capability_catalog and not request.template_capability_policy.requires_remote_creative_brain:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)
         payload.pop("template_capability_policy", None)

@@ -135,6 +135,29 @@ def test_photography_brain_receives_only_noncreative_contract_and_owns_each_dire
     assert all(item["source"] == "remote_v3_llm_brain" for item in deliverables)
 
 
+def test_photography_compact_remote_payload_is_valid_without_a_capability_catalog() -> None:
+    """The fail-closed remote call must not crash before it reaches the Brain."""
+
+    request = V3LLMBrainAdapter().build_request(
+        user_input="Create three quiet landscape photographs; no people or visible text.",
+        stage="plan",
+        scenario_id="photography",
+        template_id="photographer_template",
+        metadata={
+            "requested_image_count": 3,
+            "photographer_profile_binding": _binding(),
+            "specialized_scenario_plan": {"execution_plan": {"role_recipes": [{"role_key": "session_hero"}, {"role_key": "environmental_context"}, {"role_key": "detail_or_moment"}]}},
+        },
+        template_capability_policy=photography_capability_policy(),
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert payload["return_schema"]["image_set_plan"]
+    assert "visual_task_profile" not in payload["return_schema"]
+    assert payload["photography_creative_context"]["role_count"] == 3
+
+
 def test_general_and_ecommerce_brain_requests_never_receive_photography_contract() -> None:
     adapter = V3LLMBrainAdapter()
     metadata = {
