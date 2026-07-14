@@ -412,7 +412,9 @@ class OpenAIGPTImageProvider:
         index: int,
         mask_path=None,
     ) -> list[dict]:
-        max_attempts = 1 if self._uses_gateway_managed_failover() else 6
+        gateway_managed_failover = self._uses_gateway_managed_failover()
+        max_attempts = 1 if gateway_managed_failover else 6
+        fidelity_compatibility_replay_used = False
         last_error: Exception | None = None
         transient_retry_count = 0
         requested_fidelity = self._requested_input_fidelity(plan)
@@ -438,7 +440,12 @@ class OpenAIGPTImageProvider:
             )
         operation_timeout = self._client_timeout_seconds(image_edit=True)
         operation_deadline = time.monotonic() + operation_timeout
-        for attempt in range(1, max_attempts + 1):
+        # ``max_attempts`` can grow by exactly one for the optional
+        # input-fidelity capability negotiation below.  A ``while`` loop keeps
+        # that one replay observable; ``range`` would snapshot the old bound.
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             rate_guard = None
             try:
                 remaining_timeout = operation_deadline - time.monotonic()
@@ -497,6 +504,17 @@ class OpenAIGPTImageProvider:
                                 "message": fidelity_fallback_reason,
                             },
                         ) from exc
+                    # Gateway-managed routing owns resilience retry and must
+                    # remain one incoming request for transport failures.
+                    # This is different: the gateway has explicitly accepted
+                    # the request and rejected only an optional SDK parameter.
+                    # Permit one recorded capability-negotiation replay
+                    # without ``input_fidelity`` so compatible transports do
+                    # not turn an optional enhancement into a hard failure.
+                    # It never opens generic 4xx/5xx/network retries.
+                    if gateway_managed_failover and not fidelity_compatibility_replay_used:
+                        max_attempts += 1
+                        fidelity_compatibility_replay_used = True
                     applied_fidelity = None
                     continue
                 if self._is_image_quota_limit_error(exc):

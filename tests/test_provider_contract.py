@@ -297,6 +297,41 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
     assert provider._sdk_max_retries() == 0  # noqa: SLF001
 
 
+def test_openai_image_provider_gateway_managed_failover_does_not_replay_image_edit_500(tmp_path, monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
+    openai_image_provider._openai_image_rate_limiter.reset()
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+    )
+    calls = {"count": 0}
+
+    class Gateway500Error(Exception):
+        status_code = 500
+
+    class FailingImages:
+        async def edit(self, **kwargs):
+            calls["count"] += 1
+            raise Gateway500Error("502 equivalent after the gateway exhausted its internal routes")
+
+    with pytest.raises(ProviderRuntimeError) as error:
+        asyncio.run(
+            provider._generate_one_with_references(  # noqa: SLF001
+                SimpleNamespace(images=FailingImages()),
+                "one gateway-owned image edit",
+                ImagePromptPlan(main_subject="unbranded bottle", count=1),
+                [reference_path],
+                index=0,
+            )
+        )
+
+    assert calls["count"] == 1
+    assert error.value.detail["attempts"] == 1
+
+
 def test_openai_image_provider_compresses_large_reference_png(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     source = tmp_path / "large-reference.png"
@@ -685,8 +720,9 @@ def test_doc96_openai_image_provider_applies_high_input_fidelity(tmp_path):
     assert result[0]["input_fidelity_support_state"] == "supported"
 
 
-def test_doc96_input_fidelity_specific_400_falls_back_once(tmp_path):
+def test_doc96_input_fidelity_specific_400_falls_back_once(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
     openai_image_provider._image_edit_capability_cache.reset()
     captured = []
     reference_path = tmp_path / "reference.png"
@@ -754,6 +790,7 @@ def test_doc96_identity_local_repair_sends_same_size_mask(tmp_path):
 
 def test_openai_image_provider_retries_gateway_image_edit_500_once(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
     captured = {"attempts": 0}
     reference_path = tmp_path / "reference.png"
     reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
@@ -801,8 +838,9 @@ def test_openai_image_provider_retries_gateway_image_edit_500_once(tmp_path, mon
     assert result[0]["image_edit_transient_retries"] == 1
 
 
-def test_openai_image_provider_retries_gateway_image_edit_403_once(tmp_path):
+def test_openai_image_provider_retries_gateway_image_edit_403_once(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
     captured = {"attempts": 0}
     reference_path = tmp_path / "reference.png"
     reference_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
@@ -1318,6 +1356,7 @@ def test_work_intensity_uses_backup_llm_when_primary_fails(monkeypatch):
 
 def test_openai_image_provider_raises_retryable_rate_limit_after_retries(monkeypatch):
     provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
     attempts = 0
 
     class FailingImages:
