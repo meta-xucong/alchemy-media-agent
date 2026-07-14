@@ -26,6 +26,13 @@ product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
 operation."""
+PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
+non-creative delivery contract. The role IDs only bind output lineage and
+cardinality. Invent the complete photographic composition, scene, camera,
+lighting, pose, timing, and visual direction from the user request and
+reference truth. Return exactly one original whole-image natural-language
+direction for every role; never import General suite/cover roles or
+E-Commerce roles, slots, copy, or marketplace logic."""
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -160,6 +167,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
     if isinstance(ecommerce_context, dict) and ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
+    photography_context = request.metadata.get("photography_creative_context")
+    if isinstance(photography_context, dict) and photography_context:
+        payload["photography_creative_context"] = photography_context
+        payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
     if not request.capability_catalog:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)

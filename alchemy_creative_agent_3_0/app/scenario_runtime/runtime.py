@@ -377,8 +377,9 @@ class ScenarioRuntime:
     ) -> None:
         """Fail closed for templates whose creative answer cannot be local.
 
-        General and Photography keep their current policy values.  The check
-        therefore adds no behavior to their planning/generation paths.
+        General keeps its existing fallback policy.  Active specialized
+        templates that opt in (E-Commerce and Photography) never convert a
+        missing or malformed remote creative answer into local direction.
         """
 
         if not policy.requires_remote_creative_brain:
@@ -1185,6 +1186,10 @@ class ScenarioRuntime:
         hard_semantic_contract = bool(
             set(plan.dependency_order) & hard_capabilities
             or normalized_intent.scenario_id == "ecommerce"
+            # An active Photography run always has a frozen role/profile/
+            # reference contract.  Metadata-only inspection cannot certify a
+            # real photographic delivery, even for a single output.
+            or normalized_intent.scenario_id == "photography"
             or normalized_intent.text_policy == "provider_native_explicit_text"
             or normalized_intent.effective_image_count > 1
         )

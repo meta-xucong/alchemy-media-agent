@@ -1018,11 +1018,18 @@ class V3ProductApiService:
             }
             if specialized_execution["status"] != "complete":
                 missing = ", ".join(specialized_execution["missing_role_keys"])
+                noncertifying = ", ".join(specialized_execution.get("noncertifying_role_keys", []))
                 record.status = ProductJobStatusValue.BLOCKED
-                record.warnings.append(
-                    "Specialized role execution is incomplete; final project delivery is withheld"
-                    + (f": missing {missing}." if missing else ".")
-                )
+                if noncertifying:
+                    record.warnings.append(
+                        "Specialized role delivery lacks certifying real-pixel review; final project delivery is withheld"
+                        f": roles {noncertifying}."
+                    )
+                else:
+                    record.warnings.append(
+                        "Specialized role execution is incomplete; final project delivery is withheld"
+                        + (f": missing {missing}." if missing else ".")
+                    )
                 record.balance_estimate = self._estimate_for_result(generation_result)
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
@@ -1068,13 +1075,32 @@ class V3ProductApiService:
             if isinstance(item, dict) and str(item.get("role_key") or "").strip()
         } if isinstance(raw_roles, list) else {}
 
+        review_package = generation_result.metadata.get("post_generation_review_package")
+        inspections = review_package.get("inspections") if isinstance(review_package, dict) else []
+        inspections_by_candidate = {
+            str(item.get("candidate_id") or "").strip(): dict(item)
+            for item in inspections
+            if isinstance(item, dict) and str(item.get("candidate_id") or "").strip()
+        } if isinstance(inspections, list) else {}
+        requires_real_pixel_review = bool(execution_metadata.get("requires_real_pixel_review"))
+
         roles: list[dict[str, Any]] = []
         missing_role_keys: list[str] = []
+        noncertifying_role_keys: list[str] = []
         for role_key in expected_role_keys:
             item = dict(by_role.get(role_key) or {})
             status = str(item.get("status") or "missing").strip().lower()
             if status != "generated":
                 missing_role_keys.append(role_key)
+            inspection = inspections_by_candidate.get(str(item.get("candidate_id") or "").strip())
+            review_mode = str(inspection.get("mode") or "").strip().lower() if inspection else ""
+            review_status = str(inspection.get("status") or "").strip().lower() if inspection else ""
+            real_pixel_certified = (
+                not requires_real_pixel_review
+                or (review_mode in {"vision_model", "hybrid"} and review_status in {"pass", "warning"})
+            )
+            if status == "generated" and not real_pixel_certified:
+                noncertifying_role_keys.append(role_key)
             roles.append(
                 {
                     "role_key": role_key,
@@ -1083,16 +1109,21 @@ class V3ProductApiService:
                     "candidate_id": item.get("candidate_id"),
                     "error_type": item.get("error_type"),
                     "error_message": item.get("error_message"),
+                    "review_mode": review_mode or None,
+                    "review_status": review_status or None,
+                    "real_pixel_certified": real_pixel_certified,
                 }
             )
+        status = "incomplete" if missing_role_keys else "non_certifying" if noncertifying_role_keys else "complete"
         return {
             "requested_image_count": len(expected_role_keys),
             "role_keys": expected_role_keys,
             "shared_execution_only": True,
-            "status": "complete" if not missing_role_keys else "incomplete",
+            "status": status,
             "roles": roles,
             "missing_role_keys": missing_role_keys,
-            "final_delivery_withheld": bool(missing_role_keys),
+            "noncertifying_role_keys": noncertifying_role_keys,
+            "final_delivery_withheld": bool(missing_role_keys or noncertifying_role_keys),
             "append_only_history_preserved": True,
         }
 
@@ -3668,6 +3699,16 @@ class V3ProductApiService:
             {"provider_error", "vision_provider_unavailable", "vision_provider_not_configured"}
         ):
             hard_gate_failures.append("review_unavailable")
+        inspection_metadata = inspection.get("metadata") if isinstance(inspection.get("metadata"), dict) else {}
+        if (
+            str(inspection_metadata.get("scenario_id") or "").strip().lower() == "photography"
+            and status == "manual_review"
+            and issue_codes.intersection({"metadata_only_non_certifying", "hard_semantic_contract_unverified"})
+        ):
+            # P10/production Photography requires shared vision-model or
+            # hybrid final-pixel inspection.  A record-only review remains in
+            # append-only history but cannot become a delivery winner.
+            hard_gate_failures.append("photography_real_pixel_review_required")
 
         status_score = {
             "pass": 1.0,
