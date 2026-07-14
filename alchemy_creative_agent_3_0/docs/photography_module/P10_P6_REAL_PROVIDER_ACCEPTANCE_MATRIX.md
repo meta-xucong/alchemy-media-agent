@@ -16,9 +16,14 @@ P6 single-hero provider baseline
 
 P6 professional-set provider release
   Four scenes x text-to-photo/reference-reshoot = 8 cases.
-  Requires PHOTOGRAPHY-MAINLINE-004; do not present a single-hero fallback as
-  a professional set.
+  PHOTOGRAPHY-MAINLINE-004 is landed at 1578cbc / 364a1c8. Do not present a
+  single-hero fallback as a professional set.
 ```
+
+> Current quality correction: execution completeness alone is insufficient.
+> Per P11, a case can pass the production-quality column only through shared
+> `vision_model` or `hybrid` real-pixel review; `metadata_only` is recorded as
+> non-certifying and blocks the production gate.
 
 ## Front-End Execution Sequence
 

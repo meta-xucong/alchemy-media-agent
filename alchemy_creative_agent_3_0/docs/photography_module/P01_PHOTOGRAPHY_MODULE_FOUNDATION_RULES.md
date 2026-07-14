@@ -14,6 +14,65 @@ E-Commerce retains listing and marketplace deliverable ownership.
 Photography may configure and activate foundation capabilities. It must not
 copy, fork, bypass, or privately replace them.
 
+## 1.1 LLM-First Creative Direction Rule
+
+Photography uses the central remote LLM as the creative decision-maker and
+GPT Image 2 as the sole final-pixel renderer. Structured module data is a
+constraint and validation layer; it is never a substitute creative director.
+
+The required production chain is:
+
+```text
+explicit user controls + pinned profile + reference truth
+  -> Central LLM creates the photographic interpretation and one natural-language direction per output role
+  -> Photography validates only role coverage, immutable truth, profile rights, reference channels and safety boundaries
+  -> frozen shared constraint ledger
+  -> shared GPT Image 2 generation
+  -> shared real-pixel review / bounded retry / best eligible final delivery
+```
+
+Hard rules:
+
+1. Do not use keyword tables, scene defaults, fixed camera sentences, prompt
+   recipes, or deterministic role prose as the production source of creative
+   direction, scene interpretation, commission intent, composition, lighting,
+   lens effect, retouch, or subject behavior.
+2. Such structures may exist only as explicit-control validation, capability
+   activation evidence, backward-compatible UI defaults, or post-LLM output
+   validation. They must not overwrite, pad, replace, or silently narrow the
+   LLM's current-prompt interpretation.
+3. A Photography production job requires a successful remote Central LLM
+   result with exactly one complete natural-language direction per frozen
+   deliverable role. Missing, malformed, cardinality-mismatched, or unavailable
+   remote creative output blocks the job; it must not fall back to a local
+   keyword planner or generic single-image direction.
+4. Photography keeps only non-creative hard facts frozen before the LLM:
+   user-selected delivery mode and role count, explicit scene control when
+   supplied, pinned profile identity/version/checksum, reference-channel
+   ownership, preservation locks, safety, and provider capability requirements.
+5. A professional-set role taxonomy may require `session_hero`,
+   `environmental_context`, and `detail_or_moment`, but the LLM decides each
+   role's actual visible photographic solution. The template validates that
+   the three solutions are meaningfully distinct; it does not inject stock
+   `cover hero`, lens, lighting, pose, or crop prose.
+6. A retry receives the same frozen creative record and may add only shared,
+   review-supported corrective guidance. It may not re-run deterministic
+   scene classification, switch profile, replace the LLM direction, or import
+   a General/E-Commerce role recipe.
+7. `metadata_only` review is non-certifying. It may record development history
+   but cannot pass a Photography P10 quality gate or enable the production
+   deployment gate. Certified Photography work requires the shared
+   `vision_model` or `hybrid` real-pixel path.
+
+Short form:
+
+```text
+LLM creates the photograph.
+Photography protects the contract.
+GPT Image 2 renders the pixels.
+Shared review chooses the final result.
+```
+
 ## 2. Named Photographer Manual Selection Rule
 
 This is the highest-priority Photography product rule.

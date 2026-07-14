@@ -22,22 +22,22 @@ reuse E-Commerce suite ownership.
 
 ## 2. Current Status
 
-> Update: `PHOTOGRAPHY-MAINLINE-001` and `-002` are on mainline, and
-> `PHOTOGRAPHY-MAINLINE-003` is implemented as a deployment-gated shared
-> runtime seam. P6 module-owned professional-set and continuation planning is
-> implemented, but production set execution requires
-> `PHOTOGRAPHY-MAINLINE-004`. The deployment gate stays off by default and
-> real-provider P6 acceptance remains required. See P08 and P09.
+> Update: Mainline 001-004 are landed. `1578cbc` provides independent
+> professional-set role execution and complete-set aggregation; `364a1c8`
+> preserves specialized Photography role prompt ownership. The deployment gate
+> stays off by default. P10 execution closure is verified, but real-pixel
+> review and visual-quality acceptance remain required. P11 records the
+> LLM-first and real-pixel production correction before further release work.
 
 ```text
 planning approval: accepted
 foundation rules: accepted for module development
 master development specification: accepted for phased implementation
 named-photographer governance: drafted
-implementation: P1-P5 complete; P6 module-owned set/continuation planning implemented
-mainline contracts: 001-003 landed; 004 requested for set execution/continuation
-activation status: inactive
-merge readiness: not ready
+implementation: P1-P6 complete; professional-set execution and continuation landed
+mainline contracts: 001-005 and shared review-certification projection landed
+activation status: production closed; controlled P10 acceptance is evidence-only
+merge readiness: runtime contracts integrated; real-provider quality certification blocked externally
 ```
 
 P0 was documentation-only. P1 adds module-local contracts, an inactive Scenario
@@ -76,7 +76,7 @@ P4 publication: implementation milestone 507a9b3
 real-output acceptance: paused until shared production hooks exist
 P5 status: complete on landed trusted profile selection contract
 specific-animal identity: consumes landed shared nonhuman_subject_identity capability
-P6 status: module-owned planning implemented; shared production execution requested
+P6 status: module-owned planning and shared production execution landed
 ```
 
 ## 3. Authority Order
@@ -109,9 +109,12 @@ contract wins and Photography work pauses for an explicit design decision.
 | P07 | P5 named-profile implementation audit | Active |
 | PX Mainline 001 | Trusted photographer profile selection contract request | Landed on mainline |
 | PX Mainline 002 | Non-human subject identity foundation request | Landed on mainline |
-| P08 | Mainline-003 gated central-runtime activation handoff | Implemented; real-provider acceptance pending |
-| P09 | P6 professional-set and continuation implementation audit | Module planning implemented; shared execution blocked |
-| PX Mainline 004 | Photography set execution and continuation contract | Requested |
+| P08 | Mainline-003 gated central-runtime activation handoff | Historical; superseded for set execution by 1578cbc |
+| P09 | P6 professional-set and continuation implementation audit | Historical; execution blocker resolved by 1578cbc |
+| PX Mainline 004 | Photography set execution and continuation contract | Landed at 1578cbc / 364a1c8 |
+| P11 | LLM-first creative direction and real-pixel quality correction | Landed at `fc3f5c2` / `db70c44`; real-provider certification pending |
+| PX Mainline 005 | LLM-first Photography and real-pixel quality gate request | Historical request; fulfilled by `fc3f5c2` / `db70c44` |
+| PX Mainline 006 / Doc116 | Review-certification projection and delivery withholding | Landed at `db70c44`; real P10 evidence remains pending |
 
 Future documents must remain in this directory and use the `Pxx_` number
 family. Do not continue the root V3 document number sequence for Photography.
