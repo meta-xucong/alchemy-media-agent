@@ -309,7 +309,7 @@ def _issue_group(code: str) -> str:
         return "identity"
     if "product" in text or "label" in text or "logo" in text or "brand" in text:
         return "product"
-    if any(token in text for token in ["mode", "role", "suite", "slot"]):
+    if any(token in text for token in ["mode", "role", "suite", "slot", "evidence_dimension"]):
         return "mode"
     if any(token in text for token in ["layout", "composition", "crop", "camera"]):
         return "layout"

@@ -26,6 +26,12 @@ product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
 operation."""
+APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS = """When an active
+apparel_on_model_evidence_profile requests more than one output, return exactly
+one evidence_dimensions_by_output entry per output. Map only its allowed
+evidence dimensions, use enough distinct dimensions to meet its declared
+count, and treat each entry as a reviewable evidence purpose--never as a stock role,
+scene, camera, crop, pose, or output-order recipe."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -90,6 +96,17 @@ def _compact_required_remote_creative_schema() -> dict:
             "consistency_strategy": "string|null",
         },
     }
+
+
+def _requires_apparel_evidence_dimensions(
+    ecommerce_context: dict[str, object] | None,
+    *,
+    requested_image_count: int,
+) -> bool:
+    if requested_image_count <= 1 or not isinstance(ecommerce_context, dict):
+        return False
+    profile = ecommerce_context.get("apparel_on_model_evidence_profile")
+    return isinstance(profile, dict) and bool(profile.get("applies"))
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -179,9 +196,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             },
             "image_set_plan": {
                 "set_goal": "string",
-                "image_count": "integer 1-4",
+                "image_count": "integer exactly equal to requested_image_count",
                 "size": "string|null",
                 "shot_plan": ["string"],
+                "evidence_dimensions_by_output": [
+                    {"output_index": "integer", "evidence_dimensions": ["string"]}
+                ],
                 "composition_rules": ["string"],
                 "quality_bar": ["string"],
             },
@@ -221,9 +241,18 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         },
     }
     ecommerce_context = request.metadata.get("ecommerce_creative_context")
+    requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
+        ecommerce_context if isinstance(ecommerce_context, dict) else None,
+        requested_image_count=request.requested_image_count,
+    )
     if isinstance(ecommerce_context, dict) and ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
+        if requires_apparel_evidence_dimensions:
+            payload["ecommerce_context_instructions"] += "\n" + APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS
+            payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"] = [
+                {"output_index": "integer", "evidence_dimensions": ["allowed profile values only"]}
+            ]
     photography_context = request.metadata.get("photography_creative_context")
     if isinstance(photography_context, dict) and photography_context:
         payload["photography_creative_context"] = photography_context
@@ -236,7 +265,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["return_schema"].pop("visual_task_profile", None)
         payload["return_schema"].pop("capability_activation_intent", None)
     if request.template_capability_policy.requires_remote_creative_brain:
-        payload["return_schema"] = _compact_required_remote_creative_schema()
+        compact_schema = _compact_required_remote_creative_schema()
+        if requires_apparel_evidence_dimensions:
+            compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = [
+                {"output_index": "integer", "evidence_dimensions": ["allowed profile values only"]}
+            ]
+        payload["return_schema"] = compact_schema
         payload["remote_response_contract"] = (
             "Return only this compact schema. Every image_set_plan field and "
             "prompt_guidance.optimized_direction is required. Do not add hidden "

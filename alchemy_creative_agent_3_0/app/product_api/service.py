@@ -28,6 +28,7 @@ from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPac
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime
 from ..shared_capabilities import CapabilityRunResult
+from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
     HumanPhotorealismLayer,
     ModeAwareRoleDirector,
@@ -253,6 +254,7 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "real_but_unflattering",
     "skin_texture_beauty_balance_failure",
     "product_identity_drift",
+    *APPAREL_CONSTRUCTION_REVIEW_ISSUES.values(),
     "nonhuman_subject_identity_drift",
     "nonhuman_subject_marking_drift",
     "nonhuman_subject_proportion_drift",
@@ -337,6 +339,7 @@ VISUAL_AUTO_RETRY_RETRYABLE_ISSUES = {
     "delivery_suite_role_collapse",
     "deliverable_intent_mismatch",
     "delivery_set_role_mismatch",
+    "delivery_evidence_dimension_mismatch",
     "format_layout_collapse",
     "selection_candidate_distance_risk",
     "text_background_readability_failure",
@@ -385,6 +388,10 @@ DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES = {
     "source_camera_overinherited",
     "source_camera_mood_overinherited",
     "source_whole_style_overinherited",
+}
+
+DELIVERY_TEMPLATE_EVIDENCE_HARD_GATE_ISSUES = {
+    "delivery_evidence_dimension_mismatch",
 }
 
 VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
@@ -1449,8 +1456,21 @@ class V3ProductApiService:
         ):
             review_metadata["enable_real_vision_inspection"] = True
         resolutions = self.output_resolver.resolve_result(generation_result, project_id=project_id)
+        frozen_output_review_contracts = self._frozen_output_review_contracts_by_asset_id(
+            generation_result,
+            review_metadata,
+        )
         inspections = [
-            self.vision_inspector.inspect(resolution, metadata=review_metadata)
+            self.vision_inspector.inspect(
+                resolution,
+                metadata={
+                    **review_metadata,
+                    "frozen_output_review_contract": self._frozen_output_review_contract(
+                        resolution,
+                        frozen_output_review_contracts,
+                    ),
+                },
+            )
             for resolution in resolutions
         ]
         package = self.review_merger.build_package(
@@ -1526,6 +1546,65 @@ class V3ProductApiService:
             }
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    @staticmethod
+    def _frozen_output_review_contracts_by_asset_id(
+        generation_result: PlanningResult,
+        review_metadata: dict[str, Any],
+    ) -> dict[str, dict[str, str]]:
+        """Bind each generated asset to its frozen deliverable before review.
+
+        E-Commerce deliberately emits no shared ``mode_role_recipe``.  The
+        immutable mapping is instead the series asset priority selected before
+        generation and the matching frozen ledger ``output_index``.  Candidate
+        and provider response metadata are never used to decide which Brain
+        evidence contract a pixel reviewer receives.
+        """
+
+        envelope = review_metadata.get("capability_execution_envelope")
+        ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else {}
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+        deliverables = projection.get("deliverables") if isinstance(projection, dict) else []
+        if not isinstance(deliverables, list):
+            return {}
+
+        deliverable_by_index: dict[int, str] = {}
+        for item in deliverables:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("output_index"))
+            except (TypeError, ValueError):
+                continue
+            deliverable_id = str(item.get("deliverable_id") or "").strip()
+            if index > 0 and deliverable_id and index not in deliverable_by_index:
+                deliverable_by_index[index] = deliverable_id
+
+        contracts: dict[str, dict[str, str]] = {}
+        for asset in generation_result.series_plan.assets:
+            asset_id = str(asset.asset_id or "").strip()
+            try:
+                output_index = int(asset.priority)
+            except (TypeError, ValueError):
+                continue
+            deliverable_id = deliverable_by_index.get(output_index)
+            if asset_id and deliverable_id:
+                contracts[asset_id] = {
+                    "source": "resolved_constraint_ledger",
+                    "deliverable_id": deliverable_id,
+                }
+        return contracts
+
+    @staticmethod
+    def _frozen_output_review_contract(
+        resolution: Any,
+        contracts_by_asset_id: dict[str, dict[str, str]],
+    ) -> dict[str, str]:
+        """Return the pre-bound frozen contract for exactly this output."""
+
+        asset_id = str(getattr(resolution, "asset_id", "") or "").strip()
+        contract = contracts_by_asset_id.get(asset_id)
+        return dict(contract) if isinstance(contract, dict) else {}
 
     def _clear_superseded_pre_generation_review_warning(
         self,
@@ -2418,7 +2497,11 @@ class V3ProductApiService:
         retry_contracts = [
             dict(contract)
             for contract in ledger.get("retry_contracts", [])
-            if isinstance(contract, dict) and str(contract.get("capability_id") or "") in active
+            if isinstance(contract, dict)
+            and (
+                str(contract.get("capability_id") or "") in active
+                or str(contract.get("capability_id") or "") == "template_deliverable_owner"
+            )
         ]
         filtered: list[str] = []
         ignored: list[str] = []
@@ -2437,7 +2520,11 @@ class V3ProductApiService:
                     for contract in retry_contracts
                     if str(contract.get("capability_id") or "") == "universal_visual_quality"
                 ]
-            if (owner is None or owner in active) and matching_contracts:
+            owner_is_frozen_template_contract = owner == "template_deliverable_owner" and any(
+                str(contract.get("capability_id") or "") == "template_deliverable_owner"
+                for contract in matching_contracts
+            )
+            if (owner is None or owner in active or owner_is_frozen_template_contract) and matching_contracts:
                 filtered.append(code)
             else:
                 ignored.append(code)
@@ -2476,7 +2563,44 @@ class V3ProductApiService:
                 templates = contract.get("templates")
                 if isinstance(templates, dict):
                     patches.append(dict(templates))
+        template_evidence_patch = self._frozen_template_evidence_retry_patch(ledger, issue_codes)
+        if template_evidence_patch:
+            patches.append(template_evidence_patch)
         return self._merge_visual_retry_patches(patches)
+
+    def _frozen_template_evidence_retry_patch(
+        self,
+        ledger: dict[str, Any],
+        issue_codes: list[str],
+    ) -> dict[str, Any]:
+        """Carry only a prior frozen Brain evidence map into a bounded retry."""
+
+        if "delivery_evidence_dimension_mismatch" not in set(self._dedupe_strings(issue_codes)):
+            return {}
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+        deliverables = projection.get("deliverables") if isinstance(projection, dict) else []
+        assignments: list[str] = []
+        for item in (deliverables if isinstance(deliverables, list) else []):
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            dimensions = self._dedupe_strings(metadata.get("brain_evidence_dimensions"))
+            if not dimensions:
+                continue
+            index = self._safe_int(item.get("output_index"), default=None)
+            if index is None:
+                continue
+            assignments.append(f"output {index}: {', '.join(dimensions)}")
+        if not assignments:
+            return {}
+        return {
+            "prompt_additions": [
+                "preserve this prior frozen template-owned evidence map on retry: " + "; ".join(assignments)
+            ],
+            "composition_repair": [
+                "make each output visibly prove its assigned evidence dimension without changing the Brain-owned delivery intent"
+            ],
+        }
 
     def _review_issue_capability_owner(self, issue_code: str) -> str | None:
         code = str(issue_code or "").strip().lower()
@@ -2484,6 +2608,15 @@ class V3ProductApiService:
             return None
         if "nonhuman_subject" in code or "nonhuman_reference" in code:
             return "nonhuman_subject_identity"
+        if code == "delivery_evidence_dimension_mismatch":
+            return "template_deliverable_owner"
+        if code in {
+            "flat_scene_lighting",
+            "airbrushed_background_texture",
+            "synthetic_material_response",
+            "frozen_centered_pose",
+        }:
+            return "human_realism"
         if any(token in code for token in ("product", "packaging", "label", "logo_drift", "sku_")):
             return "product_identity"
         if any(
@@ -2543,6 +2676,10 @@ class V3ProductApiService:
                 "complexion",
                 "unintended_skin",
                 "realism_",
+                "flat_scene_lighting",
+                "airbrushed_background_texture",
+                "synthetic_material_response",
+                "frozen_centered_pose",
             )
         ):
             return "human_realism"
@@ -3696,6 +3833,7 @@ class V3ProductApiService:
             statuses.intersection({"fail_final"})
             or issue_codes.intersection(DELIVERY_IDENTITY_HARD_GATE_ISSUES)
             or issue_codes.intersection(DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES)
+            or issue_codes.intersection(DELIVERY_TEMPLATE_EVIDENCE_HARD_GATE_ISSUES)
         )
         status_score = 0.0
         if statuses and statuses <= {"pass"}:
@@ -3745,6 +3883,8 @@ class V3ProductApiService:
             hard_gate_failures.append("identity_truth_not_respected")
         if issue_codes.intersection(DELIVERY_PROMPT_CHANNEL_HARD_GATE_ISSUES):
             hard_gate_failures.append("prompt_owned_channel_not_respected")
+        if issue_codes.intersection(DELIVERY_TEMPLATE_EVIDENCE_HARD_GATE_ISSUES):
+            hard_gate_failures.append("template_delivery_evidence_not_respected")
         if status == "manual_review" and issue_codes.intersection(
             {"provider_error", "vision_provider_unavailable", "vision_provider_not_configured"}
         ):

@@ -1,6 +1,7 @@
 """E-Commerce Scenario Pack package."""
 
 from .contracts import (
+    ApparelOnModelEvidenceProfile,
     CommerceCriticReport,
     EcommerceCreativeContext,
     CommerceIntelligenceBrief,
@@ -13,6 +14,7 @@ from .contracts import (
 from .pack import EcommerceScenarioPack, EcommerceScenarioPackPlanner
 
 __all__ = [
+    "ApparelOnModelEvidenceProfile",
     "CommerceCriticReport",
     "EcommerceCreativeContext",
     "CommerceIntelligenceBrief",

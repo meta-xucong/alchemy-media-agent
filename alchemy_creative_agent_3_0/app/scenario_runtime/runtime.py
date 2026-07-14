@@ -21,6 +21,7 @@ from ..shared_capabilities import (
     SharedCapabilityRegistry,
     UploadedAssetInfo,
 )
+from ..shared_capabilities.apparel_construction import extract_apparel_construction_facts
 from ..shared_capabilities.activation import (
     CapabilityActivationError,
     CapabilityActivationIntent,
@@ -260,6 +261,7 @@ class ScenarioRuntime:
             )
             self._require_remote_creative_brain(request, policy, brain_result)
             deliverable_plan = self._build_template_deliverable_plan(
+                request,
                 normalized_intent,
                 policy,
                 brain_result,
@@ -298,6 +300,7 @@ class ScenarioRuntime:
                 mode,
             )
             deliverable_plan = self._build_template_deliverable_plan(
+                request,
                 normalized_intent,
                 policy,
                 brain_result,
@@ -334,6 +337,7 @@ class ScenarioRuntime:
             mode,
         )
         deliverable_plan = self._build_template_deliverable_plan(
+            request,
             normalized_intent,
             policy,
             brain_result,
@@ -597,6 +601,7 @@ class ScenarioRuntime:
 
     def _build_template_deliverable_plan(
         self,
+        request: ScenarioRuntimeRequest,
         normalized_intent: NormalizedV3JobIntent,
         policy: TemplateCapabilityPolicy,
         brain_result: BrainRunResult,
@@ -610,6 +615,11 @@ class ScenarioRuntime:
                 f": expected={expected}; brain_image_count={brain_result.image_set_plan.image_count}; "
                 f"brain_direction_count={len(directions)}"
             )
+        evidence_dimensions_by_output = self._validated_ecommerce_apparel_evidence_dimensions(
+            request=request,
+            brain_result=brain_result,
+            expected_count=expected,
+        )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -624,31 +634,38 @@ class ScenarioRuntime:
         deliverables: list[TemplateDeliverable] = []
         for index, direction in enumerate(directions, 1):
             recipe = role_recipes[index - 1] if index <= len(role_recipes) and isinstance(role_recipes[index - 1], dict) else {}
+            evidence_dimensions = evidence_dimensions_by_output.get(index, [])
+            factual_acceptance = (
+                ["product_truth", "platform_factual_constraints"]
+                if normalized_intent.scenario_id == "ecommerce"
+                else []
+            )
+            if evidence_dimensions:
+                factual_acceptance.append("apparel_on_model_evidence_contract")
+            # The Template owns the professional role contract while Central
+            # Brain owns the image intent. Carry that frozen role record and
+            # the Brain-selected evidence purpose through the deliverable plan
+            # so an enforced Provider/Review/Retry path consumes the resolved
+            # ledger rather than mutable runtime metadata.
+            deliverable_metadata = (
+                {
+                    "specialized_role_key": recipe.get("role_key"),
+                    "specialized_role_contract": dict(recipe),
+                    "specialized_execution_policy": specialized_policy,
+                }
+                if recipe.get("role_key")
+                else {}
+            )
+            if evidence_dimensions:
+                deliverable_metadata["brain_evidence_dimensions"] = evidence_dimensions
             deliverables.append(
                 TemplateDeliverable(
                     deliverable_id=stable_id("template_deliverable", normalized_intent.intent_id, index, direction),
                     output_index=index,
                     image_intent=direction,
                     source=creative_owner,
-                    factual_acceptance=(
-                        ["product_truth", "platform_factual_constraints"]
-                        if normalized_intent.scenario_id == "ecommerce"
-                        else []
-                    ),
-                    # The Template owns the professional role contract while
-                    # Central Brain owns the image intent.  Carry the frozen
-                    # role record through the deliverable plan so an enforced
-                    # Provider/Review/Retry path can consume it from the
-                    # resolved ledger, never from mutable runtime metadata.
-                    metadata=(
-                        {
-                            "specialized_role_key": recipe.get("role_key"),
-                            "specialized_role_contract": dict(recipe),
-                            "specialized_execution_policy": specialized_policy,
-                        }
-                        if recipe.get("role_key")
-                        else {}
-                    ),
+                    factual_acceptance=factual_acceptance,
+                    metadata=deliverable_metadata,
                 )
             )
         return TemplateDeliverablePlan(
@@ -673,6 +690,59 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _validated_ecommerce_apparel_evidence_dimensions(
+        *,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        expected_count: int,
+    ) -> dict[int, list[str]]:
+        """Freeze only a Brain-chosen apparel evidence contract for multi-output E-Commerce.
+
+        The E-Commerce context provides an allowed vocabulary and a required
+        diversity floor. It never contributes a local output map, role, scene,
+        camera, crop, pose, or expression recipe.
+        """
+
+        if expected_count <= 1:
+            return {}
+        context = request.metadata.get("ecommerce_creative_context")
+        if not isinstance(context, dict):
+            return {}
+        profile = context.get("apparel_on_model_evidence_profile")
+        if not isinstance(profile, dict) or not profile.get("applies"):
+            return {}
+        allowed = {
+            str(item).strip()
+            for item in profile.get("allowed_evidence_dimensions", [])
+            if str(item).strip()
+        }
+        required_distinct = min(
+            expected_count,
+            max(0, int(profile.get("required_distinct_dimension_count") or 0)),
+        )
+        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
+        if len(raw_entries) != expected_count:
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_missing_or_incomplete")
+        resolved: dict[int, list[str]] = {}
+        for entry in raw_entries:
+            index = int(entry.output_index)
+            dimensions = list(dict.fromkeys(str(item).strip() for item in entry.evidence_dimensions if str(item).strip()))
+            if index in resolved or index < 1 or index > expected_count or not dimensions:
+                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
+            if not set(dimensions).issubset(allowed):
+                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid_dimension")
+            resolved[index] = dimensions
+        if sorted(resolved) != list(range(1, expected_count + 1)):
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
+        signatures = [tuple(dimensions) for _, dimensions in sorted(resolved.items())]
+        if len(set(signatures)) != len(signatures):
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_repeated_output")
+        distinct_dimensions = {dimension for dimensions in resolved.values() for dimension in dimensions}
+        if len(distinct_dimensions) < required_distinct:
+            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_insufficient_diversity")
+        return resolved
 
     def _prepare_specialized_scenario_plan(
         self,
@@ -1147,6 +1217,11 @@ class ScenarioRuntime:
                         "constraint_ids": [entries[2].constraint_id, constraint_id],
                     }
                 )
+        apparel_construction = extract_apparel_construction_facts(
+            request.product_profile,
+            has_reference_evidence=bool(self._uploaded_assets(request)),
+        )
+
         for key, value in sorted(dict(request.product_profile or {}).items()):
             if value in (None, "", [], {}):
                 continue
@@ -1161,6 +1236,32 @@ class ScenarioRuntime:
                     resolved_value=value,
                     resolution="accepted",
                     provenance=[{"source": "product_profile", "field": key}],
+                )
+            )
+        for fact in apparel_construction.facts:
+            resolved_value = {
+                "values": list(fact.values),
+                "evidence_mode": fact.evidence_mode,
+                "source_fields": list(fact.source_fields),
+                "allowed_variation": fact.allowed_variation,
+            }
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", normalized_intent.intent_id, fact.channel, fact.source_fields),
+                    channel=fact.channel,
+                    owner="product_identity",
+                    strength=fact.strength,
+                    precedence=92,
+                    requested_value=list(fact.values),
+                    resolved_value=resolved_value,
+                    resolution="accepted",
+                    provenance=[
+                        {
+                            "source": fact.source,
+                            "fields": list(fact.source_fields),
+                            "evidence_mode": fact.evidence_mode,
+                        }
+                    ],
                 )
             )
         for capability_id, fragment in enumerate(composed.prompt_additions, 1):
@@ -1226,6 +1327,7 @@ class ScenarioRuntime:
             for key, value in dict(request.product_profile or {}).items()
             if value not in (None, "", [], {})
         }
+        template_evidence_retry_contract = self._template_delivery_evidence_retry_contract(resolved_deliverables)
         retry_patch = self._server_resolved_retry_patch(request, plan)
         provider_projection = {
             "projection_version": "resolved_constraint_ledger_v1",
@@ -1238,6 +1340,7 @@ class ScenarioRuntime:
             "visible_text_policy": normalized_intent.visible_text_policy,
             "deliverables": resolved_deliverables,
             "product_truth": product_truth,
+            "apparel_construction": apparel_construction.provider_projection(),
             "quality_guidance": [
                 entry.resolved_value
                 for entry in entries
@@ -1289,7 +1392,10 @@ class ScenarioRuntime:
                 "conflict_count": len(conflicts),
             },
             review_contracts=list(composed.review_contracts),
-            retry_contracts=list(composed.retry_contracts),
+            retry_contracts=[
+                *list(composed.retry_contracts),
+                *([template_evidence_retry_contract] if template_evidence_retry_contract else []),
+            ],
             hard_semantic_contract=hard_semantic_contract,
             provenance=[
                 {
@@ -1299,6 +1405,47 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _template_delivery_evidence_retry_contract(deliverables: list[dict[str, Any]]) -> dict[str, Any]:
+        """Publish an owner-local retry contract for Brain-declared evidence.
+
+        This derives no role, shot, pose, camera, or static suite.  It exists
+        only when a specialized template has already frozen distinct evidence
+        dimensions into its Brain-owned deliverables.
+        """
+
+        evidence_rows = []
+        for deliverable in deliverables:
+            metadata = deliverable.get("metadata") if isinstance(deliverable.get("metadata"), dict) else {}
+            dimensions = [str(item).strip() for item in metadata.get("brain_evidence_dimensions", []) if str(item).strip()]
+            if dimensions:
+                evidence_rows.append(
+                    {
+                        "deliverable_id": str(deliverable.get("deliverable_id") or ""),
+                        "output_index": deliverable.get("output_index"),
+                        "dimensions": list(dict.fromkeys(dimensions)),
+                    }
+                )
+        if not evidence_rows:
+            return {}
+        return {
+            "capability_id": "template_deliverable_owner",
+            "issue_codes": ["delivery_evidence_dimension_mismatch"],
+            "templates": {
+                "prompt_additions": [
+                    "preserve the frozen template-owned delivery intent and visibly demonstrate this output's assigned evidence dimension without replacing it with a stock role or static recipe"
+                ],
+                "composition_repair": [
+                    "make the evidence assigned to each output visibly distinct while keeping the already-frozen Brain direction"
+                ],
+            },
+            "metadata": {
+                "source": "resolved_constraint_ledger.template_deliverables",
+                "static_recipe_present": False,
+                "brain_evidence_rows": evidence_rows,
+            },
+        }
 
     @staticmethod
     def _server_resolved_retry_patch(

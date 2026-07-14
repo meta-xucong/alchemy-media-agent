@@ -57,6 +57,7 @@ class EcommerceRemoteBrainTestProvider:
                 f"Remote Brain test output {index}: communicate the supplied product facts and this request's buyer need."
                 for index in range(1, count + 1)
             ],
+            "evidence_dimensions_by_output": _apparel_evidence_dimensions(request, count),
             "composition_rules": ["Remote Brain decides the complete image treatment for each requested output."],
             "quality_bar": ["Product facts and approved claims remain faithful."],
         }
@@ -66,6 +67,24 @@ class EcommerceRemoteBrainTestProvider:
             "visual_direction_addons": ["Use the remote Brain's product-specific image intent."],
         }
         return payload
+
+
+def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
+    context = request.metadata.get("ecommerce_creative_context") if isinstance(request.metadata, dict) else None
+    profile = context.get("apparel_on_model_evidence_profile") if isinstance(context, dict) else None
+    if not isinstance(profile, dict) or not profile.get("applies") or count <= 1:
+        return []
+    dimensions = [str(item) for item in profile.get("allowed_evidence_dimensions", []) if str(item).strip()]
+    if not dimensions:
+        return []
+    entries = []
+    for index in range(1, count + 1):
+        primary = dimensions[(index - 1) % len(dimensions)]
+        evidence = [primary]
+        if index > len(dimensions):
+            evidence.append(dimensions[index % len(dimensions)])
+        entries.append({"output_index": index, "evidence_dimensions": evidence})
+    return entries
 
 
 def ecommerce_test_service(

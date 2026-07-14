@@ -331,7 +331,7 @@ def test_ecommerce_factual_context_and_failure_state_have_queryable_provenance()
     provenance = created.metadata["ecommerce_runtime_provenance"]
     factual = provenance["factual_context"]
     assert factual["context_id"]
-    assert factual["source_version"] == "ecommerce_creative_context_v1"
+    assert factual["source_version"] == "ecommerce_creative_context_v2"
     assert factual["platform_profile_id"] == "ecommerce_amazon_us"
     assert factual["platform_profile_version"]
     assert "claim evidence" in factual["product_evidence_sources"]

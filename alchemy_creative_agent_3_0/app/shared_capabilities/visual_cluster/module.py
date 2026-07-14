@@ -199,6 +199,10 @@ ANTI_AI_FACE_ISSUE_CODES = {
     "wax_skin_highlight",
     "uncanny_eye_expression",
     "same_ai_face_repetition",
+    "flat_scene_lighting",
+    "airbrushed_background_texture",
+    "synthetic_material_response",
+    "frozen_centered_pose",
 }
 BEAUTIFUL_REALISM_ISSUE_CODES = {
     "identity_card_missing",
