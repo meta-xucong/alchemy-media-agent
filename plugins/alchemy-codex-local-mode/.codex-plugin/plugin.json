@@ -1,0 +1,19 @@
+{
+  "name": "alchemy-codex-local-mode",
+  "version": "0.3.0",
+  "description": "Explicit Codex-native image planning for conversation-only results",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Alchemy Codex Local Mode",
+    "shortDescription": "Alchemy prompt planning for Codex native ImageGen.",
+    "longDescription": "A disabled-by-default planning-only plugin. Codex calls local stdio MCP for frozen V3 prompts and creates images in the conversation itself.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use Codex Native ImageGen Mode only when I explicitly request it. Plan with Alchemy MCP, then create each planned image in this conversation; do not treat it as an Alchemy delivery."
+  },
+  "mcpServers": "./.mcp.json"
+}

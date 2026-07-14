@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "alchemy_local_mode": {
+      "command": "python",
+      "args": [
+        "-m",
+        "services.alchemy_codex_local_adapter.mcp_server",
+        "--enable-native-imagegen"
+      ],
+      "cwd": "../.."
+    }
+  }
+}
