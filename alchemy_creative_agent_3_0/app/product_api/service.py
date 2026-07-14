@@ -4470,6 +4470,13 @@ class V3ProductApiService:
         asset_pack = result.asset_pack
         nav = get_navigation_entry()
         delivery_settling = record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        public_visual_retry = self._public_visual_auto_retry_summary(result.metadata.get("visual_auto_retry"))
+        public_review = self._public_post_generation_review(result.metadata.get("post_generation_review_package"))
+        public_warnings = list(record.warnings + asset_pack.manifest.get("warnings", []))
+        if public_visual_retry.get("manual_confirmation_required"):
+            public_warnings.append(
+                "The image was generated, but the automatic refinement did not complete; manual confirmation is required."
+            )
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -4489,7 +4496,7 @@ class V3ProductApiService:
             selected_result=record.selected_result,
             balance_estimate=dict(record.balance_estimate),
             routes=get_route_contracts(),
-            warnings=list(dict.fromkeys(record.warnings + asset_pack.manifest.get("warnings", []))),
+            warnings=list(dict.fromkeys(public_warnings)),
             metadata={
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
@@ -4498,8 +4505,8 @@ class V3ProductApiService:
                 "selected_vertical_pack": result.metadata.get("selected_vertical_pack"),
                 "scenario_id": result.metadata.get("scenario_id"),
                 "shared_capabilities": result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run),
-                "visual_auto_retry": result.metadata.get("visual_auto_retry", {}),
-                "post_generation_review": result.metadata.get("post_generation_review_package", {}),
+                "visual_auto_retry": public_visual_retry,
+                "post_generation_review": public_review,
                 "text_pixel_delivery": result.metadata.get("text_pixel_delivery", {}),
                 "text_pixel_delivery_batch": result.metadata.get("text_pixel_delivery_batch", {}),
                 "exposes_product_concepts_only": True,
@@ -4511,6 +4518,76 @@ class V3ProductApiService:
                 **self._ecommerce_runtime_provenance_status_metadata(record),
             },
         )
+
+    @staticmethod
+    def _public_visual_auto_retry_summary(value: Any) -> dict[str, Any]:
+        """Project only user-actionable retry status to public Job surfaces.
+
+        The durable record intentionally retains the full retry patch and raw
+        failure provenance for operator audit. Browser/API consumers only need
+        to know whether a bounded refinement ran, which safe issue categories
+        remain, and whether a person must confirm the retained delivery.
+        """
+
+        summary = dict(value or {}) if isinstance(value, dict) else {}
+        records = [dict(item) for item in summary.get("records", []) if isinstance(item, dict)]
+        public_records = [
+            {
+                "attempt_index": int(item.get("attempt_index") or 0),
+                "status": str(item.get("status") or "unknown"),
+                "reason_codes": [str(code) for code in item.get("reason_codes", []) if str(code)],
+            }
+            for item in records
+        ]
+        manual_confirmation_required = any(item["status"] in {"failed", "blocked"} for item in public_records)
+        return {
+            "enabled": bool(summary.get("enabled")),
+            "executed_count": max(0, int(summary.get("executed_count") or 0)),
+            "max_attempts": max(0, int(summary.get("max_attempts") or 0)),
+            "issue_codes": [str(code) for code in summary.get("issue_codes", []) if str(code)],
+            "records": public_records,
+            "append_only": bool(summary.get("append_only", bool(public_records))),
+            "manual_confirmation_required": manual_confirmation_required,
+        }
+
+    @staticmethod
+    def _public_post_generation_review(value: Any) -> dict[str, Any]:
+        """Expose review outcome without provider, prompt, path, or repair internals."""
+
+        package = dict(value or {}) if isinstance(value, dict) else {}
+        inspections = []
+        for item in package.get("inspections", []):
+            if not isinstance(item, dict):
+                continue
+            issues = [
+                {
+                    "code": str(issue.get("code") or "review_notice"),
+                    "severity": str(issue.get("severity") or "warning"),
+                    "retryable": bool(issue.get("retryable")),
+                    "message": str(issue.get("message") or issue.get("code") or "V3 found a review notice."),
+                }
+                for issue in item.get("detected_issues", [])
+                if isinstance(issue, dict)
+            ]
+            inspections.append(
+                {
+                    "output_id": str(item.get("output_id") or ""),
+                    "mode": str(item.get("mode") or "metadata_only"),
+                    "status": str(item.get("status") or "unverified"),
+                    "verification_state": str(item.get("verification_state") or "unverified"),
+                    "detected_issues": issues,
+                }
+            )
+        return {
+            "user_visible_summary": [
+                str(line)[:300]
+                for line in package.get("user_visible_summary", [])
+                if isinstance(line, str) and line.strip()
+            ][:6],
+            "inspections": inspections,
+            "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
+            "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
+        }
 
     def _empty_status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
         nav = get_navigation_entry()

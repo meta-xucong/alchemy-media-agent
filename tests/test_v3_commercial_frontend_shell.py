@@ -198,6 +198,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "imageCandidates: [thumbUrl].filter(Boolean)" in script.text
     assert "post_generation_review" in script.text
     assert "v3PostGenerationReviewLines" in script.text
+    assert "自动修复未完成；用于正式交付前请人工确认细节" in script.text
     assert "高级查看：质量复检" in script.text
     assert ".v3-field-title-row" in styles.text
     assert ".v3-generation-settings" in styles.text

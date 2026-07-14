@@ -3711,6 +3711,9 @@ function v3PostGenerationReviewLines(job = v3State.currentJob) {
   const retrySummary = job?.metadata?.visual_auto_retry || {};
   const executedCount = Number(retrySummary.executed_count || 0);
   if (executedCount > 0) lines.push("发现可修复问题后，已追加一组更干净的结果");
+  if (retrySummary.manual_confirmation_required) {
+    lines.push("图片已生成，但自动修复未完成；用于正式交付前请人工确认细节。");
+  }
   if (!lines.length && inspections.length) {
     lines.push("V3 已检查生成结果");
   }

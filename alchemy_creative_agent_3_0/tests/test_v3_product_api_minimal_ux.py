@@ -141,6 +141,69 @@ def test_root_job_instance_id_is_server_owned() -> None:
         )
 
 
+def test_public_review_projection_hides_retry_prompt_and_upstream_failure_details() -> None:
+    raw_retry = {
+        "enabled": True,
+        "executed_count": 0,
+        "max_attempts": 1,
+        "issue_codes": ["plastic_skin"],
+        "records": [
+            {
+                "attempt_index": 1,
+                "status": "failed",
+                "reason_codes": ["plastic_skin"],
+                "retry_patch": {"negative_additions": ["internal retry prompt"]},
+                "blocked_reason": "upstream access forbidden",
+            }
+        ],
+    }
+    raw_review = {
+        "user_visible_summary": ["V3 checked the generated image."],
+        "inspections": [
+            {
+                "output_id": "output_safe",
+                "mode": "hybrid",
+                "status": "fail_retryable",
+                "verification_state": "verified",
+                "file_path": "D:/internal/output.png",
+                "retry_patch": {"prompt_additions": ["internal repair instruction"]},
+                "detected_issues": [
+                    {
+                        "code": "plastic_skin",
+                        "severity": "medium",
+                        "retryable": True,
+                        "message": "Skin may look too smooth.",
+                        "provider_reason": "internal provider detail",
+                    }
+                ],
+            }
+        ],
+        "recommended_output_ids": ["output_safe"],
+    }
+
+    public_retry = V3ProductApiService._public_visual_auto_retry_summary(raw_retry)
+    public_review = V3ProductApiService._public_post_generation_review(raw_review)
+
+    assert public_retry["manual_confirmation_required"] is True
+    assert public_retry["records"] == [
+        {"attempt_index": 1, "status": "failed", "reason_codes": ["plastic_skin"]}
+    ]
+    assert "retry_patch" not in public_retry["records"][0]
+    assert "blocked_reason" not in public_retry["records"][0]
+    inspection = public_review["inspections"][0]
+    assert inspection["mode"] == "hybrid"
+    assert inspection["detected_issues"] == [
+        {
+            "code": "plastic_skin",
+            "severity": "medium",
+            "retryable": True,
+            "message": "Skin may look too smooth.",
+        }
+    ]
+    assert "file_path" not in inspection
+    assert "retry_patch" not in inspection
+
+
 def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_reopen_it() -> None:
     service, _, _ = _service("gateway_background_timeout")
     created = service.create_job({"user_input": "Create one clean still-life image."})

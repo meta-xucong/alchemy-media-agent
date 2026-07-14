@@ -41,9 +41,11 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
         },
     )
 
-    retry_summary = generated.metadata["visual_auto_retry"]
-    retry_candidates = [candidate for candidate in generated.candidates if candidate.metadata.get("visual_auto_retry_output")]
-    original_candidates = [candidate for candidate in generated.candidates if not candidate.metadata.get("visual_auto_retry_output")]
+    internal_result = _internal_generation_result(service, created.job_id)
+    retry_summary = internal_result.metadata["visual_auto_retry"]
+    internal_candidates = service._candidate_summaries(internal_result)  # noqa: SLF001
+    retry_candidates = [candidate for candidate in internal_candidates if candidate.metadata.get("visual_auto_retry_output")]
+    original_candidates = [candidate for candidate in internal_candidates if not candidate.metadata.get("visual_auto_retry_output")]
 
     assert generated.status == ProductJobStatusValue.GENERATED
     assert retry_summary["enabled"] is True
@@ -57,6 +59,8 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
         {candidate.candidate_id for candidate in retry_candidates}
     )
     assert all(candidate.metadata["visual_auto_retry_attempt"] == 1 for candidate in retry_candidates)
+    assert generated.metadata["visual_auto_retry"]["append_only"] is True
+    assert "retry_patch" not in generated.metadata["visual_auto_retry"]["records"][0]
 
 
 def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path) -> None:
@@ -74,7 +78,7 @@ def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path
         },
     )
 
-    retry_summary = generated.metadata["visual_auto_retry"]
+    retry_summary = _internal_generation_result(service, created.job_id).metadata["visual_auto_retry"]
     records = retry_summary["records"]
 
     assert retry_summary["max_attempts"] == 2
@@ -91,6 +95,13 @@ def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(t
         "_visual_retry_patch_from_issues",
         lambda _codes: (_ for _ in ()).throw(AssertionError("enforced retry must not use legacy issue mapper")),
     )
+
+
+def _internal_generation_result(service: V3ProductApiService, job_id: str):
+    record = service.job_store.get(job_id)
+    assert record is not None
+    assert record.generation_result is not None
+    return record.generation_result
     created = service.create_job(
         {
             "user_input": "Create a clean ecommerce product set for a drink can",
@@ -119,7 +130,7 @@ def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(t
         },
     )
 
-    retry_summary = generated.metadata["visual_auto_retry"]
+    retry_summary = _internal_generation_result(service, created.job_id).metadata["visual_auto_retry"]
     patch_text = " ".join(
         str(item)
         for item in retry_summary["records"][0]["retry_patch"].get("product_reinforcement", [])
@@ -146,12 +157,14 @@ def test_visual_auto_retry_skips_empty_patch_without_provider_loop(tmp_path) -> 
         },
     )
 
-    retry_summary = generated.metadata["visual_auto_retry"]
+    internal_result = _internal_generation_result(service, created.job_id)
+    retry_summary = internal_result.metadata["visual_auto_retry"]
 
     assert retry_summary["executed_count"] == 0
     assert retry_summary["records"][0]["status"] == "skipped"
     assert retry_summary["records"][0]["blocked_reason"] == "empty_retry_patch"
-    assert not any(candidate.metadata.get("visual_auto_retry_output") for candidate in generated.candidates)
+    internal_candidates = service._candidate_summaries(internal_result)  # noqa: SLF001
+    assert not any(candidate.metadata.get("visual_auto_retry_output") for candidate in internal_candidates)
 
 
 def test_visual_auto_retry_is_off_by_default_in_explore_mode(tmp_path) -> None:
