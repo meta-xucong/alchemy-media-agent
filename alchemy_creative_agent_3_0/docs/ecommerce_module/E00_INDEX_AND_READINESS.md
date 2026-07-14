@@ -18,14 +18,17 @@ commerce-specific deliverables.
 ## Authority order
 
 1. `AGENTS.md` repository safety and layer-boundary rules.
-2. V3 foundation and capability authorities, especially Docs 76, 77, 91-103.
-3. V3 template/project authorities, especially Docs 41-43, 57, and 60.
-4. V3 Doc111 provider-native text and creative-direction correction.
-5. E17 LLM-native E-Commerce architecture correction.
-6. E18 LLM-native pre-acceptance closure and evidence record.
-7. E19 real Provider Gate C/D acceptance record.
-8. This E-Commerce module family.
-9. Implementation notes and examples.
+2. V3 foundation and capability authorities, especially Docs76, 91, 93, 94,
+   100-103, 111, 113, and 117.
+3. V3 template/project authorities, especially Docs41-43 and Doc105
+   continuation. Docs57, 59, and 60 are historical compatibility material only.
+4. V3 Doc111 provider-native creative-direction correction.
+5. V3 Doc113 execution truth and Doc117 Provider/no-pixel closure.
+6. E17 LLM-native E-Commerce architecture correction.
+7. E18 LLM-native pre-acceptance closure and evidence record.
+8. E19 real Provider Gate C/D acceptance record.
+9. This E-Commerce module family.
+10. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -67,6 +70,14 @@ unchanged: their deterministic compositor, font, safe-area, and multi-plan
 contracts are superseded for new work by Doc111. E17 additionally supersedes
 active deterministic platform/category slot direction. Product facts, platform
 evidence, output lineage, and final-pixel review remain valid inputs.
+
+The same reading rule applies to root Docs57, 59, and 60: no static platform
+suite, default marketing copy, category shot order, prompt recipe, or local
+text/overlay mechanism may be restored. E-Commerce enters only after explicit
+template selection. The template freezes requested count and factual acceptance
+constraints; the remote Brain supplies one natural-language image direction per
+requested output; GPT Image 2 supplies the complete pixels; the shared runtime
+owns review, bounded retry, and append-only delivery.
 
 E18 is the current execution checklist for the pre-acceptance stage. It
 requires strict remote-Brain failure closure, exact output-count behavior,

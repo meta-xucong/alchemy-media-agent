@@ -1,18 +1,24 @@
 # 75 V3 Identity Hero, Suite Director, And Strict Review Closure
 
+> Historical/compatibility notice (Docs93, 95, 111, and 113): identity evidence
+> and append-only best-result observations remain useful, but the shared hero
+> selector, suite director, role recipes, and negative-prompt proposals below
+> are not forward runtime authority. Do not bring them into General, E-Commerce,
+> Photography, Brain requests, or Provider prompts for new jobs.
+
 Doc94/95 correction note:
 
 ```text
-Doc75 remains the identity-hero, suite-role, and strict-review baseline. Its
-named portrait cases and negative terms are historical fixtures, not shared
-runtime profiles. Doc94 owns universal visual variables; Doc95 owns complete
-identity evidence and per-role best-result selection after retry.
+Doc75 is historical source material for identity and review observations. Its
+named portrait cases and negative terms are fixtures, not shared runtime
+profiles. Doc94 owns universal visual variables; Doc95 owns complete identity
+evidence and per-role best-result selection after retry.
 ```
 
 ## 1. Purpose
 
-This document is the current authority for the next General Template quality
-closure pass.
+This document is not current authority for a new General Template quality pass.
+Use Docs93, 95, 111, and 113 for forward work.
 
 The goal is not to add another large framework. The goal is to close the gap
 between three existing abilities:

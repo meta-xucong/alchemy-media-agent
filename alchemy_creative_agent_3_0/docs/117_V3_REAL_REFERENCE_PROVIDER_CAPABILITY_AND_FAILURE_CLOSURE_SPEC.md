@@ -1,14 +1,45 @@
 # Doc117 V3 Real Reference Provider Capability and Failure Closure
 
 Status: post-Doc113/Doc114 corrective foundation authority and gated
-acceptance contract. Activation closure is implemented on the mainline
-integration candidate `e458d23`; this document retains the regression contract
-and must not introduce a second activation mechanism.
+acceptance contract. `e458d23` is a **not-yet-mainline integration candidate**
+which proves the shared real-visible-person activation guard. It is not a
+claim that the provider-admission, failure-classification, or public-projection
+phases in this document already exist. This document retains the regression
+contract and must not introduce a second activation mechanism or lifecycle.
 
 Scope: V3 normalized evidence, capability activation, reference policy/Product
 Identity, Provider materialization, Product API/Project Mode failure projection,
 and cross-template real-chain acceptance. This document adds no renderer,
 template, Scenario Pack, or child-specific capability.
+
+## 0. Current decision record and reading order
+
+The following facts are deliberately separated. Future work must not collapse
+them into a single "child generation failed" or "Human Realism is done"
+statement.
+
+| Item | Current evidence | Meaning |
+| --- | --- | --- |
+| Shared Human Realism activation | Candidate `e458d23` freezes `human_realism` as required for a non-stylized, visible real person even when the remote Brain omits it. Its focused regression suite passed. | This is the activation regression lock to integrate and re-run on current `main`; it is not a child-specific feature. |
+| Adult real-pixel smoke | `job_8f8ac7de18` produced a GPT Image 2 candidate with `hybrid / pass / verified / 0.92`. | It is positive evidence for the existing shared chain, not a blanket production gate for every template. |
+| Controlled school-age-child smoke | `job_3863e5d5f2` reached the remote Brain, froze Human Realism, then received a generic provider `400` before pixels. The raw message says the request *may* be policy-blocked or unsuitable. | Classify it as `image_generation_invalid_request_unattributed` until the upstream supplies structured or correlated policy evidence. It is neither a visual-quality pass nor a visual-quality failure. |
+| Reference-provider closure | This document specifies the derived admission/result projection, classifier, and safe UI state. | These phases remain to implement after the activation candidate is integrated. They must reuse the existing envelope, Provider result, retry record, and Job lifecycle. |
+
+The forward execution model is intentionally short:
+
+```text
+normalized factual evidence
+  -> frozen envelope and resolved ledger
+  -> remote Brain's natural-language image direction
+  -> one provider materialization operation
+  -> existing Provider result / classified no-pixel failure
+  -> review and bounded retry only after pixels exist
+```
+
+The shared stages decide whether an operation is allowed, what evidence is
+preserved, and how a result is honestly reported. They do **not** manufacture
+creative prompt fragments, child-oriented language, local scene recipes, or a
+second structured prompt language.
 
 ## 1. Purpose and authority
 
@@ -21,8 +52,9 @@ the shared boundary:
    returned activation intent omits shared `human_realism`; and
 2. an actual image-edit Provider may reject a user-authorized reference image
    with an upstream 4xx before any pixels, review, or visual retry exist; and
-3. a compliant, fully fictional school-age-child scene may be explicitly
-   blocked by the configured Provider's policy before pixels exist.
+3. a compliant, fully fictional school-age-child scene may receive an
+   ambiguous Provider invalid-request response before pixels exist. A generic
+   4xx is not proof of a policy decision.
 
 Neither risk is an apparel-only concern. They affect a person wearing a product,
 same-person reference work, a product-on-person lifestyle image, and any other
@@ -30,7 +62,7 @@ V3 task that requires a real reference input. The correct architecture is:
 
 ```text
 normalized request/reference evidence
-  -> locally authoritative capability activation and frozen envelope
+  -> locally authoritative capability activation and frozen envelope/ledger
   -> remote Brain creative direction only
   -> reference-input admission and one gateway-owned image-edit request
   -> shared Provider result or structured Provider failure
@@ -47,7 +79,8 @@ It does not override Doc93's existing, narrowly classified direct-Provider
 transport retry. For a gateway-owned operation, V3 still submits exactly one
 outer request and leaves lane selection/failover to the gateway. This document
 also does not recast an explicit Provider policy block as a visual failure or a
-reason to substitute a young adult for a child.
+reason to substitute a young adult for a child. Conversely, it does not call an
+opaque 4xx a policy block merely because a request mentions a child.
 
 Doc100 remains authoritative: GPT Image 2 is the sole production final-pixel
 renderer. The configured gateway remains the sole owner of upstream routing and
@@ -156,26 +189,26 @@ request.
 
 ## 4. Required contracts and invariants
 
-### 4.1 Activation integrity record
+### 4.1 Derived activation-integrity projection
 
-The frozen `CapabilityExecutionEnvelope` must retain a compact,
-non-biometric activation integrity projection:
+The frozen `CapabilityExecutionEnvelope` is already the sole activation truth.
+Do not create or persist a new `v3_activation_integrity_v1` record beside it.
+When an audit or public-safe status needs to explain the Human Realism outcome,
+derive a compact projection from the normalized evidence, frozen plan, and
+envelope:
 
-```json
-{
-  "schema_version": "v3_activation_integrity_v1",
-  "evidence_ids": ["..."],
-  "visible_person": true,
-  "product_on_person_detected": true,
-  "human_realism_state": "active | inactive_with_reason | blocked_with_reason",
-  "human_realism_reason_code": "visible_real_person | visible_human_surface | nonhuman | explicitly_excluded | stylized_nonphotoreal | conflicting_evidence",
-  "activation_source": "local_normalized_evidence",
-  "remote_brain_may_override": false
-}
+```text
+human_realism_state = active | inactive_with_reason | blocked_with_reason
+human_realism_reason_code = visible_real_person | visible_human_surface |
+                            nonhuman | explicitly_excluded |
+                            stylized_nonphotoreal | conflicting_evidence
+activation_source = local_normalized_evidence
+remote_brain_may_override = false
 ```
 
-The public projection may expose only the state and safe reason code. Evidence
-IDs and internal activation traces remain audit-only.
+The public projection exposes only state and a safe reason code. Evidence IDs,
+plan details, and internal activation traces remain in the existing audit
+records. This is a read model, not another planner, envelope, or lifecycle.
 
 The canonical emitted field is `product_on_person_detected`, as required by
 Doc113. A Product API boundary may read the older `product_on_person` spelling
@@ -213,7 +246,7 @@ canonical records rather than duplicating their lifecycle:
   "transport_profile": "safe_capability_identifier",
   "request_budget_owner": "gateway | direct_provider",
   "outer_request_count": 1,
-  "failure_code": "reference_input_unsupported | reference_input_capability_mismatch | reference_input_rejected | image_edit_invalid_request_unattributed | provider_policy_blocked | provider_timeout | provider_unavailable | null",
+  "failure_code": "reference_input_unsupported | reference_input_capability_mismatch | reference_input_rejected | image_edit_invalid_request_unattributed | image_generation_invalid_request_unattributed | provider_policy_blocked | provider_timeout | provider_unavailable | null",
   "failure_retry_link": "existing provider_failure_retry record or null",
   "safe_message": "string | null"
 }
@@ -239,8 +272,10 @@ Required invariants:
    capability. It never asserts content-policy eligibility.
 3. A stable upstream 4xx maps to `reference_input_rejected` only when
    structured/redacted evidence actually attributes it to the reference input.
-   A generic or garbled `400` is `image_edit_invalid_request_unattributed` and
-   must not be presented as a reference rejection or policy decision.
+   A generic or garbled image-edit `400` is
+   `image_edit_invalid_request_unattributed`; its no-reference equivalent is
+   `image_generation_invalid_request_unattributed`. Neither may be presented
+   as a reference rejection or policy decision.
 4. An explicit, safely classified Provider safety/content-policy block maps to
    `provider_policy_blocked`; it is not retried, visually reviewed, or made to
    look supported by changing the requested age or scenario.
@@ -276,18 +311,20 @@ existing retry/failure owner resolves it; it must not be falsely labeled
 | Transport declares no native edit/reference support | `blocked` / `reference_input_capability_mismatch` | Provider capability layer | Block; do not reduce required truth to text. |
 | Structured failure attributes a stable upstream 4xx to the supplied reference | `failed` / `reference_input_rejected` | gateway + shared Provider projection | For a gateway-owned operation: one outer request, safe rejected state, no visual retry. |
 | Generic/garbled image-edit 4xx cannot distinguish reference, prompt, parameter, or gateway cause | `failed` / `image_edit_invalid_request_unattributed` | shared Provider failure classifier | Do not assert reference rejection or policy. Only the existing Doc93 direct-Provider transient rule may issue its bounded fresh request; a gateway-owned operation makes no V3 outer replay. |
+| Generic/garbled no-reference image-generation 4xx cannot distinguish prompt, parameter, gateway, or policy cause | `failed` / `image_generation_invalid_request_unattributed` | shared Provider failure classifier | Do not infer policy from age, product, or template vocabulary. Preserve safe evidence, make no visual retry, and wait for an attributable upstream result before changing the classified state. |
 | Explicit Provider safety/content-policy refusal, with or without a reference | `failed` / `provider_policy_blocked` | gateway + shared Provider projection | No visual retry, no text-only substitution, no age/scenario substitution, and no claim of quality acceptance. Preserve safe blocked evidence and wait for supported-route/upstream confirmation. |
 | Gateway/Provider timeout or unavailable route | `failed` / `provider_timeout` or `provider_unavailable` | gateway + shared Provider projection | Follow existing gateway-owned resilience policy; preserve bounded transport provenance. |
 | Request submitted but provider returns no candidate bytes | `empty_provider_output` | shared Provider result classifier | Use the existing provider-failure owner; do not mark the request accepted or visually reviewed. |
 | Candidate pixels exist but garment/person/scene contract fails | normal candidate/review state | Product Identity, Human Realism, template, or universal quality | Use existing shared bounded visual retry only for observed pixel issues. |
 | Required reference was rejected and an optional unrelated output exists | `blocked` for required-reference deliverable | Product API/template delivery | Keep unrelated diagnostics append-only; do not certify or substitute them. |
 
-The user-visible outcome for `reference_input_rejected` or
-`provider_policy_blocked` must be plain and non-accusatory: the current image
-route could not complete this requested image, so it was not created. It may
-offer a valid replacement image or an explicitly selected supported route, but
-must not advise cropping, obscuring, changing the depicted age, or otherwise
-altering a request to bypass upstream controls.
+The user-visible outcome for `reference_input_rejected`, either unattributed
+invalid-request state, or `provider_policy_blocked` must be plain and
+non-accusatory: the current image route could not complete this requested
+image, so it was not created. It may offer a valid replacement image or an
+explicitly selected supported route, but must not advise cropping, obscuring,
+changing the depicted age, or otherwise altering a request to bypass upstream
+controls.
 
 ## 6. Provider, review, and browser behavior
 
@@ -305,8 +342,8 @@ They apply before the operation and remain traceable to the same source. They
 must not be suggested to a user, or invoked after a policy block, to evade an
 upstream decision.
 
-When a required reference is blocked or rejected, or a no-reference request is
-explicitly Provider-policy blocked:
+When a required reference is blocked or rejected, or a no-reference request
+has an explicit policy block or an unattributed no-pixel invalid-request:
 
 ```text
 no candidate asset
@@ -319,9 +356,10 @@ one append-only classified Provider attempt
 ### Review and retry behavior
 
 Shared review/retry begins only after actual candidate pixels exist. A reference
-input rejection or Provider policy block is terminal for that materialization
-attempt. Its repair is not a request to make the garment, face, hand, scene, or
-depicted age more realistic or more likely to be admitted.
+input rejection, explicit Provider policy block, or unattributed no-pixel
+invalid-request is terminal for that materialization attempt. Its repair is not
+a request to make the garment, face, hand, scene, or depicted age more realistic
+or more likely to be admitted.
 
 If pixels exist, Doc113/Doc114 ownership resumes unchanged: Product
 Identity/reference policy repairs garment truth; Human Realism repairs observed
@@ -338,7 +376,7 @@ The user-facing Job/Project state must expose a safe terminal reference state:
   "reference_execution_state": "ready | blocked | rejected | unavailable",
   "automatic_delivery_available": false,
   "manual_confirmation_required": true,
-  "safe_reason_code": "reference_input_rejected | provider_policy_blocked | image_edit_invalid_request_unattributed"
+  "safe_reason_code": "reference_input_rejected | provider_policy_blocked | image_edit_invalid_request_unattributed | image_generation_invalid_request_unattributed"
 }
 ```
 
@@ -403,13 +441,14 @@ failure contract only; it does not prove or disprove visual quality.
 | General, real product reference, person wearing product | Local evidence freezes `human_realism`; remote creative direction cannot remove it; one image-edit request reaches real Provider. |
 | E-Commerce, real product reference, apparel-on-person | Doc114 garment facts, active Human Realism, template-owned count, and reference input lineage coexist without a vertical shared recipe. |
 | Photography, real portrait/reference image | Photography role contract remains isolated; reference execution state follows the same shared contract. |
-| General, fully fictional, fully clothed school-age-child daily scene, no reference | It remains General, and active shared Human Realism is frozen. If the Provider explicitly policy-blocks it, record `provider_policy_blocked`; do not call it a quality pass/failure or substitute a young adult. |
+| General, fully fictional, fully clothed school-age-child daily scene, no reference | It remains General, and active shared Human Realism is frozen. Record an explicit policy block only with attributable evidence; record an opaque 4xx as `image_generation_invalid_request_unattributed`. Neither is a quality pass/failure or a reason to substitute a young adult. |
 | Remote Brain omits/malforms activation fields | For a real visible-person target, local activation survives; incompatible remote sections are rejected/audited; no weakened plan is frozen. Explicit stylized/non-photoreal targets retain their explicit inactive reason. |
 | Non-person product with no human evidence | Human Realism remains inactive with a safe reason; reference input can still proceed. |
 | Explicit no-person/nonhuman request | No false Human Realism activation from product wording or human-like parts. |
 | Locally invalid required reference | Blocks before upstream call with safe reason; no text-only fallback. |
 | Structured real upstream reference 4xx | One outer gateway request; `reference_input_rejected`; no candidate, review, retry, or final delivery. |
 | Generic image-edit 400 | `image_edit_invalid_request_unattributed`, never a fabricated reference/policy reason. A direct Provider may follow the existing Doc93 bounded rule; a gateway-owned operation has no V3 outer replay. |
+| Generic image-generation 400 | `image_generation_invalid_request_unattributed`, never a fabricated policy reason. No visual retry, delivery, or demographic/content substitution follows from the error. |
 | Input-fidelity-only compatibility rejection | Use only the existing documented technical negotiation, preserve the same reference lineage, and record each direct outer request. It must not become a content bypass. |
 | Explicit Provider policy block | `provider_policy_blocked`; no candidate, review, retry, delivery, young-adult substitution, or manual visual certification. |
 | Provider returns pixels after an admitted reference | Shared vision/hybrid review and existing bounded visual retry run normally; final delivery contains only the winner. |
@@ -454,19 +493,21 @@ mistake a correctly blocked failure for a visual-quality pass.
 The controlled General request `job_3863e5d5f2` was a no-reference, fully
 fictional, fully clothed school-age-child daily scene. It reached remote Brain
 successfully without fallback, and the enforced plan froze `human_realism` as
-required. The real GPT Image 2 request then received an explicit non-retryable
-Provider 400 identified by the mainline acceptance environment as an upstream
-content-safety/not-applicable generation decision. No candidate pixels,
-visual-review record, retry, or delivery exist.
+required. The real GPT Image 2 request then received a non-retryable generic
+Provider 400 before any pixels. Its redacted wording says the request *may* be
+blocked by safety policy or may be unsuitable for image generation; it does not
+attribute the cause with structured or correlated evidence.
 
-Its Gate is therefore **Provider-policy blocked**, not passed and not failed on
-children's visual quality. It also does not prove that Human Realism or garment
-truth is visually effective. Do not transform the request into a young-adult
-sample, text-only fallback, alternate renderer, or a private children-specific
-rule in order to obtain a green result.
+Its current state is therefore
+**`image_generation_invalid_request_unattributed`**. It is not passed and not
+failed on children's visual quality, and it is not yet a confirmed Provider
+policy block. It also does not prove that Human Realism or garment truth is
+visually effective. Do not transform the request into a young-adult sample,
+text-only fallback, alternate renderer, or a private children-specific rule in
+order to obtain a green result.
 
-Until the upstream explicitly supports this compliant scenario and the
-mainline reruns it, permitted work is limited to offline/contract checks:
+Until the upstream supplies attributable evidence or supports a compliant
+rerun, permitted work is limited to offline/contract checks:
 
 1. confirm General routing, remote-Brain/no-fallback provenance, and frozen
    shared Human Realism activation;
@@ -475,7 +516,8 @@ mainline reruns it, permitted work is limited to offline/contract checks:
 3. confirm the public blocked projection survives refresh/recovery without
    exposing upstream detail; and
 4. keep the real-reference Doc114 Gate independently open. A no-reference
-   child policy block cannot replace its authorized-product-reference evidence.
+   child no-pixel error cannot replace its authorized-product-reference
+   evidence.
 
 ## 10. Definition of done
 
@@ -492,6 +534,56 @@ Doc117 is complete only when:
    contract without inheriting each other's deliverable logic; and
 7. the mandatory real-chain and failure-path evidence is recorded on the
    current mainline; and
-8. a Provider-policy-blocked child request remains a correctly classified open
-   Gate until a compliant real-pixel rerun exists, never a surrogate visual
-   pass or a reason to add vertical special cases.
+8. a child no-pixel request remains a correctly classified open Gate until an
+   attributable failure or compliant real-pixel rerun exists, never a surrogate
+   visual pass or a reason to add vertical special cases.
+
+## 11. Unified authority map and integration sequence
+
+The following reading order prevents a later implementation from reviving a
+historical recipe or treating an audit fixture as a new runtime product.
+
+| Concern | Current authority | Implementation consequence |
+| --- | --- | --- |
+| Reference channels and source-owned truth | Doc93 | Preserve reference truth through the existing policy; technical preparation is traceable and never a content workaround. |
+| Shared anti-overfitting boundary | Doc94 | Regression samples may be children, apparel, portrait, or product; none may become a named shared path or prompt recipe. |
+| Final renderer and gateway ownership | Doc100 | GPT Image 2 remains the production renderer; the gateway owns upstream routing/failover. |
+| Enforced execution truth | Docs102 and 113 | One normalized intent, envelope, ledger, materialization, and review/retry chain. |
+| LLM/provider-native creative direction | Doc111 | The remote Brain creates natural-language image direction; no local font, overlay, recipe, or prompt-atom system is restored. |
+| Garment/person quality after pixels | Doc114 | Product truth and shared Human Realism are reviewed only after pixels exist. |
+| Provider admission and no-pixel closure | This document | Add a derived audit/status projection and narrow classifier, not another state machine. |
+
+The following documents remain readable historical material or compatibility
+references only: Docs57, 59, 60, 65, 68, 69, 70, and 75. Their static suite,
+role-recipe, prompt-atom, named-demographic, or local-composition proposals
+must not re-enter a new task. Their useful regression observations may be
+translated into neutral evidence and pixel-review tests under the authorities
+above.
+
+Document-number reservation: this is the only Doc117 intended for mainline.
+The separate, unmerged Codex Local Mode experiment previously used the same
+number in its feature worktree. It is a quarantined experiment, not an
+authority for this closure; before any later integration it must be renumbered
+and amended to the then-current local-Codex architecture decision. Do not merge
+two documents numbered 117 or treat its abandoned Platform-key adapter as a
+fallback for the web/provider path.
+
+Implementation proceeds in this order:
+
+1. rebase and integrate `e458d23` into the then-current mainline, then rerun
+   its activation regression across all entry paths;
+2. build a **derived** reference-input audit projection from existing asset
+   plans, materialization attempts, Provider results, retry records, and Job
+   lifecycle;
+3. add the narrow no-pixel result classifier, including the two unattributed
+   invalid-request states and the higher-evidence policy classification;
+4. project only safe terminal status to Product API, Project Mode, history,
+   and browser surfaces; and
+5. run the cross-template real-chain matrix with authorized references and
+   vision/hybrid review. A real result is accepted only when candidate pixels,
+   review provenance, and the final delivery lineage all exist.
+
+During every phase, creative direction remains remote-Brain owned. The local
+system may enforce facts, capability activation, reference admission, count,
+and truthful status, but it must not compensate for a Provider failure by
+assembling a longer structured prompt or a special-case visual recipe.

@@ -29,6 +29,22 @@ keyword matching. Only a frozen Doc101 activation plan may enable its prompt,
 review, or retry contributions.
 ```
 
+Doc113/Doc117 execution correction:
+
+```text
+Doc113 owns the single normalized intent, execution envelope, resolved ledger,
+and truthful review contract. Doc117 closes real-reference admission and
+no-pixel Provider failure reporting without adding a second lifecycle. Human
+Realism is a shared semantic quality capability inside that contract: it never
+owns a template role, an age classifier, a vertical route, or a catalogue of
+prompt atoms. The remote Brain owns natural-language creative direction; the
+frozen local plan decides whether Human Realism is active.
+
+`e458d23` is an integration candidate that locks the real-visible-person
+activation invariant. It must be integrated and re-run on current main before
+being treated as deployed mainline behavior.
+```
+
 ## 1. Purpose
 
 Doc91 formalizes the reusable Human Realism Plugin for V3.
@@ -42,13 +58,14 @@ not a generic AI face, doll face, wax face, beauty-filter face, or synthetic
 stock-model face.
 ```
 
-This document exists because recent validation exposed a cross-template gap:
+This document exists because validation exposed a cross-template activation
+gap. The shared planner candidate `e458d23` addresses it, but the regression
+must remain explicit until that candidate is integrated:
 
 ```text
-Portrait and General Template paths can apply human photorealism.
-Some E-Commerce product paths can still skip it when subject_type is product.
-Kidswear, fashion, product-on-model, lifestyle scenes, and hand-held product
-images may contain human faces even when the primary deliverable is a product.
+Real people can be present while the requested subject is a product.
+Human quality must therefore depend on normalized visible-person evidence, not
+on `subject_type`, template name, product category, or a prompt keyword list.
 ```
 
 Therefore human realism must be governed as a shared V3 visual capability, not
@@ -169,7 +186,92 @@ Do not let General Template become a Photography or E-Commerce deliverable map.
 Do not expose raw engineering issue codes in beginner-facing UI.
 ```
 
-## 4. Plugin Contract
+## 4. Current execution contract
+
+Human Realism is a shared quality capability, not a prompt template. Its active
+contract is deliberately small:
+
+```text
+normalized factual evidence
+  -> frozen CapabilityActivationPlan / CapabilityExecutionEnvelope
+  -> remote Brain natural-language image direction
+  -> GPT Image 2 materialization
+  -> shared vision/hybrid pixel review
+  -> bounded, observed-issue repair and final-winner selection
+```
+
+The capability contributes a semantic quality concern: preserve a convincing
+real human without plastic skin, implausible anatomy, frozen expression, or a
+person detached from the photographed environment. It preserves prompt-owned
+style, light, scene, wardrobe, pose, and mood rather than replacing them with a
+preferred commercial look. It also preserves Doc93 reference boundaries: an
+identity reference establishes only the channels the user/reference policy has
+actually assigned.
+
+### 4.1 Evidence and activation
+
+The local normalizer and activation planner use normalized evidence, not broad
+keywords or product categories:
+
+- a real, visible person or human surface is required by the request or trusted
+  task profile;
+- a person is actually required to wear, hold, or use a product
+  (`product_on_person_detected`);
+- a portrait/person reference or an explicit human-rendering request assigns a
+  relevant reference channel; or
+- the user explicitly requests age fidelity for a real-person target.
+
+An explicitly non-photoreal/stylized person, a nonhuman target, or conflicting
+evidence must result in an explicit inactive/blocked decision. A garment size,
+an ecommerce label, a word such as "photo", or a human-like product shape is
+not enough. The plan is authoritative: remote Brain output cannot remove an
+active shared capability, and the capability cannot self-activate after the
+plan has frozen.
+
+### 4.2 Contribution, review, and retry
+
+Human Realism receives the resolved evidence and envelope; it must not emit a
+second structured prompt, static camera/lighting/pose recipe, named demographic
+profile, or template delivery role. The remote Brain remains the sole owner of
+the complete natural-language creative image direction. The capability and
+review share only broad quality dimensions such as facial-feature coherence,
+skin/material response, anatomy/contact/drape plausibility, expression
+naturalness, person-to-scene light/depth integration, and explicit age fidelity
+when the request supplies it.
+
+After pixels exist, shared vision/hybrid review records observed defects using
+generic issue evidence. Any bounded retry is an owner-local repair of that
+observed defect through the frozen envelope and ledger; it is not an appended
+catalogue of anti-AI phrases. `metadata_only` and local heuristics can never
+certify person, anatomy, age, identity, or product truth. Before pixels exist,
+Doc117's Provider classifier owns the terminal no-pixel state and no visual
+repair occurs.
+
+### 4.3 Compatibility and regression locks
+
+`product_on_person_detected` is the only emitted generic field. The older
+`product_on_person` and `ecommerce_human_model_detected` spellings may be read
+at an explicit compatibility boundary only; they must not be emitted into new
+plans, ledger entries, prompts, review records, or retries. Historical child
+issue aliases may be displayed/read for old data but cannot form a new child
+branch or direct retry instruction.
+
+The required regression set covers at least a real adult portrait/lifestyle
+target, product-on-person, a non-person product, and an explicitly stylized
+human target. Child/apparel fixtures remain useful regression samples, but they
+are not a runtime category. A real-provider sample is a quality gate only after
+candidate pixels plus vision/hybrid provenance exist.
+
+## H1. Historical pre-Doc94 contract (compatibility material only)
+
+The remainder of this document records the earlier proposal that led to the
+shared capability. It is **not** forward implementation authority where it
+describes subject kinds, strictness tiers, named demographic branches, prompt
+fragments, or template/product-category activation. Retain it solely to read
+legacy records and understand the historical test vocabulary. The current
+contract is Sections 1--4.3 plus Docs93, 94, 102, 111, 113, 114, and 117.
+
+### Historical plugin-contract proposal
 
 Future code should expose a single activation contract.
 
@@ -240,7 +342,7 @@ human_realism_plugin:
   doc: "91"
 ```
 
-## 5. Activation Evidence Rules
+## H2. Historical activation-evidence examples
 
 The signals below are evidence supplied to Central Brain and the Doc101
 Activation Planner. They are not permission for the plugin to self-activate or
@@ -323,7 +425,7 @@ the plugin.
 reduce the plugin.
 ```
 
-## 6. Ownership And Consolidation
+## H3. Historical ownership table
 
 The following ownership table is mandatory.
 
@@ -343,7 +445,7 @@ The following ownership table is mandatory.
 | Suite role planning and shot purpose | Mode/Suite Director or specialized template | Do not move into Human Realism Plugin |
 | Real-output review, retry budget, final delivery filtering | Quality/retry/output reconciliation modules | Consume plugin issue codes |
 
-## 7. Rules To Consolidate From Recent Iterations
+## H4. Historical tuning observations
 
 The following recent updates must be treated as Human Realism Plugin behavior,
 not scattered template behavior:
@@ -365,7 +467,7 @@ makeup, pageant polish, frozen smile, over-large glossy eyes, and synthetic
 skin
 ```
 
-## 8. Child And Teen Model Branch
+## H5. Retired child/teen branch proposal
 
 When `human_subject_kind` is `child_or_teen_model`, strictness must be at least
 `child_strict` unless the user explicitly requests a stylized illustration.
@@ -416,7 +518,7 @@ unreal_child_teeth
 child_face_ai_render
 ```
 
-## 9. Review And Retry Policy
+## H6. Historical review/retry examples
 
 When the plugin applies, post-generation review must check:
 
@@ -453,7 +555,7 @@ patch: real child photography, age-appropriate face, natural expression, no
 Bounded retry remains controlled by the existing retry layer. Doc91 does not
 increase retry loops by itself.
 
-## 10. Frontend Rule
+## H7. Historical frontend note
 
 No new default beginner UI complexity is required.
 
@@ -475,7 +577,7 @@ V3 will keep people looking like real photographed humans.
 V3 will avoid fake skin, doll faces, and over-polished AI faces.
 ```
 
-## 11. Implementation Plan
+## H8. Retired implementation plan
 
 Future coding must follow this order:
 
@@ -511,7 +613,7 @@ Future coding must follow this order:
 10. Update tests before real-image validation.
 ```
 
-## 12. Required Tests
+## H9. Historical test inventory
 
 Focused tests:
 
@@ -565,7 +667,7 @@ The plugin should improve human realism without changing suite purpose,
 template deliverable maps, product truth, or prompt mood.
 ```
 
-## 13. Audit Commands
+## H10. Historical audit commands
 
 Use these commands before implementation:
 
@@ -578,7 +680,7 @@ git diff --check -- AGENTS.md alchemy_creative_agent_3_0/README.md alchemy_creat
 After implementation, add focused tests for Doc91 before running real image
 validation.
 
-## 14. Current Audit Result
+## H11. Historical audit snapshot
 
 Current structure is mostly compatible:
 

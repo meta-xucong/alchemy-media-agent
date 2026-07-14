@@ -1,12 +1,18 @@
 # 65 V3 Human Photorealism And Anti-AI Face Layer Spec
 
+> Historical/compatibility notice (Docs91, 94, 113, and 117): this is source
+> material for the shared Human Realism capability, not a live implementation
+> recipe. Its demographic, mode, prompt, and retry examples must not be copied
+> into a new path. Current execution uses normalized evidence, a frozen shared
+> activation plan, remote-Brain creative direction, and pixel-observed review.
+
 Doc94 correction note:
 
 ```text
-Doc65 remains the foundation for photographed-human realism and anti-AI-face
-quality. Any named demographic, season, wardrobe, or historical validation case
-in this document is test evidence only. It must not create a shared runtime
-profile or prompt branch. Doc94 owns universal rendering variables.
+Doc65 is retained as historical source material for photographed-human realism
+and anti-AI-face observations. Any named demographic, season, wardrobe, or
+historical validation case is test evidence only. It must not create a shared
+runtime profile or prompt branch. Doc91/Doc94 own current capability governance.
 ```
 
 Doc93 compatibility note:
@@ -19,7 +25,8 @@ identity reference into hair, wardrobe, lighting, scene, camera, or style truth.
 
 ## 1. Status And Authority
 
-Doc65 is the human portrait realism layer after Doc64.
+Doc65 is a historical precursor to the current shared Human Realism layer.
+Docs91, 94, 113, and 117 define forward ownership and execution.
 
 Authority chain:
 

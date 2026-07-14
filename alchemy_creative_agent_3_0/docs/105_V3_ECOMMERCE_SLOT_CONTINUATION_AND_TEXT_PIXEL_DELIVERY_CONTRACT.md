@@ -11,10 +11,11 @@ safe-area overlay contract. Slot continuation remains active and unchanged.
 
 ## 1. Purpose And Ownership
 
-E-Commerce owns suite roles, platform profiles, copy planning, and the
-professional delivery map. The V3 foundation owns Project Mode lineage,
-CapabilityActivationPlan governance, provider routing, deterministic delivery
-postprocess, review, retry, and final-result presentation.
+E-Commerce owns its explicit template delivery contract. The V3 foundation owns
+Project Mode lineage, CapabilityActivationPlan governance, provider routing,
+provider-native complete-image delivery, observational final-pixel review,
+retry, and final-result presentation. It does **not** own a deterministic text
+compositor or local post-generation text construction for new jobs.
 
 This contract applies only to `ecommerce_template`. It does not add an
 E-Commerce action, slot, platform, or continuation concept to General

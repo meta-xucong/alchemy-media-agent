@@ -3,6 +3,21 @@
 Status: post-Doc113 capability specification; implementation is explicitly out
 of scope for the Doc113 correction task.
 
+The separate Doc114 implementation candidate `a2f2594` may be audited/rebased
+only after the shared execution and Provider-closure contracts below are
+integrated. Until then this document is a gated specification, not proof that
+the apparel/child acceptance gate is passed.
+
+Current gate reconciliation (Doc117): `job_3863e5d5f2` did **not** produce
+pixels. Its generic Provider 400 is currently
+`image_generation_invalid_request_unattributed`, not a confirmed policy block
+and not a child-visual-quality result. Candidate `e458d23` closes the shared
+real-visible-person activation omission but still awaits mainline integration.
+Doc117 owns reference-input admission and no-pixel Provider failure closure;
+this document begins only after candidate pixels exist. Neither document
+authorizes a child/kidswear route, classifier, prompt recipe, age inference, or
+demographic workaround.
+
 This is the mainline-numbered import of the audit authority formerly prepared
 as `105_V3_APPAREL_ON_CHILD_REALISM_AND_GARMENT_TRUTH_OPTIMIZATION_SPEC.md`.
 References to the former audit runtime-correction/apparel documents mean
@@ -58,11 +73,16 @@ Human Realism activates only from reusable normalized evidence:
 
 ```text
 visible_person
-product_on_person
+product_on_person_detected
 explicit_age_direction
 wearable_apparel_evidence
 reference_channel_assignment
 ```
+
+`product_on_person_detected` is the canonical emitted field from Doc113. The
+former `product_on_person` spelling is read-only compatibility for historical
+records and must not be emitted into a new plan, ledger, prompt, review, or
+retry.
 
 Age direction is a user/request/review constraint, not a stored biometric
 inference. A small garment is never evidence that a subject must be young.
@@ -144,10 +164,11 @@ need materially different evidence purposes, not seven repeated centered poses.
 
 ## 6. Provider, review, and bounded repair
 
-Provider materializes only the Doc113 ledger: final role contract, garment
-facts with strengths, generic Human Realism variables, user-owned art direction,
+Provider materializes only the Doc113 ledger and the remote Brain's complete
+natural-language image direction: final role contract, garment facts with
+strengths, generic Human Realism quality concern, user-owned art direction,
 text policy, resolved format, and review IDs. No independent child, beauty,
-listing-role, or studio recipe may be appended.
+listing-role, studio recipe, or structured prompt supplement may be appended.
 
 For a multi-output E-Commerce request, the per-output review ID is frozen
 before generation by the internal `asset_id -> requested output index ->

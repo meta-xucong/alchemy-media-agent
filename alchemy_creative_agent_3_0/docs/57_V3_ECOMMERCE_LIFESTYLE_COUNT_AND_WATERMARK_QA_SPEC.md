@@ -1,8 +1,16 @@
 # 57 V3 E-Commerce Lifestyle Count And Watermark QA Spec
 
+> Historical/compatibility notice (Docs111 and 113): this document records the
+> pre-LLM-native static-suite approach. Its lifestyle categories, slot ordering,
+> prompt rules, and fixed count-selection proposals are not forward runtime
+> authority. New E-Commerce work requires explicit template selection, a
+> remote-Brain natural-language image plan, a resolved count contract, GPT Image
+> 2 complete-image generation, and shared review/retry. Only its neutral
+> regression observations may be retained.
+
 ## 1. Status And Authority
 
-This document adds three targeted quality upgrades for the next V3 E-Commerce
+This historical document added three targeted quality upgrades for the earlier V3 E-Commerce
 and commercial-output phase:
 
 ```text

@@ -1,5 +1,13 @@
 # 60 V3 E-Commerce Product Suite Slot And Label QA Spec
 
+> Historical/compatibility notice (Docs111 and 113): the static product-suite
+> slots, label/logo prompt guidance, and local role mapping below are retained
+> only to read historical records and derive neutral regression fixtures. They
+> must not shape a new E-Commerce job, continuation, Brain request, or provider
+> prompt. Current work is LLM-native complete-image generation with factual
+> product evidence, an explicit selected template, resolved count, and shared
+> pixel review/retry.
+
 ## 1. Status And Authority
 
 This document is the implementation authority for closing the product-image

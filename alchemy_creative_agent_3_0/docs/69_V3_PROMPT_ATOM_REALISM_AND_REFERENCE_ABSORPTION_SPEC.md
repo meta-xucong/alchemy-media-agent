@@ -1,11 +1,18 @@
 # 69 V3 Prompt Atom Realism And Reference Absorption Spec
 
+> Historical/compatibility notice (Docs93, 94, 111, and 113): prompt atoms and
+> local stacked prompt construction are retired for new V3 production jobs.
+> Do not reuse these atom schemas, role overlays, or local retry wording as a
+> substitute for the remote Brain's complete natural-language image direction.
+> Retain only source-policy and regression observations that can be expressed
+> through the frozen envelope and resolved ledger.
+
 Doc94 correction note:
 
 ```text
-Doc69 remains the reusable prompt-atom baseline. Atoms must describe portable
-visual properties and cannot encode a named demographic, costume, season,
-market, or historical case as a default shared recipe. Named cases remain tests.
+Doc69 is historical prompt-atom source material. Named cases remain tests, but
+new work must not revive the atom mechanism; Docs93, 94, 111, and 113 govern the
+current remote-Brain/provider-native path.
 ```
 
 Doc93 compatibility note:
@@ -16,7 +23,7 @@ source role and allowed channel, and must be dropped when they conflict with a
 current prompt-owned channel.
 ```
 
-Status: accepted optimization document after Doc68.
+Status: historical optimization record; not forward implementation authority.
 
 This document answers the latest audit question:
 

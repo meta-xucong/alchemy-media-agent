@@ -1,5 +1,11 @@
 # 68 V3 Casebook-Guided Photographic Recipe Tuning Spec
 
+> Historical/compatibility notice (Docs94, 111, and 113): casebook recipes are
+> no longer a forward runtime mechanism. Do not recreate local recipe helpers,
+> camera/light/pose blocks, or case-derived prompt stacks from this document.
+> Preserve only neutral empirical observations as regression fixtures; remote
+> Brain creative direction and shared factual constraints now govern new work.
+
 Doc93 compatibility note:
 
 ```text
@@ -8,12 +14,12 @@ inheritance. Recipe identity, hair, wardrobe, light, and scene examples must be
 filtered through the resolved channel policy before provider compilation.
 ```
 
-Status: accepted next-stage optimization spec.
+Status: historical optimization record; not forward implementation authority.
 
-This document is the implementation authority after document 67. It tightens
-quality by distilling proven V2 case/prompt experience and GPT-Image-2 prompt
-patterns into V3-owned reusable photographic recipes. It must not create a new
-parallel visual framework.
+This document formerly proposed reusable photographic recipes after document
+67. Its observations remain useful only when restated as neutral test evidence;
+it is not an implementation authority and must not create a parallel visual
+framework.
 
 Document 69 is the accepted authority after this document for prompt atom
 realism and reference absorption. Doc69 keeps this architecture and only makes

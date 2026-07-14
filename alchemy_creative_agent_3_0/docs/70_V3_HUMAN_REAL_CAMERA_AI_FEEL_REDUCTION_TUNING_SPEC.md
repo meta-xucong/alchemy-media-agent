@@ -1,5 +1,11 @@
 # 70 V3 Human Real-Camera AI Feel Reduction Tuning Spec
 
+> Historical/compatibility notice (Docs91, 94, 113, and 117): this document is
+> evidence for shared Human Realism, not a live prompt-tuning catalogue. New
+> work may use its observations only through generic quality dimensions and
+> pixel-observed defects; it must not restore named demographic/style recipes or
+> local prompt stacks.
+
 Doc94 correction note:
 
 ```text
@@ -9,12 +15,13 @@ conditions. The current implementation uses universal texture, specularity,
 asymmetry, age-fidelity, and camera-response variables.
 ```
 
-Status: accepted micro-tuning document after Doc69.
+Status: historical micro-tuning record; its neutral observations are absorbed
+only through the current shared Human Realism contract.
 
-This document is a narrow quality pass. It does not add a new architecture
-module. It tunes the existing V3 Visual Capability Cluster so photoreal human
-outputs look less like polished AI beauty portraits and more like commercial
-images captured by a real camera.
+This historical document described a narrow quality pass. It does not add a
+current architecture module or prompt program. Any retained observation is
+expressed only through the current shared Human Realism quality dimensions and
+pixel-observed review.
 
 ## 1. Why This Pass Exists
 

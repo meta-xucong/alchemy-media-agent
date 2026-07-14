@@ -12,6 +12,15 @@ It does not replace the existing mainline documents numbered 104 and 105.
 References to the former audit runtime-correction document in this imported
 authority mean **Doc113**; references to its apparel follow-up mean **Doc114**.
 
+Doc117 reconciliation: this document remains the execution-truth authority.
+Doc117 extends it only at the real-reference Provider boundary: a derived
+admission/result projection and a narrow no-pixel failure classifier reuse the
+same normalized intent, envelope, ledger, Provider result, retry record, and
+Job lifecycle. They must not create another planner, envelope, prompt format,
+or lifecycle. The remote Brain still owns complete natural-language creative
+direction; the shared runtime still owns factual constraints and truthful
+execution status.
+
 ## 1. Purpose and authority
 
 V3 must have one execution truth for every job:

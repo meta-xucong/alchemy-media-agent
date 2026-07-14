@@ -29,6 +29,13 @@ reuse E-Commerce suite ownership.
 > review and visual-quality acceptance remain required. P11 records the
 > LLM-first and real-pixel production correction before further release work.
 
+> Current shared-boundary note (Docs113/117): a P10 terminal image is not a
+> photography quality pass unless its result surface shows `vision_model` or
+> `hybrid` provenance and a certifying final verdict. `metadata_only`,
+> `manual_confirmation_required`, and every no-pixel Provider failure remain
+> non-certifying. Photography does not add a second review/retry state or a
+> local creative recipe to compensate.
+
 ```text
 planning approval: accepted
 foundation rules: accepted for module development
@@ -84,7 +91,8 @@ P6 status: module-owned planning and shared production execution landed
 Photography development must follow this order when rules overlap:
 
 1. Repository `AGENTS.md`.
-2. Accepted V3 foundation authorities, especially Docs 76, 93-96, 100-102.
+2. Accepted V3 foundation authorities, especially Docs76, 91, 93-96, 100-103,
+   111, 113, and 117.
 3. `P01_PHOTOGRAPHY_MODULE_FOUNDATION_RULES.md`.
 4. `P03_NAMED_PHOTOGRAPHER_PROFILE_AND_RIGHTS_GOVERNANCE.md`.
 5. `P02_PHOTOGRAPHY_MODULE_MASTER_DEVELOPMENT_SPEC.md`.

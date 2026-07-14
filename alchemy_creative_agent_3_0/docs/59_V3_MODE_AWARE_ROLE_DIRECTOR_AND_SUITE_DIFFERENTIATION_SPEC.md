@@ -1,11 +1,20 @@
 # 59 V3 Mode-Aware Role Director And Suite Differentiation Spec
 
+> Historical/compatibility notice (Docs111 and 113): the shared director,
+> role-recipe, and prompt-compilation design below is not a forward production
+> path. General remains scenario-neutral; specialist templates own their own
+> explicit delivery contracts, and the remote Brain owns creative direction.
+> Do not revive `_ecommerce_delivery_recipes`, shared marketplace roles, static
+> camera/light/crop instructions, or prompt stacks from this document. Retain
+> only neutral regression evidence about requested-count and output diversity.
+
 Doc93 compatibility note:
 
 ```text
-Mode-aware role planning remains valid. The director may request channel
-variation but cannot redefine reference ownership. Identity, appearance, style,
-scene, and prompt-owned channels come from the resolved Doc93 policy.
+This historical record may be read for its reference-boundary observations only.
+Current role ownership follows Docs93, 111, and 113: a selected specialized
+template owns structural delivery bindings; the remote Brain owns the concrete
+creative direction; General does not inherit specialist roles.
 ```
 
 ## 1. Status And Authority
