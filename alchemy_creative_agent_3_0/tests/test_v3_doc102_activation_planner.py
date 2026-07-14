@@ -3,6 +3,7 @@ import pytest
 from alchemy_creative_agent_3_0.app.shared_capabilities import SharedCapabilityRegistry
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     ActivationEvidence,
+    CapabilityActivationError,
     CapabilityActivationIntent,
     CapabilityActivationPlanner,
     RequestedCapability,
@@ -45,10 +46,14 @@ def _plan(requested):
     )
 
 
-def test_required_universal_capabilities_are_always_present() -> None:
+def test_visible_real_person_is_a_shared_activation_invariant_even_when_brain_omits_it() -> None:
     plan = _plan([])
     assert {"visual_grammar", "universal_visual_quality", "commercial_quality"} <= set(plan.dependency_order)
-    assert "human_realism" not in plan.dependency_order
+    human = plan.active("human_realism")
+    assert human is not None
+    assert human.activation_mode == "required"
+    assert human.reason_codes == ["visible_real_person_execution_invariant"]
+    assert human.evidence_ids == ["person_evidence"]
 
 
 def test_evidence_backed_human_capability_activates() -> None:
@@ -87,3 +92,27 @@ def test_requested_product_reference_profile_overrides_concept_default() -> None
         RequestedCapability(capability_id="product_identity", requested_profile="reference_truth", confidence=0.95)
     ])
     assert plan.active("product_identity").selected_profile == "reference_truth"
+
+
+def test_explicitly_stylized_person_does_not_force_photorealism() -> None:
+    profile = _profile().model_copy(update={"visual_intent_tags": ["anime", "illustration"]})
+    plan = _planner().plan(
+        task_profile=profile,
+        intent=CapabilityActivationIntent(intent_id="intent", task_profile_id="profile", confidence=0.9),
+        template_policy=general_capability_policy(),
+        catalog_version="catalog",
+        activation_mode="enforced",
+    )
+    assert "human_realism" not in plan.dependency_order
+
+
+def test_visible_real_person_fails_closed_if_a_template_forbids_shared_realism() -> None:
+    policy = general_capability_policy().model_copy(update={"forbidden_capabilities": ["human_realism"]})
+    with pytest.raises(CapabilityActivationError, match="required shared capability is forbidden"):
+        _planner().plan(
+            task_profile=_profile(),
+            intent=CapabilityActivationIntent(intent_id="intent", task_profile_id="profile", confidence=0.9),
+            template_policy=policy,
+            catalog_version="catalog",
+            activation_mode="enforced",
+        )

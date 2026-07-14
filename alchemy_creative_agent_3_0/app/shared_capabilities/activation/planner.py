@@ -51,6 +51,31 @@ class CapabilityActivationPlanner:
         for capability_id, binding in required.items():
             self._activate(active, capability_id, "required", ["template_required"], [], 1.0, binding, template_policy)
 
+        # A remote Brain may correctly describe a visible real person in its
+        # task profile yet omit the corresponding capability from its proposed
+        # list.  In enforced mode that omission used to suppress the shared
+        # Human Realism executor altogether.  The profile is the evidence
+        # authority; a capability proposal is not allowed to weaken this
+        # foundation-level routing invariant.
+        #
+        # This is deliberately not a template, commerce, apparel, or child
+        # rule.  It applies only to an asserted visible person in a
+        # non-stylized image task, and it keeps the evidence on the frozen
+        # activation plan for provider, review, and retry provenance.
+        for capability_id, reason_codes, evidence_ids, confidence in self._shared_required_capabilities(task_profile):
+            if capability_id in forbidden:
+                raise CapabilityActivationError(f"required shared capability is forbidden: {capability_id}")
+            self._activate(
+                active,
+                capability_id,
+                "required",
+                reason_codes,
+                evidence_ids,
+                confidence,
+                optional.get(capability_id),
+                template_policy,
+            )
+
         candidates: list[tuple[str, str, TemplateCapabilityBinding | None]] = []
         for capability_id in requested:
             candidates.append((capability_id, requested[capability_id].activation_mode, None))
@@ -161,6 +186,57 @@ class CapabilityActivationPlanner:
             catalog_version=catalog_version,
             activation_mode=activation_mode,
         )
+
+    @staticmethod
+    def _shared_required_capabilities(
+        task_profile: VisualTaskProfile,
+    ) -> list[tuple[str, list[str], list[str], float]]:
+        """Return evidence-backed shared capabilities that cannot be omitted.
+
+        The current invariant is intentionally narrow: a *visible* ``person``
+        plus an affirmative real-person/visible-person evidence item requires
+        Human Realism, unless the task profile explicitly declares a
+        non-photorealistic person.  A person noun alone, a hidden person, an
+        animal, or a product does not qualify.
+        """
+
+        visible_people = [
+            entity
+            for entity in task_profile.subject_entities
+            if entity.entity_type.strip().casefold() == "person" and entity.visible_in_target
+        ]
+        if not visible_people:
+            return []
+
+        non_real_tags = {
+            "anime",
+            "animated",
+            "cartoon",
+            "illustration",
+            "non_photorealistic",
+            "stylized_person",
+        }
+        profile_tags = {str(tag).strip().casefold() for tag in task_profile.visual_intent_tags}
+        if profile_tags & non_real_tags:
+            return []
+
+        evidence = [
+            item
+            for item in task_profile.evidence
+            if item.evidence_type in {"visible_person", "real_human_output"}
+            and item.value is not False
+        ]
+        if not evidence:
+            return []
+
+        return [
+            (
+                "human_realism",
+                ["visible_real_person_execution_invariant"],
+                [item.evidence_id for item in evidence],
+                max([item.confidence for item in evidence] + [entity.confidence for entity in visible_people]),
+            )
+        ]
 
     def _activate(
         self,
