@@ -179,6 +179,42 @@ def test_required_remote_specialized_payload_keeps_only_relevant_evidence() -> N
     assert "general_suite_role_plan" not in serialized
 
 
+def test_real_general_image_contract_is_compact_and_keeps_declared_garment_truth() -> None:
+    request = BrainRunRequest(
+        user_input="Create one factual apparel image from the declared garment facts.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        requested_image_size="1024x1536",
+        capability_catalog={"private_capability": {"internal": True}},
+        pre_activation_capabilities={"private_trace": {"file_path": "D:/private/trace.json"}},
+        product_profile={
+            "product_name": "Blue floral dress",
+            "apparel_construction": {
+                "silhouette_and_proportion": "A-line knee-length dress with a fitted bodice and full skirt",
+                "print_or_pattern_registration": "small blue floral print aligns across bodice and skirt",
+                "layer_order": "cotton lining beneath a light tulle overlay",
+                "seam_hem_edge_trim_fastening": "waist seam, scalloped hem, back button fastening",
+                "material_weight_and_surface_response": "light cotton with a soft matte surface",
+                "fold_tension_gravity_and_drape": "natural folds follow gravity from the waist seam",
+            },
+        },
+        metadata={"require_real_images": True},
+    )
+
+    payload = json.loads(build_remote_payload(request))
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert set(payload["return_schema"]) == {"image_set_plan", "prompt_guidance"}
+    assert payload["product_profile"]["apparel_construction"]["layer_order"] == (
+        "cotton lining beneath a light tulle overlay"
+    )
+    assert "private_capability" not in serialized
+    assert "pre_activation_capabilities" not in serialized
+    assert "ecommerce_creative_context" not in payload
+    assert "photography_creative_context" not in payload
+
+
 def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     adapter = V3LLMBrainAdapter()
@@ -375,6 +411,14 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
         def run(self, request):  # noqa: ANN001
             assert request.metadata["require_real_images"] is True
             return {
+                "image_set_plan": {
+                    "set_goal": "refined summer portrait set",
+                    "image_count": 2,
+                    "shot_plan": [
+                        "sunlit natural portrait with calm summer atmosphere",
+                        "a related but distinct outdoor portrait direction",
+                    ],
+                },
                 "prompt_guidance": {
                     "optimized_direction": "remote refined summer portrait direction",
                     "style_notes": ["remote premium summer light"],

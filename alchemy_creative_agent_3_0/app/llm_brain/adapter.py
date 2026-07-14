@@ -55,7 +55,7 @@ class V3LLMBrainAdapter:
             result = self._merge_remote_result(
                 fallback,
                 data,
-                requires_complete_image_set=request.template_capability_policy.requires_remote_creative_brain,
+                requires_complete_image_set=_requires_complete_remote_image_set(request),
             )
             result.llm_used = True
             result.fallback_used = False
@@ -365,6 +365,23 @@ def _remote_allowed_for_request(request: BrainRunRequest) -> bool:
     if os.getenv("V3_LLM_BRAIN_API_KEY"):
         return True
     return bool(request.metadata.get("require_real_images") or request.metadata.get("real_image_generation"))
+
+
+def _requires_complete_remote_image_set(request: BrainRunRequest) -> bool:
+    """Require a complete creative answer whenever a real image is requested.
+
+    This mirrors the compact remote-payload boundary.  It deliberately does
+    not alter ordinary General draft planning, where the compatibility
+    fallback remains valid, but it prevents a partial remote response from
+    being combined with a local image direction for a real Provider job.
+    """
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    return bool(
+        request.template_capability_policy.requires_remote_creative_brain
+        or metadata.get("require_real_images")
+        or metadata.get("real_image_generation")
+    )
 
 
 def _remote_provider_error_class(exc: Exception) -> str:

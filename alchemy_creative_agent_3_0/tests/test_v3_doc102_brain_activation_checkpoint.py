@@ -72,6 +72,7 @@ def test_remote_brain_keeps_safe_activation_contract_when_structured_sections_ar
     assert {"human_realism", "portrait_identity"} <= requested
     assert result.audit["remote_contract_partial_fallback"] is True
     assert result.audit["remote_contract_rejected_sections"] == [
+        "image_set_plan",
         "visual_task_profile",
         "capability_activation_intent",
     ]

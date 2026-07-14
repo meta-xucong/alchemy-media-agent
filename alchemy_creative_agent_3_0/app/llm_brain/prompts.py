@@ -42,17 +42,18 @@ E-Commerce roles, slots, copy, or marketplace logic."""
 
 
 def _compact_required_remote_creative_schema() -> dict:
-    """Return the minimum remote contract for LLM-first specialized templates.
+    """Return the minimum remote contract for LLM-first real-image work.
 
-    E-Commerce and Photography must fail closed without a remote creative
-    answer, but they do not need the provider to re-state project history,
-    presentation copy, or deterministic review summaries.  Asking a remote
-    model for those redundant sections makes a one-image plan needlessly
-    large and can turn a valid remote Brain into a transport timeout.
+    A real General image and the LLM-first specialized templates fail closed
+    without a remote creative answer, but they do not need the provider to
+    re-state project history, presentation copy, or deterministic review
+    summaries. Asking a remote model for those redundant sections makes a
+    one-image plan needlessly large and can turn a valid Brain into a
+    transport timeout.
     """
 
     # The frozen template plan and shared evidence runtime already own
-    # capability gating.  The remote specialist must contribute precisely its
+    # capability gating.  The remote Brain must contribute precisely its
     # irreplaceable work: one creative image direction per frozen output.  Do
     # not make the model restate task-profile or capability bookkeeping; that
     # made compatible providers produce a large, fragile JSON envelope without
@@ -128,7 +129,15 @@ def _compact_specialized_assets(items: list[dict[str, object]], *, limit: int = 
     return compact
 
 
-def _compact_specialized_product_profile(product_profile: dict[str, object]) -> dict[str, object]:
+def _compact_remote_creative_product_profile(product_profile: dict[str, object]) -> dict[str, object]:
+    """Keep factual truth needed for a remote creative direction.
+
+    This is deliberately transport-level rather than template-level.  A
+    declared garment construction map is useful evidence for any real image
+    request, including General, but it does not introduce a garment role,
+    delivery map, or creative recipe into General.
+    """
+
     allowed = (
         "product_name",
         "product_category",
@@ -151,6 +160,40 @@ def _compact_specialized_product_profile(product_profile: dict[str, object]) -> 
             text = _compact_text(value, 300)
             if text:
                 compact[key] = text
+    apparel_construction = _compact_declared_fact_map(product_profile.get("apparel_construction"))
+    if apparel_construction:
+        compact["apparel_construction"] = apparel_construction
+    return compact
+
+
+def _compact_declared_fact_map(value: object) -> dict[str, object]:
+    """Compact explicit structured facts without inventing or renaming them."""
+
+    if not isinstance(value, dict):
+        return {}
+    compact: dict[str, object] = {}
+    for raw_key, raw_value in list(value.items())[:16]:
+        key = _compact_text(raw_key, 100)
+        if not key:
+            continue
+        if isinstance(raw_value, list):
+            values = _compact_text_list(raw_value, limit=12, item_limit=240)
+            if values:
+                compact[key] = values
+            continue
+        if isinstance(raw_value, dict):
+            nested: dict[str, str] = {}
+            for nested_key, nested_value in list(raw_value.items())[:12]:
+                nested_name = _compact_text(nested_key, 100)
+                nested_text = _compact_text(nested_value, 240)
+                if nested_name and nested_text:
+                    nested[nested_name] = nested_text
+            if nested:
+                compact[key] = nested
+            continue
+        text = _compact_text(raw_value, 240)
+        if text:
+            compact[key] = text
     return compact
 
 
@@ -178,18 +221,20 @@ def _compact_text(value: object, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def _compact_specialized_payload(
+def _compact_remote_creative_payload(
     request: BrainRunRequest,
     *,
     ecommerce_context: dict[str, object] | None,
     photography_context: dict[str, object] | None,
 ) -> dict[str, object]:
-    """Build the minimal evidence envelope for an LLM-first specialized run.
+    """Build the minimum evidence envelope for an LLM-first real-image run.
 
     The Brain needs user intent, frozen output cardinality, factual/reference
-    evidence, and template-specific non-creative constraints.  Full project
-    snapshots, local paths, catalog dumps, and pre-activation traces neither
-    improve its creative direction nor belong in a remote request.
+    evidence, and template non-creative constraints.  Full project snapshots,
+    local paths, catalog dumps, and pre-activation traces neither improve its
+    creative direction nor belong in a remote request.  The same neutral
+    transport contract is used by a real General image and LLM-first
+    specialized templates; scenario contexts remain opt-in below.
     """
 
     policy = request.template_capability_policy
@@ -207,7 +252,7 @@ def _compact_specialized_payload(
         "selected_output_assets": _compact_specialized_assets(request.selected_output_assets),
         "reference_assets": _compact_specialized_assets(request.reference_assets),
         "uploaded_assets": _compact_specialized_assets(request.uploaded_assets),
-        "product_profile": _compact_specialized_product_profile(request.product_profile),
+        "product_profile": _compact_remote_creative_product_profile(request.product_profile),
         "template_capability_policy": {
             "policy_id": policy.policy_id,
             "deliverable_role_owner": policy.deliverable_role_owner,
@@ -222,6 +267,22 @@ def _compact_specialized_payload(
         payload["photography_creative_context"] = photography_context
         payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
     return payload
+
+
+def _requires_remote_creative_contract(request: BrainRunRequest) -> bool:
+    """Return whether this request must receive a compact remote answer.
+
+    An explicitly real image request is LLM-first even for General.  Ordinary
+    General exploration remains on its existing broad/fallback-compatible
+    planning contract, so this does not make General a specialized template.
+    """
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    return bool(
+        request.template_capability_policy.requires_remote_creative_brain
+        or metadata.get("require_real_images")
+        or metadata.get("real_image_generation")
+    )
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
@@ -355,6 +416,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ],
         },
     }
+    requires_remote_creative_contract = _requires_remote_creative_contract(request)
     ecommerce_context = request.metadata.get("ecommerce_creative_context")
     requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
         ecommerce_context if isinstance(ecommerce_context, dict) else None,
@@ -372,24 +434,24 @@ def build_remote_payload(request: BrainRunRequest) -> str:
     if isinstance(photography_context, dict) and photography_context:
         payload["photography_creative_context"] = photography_context
         payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
-    if request.template_capability_policy.requires_remote_creative_brain:
-        payload = _compact_specialized_payload(
+    if requires_remote_creative_contract:
+        payload = _compact_remote_creative_payload(
             request,
             ecommerce_context=ecommerce_context if isinstance(ecommerce_context, dict) else None,
             photography_context=photography_context if isinstance(photography_context, dict) else None,
         )
-    # LLM-first specialized templates replace the broad payload with their
-    # compact contract above.  That compact envelope deliberately has no
+    # LLM-first real-image runs replace the broad payload with their compact
+    # contract above.  That compact envelope deliberately has no
     # ``return_schema`` until the specialized schema is installed below, so
     # the generic catalog-pruning branch must not index it first.
-    if not request.capability_catalog and not request.template_capability_policy.requires_remote_creative_brain:
+    if not request.capability_catalog and not requires_remote_creative_contract:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)
         payload.pop("template_capability_policy", None)
         payload.pop("capability_activation_instructions", None)
         payload["return_schema"].pop("visual_task_profile", None)
         payload["return_schema"].pop("capability_activation_intent", None)
-    if request.template_capability_policy.requires_remote_creative_brain:
+    if requires_remote_creative_contract:
         compact_schema = _compact_required_remote_creative_schema()
         if requires_apparel_evidence_dimensions:
             compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = [
