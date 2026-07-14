@@ -1,5 +1,16 @@
 # Doc117: V3 Codex Local Mode Plugin And MCP Execution Adapter
 
+> **Historical design notice — B2 is retired for future work.**  The
+> separately configured Platform Image API materialization route described in
+> this document is not the approved Local Mode product and must not be merged,
+> enabled, or used as a substitute for Codex-native image generation.  Its
+> security research and the finding that Codex exposes no durable artifact
+> handoff remain historical evidence only.  Doc118,
+> `118_V3_CODEX_NATIVE_IMAGEGEN_PROMPT_ORCHESTRATION_SPEC.md`, is the sole
+> authority for new Local Mode work: Alchemy planning MCP -> Codex built-in
+> image tool -> conversation-only result, with no additional API key and no
+> artifact import.
+
 ## Status
 
 Proposed development specification.  This document authorizes design and a

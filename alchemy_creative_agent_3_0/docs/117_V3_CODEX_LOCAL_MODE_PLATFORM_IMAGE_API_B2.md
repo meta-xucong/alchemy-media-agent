@@ -1,5 +1,15 @@
 # Doc117 Phase B2: Official Platform Image API Materialization
 
+> **Retired / do not implement or merge.**  This document is preserved solely
+> as a dated record of a rejected technical spike.  Its dedicated Platform API
+> key, HTTP renderer, API-image materialization, and B2 MCP tools are not an
+> acceptable answer to the Local Mode requirement and must remain disabled.
+> Do not revive them for a provider outage or because Codex artifact handoff
+> is unavailable.  Follow Doc118,
+> `118_V3_CODEX_NATIVE_IMAGEGEN_PROMPT_ORCHESTRATION_SPEC.md`, for all future
+> work: Alchemy planning MCP -> Codex built-in image tool ->
+> conversation-only, non-certified result.
+
 ## Decision and Scope
 
 Phase B2 is a constrained alternative to the blocked Codex Desktop artifact

@@ -290,7 +290,39 @@ candidate/delivery record.
 | Image is generated | Displayed in Codex only; never marked reviewed/certified/delivered. |
 | Plugin is later removed | No effect on Web Mode or historical V3 projects. |
 
-## 8. Implementation phases
+## 8. Mandatory retirement and migration plan
+
+The next implementation must remove the rejected B2 route from the native
+prompt plugin rather than merely leave a hidden button or an undocumented
+fallback.  The following disposition is mandatory and must be reviewed in one
+dedicated change set before N1 can be called complete.
+
+| Existing B2 surface | Required disposition | Completion proof |
+| --- | --- | --- |
+| `services/alchemy_codex_local_adapter/platform_renderer.py` | Remove from the native prompt mode; do not import, wrap, or leave a callable Platform API path. | Source scan finds no `api.openai.com`, Platform key-file variable, or renderer import in the native mode. |
+| `artifact_import.py` and `PlatformRenderedImage` materialization types | Remove from the native prompt mode; no arbitrary-file or staged API import substitute may remain. | MCP schema has no render/import operation and no local candidate/artifact record is written. |
+| `render_platform_candidate`, `render_platform_candidates`, and B2 MCP schema entries | Delete rather than hide; a stale Codex session must not discover them. | `tools/list` exposes only the approved prompt-planning surface. |
+| `ALCHEMY_CODEX_LOCAL_IMAGE_API_KEY_FILE`, Platform API documentation, B2 provenance names, and live opt-in flags | Delete from active plugin/adapter configuration and instructions.  Historic references stay only in the clearly retired Doc117 records. | Repository scan proves active native files do not mention the variable or `platform_openai_gpt_image_2`. |
+| Plugin `SKILL.md`, `README.md`, manifest description, and MCP server version | Rewrite for `prepare_native_imagegen_plan` and the conversation-only boundary. | Plugin validation passes and the Skill asks Codex to use its built-in image tool exactly once per returned output. |
+| Existing B2 tests | Replace them with negative regression tests: no API key, renderer, HTTP call, file import, or false delivery is possible. | Tests fail if any retired B2 tool/configuration is restored. |
+
+The retired B2 code must not be moved into a compatibility namespace.  This
+would preserve an attractive but wrong fallback route and make a later audit
+ambiguous.  Git history and the three marked Doc117 documents are sufficient
+for historical recovery.
+
+Migration must also change active provenance vocabulary to:
+
+```text
+execution_channel = codex_native_imagegen
+renderer = codex_builtin_imagegen
+delivery_state = conversation_only_not_certified
+```
+
+No historical B2 `platform_openai_gpt_image_2` record may be rewritten as if
+it were Codex-native.  It remains an old, non-certified experiment.
+
+## 9. Implementation phases
 
 ### Phase N1 — Prompt contract and plugin correction
 
@@ -321,7 +353,7 @@ No artifact materialization, project continuation, shared pixel review, retry,
 or final delivery is part of this document.  A future platform-supported
 artifact handoff would require a new design review before such a phase begins.
 
-## 9. Required tests and acceptance
+## 10. Required tests and acceptance
 
 Implementation may start only with tests covering:
 
@@ -350,7 +382,7 @@ and use its built-in image tool without an additional image API key or the
 Alchemy website.** It is not acceptance of production rendering, image review,
 or any existing V3 quality gate.
 
-## 10. Authority
+## 11. Authority
 
 Doc76 governs foundation/template separation.  Docs100–102 govern Web Mode
 rendering and frozen capability execution.  Docs109, 113, 115, and 116 remain

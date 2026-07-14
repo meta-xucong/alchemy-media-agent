@@ -1,5 +1,14 @@
 # Doc117 Phase B: Codex Local Artifact Handoff Evidence
 
+> **Historical evidence, not an implementation mandate.**  The conclusion
+> that Codex exposes no supported durable local image artifact remains valid.
+> The former B2 Platform API workaround is retired and must not be enabled or
+> merged.  This limitation no longer blocks the approved conversation-only
+> workflow in Doc118,
+> `118_V3_CODEX_NATIVE_IMAGEGEN_PROMPT_ORCHESTRATION_SPEC.md`: Alchemy returns
+> a planning prompt and Codex renders it with its built-in image tool without
+> any artifact import.
+
 ## Status
 
 **Stopped — no supported durable artifact handoff is exposed by the current
