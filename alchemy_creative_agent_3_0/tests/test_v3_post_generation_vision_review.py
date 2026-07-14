@@ -1,6 +1,8 @@
 import base64
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
+import sys
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
@@ -9,6 +11,7 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
     _inspection_prompt,
     _is_timeout_error,
@@ -527,6 +530,28 @@ def test_vision_timeout_detection_covers_sdk_and_gateway_messages() -> None:
     assert _is_timeout_error(TimeoutError("request stalled")) is True
     assert _is_timeout_error(RuntimeError("Request timed out.")) is True
     assert _is_timeout_error(RuntimeError("unsupported endpoint")) is False
+
+
+def test_openai_vision_provider_disables_sdk_retries(tmp_path, monkeypatch) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    class StubResponses:
+        def create(self, **_kwargs):  # noqa: ANN003
+            return SimpleNamespace(output_text='{"status":"pass","confidence":0.91,"issue_codes":[]}')
+
+    class StubOpenAI:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            captured_kwargs.update(kwargs)
+            self.responses = StubResponses()
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=lambda **_kwargs: None))
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=StubOpenAI))
+    provider = OpenAIVisionInspectionProvider(api_key="test-key", base_url="https://vision.example.test/v1")
+
+    payload = provider.inspect(_ready_resolution(tmp_path), metadata={"vision_model": "vision-test"})
+
+    assert payload["status"] == "pass"
+    assert captured_kwargs["max_retries"] == 0
 
 
 def test_vision_inspector_real_provider_low_confidence_does_not_retry(tmp_path) -> None:
