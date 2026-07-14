@@ -100,6 +100,13 @@ class V3LLMBrainProvider:
                 or _settings_value("lab_kimi_api_key")
             )
             base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("anthropic_base_url") or _settings_value("lab_kimi_base_url")
+        elif self.provider == "deepseek":
+            # DeepSeek is OpenAI-compatible at transport level, but it owns
+            # its own configured credential/base URL.  Do not silently route
+            # Central Brain calls through the unrelated image gateway simply
+            # because OPENAI_API_KEY is also present in the process.
+            api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("deepseek_llm_api_key")
+            base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("deepseek_llm_base_url")
         else:
             api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("openai_api_key") or _settings_value("lab_openai_api_key")
             base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("openai_base_url") or _settings_value("lab_openai_base_url")
@@ -111,10 +118,15 @@ class V3LLMBrainProvider:
 def _default_model(provider: str) -> str:
     if provider in {"anthropic", "kimi", "claude"}:
         return _settings_value("kimi_llm_model") or _settings_value("backup_llm_model") or "kimi-for-coding"
+    if provider == "deepseek":
+        return _settings_value("deepseek_llm_model") or _settings_value("default_llm_model") or "deepseek-v4-pro-260425"
     return _settings_value("openai_llm_model") or _settings_value("default_llm_model") or "gpt-5.5"
 
 
 def _preferred_provider() -> str:
+    configured = str(_settings_value("default_llm_provider") or "").strip().lower()
+    if configured in {"openai", "deepseek", "anthropic", "kimi", "claude"}:
+        return configured
     if _settings_value("openai_api_key") or _settings_value("lab_openai_api_key"):
         return "openai"
     return _settings_value("default_llm_provider") or "openai"

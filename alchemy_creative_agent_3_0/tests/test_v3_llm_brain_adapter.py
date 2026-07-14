@@ -319,6 +319,52 @@ def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None
     assert provider.timeout >= 120
 
 
+def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monkeypatch) -> None:
+    """A configured default Brain must win over an unrelated OpenAI image key."""
+
+    from app.config import settings
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "default_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "openai_api_key", "image-gateway-key")
+    monkeypatch.setattr(settings, "openai_base_url", "https://image.example.test/v1")
+
+    provider = V3LLMBrainProvider()
+
+    assert provider.provider == "deepseek"
+    assert provider.model == "deepseek-primary"
+    assert provider.available(force=True) is True
+    api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
+    assert api_key == "deepseek-test-key"
+    assert base_url == "https://brain.example.test/v1"
+
+
+def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "brain-override")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-override-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://override.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+
+    provider = V3LLMBrainProvider()
+
+    assert provider.provider == "openai"
+    assert provider.model == "brain-override"
+    api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
+    assert api_key == "brain-override-key"
+    assert base_url == "https://override.example.test/v1"
+
+
 def test_remote_brain_rejects_internally_inconsistent_image_set_plan(monkeypatch) -> None:
     class InconsistentImageSetProvider:
         provider = "openai"
