@@ -381,16 +381,22 @@ class ScenarioRuntime:
     ) -> None:
         """Fail closed for templates whose creative answer cannot be local.
 
-        General keeps its existing fallback policy.  Active specialized
-        templates that opt in (E-Commerce and Photography) never convert a
-        missing or malformed remote creative answer into local direction.
+        General keeps its compatibility fallback for ordinary, non-production
+        planning. A job that explicitly requires a real image is an
+        acceptance/production assertion, however: it cannot silently turn a
+        remote creative-brain outage into a locally invented image direction.
+        Active specialized templates (E-Commerce and Photography) likewise
+        never convert a missing or malformed remote creative answer into local
+        direction.
         """
 
-        if not policy.requires_remote_creative_brain:
+        real_image_job = self._requires_remote_creative_brain_for_real_images(request)
+        if not policy.requires_remote_creative_brain and not real_image_job:
             return
         if not brain_result.llm_used or brain_result.fallback_used:
             raise self._remote_creative_brain_block(
-                "remote_creative_brain_required_for_template",
+                "remote_brain_unavailable" if real_image_job and not policy.requires_remote_creative_brain
+                else "remote_creative_brain_required_for_template",
                 brain_result,
             )
         rejected_sections = brain_result.audit.get("remote_contract_rejected_sections")
@@ -411,6 +417,20 @@ class ScenarioRuntime:
                 actual_image_count=image_plan.image_count,
                 actual_direction_count=len(directions),
             )
+
+    @staticmethod
+    def _requires_remote_creative_brain_for_real_images(request: ScenarioRuntimeRequest) -> bool:
+        """Keep an explicitly real image job LLM-first without changing draft mode.
+
+        ``require_real_images`` / ``real_image_generation`` are persisted
+        production-quality assertions. They are narrower than selecting the
+        General template: ordinary General mock or exploratory jobs retain the
+        documented fallback, while a real Provider job cannot claim a
+        trustworthy creative plan after the remote Brain failed.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        return bool(metadata.get("require_real_images") or metadata.get("real_image_generation"))
 
     @staticmethod
     def _remote_creative_brain_block(

@@ -1,4 +1,6 @@
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
+from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
 
@@ -123,6 +125,65 @@ def test_ecommerce_blocks_when_remote_image_set_plan_is_internally_inconsistent(
 
     assert result.status == ScenarioRuntimeStatus.BLOCKED
     assert any("remote_creative_brain_image_set_plan_invalid" in warning for warning in result.warnings)
+
+
+def test_real_general_image_job_blocks_when_remote_brain_times_out_but_draft_general_keeps_fallback(monkeypatch) -> None:
+    class TimeoutRemoteBrain:
+        provider = "remote-fixture"
+        model = "remote-fixture-v1"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            raise BrainProviderError("remote brain provider failed: request timed out")
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=TimeoutRemoteBrain()))
+
+    real = runtime.plan_job(
+        {
+            "user_input": "Create a factual declared-apparel image for controlled acceptance.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+            "metadata": {"requested_image_count": 1, "require_real_images": True},
+        }
+    )
+    draft = runtime.plan_job(
+        {
+            "user_input": "Explore a simple poster concept.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+
+    assert real.status == ScenarioRuntimeStatus.BLOCKED
+    assert "remote_brain_unavailable" in " ".join(real.warnings)
+    assert real.metadata["remote_creative_brain_outcome"] == {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_brain_unavailable",
+        "outcome_class": "remote_provider_error",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": None,
+        "remote_contract_rejected_sections": [],
+        "remote_error_class": "timeout",
+    }
+    assert draft.status == ScenarioRuntimeStatus.PLANNED
+    assert draft.metadata["llm_brain"]["llm_used"] is False
+    assert draft.metadata["llm_brain"]["fallback_used"] is True
+
+    status = V3ProductApiService(scenario_runtime=runtime).create_job(
+        {
+            "user_input": "Create one declared-apparel image for a real-provider acceptance run.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+            "metadata": {"requested_image_count": 1, "require_real_images": True},
+        }
+    )
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert status.asset_series == []
+    assert status.metadata["remote_creative_brain_outcome"]["reason_code"] == "remote_brain_unavailable"
 
 
 def test_generic_photography_word_does_not_prove_visible_human(monkeypatch) -> None:

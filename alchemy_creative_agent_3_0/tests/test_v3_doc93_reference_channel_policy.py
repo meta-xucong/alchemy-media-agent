@@ -427,6 +427,7 @@ def test_doc93_legacy_fallback_and_retry_do_not_restore_coarse_style_inheritance
         request=SimpleNamespace(requested_image_count=2),
         variation_mode="selection_candidates",
         allow_product_language=False,
+        human_subject_evidenced=True,
     )
     report = VisionOutputInspector(vision_provider=None).inspect(
         GeneratedOutputResolution(
