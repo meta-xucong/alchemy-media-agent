@@ -1,4 +1,5 @@
 import base64
+import json
 import sys
 from types import SimpleNamespace
 from io import BytesIO
@@ -7,6 +8,7 @@ from pathlib import Path
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -101,6 +103,39 @@ def test_llm_brain_adapter_skips_non_general_scope(monkeypatch) -> None:
     assert result.enabled is False
     assert result.provider == "disabled"
     assert "general template" in result.audit["skip_reason"]
+
+
+def test_required_remote_photography_contract_uses_compact_schema() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import photography_capability_policy
+
+    request = BrainRunRequest(
+        user_input="Create one natural landscape photograph.",
+        scenario_id="photography",
+        template_id="photographer_template",
+        requested_image_count=1,
+        capability_catalog={"scene_continuity": {"id": "scene_continuity"}},
+        template_capability_policy=photography_capability_policy(),
+        metadata={
+            "specialized_scenario_plan": {
+                "execution_plan": {"role_recipes": [{"role_key": "session_hero"}]}
+            }
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert set(payload["return_schema"]) == {
+        "visual_task_profile",
+        "capability_activation_intent",
+        "image_set_plan",
+        "prompt_guidance",
+    }
+    assert payload["return_schema"]["image_set_plan"]["image_count"] == "integer exactly equal to requested_image_count"
+    assert "project_memory_digest" not in payload["return_schema"]
+    assert "prompt_review" not in payload["return_schema"]
+    assert "user_visible_summary" not in payload["return_schema"]
+    assert "ecommerce_creative_context" not in payload
+    assert "compact schema" in payload["remote_response_contract"]
 
 
 def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) -> None:
@@ -390,6 +425,7 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert calls["client_kwargs"] == {
         "api_key": "deepseek-test-key",
         "base_url": "https://brain.example.test/v1",
+        "max_retries": 0,
     }
     chat_kwargs = calls["chat_kwargs"]
     assert isinstance(chat_kwargs, dict)

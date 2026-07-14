@@ -35,6 +35,63 @@ direction for every role; never import General suite/cover roles or
 E-Commerce roles, slots, copy, or marketplace logic."""
 
 
+def _compact_required_remote_creative_schema() -> dict:
+    """Return the minimum remote contract for LLM-first specialized templates.
+
+    E-Commerce and Photography must fail closed without a remote creative
+    answer, but they do not need the provider to re-state project history,
+    presentation copy, or deterministic review summaries.  Asking a remote
+    model for those redundant sections makes a one-image plan needlessly
+    large and can turn a valid remote Brain into a transport timeout.
+    """
+
+    return {
+        "visual_task_profile": {
+            "subject_entities": [
+                {
+                    "entity_id": "string",
+                    "entity_type": "open string",
+                    "role": "string",
+                    "source_asset_ids": ["string"],
+                    "visible_in_target": "boolean",
+                    "preservation_level": "string",
+                    "confidence": "number 0-1",
+                }
+            ],
+            "requested_deliverable_roles": ["string"],
+            "visual_intent_tags": ["string"],
+            "unknown_requirements": ["string"],
+        },
+        "capability_activation_intent": {
+            "requested_capabilities": [
+                {
+                    "capability_id": "catalog ID only",
+                    "activation_mode": "required|recommended|optional|forbidden",
+                    "reason_codes": ["string"],
+                    "evidence_ids": ["string"],
+                    "confidence": "number 0-1",
+                }
+            ],
+            "rejected_capabilities": ["string"],
+            "unresolved_signals": ["string"],
+        },
+        "image_set_plan": {
+            "set_goal": "string",
+            "image_count": "integer exactly equal to requested_image_count",
+            "size": "string|null",
+            "shot_plan": ["one original whole-image natural-language direction per requested output"],
+            "composition_rules": ["string"],
+            "quality_bar": ["string"],
+        },
+        "prompt_guidance": {
+            "optimized_direction": "complete natural-language direction for the requested image set",
+            "hard_constraints": ["string"],
+            "negative_prompt_addons": ["string"],
+            "consistency_strategy": "string|null",
+        },
+    }
+
+
 def build_remote_payload(request: BrainRunRequest) -> str:
     payload = {
         "task": "prepare_pre_generation_image_reasoning",
@@ -178,4 +235,11 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload.pop("capability_activation_instructions", None)
         payload["return_schema"].pop("visual_task_profile", None)
         payload["return_schema"].pop("capability_activation_intent", None)
+    if request.template_capability_policy.requires_remote_creative_brain:
+        payload["return_schema"] = _compact_required_remote_creative_schema()
+        payload["remote_response_contract"] = (
+            "Return only this compact schema. Every image_set_plan field and "
+            "prompt_guidance.optimized_direction is required. Do not add hidden "
+            "reasoning, project-history summaries, or UI copy."
+        )
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
