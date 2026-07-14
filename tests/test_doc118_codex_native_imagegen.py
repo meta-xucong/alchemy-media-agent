@@ -112,6 +112,9 @@ def test_general_plan_has_exact_frozen_count_and_conversation_only_provenance(mo
     assert "candidate" not in serialized.lower()
     assert "artifact" not in serialized.lower()
     assert "final_delivery" not in serialized.lower()
+    assert "ecommerce_creative_context" not in serialized
+    assert "copy_render_plan" not in serialized
+    assert "photography" not in serialized.lower()
 
 
 def test_native_plan_does_not_create_files_or_a_delivery_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,6 +286,7 @@ def test_active_native_source_has_no_b2_renderer_or_web_control_path() -> None:
         "api.openai.com",
         "OPENAI_API_KEY",
         "ALCHEMY_CODEX_LOCAL_IMAGE_API_KEY_FILE",
+        "Aiself",
         "platform_openai_gpt_image_2",
         "CodexLocalExecutionFacade",
         "PlatformImageRenderer",
