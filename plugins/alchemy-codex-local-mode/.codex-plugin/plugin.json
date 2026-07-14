@@ -1,0 +1,19 @@
+{
+  "name": "alchemy-codex-local-mode",
+  "version": "0.1.0",
+  "description": "Explicit local Codex-to-Alchemy image artifact handoff (development spike)",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Alchemy Codex Local Mode",
+    "shortDescription": "Explicit local image-artifact handoff for Alchemy.",
+    "longDescription": "A disabled-by-default local development spike. Codex calls a local MCP adapter; it never becomes a Web provider or a CLI backend.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use the explicit Alchemy Local Mode contract only when I request it, and stop if the image artifact cannot be handed off as a durable local file."
+  },
+  "mcpServers": "./.mcp.json"
+}
