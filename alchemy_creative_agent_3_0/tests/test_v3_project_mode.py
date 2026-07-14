@@ -388,6 +388,51 @@ def test_project_mode_allows_ecommerce_project_job_without_product_reference() -
     assert job["metadata"]["has_product_reference"] is False
 
 
+def test_project_mode_preserves_explicit_apparel_construction_into_the_frozen_ledger() -> None:
+    """Doc114 garment truth must not be dropped by the public E-Commerce API."""
+
+    handlers = _ecommerce_handlers()
+    project = handlers.post_projects({"user_goal": "Validate a fictional children's apparel product image"})["project"]
+    construction = {
+        "silhouette_and_proportion": "A-line knee-length silhouette with a fitted bodice",
+        "print_or_pattern_registration": "small blue floral print stays registered across bodice and skirt",
+        "layer_order": ["cotton lining", "two uneven tulle overlays"],
+        "seam_hem_edge_trim_fastening": "waist seam, scalloped hem trim, back button",
+        "material_weight_and_surface_response": "matte cotton lining and translucent tulle",
+        "fold_tension_gravity_and_drape": "soft gravity-driven folds with separated tulle edges",
+    }
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create one age-appropriate product-on-person image of the fictional supplied children's dress.",
+            "commerce_profile_patch": {
+                "product_name": "fictional blue layered children's dress",
+                "product_category": "apparel",
+                "apparel_construction": construction,
+            },
+            "metadata": {"requested_image_count": 1},
+        },
+    )
+
+    record = handlers.service.get_job_record(job["job_id"])
+    assert record is not None and record.planning_result is not None
+    assert record.request.product_profile["apparel_construction"] == construction
+    ledger = record.planning_result.metadata["resolved_constraint_ledger"]
+    projection = ledger["provider_projection"]["apparel_construction"]
+    assert projection["applies"] is True
+    assert projection["source_summary"] == "declared_structured_apparel_construction"
+    assert {item["channel"] for item in projection["facts"]} == {
+        "product_silhouette",
+        "product_pattern_registration",
+        "product_layer_topology",
+        "product_construction_detail",
+        "product_material_response",
+        "product_drape_behavior",
+    }
+
+
 def test_project_mode_rejects_ecommerce_project_job_with_fake_uploaded_asset_id() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]

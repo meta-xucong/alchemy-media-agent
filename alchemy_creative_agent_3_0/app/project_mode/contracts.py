@@ -214,6 +214,12 @@ class ProjectCommerceProfile(V3BaseModel):
     keyword_roots: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     competitor_notes: list[str] = Field(default_factory=list)
+    # Explicit garment truth is a product fact, not an E-Commerce recipe.  It
+    # must survive the public Project Mode request boundary so the shared
+    # constraint ledger, Provider, and pixel reviewer see the same frozen
+    # evidence.  An empty value intentionally means that no construction
+    # truth was supplied; the runtime must never infer it from a small garment.
+    apparel_construction: dict[str, Any] = Field(default_factory=dict)
     # Historical payload-read field. New E-Commerce requests reject it because
     # the remote Brain decides the output set.
     suite_slots_requested: list[str] = Field(default_factory=list)
@@ -249,6 +255,13 @@ class ProjectCommerceProfile(V3BaseModel):
     @classmethod
     def clean_profile_text_list(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if str(item).strip()]
+
+    @field_validator("apparel_construction")
+    @classmethod
+    def clean_apparel_construction(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise ValueError("apparel_construction must be an object when supplied")
+        return {str(key).strip(): item for key, item in value.items() if str(key).strip() and item not in (None, "", [], {})}
 
 
 class ProjectTimelineItem(V3BaseModel):

@@ -2509,6 +2509,11 @@ class V3ProjectModeService:
             values = patch_data.get(field)
             if values:
                 data[field] = self._dedupe_text(values)
+        # Construction evidence is one product-truth record.  Replace it as
+        # an atomic, explicitly supplied fact set rather than merging stale
+        # garment details from a previous job into a new product request.
+        if "apparel_construction" in patch_data:
+            data["apparel_construction"] = dict(patch_data.get("apparel_construction") or {})
         metadata = dict(data.get("metadata") or {})
         metadata.update(dict(patch_data.get("metadata") or {}))
         metadata.update(
@@ -2679,6 +2684,7 @@ class V3ProjectModeService:
             "keyword_roots": list(profile.keyword_roots),
             "keywords": list(profile.keywords),
             "competitor_notes": list(profile.competitor_notes),
+            "apparel_construction": dict(profile.apparel_construction),
             "has_product_reference": bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
             "text_to_image_fallback": not bool(request.uploaded_asset_ids or self._project_product_reference_candidates(project)),
         }
