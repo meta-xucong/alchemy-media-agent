@@ -1478,6 +1478,50 @@ class V3ProjectModeService:
             )
         return status
 
+    def mark_project_job_generation_worker_failed(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        failure_code: str,
+    ) -> ProductJobStatus:
+        """Project-facing terminal closure for a local background worker error."""
+
+        project = self._require_project(project_id)
+        self._ensure_project_job(project, job_id)
+        previous = self.product_service.get_job(job_id)
+        previous_failure = (
+            previous.metadata.get("generation_lifecycle_failure")
+            if isinstance(previous.metadata, dict)
+            else None
+        )
+        status = self.product_service.mark_job_generation_worker_failed(
+            job_id,
+            background_attempt_id=background_attempt_id,
+            failure_code=failure_code,
+        )
+        failure_metadata = status.metadata.get("generation_lifecycle_failure") if isinstance(status.metadata, dict) else None
+        if (
+            not isinstance(previous_failure, dict)
+            and isinstance(failure_metadata, dict)
+            and failure_metadata.get("background_attempt_id") == background_attempt_id
+        ):
+            self._append_timeline(
+                project.project_id,
+                TimelineItemType.JOB_BLOCKED,
+                "Generation request ended before image delivery",
+                "V3 closed this background attempt safely and did not replay an image request automatically.",
+                job_id=job_id,
+                metadata={
+                    "template_id": self._template_id_for_project_job(project, job_id),
+                    "failure_code": failure_metadata.get("failure_code"),
+                    "failure_owner": failure_metadata.get("owner"),
+                    "background_attempt_id": background_attempt_id,
+                },
+            )
+        return status
+
     def _blocked_generation_summary(self, status: ProductJobStatus) -> str:
         warnings = [str(item).strip() for item in (status.warnings or []) if str(item).strip()]
         joined = " ".join(warnings).lower()

@@ -893,6 +893,56 @@ class V3ProductApiService:
         self.job_store.save(record)
         return self._status_from_record(record)
 
+    def mark_job_generation_worker_failed(
+        self,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        failure_code: str,
+    ) -> ProductJobStatus:
+        """Close a background worker exception without fabricating a Provider failure.
+
+        The asynchronous HTTP wrapper marks a Job as ``generating`` before it
+        submits work.  Payload validation or another local worker exception
+        can therefore occur before ``generate_asset_series`` gets far enough
+        to persist its own terminal status.  Leaving that Job pending until a
+        long gateway watchdog expires is misleading and permits no useful
+        operator diagnosis.  Record a safe, non-Provider terminal reason
+        instead; raw exception text stays in server logs.
+        """
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            return self._not_found_status(job_id)
+        active_attempt_id = str(dict(record.request.metadata).get("background_generation_attempt_id") or "")
+        if (
+            active_attempt_id != str(background_attempt_id)
+            or record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        ):
+            return self._status_from_record(record)
+        normalized_code = (
+            "background_generation_request_invalid"
+            if str(failure_code).strip() == "background_generation_request_invalid"
+            else "background_generation_worker_error"
+        )
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **dict(record.request.metadata),
+            "generation_lifecycle_failure": {
+                "background_attempt_id": active_attempt_id,
+                "failure_code": normalized_code,
+                "status": "terminal_failure",
+                "owner": "v3_background_generation_worker",
+            },
+        }
+        record.warnings.append(
+            "V3 background generation ended before a terminal image result "
+            f"({normalized_code}); no image request was replayed automatically."
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
     def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
         records = self.job_store.list_recent(bounded_limit)
@@ -4367,6 +4417,7 @@ class V3ProductApiService:
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
             "generation_lifecycle_timeout",
+            "generation_lifecycle_failure",
             "background_generation_watchdog",
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",

@@ -284,7 +284,27 @@ def _run_v3_project_generation_background(project_id: str, job_id: str, payload:
     key = f"{project_id}:{job_id}"
     try:
         _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
-    except Exception:
+    except Exception as exc:
+        detail = getattr(exc, "detail", None)
+        failure_code = (
+            "background_generation_request_invalid"
+            if isinstance(detail, dict) and str(detail.get("code") or "") == "invalid_v3_request"
+            else "background_generation_worker_error"
+        )
+        try:
+            _run_v3_handler(
+                v3_route_handlers.mark_project_job_generation_worker_failed,
+                project_id,
+                job_id,
+                background_attempt_id=background_attempt_id,
+                failure_code=failure_code,
+            )
+        except Exception:
+            logger.exception(
+                "V3 background project failure could not be persisted for project=%s job=%s",
+                project_id,
+                job_id,
+            )
         logger.exception("V3 background project generation failed for project=%s job=%s", project_id, job_id)
     finally:
         with _v3_background_generation_jobs_lock:

@@ -135,6 +135,42 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     assert late_worker.status == ProductJobStatusValue.BLOCKED
 
 
+def test_background_worker_failure_is_terminal_without_claiming_a_provider_timeout() -> None:
+    service, _, _ = _service("background_worker_failure")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+    service.mark_job_generating(
+        created.job_id,
+        background_attempt_id="invalid_request_attempt",
+        background_timeout_seconds=675,
+    )
+
+    failed = service.mark_job_generation_worker_failed(
+        created.job_id,
+        background_attempt_id="invalid_request_attempt",
+        failure_code="background_generation_request_invalid",
+    )
+    late_worker = service.generate_job(
+        created.job_id,
+        {
+            "metadata": {
+                "_v3_background_worker_claim": True,
+                "_v3_background_generation_attempt_id": "invalid_request_attempt",
+            }
+        },
+    )
+
+    assert failed.status == ProductJobStatusValue.BLOCKED
+    assert failed.metadata["generation_lifecycle_failure"] == {
+        "background_attempt_id": "invalid_request_attempt",
+        "failure_code": "background_generation_request_invalid",
+        "status": "terminal_failure",
+        "owner": "v3_background_generation_worker",
+    }
+    assert "provider_failure_retry" not in failed.metadata
+    assert "background_generation_request_invalid" in " ".join(failed.warnings)
+    assert late_worker.status == ProductJobStatusValue.BLOCKED
+
+
 def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_job() -> None:
     output_store = V3GeneratedOutputStore(storage_root=_test_store_root("partial_output") / "outputs")
     brand_service = BrandProfileService(BrandProfileStore(_test_store_root("partial_output_brand")))
@@ -232,6 +268,39 @@ def test_project_timeout_handler_records_one_safe_terminal_timeline_item() -> No
         item["related_job_id"] == created["job_id"] and item["item_type"] == "job_blocked"
         for item in timeline["items"]
     )
+
+
+def test_project_background_worker_failure_records_one_safe_terminal_timeline_item() -> None:
+    service, _, _ = _service("project_background_worker_failure")
+    handlers = V3ProductRouteHandlers(service)
+    project = handlers.post_projects({"user_goal": "Create one clean still-life image."})
+    created = handlers.post_project_job(
+        project["project"]["project_id"],
+        {"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    )
+
+    handlers.mark_project_job_generating(
+        project["project"]["project_id"],
+        created["job_id"],
+        background_attempt_id="project_invalid_request",
+    )
+    failed = handlers.mark_project_job_generation_worker_failed(
+        project["project"]["project_id"],
+        created["job_id"],
+        background_attempt_id="project_invalid_request",
+        failure_code="background_generation_request_invalid",
+    )
+    timeline = handlers.get_project_timeline(project["project"]["project_id"])
+
+    assert failed["status"] == "blocked"
+    assert failed["metadata"]["generation_lifecycle_failure"]["owner"] == "v3_background_generation_worker"
+    blocked_items = [
+        item
+        for item in timeline["items"]
+        if item["related_job_id"] == created["job_id"] and item["item_type"] == "job_blocked"
+    ]
+    assert len(blocked_items) == 1
+    assert blocked_items[0]["metadata"]["failure_code"] == "background_generation_request_invalid"
 
 
 def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts() -> None:

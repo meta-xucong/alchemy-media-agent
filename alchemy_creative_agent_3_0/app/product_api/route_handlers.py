@@ -208,6 +208,21 @@ class V3ProductRouteHandlers:
             timeout_seconds=timeout_seconds,
         ).model_dump(mode="json")
 
+    def mark_project_job_generation_worker_failed(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        background_attempt_id: str,
+        failure_code: str,
+    ) -> dict[str, Any]:
+        return self.project_service.mark_project_job_generation_worker_failed(
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+            failure_code=failure_code,
+        ).model_dump(mode="json")
+
     def post_project_job_select(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.select_project_job(project_id, job_id, payload or {})
 
