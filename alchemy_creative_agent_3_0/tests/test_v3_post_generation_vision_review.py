@@ -322,6 +322,14 @@ def test_metadata_only_review_is_non_certifying_and_reports_unverifiable_dimensi
         metadata={"vision_inspection_mode": "metadata_only"},
     )
 
+
+def _internal_generation_metadata(service: V3ProductApiService, job_id: str) -> dict:
+    """Read the durable audit record, not the browser/API projection."""
+
+    record = service.job_store.get(job_id)
+    assert record is not None and record.generation_result is not None
+    return record.generation_result.metadata
+
     assert report.mode == "metadata_only"
     assert report.status == "manual_review"
     assert report.retryable is False
@@ -557,14 +565,17 @@ def test_product_api_doc55_signal_triggers_doc53_retry_without_force_retry_metad
     retry_summary = generated.metadata["visual_auto_retry"]
     review = generated.metadata["post_generation_review"]
     retry_candidates = [candidate for candidate in generated.candidates if candidate.metadata.get("visual_auto_retry_output")]
+    internal_metadata = _internal_generation_metadata(service, created.job_id)
+    internal_review = internal_metadata["post_generation_review_package"]
+    internal_retry = internal_metadata["visual_auto_retry"]
 
     assert generated.status == ProductJobStatusValue.GENERATED
     assert review["inspections"][0]["status"] == "fail_retryable"
-    assert review["real_review_signal_package"]["retryable_candidate_ids"]
+    assert internal_review["real_review_signal_package"]["retryable_candidate_ids"]
     assert retry_summary["executed_count"] == 1
     assert retry_candidates
-    assert retry_summary["records"][0]["source"] == "real_review_signal_package"
-    assert retry_summary["records"][0]["retry_patch"]["target_candidate_ids"]
+    assert internal_retry["records"][0]["source"] == "real_review_signal_package"
+    assert internal_retry["records"][0]["retry_patch"]["target_candidate_ids"]
 
 
 def test_product_api_aigc_provenance_issue_retries_by_default_in_standard_mode(tmp_path) -> None:
@@ -652,15 +663,16 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
 
     retry_summary = generated.metadata["visual_auto_retry"]
     review = generated.metadata["post_generation_review"]
+    internal_review = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
 
     assert generated.status == ProductJobStatusValue.GENERATED
     assert review["inspections"][0]["mode"] == "vision_model"
     assert review["inspections"][0]["status"] == "fail_retryable"
     assert retry_summary["executed_count"] == 1
     assert len(provider.calls) >= 2
-    assert review["final_review"]["status"] == "failed_after_retry"
-    assert review["final_review"]["additional_retry_allowed"] is False
-    assert [attempt["stage"] for attempt in review["review_attempts"]] == ["initial", "final_retry"]
+    assert internal_review["final_review"]["status"] == "failed_after_retry"
+    assert internal_review["final_review"]["additional_retry_allowed"] is False
+    assert [attempt["stage"] for attempt in internal_review["review_attempts"]] == ["initial", "final_retry"]
 
 
 def test_product_api_hides_planning_only_review_warning_after_live_pixel_review(tmp_path) -> None:
@@ -691,7 +703,9 @@ def test_product_api_hides_planning_only_review_warning_after_live_pixel_review(
     )
 
     assert generated.status == ProductJobStatusValue.GENERATED
-    assert generated.metadata["post_generation_review"]["quality_review_reports"][0]["review_mode"] == "vision_model"
+    assert generated.metadata["post_generation_review"]["inspections"][0]["mode"] == "vision_model"
+    internal_review = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    assert internal_review["quality_review_reports"][0]["review_mode"] == "vision_model"
     assert not any("output_review_metadata_only" in warning for warning in generated.warnings)
 
 
@@ -731,8 +745,10 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
     )
 
     review = generated.metadata["post_generation_review"]
-    history = review["review_attempts"]
-    final_review = review["final_review"]
+    internal_metadata = _internal_generation_metadata(service, created.job_id)
+    internal_review = internal_metadata["post_generation_review_package"]
+    history = internal_review["review_attempts"]
+    final_review = internal_review["final_review"]
 
     assert len(provider.calls) == 2
     assert [attempt["stage"] for attempt in history] == ["initial", "final_retry"]
@@ -743,9 +759,7 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
     assert final_review["status"] == "pass"
     assert final_review["additional_retry_allowed"] is False
     assert generated.metadata["visual_auto_retry"]["executed_count"] == 1
-    cluster_review = generated.metadata["shared_capabilities"]["visual_cluster"][
-        "post_generation_review_package"
-    ]
+    cluster_review = internal_metadata["shared_capabilities"]["visual_cluster"]["post_generation_review_package"]
     assert cluster_review["final_review"]["status"] == "pass"
 
 

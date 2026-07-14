@@ -4611,12 +4611,18 @@ class V3ProductApiService:
             "provider_response_summary",
             "runtime_transport",
             "final_provider_prompt",
+            "post_generation_review_package",
+            "visual_auto_retry",
         }
         if isinstance(value, dict):
             projected: dict[str, Any] = {}
             for key, nested in value.items():
                 key_text = str(key)
-                if key_text in hidden_keys or key_text.endswith("_retry_patch"):
+                if (
+                    key_text in hidden_keys
+                    or key_text.endswith("_retry_patch")
+                    or "retry_patch" in key_text
+                ):
                     continue
                 # Capability executor stages are internal diagnostics.  A
                 # literal ``retry_patch`` stage would otherwise make the

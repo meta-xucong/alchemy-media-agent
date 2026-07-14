@@ -193,7 +193,11 @@ def test_product_api_mock_generation_persists_distinct_doc59_roles() -> None:
     ]
     assert candidate_role_keys == template_deliverable_ids
     assert len(set(candidate_role_keys)) == len(role_keys)
-    assert generated.metadata["post_generation_review"]["metadata"]["mode_differentiation_review"]["status"] == "pass"
+    assert (
+        service.job_store.get(created.job_id).generation_result.metadata["post_generation_review_package"]["metadata"]
+        ["mode_differentiation_review"]["status"]
+        == "pass"
+    )
 
 
 def test_doc59_role_plan_reconciles_to_default_series_count_without_false_retry() -> None:
