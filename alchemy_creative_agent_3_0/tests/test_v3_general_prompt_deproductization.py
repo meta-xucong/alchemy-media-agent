@@ -271,6 +271,86 @@ def test_explicit_product_or_ecommerce_context_keeps_product_language() -> None:
     assert "product claims" in final_provider_prompt
 
 
+def test_real_general_remote_brain_direction_does_not_replay_local_suite_recipe() -> None:
+    user_request = (
+        "Create one full-body, age-appropriate child fashion photograph in daylight. "
+        "Keep the exact blue floral A-line dress, fitted bodice, layered tulle, waist seam, "
+        "scalloped hem, natural skin, believable hands, and no readable text."
+    )
+    remote_direction = (
+        "REMOTE_BRAIN_DIRECTION: A relaxed school-age child stands in a sunlit garden wearing the specified "
+        "blue floral A-line dress. The fitted bodice, full skirt, layered translucent tulle, waist seam, "
+        "scalloped hem, natural folds, natural skin, and believable hands are clearly visible."
+    )
+    request = GenerationRequest(
+        asset_spec=AssetSpec(
+            asset_id="asset_remote_general",
+            asset_type=AssetType.SINGLE_IMAGE,
+            platform=Platform.GENERIC_SOCIAL,
+            aspect_ratio="2:3",
+            purpose="single requested creative image",
+        ),
+        layout_plan=LayoutPlan(
+            layout_plan_id="layout_remote_general",
+            asset_id="asset_remote_general",
+            platform=Platform.GENERIC_SOCIAL,
+            aspect_ratio="2:3",
+            text_rendering=TextRenderingMode.MODEL_TEXT_ALLOWED,
+            visual_hierarchy=["main_subject"],
+            product_area=LayoutRegion(name="subject_area", position="center_subject"),
+        ),
+        prompt_compilation=PromptCompilationResult(
+            prompt_compilation_id="prompt_remote_general",
+            asset_id="asset_remote_general",
+            visual_prompt="LOCAL_PROMPT_COMPILER_RECIPE_MUST_NOT_REACH_THE_REAL_PROVIDER",
+            negative_prompt="watermark, unreadable text",
+            text_policy="provider_native_text_forbidden",
+            hard_constraints=["LOCAL_SUITE_HARD_CONSTRAINT_MUST_NOT_REACH_THE_REAL_PROVIDER"],
+        ),
+        condition_plan=ConditionPlan(condition_plan_id="condition_remote_general", asset_id="asset_remote_general"),
+        generation_plan=GenerationPlan(
+            generation_plan_id="generation_remote_general",
+            asset_id="asset_remote_general",
+            provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+            candidate_count=1,
+            max_refine_rounds=0,
+            metadata={"scenario_id": "general_creative", "output_index": 0},
+        ),
+        metadata={
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "require_real_images": True,
+            "user_input": user_request,
+            "output_index": 0,
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "image_set_plan": {"shot_plan": [remote_direction]},
+            },
+            "mode_role_recipe": {
+                "label": "LOCAL_SUITE_ROLE_MUST_NOT_REACH_THE_REAL_PROVIDER",
+                "prompt_pressure": "LOCAL_SUITE_ROLE_PRESSURE_MUST_NOT_REACH_THE_REAL_PROVIDER",
+            },
+            "mode_execution_policy": {"mode": "delivery_suite"},
+            "visual_cluster": {
+                "human_photorealism_guidance": {
+                    "positive_prompt_fragments": ["natural skin texture", "believable hands"],
+                }
+            },
+        },
+    )
+
+    final_provider_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
+
+    assert user_request in final_provider_prompt
+    assert remote_direction in final_provider_prompt
+    assert "LOCAL_PROMPT_COMPILER_RECIPE" not in final_provider_prompt
+    assert "LOCAL_SUITE_ROLE" not in final_provider_prompt
+    assert "Role-specific generation contract:" not in final_provider_prompt
+    assert "Mode quality contract:" not in final_provider_prompt
+    assert len(final_provider_prompt) < 3500
+
+
 def test_general_reference_asset_plan_uses_neutral_subject_language() -> None:
     request = GenerationRequest(
         asset_spec=AssetSpec(

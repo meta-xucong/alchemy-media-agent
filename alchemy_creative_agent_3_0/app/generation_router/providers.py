@@ -2302,6 +2302,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         asset = request.asset_spec
         layout = request.layout_plan
         user_direction = self._provider_user_direction(request)
+        remote_general_contract = self._uses_remote_brain_native_general_contract(request)
         visual_direction = self._provider_visual_direction(request, user_direction=user_direction)
         allow_product_language = self._product_language_allowed(request, reference_assets)
         provider_text_instruction = self._provider_native_text_instruction(
@@ -2312,9 +2313,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
-        role_guidance = self._mode_role_prompt_guidance(request)
+        # A real General image whose remote Brain plan has been frozen already
+        # owns its creative direction.  General's optional suite helpers may
+        # describe lineage in the audit trail, but must not re-expand a single
+        # Brain-authored image into local camera, role, crop, or scene recipes.
+        role_guidance = [] if remote_general_contract else self._mode_role_prompt_guidance(request)
         apparel_construction_guidance = self._apparel_construction_prompt_guidance(request)
-        include_supporting_notes = allow_product_language or len(user_direction) < 180
+        include_supporting_notes = (allow_product_language or len(user_direction) < 180) and not remote_general_contract
         resolved_reference_policy = self._resolved_reference_policy_package(request)
         identity_evidence_prompt = self._identity_evidence_prompt(asset_plan)
         provider_hard_constraints = self._provider_hard_constraints(
@@ -2322,8 +2327,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             has_role_guidance=bool(role_guidance),
             has_reference_policy=bool(resolved_reference_policy),
         )
+        if remote_general_contract:
+            # The lossless user intent and the matched remote shot direction
+            # carry the factual visual contract.  Retaining a generic reminder
+            # avoids replaying the local prompt compiler's duplicated recipe
+            # stack into GPT Image 2.
+            provider_hard_constraints = [
+                "The user's explicit factual, safety, and negative constraints are mandatory."
+            ]
         composed = self._composed_visual_contribution(request) if self._activation_enforced(request) else {}
-        composed_prompt = self._string_list(composed.get("prompt_additions"))
+        composed_prompt = [] if remote_general_contract else self._string_list(composed.get("prompt_additions"))
         parts = [
             (
                 "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
@@ -2348,10 +2361,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             reference_channel_contract,
             portrait_identity_contract,
             identity_evidence_prompt,
-            f"Asset purpose: {asset.purpose}" if asset else "",
+            f"Asset purpose: {asset.purpose}" if asset and not remote_general_contract else "",
             (
                 "Output goal: create a polished, directly usable image with a clear subject and atmosphere."
-                if not allow_product_language and len(user_direction) < 180
+                if not remote_general_contract and not allow_product_language and len(user_direction) < 180
                 else ""
             ),
             self._asset_canvas_instruction(request, asset),
@@ -2365,7 +2378,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ]
                 if allow_product_language
                 else [
-                    "Preserve the requested subject, scene, style, and mood, plus explicit lighting, composition, and natural proportions.",
+                    (
+                        "Preserve the requested subject, scene, style, and mood, plus explicit lighting, composition, and natural proportions."
+                        if not remote_general_contract
+                        else "Preserve the remote Brain's matched image direction without adding an unrelated scene or subject."
+                    ),
                     "Do not add unrelated props, unrelated labels, logos, distracting objects, or objects not requested by the user.",
                 ]
             ),
@@ -2376,7 +2393,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         ]
         if role_guidance:
             parts.append("Role-specific generation contract:\n" + "\n".join(role_guidance))
-        mode_quality = self._mode_quality_profile(request)
+        mode_quality = {} if remote_general_contract else self._mode_quality_profile(request)
         if mode_quality:
             mode_lines = [
                 f"Mode quality: {mode_quality.get('user_visible_label') or mode_quality.get('mode')}",
@@ -2386,13 +2403,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if human_guidance or (human_photo_context and not allow_product_language):
             positive = self._string_list(human_guidance.get("positive_prompt_fragments"))
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
-            lines = [
-                "Polish interpretation: camera-ready real-person photography, never beauty-app face reshaping, face slimming, enlarged eyes, V-shaped chin, or skin-blur retouch.",
-                "Attractive realism balance: the reference person's own feature geometry and individual attractiveness are identity-owned; present them through prompt-consistent makeup, expression, camera, light, complexion, and believable texture without facial optimization, whitening, tanning, or beauty-filter remodeling.",
-                "Identity continuity: Human Realism improves rendering only; it never expands reference ownership into hair, wardrobe, lighting, scene, camera, or style.",
-                "Universal complexion and proportion guard: preserve reference or explicit prompt complexion, age direction, and natural head-to-body, neck, shoulder, and upper-body proportions; do not impose demographic lightness, tanning, or beauty-template geometry.",
-                "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",
-            ]
+            lines = (
+                [
+                    "Real-person fidelity: preserve the requested age direction, natural proportions, visible skin texture, and believable hands; never beauty-filter, adultify, or reshape the person.",
+                    "Human Realism improves rendering quality only and does not override the remote Brain's prompt-owned wardrobe, scene, lighting, camera, or styling decisions.",
+                ]
+                if remote_general_contract
+                else [
+                    "Polish interpretation: camera-ready real-person photography, never beauty-app face reshaping, face slimming, enlarged eyes, V-shaped chin, or skin-blur retouch.",
+                    "Attractive realism balance: the reference person's own feature geometry and individual attractiveness are identity-owned; present them through prompt-consistent makeup, expression, camera, light, complexion, and believable texture without facial optimization, whitening, tanning, or beauty-filter remodeling.",
+                    "Identity continuity: Human Realism improves rendering only; it never expands reference ownership into hair, wardrobe, lighting, scene, camera, or style.",
+                    "Universal complexion and proportion guard: preserve reference or explicit prompt complexion, age direction, and natural head-to-body, neck, shoulder, and upper-body proportions; do not impose demographic lightness, tanning, or beauty-template geometry.",
+                    "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",
+                ]
+            )
             if positive:
                 lines.append("Photoreal human rendering: " + "; ".join(positive[:4]))
             if do_not_inherit and reference_assets:
@@ -2555,6 +2579,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return " ".join(value.split()).strip()
 
     def _provider_visual_direction(self, request: GenerationRequest, *, user_direction: str) -> str:
+        remote_direction = self._remote_brain_native_general_direction(request)
+        if remote_direction:
+            lines = [f"User request (verbatim): {user_direction}"] if user_direction else []
+            lines.append(f"Remote Central Brain image direction: {remote_direction}")
+            return "\n".join(lines)
         if not user_direction:
             return str(request.prompt_compilation.visual_prompt or "").strip()
         lines = [f"User request (verbatim): {user_direction}"]
@@ -2582,6 +2611,38 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if consistency and not self._provider_text_overlaps_user(consistency, user_direction):
             lines.append("Project continuity decision: " + consistency)
         return "\n".join(lines)
+
+    def _uses_remote_brain_native_general_contract(self, request: GenerationRequest) -> bool:
+        """Recognize the real-image General path that must stay LLM-first."""
+
+        metadata = dict(request.metadata or {})
+        scenario_id = str(
+            metadata.get("scenario_id")
+            or request.generation_plan.metadata.get("scenario_id")
+            or ""
+        ).strip()
+        if scenario_id != "general_creative" or not bool(metadata.get("require_real_images")):
+            return False
+        llm_brain = metadata.get("llm_brain")
+        if not isinstance(llm_brain, dict) or not llm_brain.get("llm_used") or llm_brain.get("fallback_used"):
+            return False
+        plan = llm_brain.get("image_set_plan")
+        return bool(isinstance(plan, dict) and self._string_list(plan.get("shot_plan")))
+
+    def _remote_brain_native_general_direction(self, request: GenerationRequest) -> str:
+        if not self._uses_remote_brain_native_general_contract(request):
+            return ""
+        metadata = dict(request.metadata or {})
+        llm_brain = metadata.get("llm_brain") if isinstance(metadata.get("llm_brain"), dict) else {}
+        plan = llm_brain.get("image_set_plan") if isinstance(llm_brain.get("image_set_plan"), dict) else {}
+        directions = self._string_list(plan.get("shot_plan"))
+        try:
+            output_index = int(metadata.get("output_index") or request.generation_plan.metadata.get("output_index") or 0)
+        except (TypeError, ValueError):
+            output_index = 0
+        if output_index < 0 or output_index >= len(directions):
+            return ""
+        return directions[output_index]
 
     def _provider_brain_refinement_clauses(self, value: str, *, user_direction: str) -> list[str]:
         text = " ".join(str(value or "").split()).strip()
