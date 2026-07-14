@@ -160,7 +160,8 @@ def test_specialized_malformed_remote_json_projects_a_safe_invalid_response_cate
 
 
 def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy() -> None:
-    service = ecommerce_test_service()
+    provider = EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(brain_provider=provider)
     created = service.create_job(_request(count=2, approved_copy="Adjustable warm light"))
 
     assert created.status == "planned"
@@ -172,6 +173,11 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     ]
     assert all(item.metadata["asset_metadata"]["ecommerce_llm_directed"] for item in created.asset_series)
     assert all("ecommerce_recipe" not in item.metadata for item in created.asset_series)
+    planned_record = service.job_store.get(created.job_id)
+    assert planned_record is not None
+    frozen = planned_record.request.metadata["frozen_remote_creative_brain"]
+    assert frozen["schema_version"] == "v3_frozen_remote_creative_brain_v1"
+    assert frozen["capability_plan_id"] == planned_record.request.metadata["capability_activation_plan"]["plan_id"]
 
     generated = service.generate_job(created.job_id, {"quality_mode": "standard"})
     record = service.job_store.get(created.job_id)
@@ -182,6 +188,10 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert "Adjustable warm light" in prompt.visual_prompt
     assert prompt.provider_notes["text_rendering_owner"] == "image_provider"
     assert "ecommerce_recipe" not in prompt.metadata
+    # One logical specialized job creates its remote direction once during
+    # planning. Generation must consume that pinned result rather than issue a
+    # second, independently fallible Brain request.
+    assert len(provider.requests) == 1
 
     exported = service.export_job(created.job_id)
     assert exported.export_package is not None

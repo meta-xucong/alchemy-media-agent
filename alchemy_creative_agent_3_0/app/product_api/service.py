@@ -670,6 +670,7 @@ class V3ProductApiService:
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
         self._bind_capability_plan_provenance(create_request, job_id)
+        self._bind_frozen_remote_creative_brain(create_request, runtime_result)
         self._bind_internal_copy_render_plan(create_request)
         self._seed_ecommerce_slot_root_lineage(create_request, job_id)
         self._seed_photography_role_root_lineage(create_request, job_id)
@@ -5924,8 +5925,44 @@ class V3ProductApiService:
             "template_deliverable_plan_id",
             "resolved_constraint_ledger",
             "resolved_constraint_ledger_id",
+            "frozen_remote_creative_brain",
         }
     )
+
+    @staticmethod
+    def _bind_frozen_remote_creative_brain(
+        request: CreateCreativeJobRequest,
+        runtime_result: Any,
+    ) -> None:
+        """Persist a specialized remote creative answer with its frozen plan.
+
+        This is a server-owned execution binding, not browser-supplied
+        metadata.  ScenarioRuntime validates the exact plan/template/scenario
+        linkage before generation or retry may reuse it.
+        """
+
+        resolution = getattr(runtime_result, "scenario_resolution", None)
+        scenario_id = str(getattr(getattr(resolution, "manifest", None), "scenario_id", "") or "")
+        if scenario_id not in {"ecommerce", "photography"}:
+            return
+        runtime_metadata = dict(getattr(runtime_result, "metadata", {}) or {})
+        plan = runtime_metadata.get("capability_activation_plan")
+        brain_result = runtime_metadata.get("llm_brain")
+        if not isinstance(plan, dict) or not isinstance(brain_result, dict):
+            return
+        if not bool(brain_result.get("llm_used")) or bool(brain_result.get("fallback_used")):
+            return
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "frozen_remote_creative_brain": {
+                "schema_version": "v3_frozen_remote_creative_brain_v1",
+                "template_id": str(plan.get("template_id") or ""),
+                "scenario_id": str(plan.get("scenario_id") or scenario_id),
+                "capability_plan_id": str(plan.get("plan_id") or ""),
+                "capability_plan_fingerprint": str(plan.get("fingerprint") or ""),
+                "brain_result": brain_result,
+            },
+        }
 
     def _assert_runtime_metadata_server_owned(
         self,

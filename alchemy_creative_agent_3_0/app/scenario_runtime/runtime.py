@@ -2055,6 +2055,14 @@ class ScenarioRuntime:
         pre_activation_capabilities: dict[str, Any] | None = None,
         template_capability_policy: TemplateCapabilityPolicy | None = None,
     ) -> BrainRunResult:
+        frozen = self._frozen_remote_creative_brain_for_execution(
+            request,
+            resolution,
+            stage=stage,
+            template_capability_policy=template_capability_policy,
+        )
+        if frozen is not None:
+            return frozen
         base_metadata = self._brain_runtime_metadata(request, resolution, quality_mode=quality_mode)
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
         brain_request = self.llm_brain_adapter.build_request(
@@ -2071,6 +2079,56 @@ class ScenarioRuntime:
             template_capability_policy=template_capability_policy,
         )
         return self.llm_brain_adapter.run(brain_request)
+
+    def _frozen_remote_creative_brain_for_execution(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        stage: str,
+        template_capability_policy: TemplateCapabilityPolicy | None,
+    ) -> BrainRunResult | None:
+        """Reuse the server-pinned specialized creative answer during execution.
+
+        Planning is the only stage that may ask the remote Brain to create a
+        specialized direction.  Generation and bounded retry must consume the
+        same verified answer together with the frozen activation plan; a
+        second Brain call would make one logical job non-deterministic and can
+        block it after planning has already succeeded.
+        """
+
+        if stage == "plan" or not (template_capability_policy and template_capability_policy.requires_remote_creative_brain):
+            return None
+        frozen = request.metadata.get("frozen_remote_creative_brain")
+        if frozen is None:
+            return None
+        if not isinstance(frozen, dict):
+            raise CapabilityActivationError("frozen_remote_creative_brain_invalid")
+        plan = request.metadata.get("capability_activation_plan")
+        brain_payload = frozen.get("brain_result")
+        expected_template_id = self._template_id(request, resolution)
+        if (
+            frozen.get("schema_version") != "v3_frozen_remote_creative_brain_v1"
+            or not isinstance(plan, dict)
+            or not isinstance(brain_payload, dict)
+            or str(frozen.get("template_id") or "") != expected_template_id
+            or str(frozen.get("scenario_id") or "") != resolution.manifest.scenario_id
+            or str(frozen.get("capability_plan_id") or "") != str(plan.get("plan_id") or "")
+            or str(frozen.get("capability_plan_fingerprint") or "") != str(plan.get("fingerprint") or "")
+        ):
+            raise CapabilityActivationError("frozen_remote_creative_brain_binding_mismatch")
+        try:
+            result = BrainRunResult.model_validate(brain_payload)
+        except ValueError as exc:
+            raise CapabilityActivationError("frozen_remote_creative_brain_invalid") from exc
+        if not result.llm_used or result.fallback_used:
+            raise CapabilityActivationError("frozen_remote_creative_brain_not_remote")
+        result.audit = {
+            **dict(result.audit or {}),
+            "frozen_execution_reuse": True,
+            "frozen_execution_stage": stage,
+        }
+        return result
 
     def _selected_capability_ids(self, request: ScenarioRuntimeRequest, resolution) -> list[str]:
         parameters = request.scenario_selection.parameters if request.scenario_selection else {}
