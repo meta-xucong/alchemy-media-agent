@@ -1,6 +1,8 @@
 import base64
 from io import BytesIO
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.project_mode import (
     PersistentProjectStore,
     ProjectTemplateRegistry,
@@ -17,6 +19,28 @@ from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider, ecommerce_test_service
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_v3_storage(monkeypatch, tmp_path) -> None:
+    """Keep default Project Mode services out of developer/runtime media roots.
+
+    Several regression cases intentionally exercise the default Product API
+    constructor.  Its stores are persistent by design, so without this
+    fixture those cases read and append to the repository's live
+    ``.media_storage`` directory.  That makes an otherwise deterministic
+    unit suite depend on prior browser/provider runs and can turn ordinary
+    output resolution into an unbounded scan.
+
+    Explicit stores in persistence tests are unaffected; only implicit test
+    defaults are redirected to this test's private temporary directory.
+    """
+
+    root = tmp_path / "isolated_v3_storage"
+    monkeypatch.setenv("ALCHEMY_V3_OUTPUT_DIR", str(root / "outputs"))
+    monkeypatch.setenv("ALCHEMY_V3_UPLOAD_DIR", str(root / "uploads"))
+    monkeypatch.setenv("ALCHEMY_V3_PROJECT_DIR", str(root / "projects"))
+    monkeypatch.setenv("ALCHEMY_V3_JOB_DIR", str(root / "jobs"))
 
 
 def _ecommerce_handlers() -> V3ProductRouteHandlers:

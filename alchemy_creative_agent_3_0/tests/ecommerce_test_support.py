@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
@@ -92,7 +93,18 @@ def ecommerce_test_service(
     brain_provider: EcommerceRemoteBrainTestProvider | None = None,
     **service_kwargs,
 ) -> V3ProductApiService:
+    # E-Commerce jobs with reference truth deliberately freeze a real-image
+    # provider strategy in production.  The test Brain double alone is not
+    # enough to make that path hermetic: without an explicit router, the
+    # default runtime would materialize ProductionImageGenerationProvider and
+    # a unit test could wait on the configured external image gateway.
+    #
+    # Pin the complete test-only rendering seam to MockGenerationProvider.
+    # Passing it as ``provider`` makes the fixture deterministic for every
+    # strategy (including reference-conditioned jobs) without relaxing the
+    # production strategy contract or modifying application code.
     runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=brain_provider or EcommerceRemoteBrainTestProvider())
+        llm_brain_adapter=V3LLMBrainAdapter(provider=brain_provider or EcommerceRemoteBrainTestProvider()),
+        generation_router=GenerationRouter(provider=MockGenerationProvider()),
     )
     return V3ProductApiService(scenario_runtime=runtime, **service_kwargs)
