@@ -98,6 +98,49 @@ def test_v3_product_api_creates_and_retrieves_creative_job_status() -> None:
     assert fetched.metadata["v3_independent_product_api"] is True
 
 
+def test_repeated_root_create_is_append_only_and_preserves_the_first_terminal_record() -> None:
+    service, _, _ = _service("append_only_root_job_identity")
+    request = {"user_input": "Create one clean still-life image."}
+
+    first = service.create_job(request)
+    service.mark_job_generating(
+        first.job_id,
+        background_attempt_id="first_attempt",
+        background_timeout_seconds=675,
+    )
+    first_terminal = service.mark_job_generation_worker_failed(
+        first.job_id,
+        background_attempt_id="first_attempt",
+        failure_code="background_generation_request_invalid",
+    )
+    second = service.create_job(request)
+
+    assert first.job_id != second.job_id
+    assert first_terminal.status == ProductJobStatusValue.BLOCKED
+    assert service.get_job(first.job_id).status == ProductJobStatusValue.BLOCKED
+    assert service.get_job(second.job_id).status == ProductJobStatusValue.PLANNED
+    assert service.job_store.count() == 2
+    first_record = service.job_store.get(first.job_id)
+    second_record = service.job_store.get(second.job_id)
+    assert first_record is not None and second_record is not None
+    assert (
+        first_record.request.metadata["v3_job_instance_id"]
+        != second_record.request.metadata["v3_job_instance_id"]
+    )
+
+
+def test_root_job_instance_id_is_server_owned() -> None:
+    service, _, _ = _service("server_owned_root_job_instance")
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned: v3_job_instance_id"):
+        service.create_job(
+            {
+                "user_input": "Create one clean still-life image.",
+                "metadata": {"v3_job_instance_id": "browser-supplied"},
+            }
+        )
+
+
 def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_reopen_it() -> None:
     service, _, _ = _service("gateway_background_timeout")
     created = service.create_job({"user_input": "Create one clean still-life image."})

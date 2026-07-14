@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Callable
+from uuid import uuid4
 
 from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
@@ -775,6 +776,7 @@ class V3ProductApiService:
             create_request,
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
         )
+        self._bind_server_job_instance_id(create_request)
         if trusted_capability_plan_reuse:
             self._validate_and_bind_trusted_capability_plan_reuse(create_request)
         self._resolve_and_pin_photographer_profile(
@@ -800,6 +802,7 @@ class V3ProductApiService:
                 create_request.user_input,
                 create_request.effective_brand_id,
                 runtime_result.scenario_resolution.manifest.scenario_id,
+                create_request.metadata.get("v3_job_instance_id"),
             )
         )
         activation_metadata = {
@@ -6136,8 +6139,26 @@ class V3ProductApiService:
             "resolved_constraint_ledger",
             "resolved_constraint_ledger_id",
             "frozen_remote_creative_brain",
+            "v3_job_instance_id",
         }
     )
+
+    @staticmethod
+    def _bind_server_job_instance_id(request: CreateCreativeJobRequest) -> None:
+        """Stamp a fresh, server-owned identity for one append-only Job.
+
+        Prompt equality is useful for deterministic planning fixtures, but it
+        is not a safe persistence identity: a user may intentionally submit
+        the same request twice, and a continuation must never replace its
+        parent. The identifier is deliberately opaque and is replaced even
+        for a trusted continuation, while its frozen capability plan remains
+        independently validated by the continuation seam.
+        """
+
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "v3_job_instance_id": uuid4().hex,
+        }
 
     @staticmethod
     def _bind_frozen_remote_creative_brain(

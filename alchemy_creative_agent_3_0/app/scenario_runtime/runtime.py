@@ -876,6 +876,7 @@ class ScenarioRuntime:
         context = SpecializedScenarioPlanningContext(
             job_key=str(
                 metadata.get("job_id")
+                or metadata.get("v3_job_instance_id")
                 or stable_id(
                     "specialized_scenario_job",
                     request.user_input,
@@ -1788,7 +1789,13 @@ class ScenarioRuntime:
         metadata: dict[str, Any] | None = None,
     ) -> CapabilityInput:
         return CapabilityInput(
-            job_id=stable_id("capability_job", request.user_input, request.optional_brand_id, resolution.manifest.scenario_id),
+            job_id=stable_id(
+                "capability_job",
+                request.user_input,
+                request.optional_brand_id,
+                resolution.manifest.scenario_id,
+                request.metadata.get("v3_job_instance_id"),
+            ),
             scenario_id=resolution.manifest.scenario_id,
             user_input=request.user_input,
             campaign=dict(request.metadata.get("campaign", {})) if isinstance(request.metadata.get("campaign"), dict) else {},

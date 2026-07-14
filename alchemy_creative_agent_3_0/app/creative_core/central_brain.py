@@ -488,6 +488,7 @@ class CentralCreativeBrain:
             user_input,
             optional_brand_id=optional_brand_id,
             optional_template_id=optional_template_id,
+            job_instance_id=str((runtime_metadata or {}).get("v3_job_instance_id") or "") or None,
         ).output
         job.metadata = {
             **job.metadata,

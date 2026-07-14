@@ -24,13 +24,26 @@ class IntentAgent(BaseAgent):
         optional_template_id: str | None = None,
         uploaded_asset_ids: list[str] | None = None,
         locale: Locale = Locale.ZH_CN,
+        job_instance_id: str | None = None,
     ) -> AgentResult[CreativeJob]:
         normalized = normalize_input(raw_user_input)
         requires_clarification = not normalized
         industry = detect_industry(normalized)
         platforms = detect_platforms(normalized)
         job = CreativeJob(
-            job_id=stable_id("job", raw_user_input, optional_brand_id, optional_template_id),
+            # A Product API submission is an append-only event, not an implicit
+            # deduplication key. Direct, deterministic planning callers keep
+            # their historical stable ID by omitting this value; the Product
+            # API supplies an opaque server-owned instance ID for every root
+            # or continuation Job so an equal prompt cannot overwrite an
+            # earlier provider/review history.
+            job_id=stable_id(
+                "job",
+                raw_user_input,
+                optional_brand_id,
+                optional_template_id,
+                job_instance_id,
+            ),
             raw_user_input=raw_user_input,
             locale=locale,
             optional_brand_id=optional_brand_id,
