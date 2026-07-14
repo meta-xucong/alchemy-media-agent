@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
+import re
 from typing import Any, Callable
 
 from ..app_shell.navigation import get_navigation_entry
@@ -496,6 +499,162 @@ class InMemoryProductJobStore:
 
     def count(self) -> int:
         return len(self._records)
+
+
+_PRODUCT_JOB_ID_PATTERN = re.compile(r"^job_[A-Za-z0-9_-]{1,128}$")
+
+
+class PersistentProductJobStore(InMemoryProductJobStore):
+    """Durable V3 Job records for Project Mode and restart-safe delivery.
+
+    Generated image files were already durable, but the planning, frozen
+    Central Brain binding, review evidence, retry history, continuation
+    lineage, and terminal state were previously held only in the process.
+    Restoring from an output PNG alone cannot safely recreate those contracts.
+    This store persists the typed V3 record atomically while retaining the
+    in-memory store as the deterministic default for isolated unit tests.
+    """
+
+    schema_version = "v3_product_job_record_v1"
+
+    def __init__(self, storage_root: str | Path | None = None) -> None:
+        super().__init__()
+        self.storage_root = Path(storage_root) if storage_root else _default_product_job_storage_root()
+
+    def save(self, record: ProductJobRecord) -> ProductJobRecord:
+        saved = super().save(record)
+        self._write_record(saved)
+        return saved
+
+    def get(self, job_id: str) -> ProductJobRecord | None:
+        cached = super().get(job_id)
+        if cached is not None:
+            return cached
+        restored = self._read_record(job_id)
+        if restored is not None:
+            self._records[restored.job_id] = restored
+        return restored
+
+    def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
+        self._load_all_records()
+        return super().list_recent(limit)
+
+    def delete_many(self, job_ids: list[str]) -> int:
+        deleted = super().delete_many(job_ids)
+        for job_id in list(dict.fromkeys(str(item or "").strip() for item in job_ids)):
+            if not _valid_product_job_id(job_id):
+                continue
+            path = self._record_path(job_id)
+            if path.exists():
+                path.unlink()
+                deleted += 1
+        return deleted
+
+    def _load_all_records(self) -> None:
+        if not self.storage_root.exists():
+            return
+        for path in self.storage_root.glob("job_*.json"):
+            restored = self._read_record(path.stem)
+            if restored is not None:
+                self._records[restored.job_id] = restored
+
+    def _read_record(self, job_id: str) -> ProductJobRecord | None:
+        if not _valid_product_job_id(job_id):
+            return None
+        path = self._record_path(job_id)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("schema_version") != self.schema_version:
+            return None
+        try:
+            return ProductJobRecord(
+                request=CreateCreativeJobRequest.model_validate(payload["request"]),
+                status=ProductJobStatusValue(payload["status"]),
+                job_id_value=str(payload["job_id"]),
+                planning_result=(
+                    PlanningResult.model_validate(payload["planning_result"])
+                    if isinstance(payload.get("planning_result"), dict)
+                    else None
+                ),
+                generation_result=(
+                    PlanningResult.model_validate(payload["generation_result"])
+                    if isinstance(payload.get("generation_result"), dict)
+                    else None
+                ),
+                scenario_resolution=(
+                    ScenarioPackResolution.model_validate(payload["scenario_resolution"])
+                    if isinstance(payload.get("scenario_resolution"), dict)
+                    else None
+                ),
+                capability_run=(
+                    CapabilityRunResult.model_validate(payload["capability_run"])
+                    if isinstance(payload.get("capability_run"), dict)
+                    else None
+                ),
+                selected_result=(
+                    SelectedResult.model_validate(payload["selected_result"])
+                    if isinstance(payload.get("selected_result"), dict)
+                    else None
+                ),
+                lifecycle=(
+                    JobLifecycleRecord.model_validate(payload["lifecycle"])
+                    if isinstance(payload.get("lifecycle"), dict)
+                    else None
+                ),
+                balance_estimate=dict(payload.get("balance_estimate") or {}),
+                warnings=[str(item) for item in payload.get("warnings") or []],
+                created_at=str(payload.get("created_at") or _utc_now_iso()),
+                updated_at=str(payload.get("updated_at") or _utc_now_iso()),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _write_record(self, record: ProductJobRecord) -> None:
+        if not _valid_product_job_id(record.job_id):
+            raise ValueError("refusing to persist an invalid V3 job id")
+        path = self._record_path(record.job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": self.schema_version,
+            "job_id": record.job_id,
+            "request": record.request.model_dump(mode="json"),
+            "status": record.status.value,
+            "planning_result": _model_json(record.planning_result),
+            "generation_result": _model_json(record.generation_result),
+            "scenario_resolution": _model_json(record.scenario_resolution),
+            "capability_run": _model_json(record.capability_run),
+            "selected_result": _model_json(record.selected_result),
+            "lifecycle": _model_json(record.lifecycle),
+            "balance_estimate": dict(record.balance_estimate),
+            "warnings": list(record.warnings),
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+
+    def _record_path(self, job_id: str) -> Path:
+        return self.storage_root / f"{job_id}.json"
+
+
+def _model_json(value: Any) -> dict[str, Any] | None:
+    return value.model_dump(mode="json") if value is not None else None
+
+
+def _valid_product_job_id(job_id: str) -> bool:
+    return bool(_PRODUCT_JOB_ID_PATTERN.match(str(job_id or "")))
+
+
+def _default_product_job_storage_root() -> Path:
+    configured = os.getenv("ALCHEMY_V3_JOB_DIR") or os.getenv("MEDIA_STORAGE_ROOT")
+    if configured:
+        return Path(configured) / "v3_jobs"
+    return Path(__file__).resolve().parents[3] / ".media_storage" / "v3_jobs"
 
 
 class V3ProductApiService:

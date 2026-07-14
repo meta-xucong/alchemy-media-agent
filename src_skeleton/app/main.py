@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
@@ -99,7 +100,10 @@ IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
-v3_route_handlers = V3ProductRouteHandlers(project_store=PersistentProjectStore())
+v3_route_handlers = V3ProductRouteHandlers(
+    service=V3ProductApiService(job_store=PersistentProductJobStore()),
+    project_store=PersistentProjectStore(),
+)
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")

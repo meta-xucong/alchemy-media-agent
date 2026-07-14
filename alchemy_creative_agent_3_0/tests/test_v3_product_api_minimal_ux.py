@@ -25,6 +25,8 @@ from alchemy_creative_agent_3_0.app.product_api import (
 )
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore
+from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 
 
@@ -301,6 +303,39 @@ def test_project_background_worker_failure_records_one_safe_terminal_timeline_it
     ]
     assert len(blocked_items) == 1
     assert blocked_items[0]["metadata"]["failure_code"] == "background_generation_request_invalid"
+
+
+def test_persistent_product_job_store_restores_project_job_contract_after_restart() -> None:
+    root = _test_store_root("persistent_product_job_store")
+    job_root = root / "jobs"
+    project_root = root / "projects"
+    first_service = V3ProductApiService(job_store=PersistentProductJobStore(job_root))
+    first_handlers = V3ProductRouteHandlers(
+        service=first_service,
+        project_store=PersistentProjectStore(project_root),
+    )
+    project = first_handlers.post_projects({"user_goal": "Create one clean still-life image."})
+    created = first_handlers.post_project_job(
+        project["project"]["project_id"],
+        {"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    )
+    first_service.mark_job_generating(
+        created["job_id"],
+        background_attempt_id="persistent_attempt",
+        background_timeout_seconds=675,
+    )
+
+    restarted_service = V3ProductApiService(job_store=PersistentProductJobStore(job_root))
+    restarted_handlers = V3ProductRouteHandlers(
+        service=restarted_service,
+        project_store=PersistentProjectStore(project_root),
+    )
+    restored = restarted_handlers.get_job(created["job_id"])
+    restored_project = restarted_handlers.get_project(project["project"]["project_id"])
+
+    assert restored["status"] == "generating"
+    assert restored["metadata"]["background_generation_watchdog"]["background_attempt_id"] == "persistent_attempt"
+    assert created["job_id"] in restored_project["project"]["job_ids"]
 
 
 def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts() -> None:
