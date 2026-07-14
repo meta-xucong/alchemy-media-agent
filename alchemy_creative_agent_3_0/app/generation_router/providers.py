@@ -2849,6 +2849,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Do not invent marketing text",
             "The final provider-rendered image must contain no added visible text",
             "Preserve the requested subject, scene, style, and mood",
+            # These labels are the shared, ledger-backed garment truth
+            # contract.  They are dynamic fact values, not a recipe: once
+            # declared hard/strong truth reaches the provider boundary, prompt
+            # compaction must not silently erase it.
+            "Garment construction truth:",
+            "- Preserve silhouette and proportion:",
+            "- Preserve print or pattern placement and scale:",
+            "- Preserve layer order and transparency or mesh topology:",
+            "- Preserve seams, hems, trim, fastenings, and accessory placement:",
+            "- Keep materially consistent material weight and surface response:",
+            "- Keep materially consistent fold, tension, gravity, and drape behavior:",
+            "These are garment construction facts only;",
         )
         for index, line in enumerate(lines):
             if line.startswith(critical_prefixes):

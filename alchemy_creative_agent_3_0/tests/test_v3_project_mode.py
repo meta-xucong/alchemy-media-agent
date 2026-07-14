@@ -12,8 +12,11 @@ from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider, ecommerce_test_service
 
 
 def _ecommerce_handlers() -> V3ProductRouteHandlers:
@@ -431,6 +434,68 @@ def test_project_mode_preserves_explicit_apparel_construction_into_the_frozen_le
         "product_material_response",
         "product_drape_behavior",
     }
+
+
+def test_project_mode_forwards_frozen_apparel_ledger_to_the_provider_request(tmp_path, monkeypatch) -> None:
+    """The public Project Mode path must preserve typed truth through rendering."""
+
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+
+    class CapturingMockGenerationProvider(MockGenerationProvider):
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001
+            self.requests.append(request)
+            return super().generate(request)
+
+    provider = CapturingMockGenerationProvider()
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()),
+        generation_router=GenerationRouter(provider=provider),
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    handlers = V3ProductRouteHandlers(service=service)
+    project = handlers.post_projects({"user_goal": "Validate declared apparel truth at provider handoff"})["project"]
+    construction = {
+        "silhouette_and_proportion": "A-line knee-length silhouette with a fitted bodice",
+        "print_or_pattern_registration": "small blue floral print stays registered across bodice and skirt",
+        "layer_order": ["cotton lining", "two uneven tulle overlays"],
+        "seam_hem_edge_trim_fastening": "waist seam, scalloped hem trim, back button",
+        "material_weight_and_surface_response": "matte cotton lining and translucent tulle",
+        "fold_tension_gravity_and_drape": "soft gravity-driven folds with separated tulle edges",
+    }
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create one product-on-person image of a fictional school-age child wearing the dress.",
+            "commerce_profile_patch": {
+                "product_name": "fictional blue layered children's dress",
+                "product_category": "apparel",
+                "apparel_construction": construction,
+            },
+            "metadata": {"requested_image_count": 1},
+        },
+    )
+
+    status = service.generate_job(job["job_id"], {"quality_mode": "standard"})
+
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert len(provider.requests) == 1
+    request = provider.requests[0]
+    envelope = request.metadata["capability_execution_envelope"]
+    projection = envelope["resolved_constraint_ledger"]["provider_projection"]
+    assert projection["apparel_construction"]["applies"] is True
+    assert len(projection["apparel_construction"]["facts"]) == 6
+
+    prompt = ProductionImageGenerationProvider(output_store=service.output_store)._generation_prompt(request, [])
+    assert "Garment construction truth:" in prompt
+    assert "A-line knee-length silhouette with a fitted bodice" in prompt
+    assert "small blue floral print stays registered" in prompt
 
 
 def test_project_mode_rejects_ecommerce_project_job_with_fake_uploaded_asset_id() -> None:

@@ -850,7 +850,20 @@ class HumanPhotorealismLayer:
         has_visible_face = (
             _contains_any(text, {"face", "portrait"}) or _contains_any(text, {"脸", "人像"})
         ) and not face_is_explicitly_excluded
-        if is_hand_or_skin and not has_visible_face:
+        # A hand, finger, or skin-quality mention is often incidental in a
+        # full-person request.  Detail-only guidance is appropriate only
+        # when the request is genuinely about that crop.  This is deliberately
+        # subject-generic: it does not introduce an age, apparel, or template
+        # branch.
+        has_full_person_context = (
+            subject_type == "character"
+            or _contains_any(
+                text,
+                _HUMAN_TERMS - {"hand holding", "holding the product", "skin detail", "face", "portrait"},
+            )
+            or _contains_any(text, _CHINESE_HUMAN_TERMS - _CHINESE_HAND_OR_SKIN_TERMS)
+        )
+        if is_hand_or_skin and not has_visible_face and not has_full_person_context:
             human_subject_kind = "hand_or_skin_detail"
             strictness = "balanced"
             reason_codes.append("hand_or_skin_detail_detected")

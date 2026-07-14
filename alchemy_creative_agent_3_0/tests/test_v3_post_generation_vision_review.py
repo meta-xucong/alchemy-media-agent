@@ -478,6 +478,43 @@ def test_identity_vision_provider_failures_use_bounded_default_attempts(tmp_path
     assert report.evidence["provider_review_attempts"] == 2
 
 
+def test_hard_semantic_pixel_contract_retries_one_transient_reviewer_failure(tmp_path, monkeypatch) -> None:
+    class FlakyVisionProvider:
+        provider_name = "hard_semantic_flaky_vision"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 1:
+                raise VisionInspectionProviderError("vision inspection returned empty output")
+            return {"status": "pass", "confidence": 0.91, "issue_codes": []}
+
+    monkeypatch.delenv("V3_VISION_INSPECTION_MAX_ATTEMPTS", raising=False)
+    monkeypatch.setattr(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
+        lambda _seconds: None,
+    )
+    provider = FlakyVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "vision_inspection_mode": "hybrid",
+            "capability_execution_envelope": {
+                "activation_plan": {"activation_mode": "enforced"},
+                "resolved_constraint_ledger": {"hard_semantic_contract": True},
+            },
+        },
+    )
+
+    assert provider.calls == 2
+    assert report.status == "pass"
+
+
 def test_vision_timeout_detection_covers_sdk_and_gateway_messages() -> None:
     assert _is_timeout_error(TimeoutError("request stalled")) is True
     assert _is_timeout_error(RuntimeError("Request timed out.")) is True

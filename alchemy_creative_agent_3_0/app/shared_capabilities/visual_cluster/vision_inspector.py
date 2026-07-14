@@ -1594,7 +1594,12 @@ def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:
 
 def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
     identity_critical = _portrait_identity_metric_requested(metadata) and _truthy(metadata.get("require_real_images"))
-    default = 2 if identity_critical else 1
+    # A transient reviewer outage must not turn a hard frozen semantic
+    # contract into a manual-only result after one attempt.  This is a bounded
+    # retry of the same shared pixel inspection, never a second image
+    # generation or a template-specific review path.
+    hard_semantic_contract = _hard_semantic_pixel_contract_requested(metadata)
+    default = 2 if identity_critical or hard_semantic_contract else 1
     raw = metadata.get("vision_inspection_max_attempts") or os.getenv("V3_VISION_INSPECTION_MAX_ATTEMPTS")
     if raw is None:
         return default
@@ -1602,6 +1607,14 @@ def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
         return max(1, min(3, int(raw)))
     except (TypeError, ValueError):
         return default
+
+
+def _hard_semantic_pixel_contract_requested(metadata: dict[str, Any]) -> bool:
+    envelope = metadata.get("capability_execution_envelope")
+    if not isinstance(envelope, dict):
+        return False
+    ledger = envelope.get("resolved_constraint_ledger")
+    return isinstance(ledger, dict) and bool(ledger.get("hard_semantic_contract"))
 
 
 def _string_list(value: Any) -> list[str]:

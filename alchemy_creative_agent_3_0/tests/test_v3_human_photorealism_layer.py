@@ -385,6 +385,34 @@ def test_doc104_hand_only_product_context_uses_hand_specific_shared_guidance() -
     assert "face-slimming" not in negative_text
 
 
+def test_full_person_context_keeps_incidental_hands_out_of_detail_only_guidance() -> None:
+    """A full person outranks incidental anatomy words in every template."""
+
+    layer = HumanPhotorealismLayer()
+    guidance = layer.build(
+        project_id="project_full_person_hands",
+        job_id="job_full_person_hands",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input=(
+            "Create a full-body product-on-person photograph of a fictional school-age child "
+            "wearing a dress with natural skin texture, expression, hands, and posture."
+        ),
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+    prompt_text = " ".join(guidance.positive_prompt_fragments).lower()
+
+    assert guidance.applies is True
+    assert plugin["human_subject_kind"] == "product_on_person"
+    assert "hand_or_skin_detail_detected" not in plugin["reason_codes"]
+    assert "adult hand or forearm" not in prompt_text
+    assert "keep any face out of frame" not in prompt_text
+
+
 def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None:
     layer = HumanPhotorealismLayer()
 
