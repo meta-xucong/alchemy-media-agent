@@ -414,7 +414,10 @@ class HumanPhotorealismLayer:
             "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop in close portraits",
             "keep harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle without beauty-filter reshaping",
             "treat pose and expression as a caught photographic moment, with natural gaze, mouth tension, shoulder balance, and small asymmetries instead of a centered front-facing presentation pose",
+            "when hands are visible, retain anatomically coherent finger count, joints, nail scale, relaxed grip, and physically credible contact with any object or garment",
+            "when garments are visible, make folds, drape, fit, and contact shadows respond naturally to the person's pose and gravity while retaining user- or reference-specified garment construction",
             "keep person, garment or props, surfaces, and background in one physically coherent photographed space with matched light direction, local falloff, depth, contact shadow, and non-uniform texture",
+            "keep the person and environment integrated through consistent light direction, color response, depth, and contact rather than a cut-out composite",
         ]
         positives.extend(_rendering_positive_fragments(rendering_profile))
         if has_identity_reference:
@@ -493,8 +496,12 @@ class HumanPhotorealismLayer:
             "adultification or infantilization",
             "age-inappropriate beauty retouching",
             "age-inappropriate high-gloss advertising beauty styling",
+            "extra, fused, missing, or misjointed visible fingers",
+            "impossible grip, hand contact, or limb connection",
+            "floating garment folds or body contact that ignores pose and gravity",
             "flat evenly lit backdrop with no depth or contact shadow",
             "airbrushed background or surface texture that looks rendered rather than photographed",
+            "cut-out subject with mismatched environmental light or color response",
             "synthetic uniform material response across skin, garment, props, and background",
             "front-facing centered mannequin pose repeated across outputs",
         ]
@@ -527,6 +534,8 @@ class HumanPhotorealismLayer:
             "facial and body morphology remain consistent with the requested or referenced age band",
             "close crops keep natural head, neck, shoulder, and upper-body proportions",
             "age appearance follows explicit prompt or reference evidence without generic advertising-beauty substitution",
+            "visible hands have credible finger count, joints, scale, grip, and object or garment contact",
+            "visible garments follow pose, gravity, folds, drape, fit, and contact shadow without replacing user- or reference-specified garment construction",
             "person, visible materials, props, and background share coherent light direction, depth, contact shadow, and photographed texture",
             "multi-output people have distinct natural shutter moments rather than repeated centered front-facing poses",
         ]
@@ -545,7 +554,9 @@ class HumanPhotorealismLayer:
                 "repair exposure or color-cast drift while preserving the reference or explicitly requested complexion direction; avoid whitening masks, forced tanning, skin smoothing, or face replacement",
                 "repair age drift toward the requested or referenced age band with age-consistent face, eyes, cheeks, teeth, neck, shoulders, expression, and skin response",
                 "repair close portrait framing so the head-to-body ratio, neck, shoulders, and upper-body crop look natural and flattering",
+                "when hands or garment contact are visible, repair finger count, joints, grip, limb connection, folds, drape, fit, and contact shadows so they obey pose and gravity",
                 "repair the photographed scene as one physical light environment: align local falloff, depth, contact shadows, and material response across person, visible surfaces, props, and background without changing the requested mood",
+                "repair subject-environment integration so light direction, color response, depth, and contact do not make the person look cut out from the background",
                 "repair repeated centered presentation posing toward a natural shutter moment with prompt-consistent variation in gaze, mouth tension, head angle, shoulders, and body orientation",
                 *_rendering_retry_fragments(rendering_profile),
                 *_string_list(casebook_retry.get("artifact_repair")),

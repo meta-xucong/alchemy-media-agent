@@ -215,6 +215,34 @@ def test_doc70_new_ai_feel_issue_codes_create_targeted_retry_patch() -> None:
     assert "beauty-filter facial reshaping" in patch_text
 
 
+def test_doc70_bad_hands_or_body_uses_specific_shared_anatomy_repair() -> None:
+    report = VisionOutputInspector().inspect(
+        GeneratedOutputResolution(
+            resolution_id="resolution_doc70_hands",
+            project_id="project_doc70_hands",
+            job_id="job_doc70_hands",
+            candidate_id="candidate_doc70_hands",
+            output_id="output_doc70_hands",
+            status="ready",
+        ),
+        metadata={
+            "post_generation_fake_issue_codes": ["bad_hands_or_body"],
+            "post_generation_fake_confidence": 0.92,
+        },
+    )
+    patch_text = " ".join(
+        [
+            *report.retry_patch["artifact_repair"],
+            *report.retry_patch["negative_additions"],
+        ]
+    )
+
+    assert report.status == "fail_retryable"
+    assert "anatomically coherent finger count" in patch_text
+    assert "extra, fused, missing, or misjointed fingers" in patch_text
+    assert "impossible grip or hand contact" in patch_text
+
+
 def test_doc70_stylized_requests_remain_exempt() -> None:
     guidance = HumanPhotorealismLayer().build(
         project_id="project_doc70_stylized",

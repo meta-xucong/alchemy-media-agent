@@ -411,6 +411,11 @@ def test_full_person_context_keeps_incidental_hands_out_of_detail_only_guidance(
     assert "hand_or_skin_detail_detected" not in plugin["reason_codes"]
     assert "adult hand or forearm" not in prompt_text
     assert "keep any face out of frame" not in prompt_text
+    assert "anatomically coherent finger count" in prompt_text
+    assert "folds, drape, fit, and contact shadows" in prompt_text
+    assert "cut-out composite" in prompt_text
+    assert "sns" not in prompt_text
+    assert "smartphone" not in prompt_text
 
 
 def test_doc91_child_face_retry_patch_is_owned_by_human_realism_plugin() -> None:

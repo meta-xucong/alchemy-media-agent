@@ -1301,9 +1301,20 @@ def _retry_patch_for_issues(
         elif code in {"unrelated_object", "unrelated_product"}:
             object_removal_instruction.append("remove unrelated objects or props that were not requested")
             negative_additions.extend(["unrelated object", "unrequested prop"])
-        elif code in {"bad_hands_or_body", "face_artifact"}:
-            artifact_repair.append("prioritize natural anatomy, clean facial structure, and realistic body details")
-            negative_additions.extend(["distorted hands", "face artifacts", "warped anatomy"])
+        elif code == "bad_hands_or_body":
+            artifact_repair.append(
+                "repair visible hands and body toward anatomically coherent finger count, joints, nail scale, relaxed grip, limb connection, and physically credible contact with objects, garments, and nearby surfaces"
+            )
+            negative_additions.extend(
+                [
+                    "extra, fused, missing, or misjointed fingers",
+                    "impossible grip or hand contact",
+                    "warped limbs or anatomy",
+                ]
+            )
+        elif code == "face_artifact":
+            artifact_repair.append("prioritize clean facial structure and realistic body details")
+            negative_additions.extend(["face artifacts", "warped anatomy"])
         elif code in {
             "suppressed_fair_complexion",
             "forced_tan_or_bronze_cast",
