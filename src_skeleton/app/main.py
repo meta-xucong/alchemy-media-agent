@@ -628,7 +628,10 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     auto_generate_payload = payload.pop("auto_generate", None)
-    response = _run_v3_handler(v3_route_handlers.post_project_job, project_id, payload)
+    # Planning can make the bounded remote Central Brain call.  Keep that
+    # synchronous V3 domain work off the ASGI event loop so project polling,
+    # health checks, and the browser remain responsive while it is in flight.
+    response = await _run_v3_handler_threaded(v3_route_handlers.post_project_job, project_id, payload)
     if isinstance(auto_generate_payload, dict) and response.get("job_id") and response.get("status") != "blocked":
         generate_payload = _v3_payload_with_veyra_owner(dict(auto_generate_payload), user_id)
         started = _start_v3_project_generation_background(project_id, response["job_id"], generate_payload)
@@ -646,7 +649,7 @@ async def v3_create_ecommerce_slot_continuation_endpoint(
 ):
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = _v3_payload_with_veyra_owner(await _v3_json_payload(request), user_id)
-    return _run_v3_handler(
+    return await _run_v3_handler_threaded(
         v3_route_handlers.post_project_ecommerce_slot_continuation,
         project_id,
         parent_job_id,
@@ -682,7 +685,7 @@ async def v3_create_photography_role_continuation_endpoint(
 ):
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = _v3_payload_with_veyra_owner(await _v3_json_payload(request), user_id)
-    return _run_v3_handler(
+    return await _run_v3_handler_threaded(
         v3_route_handlers.post_project_photography_role_continuation,
         project_id,
         parent_job_id,
