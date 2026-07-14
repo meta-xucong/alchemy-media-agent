@@ -68,7 +68,11 @@ class V3LLMBrainAdapter:
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
             fallback.warnings.append(str(exc))
-            fallback.audit = {**fallback.audit, "remote_provider_error": str(exc)[:260]}
+            fallback.audit = {
+                **fallback.audit,
+                "remote_provider_error": str(exc)[:260],
+                "remote_provider_error_class": _remote_provider_error_class(exc),
+            }
             return fallback
 
     def build_request(
@@ -353,6 +357,21 @@ def _remote_allowed_for_request(request: BrainRunRequest) -> bool:
     if os.getenv("V3_LLM_BRAIN_API_KEY"):
         return True
     return bool(request.metadata.get("require_real_images") or request.metadata.get("real_image_generation"))
+
+
+def _remote_provider_error_class(exc: Exception) -> str:
+    """Normalize a remote Brain failure for public-safe job provenance."""
+
+    text = str(exc or "").lower()
+    if any(token in text for token in ("timed out", "timeout", "readtimeout", "connecttimeout")):
+        return "timeout"
+    if any(token in text for token in ("context canceled", "cancelled", "canceled")):
+        return "canceled"
+    if any(token in text for token in ("non-json", "empty output", "json")):
+        return "invalid_response"
+    if any(token in text for token in ("status code", "http", "502", "503", "504")):
+        return "upstream_http_error"
+    return "provider_error"
 
 
 def _reasoning_depth(metadata: dict[str, Any]) -> str:

@@ -3,6 +3,7 @@ import json
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry, ScenarioPackStatus
@@ -86,6 +87,34 @@ def test_production_service_fails_closed_when_remote_brain_is_not_available() ->
         "remote_contract_rejected_sections": [],
     }
     assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
+
+
+class _TimeoutRemoteBrain:
+    provider = "fixture"
+    model = "fixture"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request):
+        raise BrainProviderError("remote brain provider failed: read timeout")
+
+
+def test_specialized_remote_provider_error_projects_only_a_safe_error_class() -> None:
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_TimeoutRemoteBrain())).plan_job(_request(count=1))
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert result.metadata["remote_creative_brain_outcome"] == {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_required_for_template",
+        "outcome_class": "remote_provider_error",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": None,
+        "remote_contract_rejected_sections": [],
+        "remote_error_class": "timeout",
+    }
 
 
 def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy() -> None:

@@ -454,6 +454,11 @@ class ScenarioRuntime:
                 for item in details.get("rejected_sections", [])
                 if str(item).strip()
             ],
+            **(
+                {"remote_error_class": str(audit["remote_provider_error_class"])}
+                if audit.get("remote_provider_error_class")
+                else {}
+            ),
             **{
                 key: value
                 for key, value in details.items()
