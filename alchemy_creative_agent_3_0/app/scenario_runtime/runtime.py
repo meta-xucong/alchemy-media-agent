@@ -2161,7 +2161,12 @@ class ScenarioRuntime:
         metadata = dict(request.metadata or {})
         refs = metadata.get("reference_assets")
         if isinstance(refs, list):
-            return [dict(item) for item in refs if isinstance(item, dict)]
+            # The Product API may carry the same project reference through an
+            # explicit continuation binding and an uploaded-asset binding.
+            # They are two provenance paths for one source, not two provider
+            # inputs.  Normalize them before the frozen job metadata is
+            # created so all downstream consumers see one reference truth.
+            return self._dedupe_reference_assets([dict(item) for item in refs if isinstance(item, dict)])
         context = metadata.get("project_context_snapshot")
         if not isinstance(context, dict):
             return []

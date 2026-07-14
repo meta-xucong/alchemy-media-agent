@@ -69,6 +69,34 @@ def test_direct_runtime_rejects_a_frozen_plan_without_product_api_provenance() -
     assert any("untrusted_frozen_capability_activation_plan" in warning for warning in result.warnings)
 
 
+def test_runtime_dedupes_explicit_reference_sources_before_freezing_metadata() -> None:
+    runtime = ScenarioRuntime()
+    request = ScenarioRuntimeRequest(
+        user_input="Create one product visual from the uploaded source.",
+        metadata={
+            "reference_assets": [
+                {
+                    "asset_id": "same_uploaded_product",
+                    "file_path": "D:/fixtures/product.png",
+                    "role": "product_reference",
+                    "use_policy": "product_identity",
+                },
+                {
+                    "asset_id": "same_uploaded_product",
+                    "file_path": "D:/fixtures/product.png",
+                    "role": "product",
+                    "use_policy": "product",
+                },
+            ]
+        },
+    )
+
+    references = runtime._reference_assets_from_request_metadata(request)  # noqa: SLF001
+
+    assert len(references) == 1
+    assert references[0]["asset_id"] == "same_uploaded_product"
+
+
 def test_public_product_api_rejects_runtime_owned_frozen_plan_metadata() -> None:
     service = V3ProductApiService()
 

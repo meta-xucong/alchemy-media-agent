@@ -232,6 +232,26 @@ def test_doc85_product_truth_derivative_and_metadata_are_persisted(tmp_path, mon
     assert any(item["truth_layer"] == "product_identity_truth" for item in metadata["provider_reference_assets"])
 
 
+def test_doc85_provider_asset_plan_dedupes_duplicate_product_source_inputs(tmp_path) -> None:
+    reference = _image(tmp_path / "product_reference.png", width=140, height=100)
+    provider = ProductionImageGenerationProvider()
+    request = _product_request(reference)
+    source = provider._reference_assets(request)[0]  # noqa: SLF001
+    duplicate = dict(source)
+    duplicate["lock_targets"] = ["product_identity"]
+
+    asset_plan = provider._asset_plan(request, [source, duplicate])  # noqa: SLF001
+    input_plan = asset_plan["provider_input_plan"]
+
+    assert input_plan["reference_image_asset_ids"] == [
+        "uploaded_product_truth::product_truth_crop",
+        "uploaded_product_truth",
+    ]
+    assert input_plan["original_reference_asset_ids"] == ["uploaded_product_truth"]
+    assert input_plan["reference_image_count"] == 2
+    assert input_plan["reference_truth_package"]["provider_reference_image_count"] == 2
+
+
 def test_doc104_known_source_artifact_uses_truth_derivative_without_full_frame(tmp_path) -> None:
     reference = _image(tmp_path / "product_reference.png", width=140, height=100)
     request = _product_request(reference)

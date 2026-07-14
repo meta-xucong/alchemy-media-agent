@@ -1697,13 +1697,21 @@ class ProductionImageGenerationProvider(GenerationProvider):
                             ],
                         }
                     )
+        # Keep the provider boundary idempotent even when a historical job or
+        # a legacy-to-envelope adapter supplied the same logical source twice.
+        # Runtime normalization is the primary defence; this guard prevents a
+        # duplicate source from becoming duplicate crop/original uploads and
+        # therefore avoids extra model inputs, cost, and competing evidence.
+        assets = self._dedupe_provider_reference_assets(assets)
+        suppressed_original_ids = _dedupe(suppressed_original_ids)
+        reference_sanitization_records = self._dedupe_reference_sanitization_records(reference_sanitization_records)
         truth_package = {
             **truth_package,
-            "truth_derivative_ids": [
+            "truth_derivative_ids": _dedupe([
                 item["asset_id"]
                 for item in assets
                 if item.get("provider_reference_derivative") and item.get("provider_input_mode") == "reference_image"
-            ],
+            ]),
             "provider_reference_image_count": len(assets),
             "reference_sanitization": reference_sanitization_records,
         }
@@ -1725,7 +1733,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         if item.get("identity_evidence_scope")
                     ]
                 ),
-                "original_reference_asset_ids": [asset["asset_id"] for asset in reference_assets],
+                "original_reference_asset_ids": _dedupe([asset["asset_id"] for asset in reference_assets]),
                 "suppressed_full_frame_identity_asset_ids": suppressed_original_ids,
                 "suppressed_full_frame_reference_asset_ids": suppressed_original_ids,
                 "reference_sanitization": reference_sanitization_records,
@@ -1757,6 +1765,58 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "adaptive_reference_target_framing": adaptive_reference_audit.get("target_framing"),
             },
         }
+
+    def _dedupe_provider_reference_assets(self, assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Coalesce repeated physical provider inputs without collapsing distinct truth sources."""
+
+        unique: list[dict[str, Any]] = []
+        index_by_key: dict[tuple[str, str], int] = {}
+        for asset in assets:
+            source_id = str(asset.get("source_asset_id") or asset.get("asset_id") or "").strip()
+            derivative_kind = str(asset.get("derivative_kind") or "original").strip()
+            key = (source_id, derivative_kind)
+            if not source_id or key not in index_by_key:
+                index_by_key[key] = len(unique)
+                unique.append(dict(asset))
+                continue
+
+            retained = unique[index_by_key[key]]
+            retained["prompt_constraints"] = _dedupe(
+                [
+                    *self._string_list(retained.get("prompt_constraints")),
+                    *self._string_list(asset.get("prompt_constraints")),
+                ]
+            )
+            retained["negative_constraints"] = _dedupe(
+                [
+                    *self._string_list(retained.get("negative_constraints")),
+                    *self._string_list(asset.get("negative_constraints")),
+                ]
+            )
+            retained["truth_layers"] = _dedupe(
+                [
+                    *self._string_list(retained.get("truth_layers")),
+                    *self._string_list(asset.get("truth_layers")),
+                ]
+            )
+            retained["priority"] = max(
+                int(retained.get("priority") or 0),
+                int(asset.get("priority") or 0),
+            )
+            retained["provider_input_deduplicated"] = True
+        return unique
+
+    @staticmethod
+    def _dedupe_reference_sanitization_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        unique: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for record in records:
+            key = (str(record.get("source_asset_id") or ""), str(record.get("action") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(record)
+        return unique
 
     def _should_include_original_reference(
         self,
