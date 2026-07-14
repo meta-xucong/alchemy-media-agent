@@ -1324,6 +1324,7 @@ class V3ProjectModeService:
                 metadata={"template_id": template_id, "scenario_pack_id": status.scenario.scenario_id if status.scenario else None},
             )
             review_package = status.metadata.get("post_generation_review") if isinstance(status.metadata, dict) else None
+            review_certification = status.metadata.get("review_certification") if isinstance(status.metadata, dict) else None
             if isinstance(review_package, dict):
                 review_summary = self._post_generation_review_summary(review_package)
                 self._append_timeline(
@@ -1339,6 +1340,7 @@ class V3ProjectModeService:
                         "inspection_count": review_package.get("metadata", {}).get("inspection_count"),
                         "recommended_output_ids": list(review_package.get("recommended_output_ids") or []),
                         "hidden_output_ids": list(review_package.get("hidden_output_ids") or []),
+                        "review_certification": review_certification if isinstance(review_certification, dict) else {},
                     },
                 )
             retry_summary = status.metadata.get("visual_auto_retry") if isinstance(status.metadata, dict) else None
@@ -1364,9 +1366,17 @@ class V3ProjectModeService:
                 if isinstance(status.metadata, dict)
                 else None
             )
+            review_certification = (
+                status.metadata.get("review_certification")
+                if isinstance(status.metadata, dict)
+                else None
+            )
             incomplete_specialized_set = (
                 isinstance(specialized_execution, dict)
                 and str(specialized_execution.get("status") or "").lower() == "incomplete"
+            )
+            final_delivery_withheld = bool(
+                isinstance(specialized_execution, dict) and specialized_execution.get("final_delivery_withheld")
             )
             if isinstance(provider_retry, dict) and int(provider_retry.get("executed_count") or 0) > 0:
                 self._append_timeline(
@@ -1386,10 +1396,21 @@ class V3ProjectModeService:
             self._append_timeline(
                 project.project_id,
                 TimelineItemType.JOB_BLOCKED,
-                "摄影专业套图未完整生成" if incomplete_specialized_set else "本次没有生成图片",
+                (
+                    "摄影专业套图未完整生成"
+                    if incomplete_specialized_set
+                    else "摄影结果需要人工确认"
+                    if isinstance(review_certification, dict)
+                    and review_certification.get("state") == "manual_confirmation_required"
+                    else "摄影结果未通过自动认证"
+                    if final_delivery_withheld
+                    else "本次没有生成图片"
+                ),
                 (
                     self._incomplete_specialized_set_summary(specialized_execution)
                     if incomplete_specialized_set
+                    else self._review_certification_summary(review_certification)
+                    if isinstance(review_certification, dict)
                     else self._blocked_generation_summary(status)
                 ),
                 job_id=job_id,
@@ -1398,7 +1419,9 @@ class V3ProjectModeService:
                     "status": str(status.status),
                     "warnings": list(status.warnings or [])[:3],
                     "provider_failure_retry": provider_retry if isinstance(provider_retry, dict) else {},
-                    "specialized_execution_summary": specialized_execution if incomplete_specialized_set else {},
+                    "specialized_execution_summary": specialized_execution if final_delivery_withheld else {},
+                    "review_certification": review_certification if isinstance(review_certification, dict) else {},
+                    "normal_project_delivery_withheld": final_delivery_withheld,
                 },
             )
         return status
@@ -3073,22 +3096,34 @@ class V3ProjectModeService:
             records = sorted(records, key=lambda item: item.created_at or "")
             incomplete_execution = self._incomplete_specialized_set_execution(job_status, records)
             if incomplete_execution is not None:
+                review_certification = incomplete_execution.get("review_certification")
+                is_noncertifying = (
+                    str(incomplete_execution.get("status") or "").lower() != "incomplete"
+                    and isinstance(review_certification, dict)
+                    and review_certification.get("state") != "certified"
+                )
+                diagnostic = "specialized_review_noncertifying" if is_noncertifying else "specialized_role_coverage_incomplete"
                 if not any(
                     item.item_type == TimelineItemType.NOTE_ADDED
                     and (item.job_id == job_id or item.related_job_id == job_id)
                     and isinstance(item.metadata, dict)
-                    and item.metadata.get("execution_diagnostic") == "specialized_role_coverage_incomplete"
+                    and item.metadata.get("execution_diagnostic") == diagnostic
                     for item in timeline
                 ):
                     self._append_timeline(
                         project.project_id,
                         TimelineItemType.NOTE_ADDED,
-                        "专业套图存在未完成角色",
-                        self._incomplete_specialized_set_summary(incomplete_execution),
+                        "摄影结果尚未自动认证" if is_noncertifying else "专业套图存在未完成角色",
+                        (
+                            self._review_certification_summary(review_certification)
+                            if is_noncertifying
+                            else self._incomplete_specialized_set_summary(incomplete_execution)
+                        ),
                         job_id=job_id,
                         metadata={
-                            "execution_diagnostic": "specialized_role_coverage_incomplete",
+                            "execution_diagnostic": diagnostic,
                             "specialized_execution_summary": incomplete_execution,
+                            "review_certification": review_certification if isinstance(review_certification, dict) else {},
                             "append_only_history_preserved": True,
                             "normal_project_delivery_withheld": True,
                         },
@@ -3146,8 +3181,16 @@ class V3ProjectModeService:
     def _incomplete_specialized_set_execution(job_status: ProductJobStatus, records: list[Any]) -> dict[str, Any] | None:
         metadata = dict(job_status.metadata or {})
         execution = metadata.get("specialized_execution_summary")
+        review_certification = metadata.get("review_certification")
+        def with_certification(value: dict[str, Any]) -> dict[str, Any]:
+            projected = dict(value)
+            if isinstance(review_certification, dict):
+                projected["review_certification"] = dict(review_certification)
+            return projected
+        if isinstance(execution, dict) and bool(execution.get("final_delivery_withheld")):
+            return with_certification(execution)
         if isinstance(execution, dict) and str(execution.get("status") or "").lower() == "incomplete":
-            return dict(execution)
+            return with_certification(execution)
         if not isinstance(execution, dict):
             return None
         expected = [str(item).strip() for item in execution.get("role_keys", []) if str(item).strip()]
@@ -3166,12 +3209,27 @@ class V3ProjectModeService:
         if not missing:
             return None
         return {
-            **dict(execution),
+            **with_certification(execution),
             "status": "incomplete",
             "missing_role_keys": missing,
             "final_delivery_withheld": True,
             "append_only_history_preserved": True,
         }
+
+    @staticmethod
+    def _review_certification_summary(certification: dict[str, Any]) -> str:
+        """Give the Project timeline a safe, actionable certification result."""
+
+        state = str(certification.get("state") or "blocked")
+        role_modes = [
+            str(item.get("review_mode") or "unknown")
+            for item in certification.get("roles", [])
+            if isinstance(item, dict)
+        ]
+        modes = "、".join(list(dict.fromkeys(role_modes))) or "unknown"
+        if state == "manual_confirmation_required":
+            return f"真实像素审查方式：{modes}。本次需要人工确认，不计入自动验收通过，也不会作为最终交付。"
+        return f"真实像素审查未自动认证（审查方式：{modes}）。结果保留在追加历史中，未作为最终交付。"
 
     def _post_generation_review_summary(self, review_package: dict[str, Any]) -> str:
         lines = [str(item).strip() for item in review_package.get("user_visible_summary", []) if str(item).strip()]
@@ -4787,11 +4845,7 @@ class V3ProjectModeService:
         # A multi-role template can preserve generated pixels in append-only
         # history while still withholding them from the ordinary project
         # result panel until every frozen role has a final winner.
-        return not (
-            isinstance(execution, dict)
-            and str(execution.get("status") or "").lower() == "incomplete"
-            and bool(execution.get("final_delivery_withheld"))
-        )
+        return not (isinstance(execution, dict) and bool(execution.get("final_delivery_withheld")))
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
         return OutputRef(

@@ -337,6 +337,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3JobDeliverySettled" in script.text
     assert "if (!v3JobDeliverySettled(job)) return [];" in script.text
     assert "if (baseJob && !v3JobDeliverySettled(baseJob)) return null;" in script.text
+    assert "function v3ReviewCertification" in script.text
+    assert "function v3JobDeliveryWithheld" in script.text
+    assert "manual_confirmation_required" in script.text
+    assert "真实像素审查未自动认证" in script.text
+    assert "需要人工确认" in script.text
     assert 'finalizing: "交付收尾中"' in script.text
     assert "function syncV3CurrentJobFromProjectOutputs" in script.text
     assert "function setV3PageLoading" in script.text

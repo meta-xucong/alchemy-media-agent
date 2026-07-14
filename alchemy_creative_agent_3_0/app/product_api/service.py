@@ -1015,6 +1015,11 @@ class V3ProductApiService:
             record.request.metadata = {
                 **dict(record.request.metadata),
                 "specialized_execution_summary": specialized_execution,
+                # The internal summary keeps append-only execution diagnostics.
+                # The separate projection is deliberately safe for Job/Project
+                # clients: it contains certification truth, never raw provider
+                # errors, candidates, assets, or other implementation details.
+                "review_certification": specialized_execution["review_certification"],
             }
             if specialized_execution["status"] != "complete":
                 missing = ", ".join(specialized_execution["missing_role_keys"])
@@ -1095,12 +1100,24 @@ class V3ProductApiService:
             inspection = inspections_by_candidate.get(str(item.get("candidate_id") or "").strip())
             review_mode = str(inspection.get("mode") or "").strip().lower() if inspection else ""
             review_status = str(inspection.get("status") or "").strip().lower() if inspection else ""
+            verification_state = str(inspection.get("verification_state") or "").strip().lower() if inspection else ""
             real_pixel_certified = (
                 not requires_real_pixel_review
                 or (review_mode in {"vision_model", "hybrid"} and review_status in {"pass", "warning"})
             )
             if status == "generated" and not real_pixel_certified:
                 noncertifying_role_keys.append(role_key)
+            certification_state = (
+                "certified"
+                if status == "generated" and real_pixel_certified
+                else "manual_confirmation_required"
+                if (
+                    status == "generated"
+                    and review_mode in {"vision_model", "hybrid"}
+                    and review_status == "manual_review"
+                )
+                else "blocked"
+            )
             roles.append(
                 {
                     "role_key": role_key,
@@ -1111,10 +1128,42 @@ class V3ProductApiService:
                     "error_message": item.get("error_message"),
                     "review_mode": review_mode or None,
                     "review_status": review_status or None,
+                    "verification_state": verification_state or None,
                     "real_pixel_certified": real_pixel_certified,
+                    "certification_state": certification_state,
                 }
             )
         status = "incomplete" if missing_role_keys else "non_certifying" if noncertifying_role_keys else "complete"
+        noncertifying_roles = [item for item in roles if item["certification_state"] != "certified"]
+        certification_state = (
+            "certified"
+            if not missing_role_keys and not noncertifying_roles
+            else "manual_confirmation_required"
+            if (
+                not missing_role_keys
+                and noncertifying_roles
+                and all(item["certification_state"] == "manual_confirmation_required" for item in noncertifying_roles)
+            )
+            else "blocked"
+        )
+        review_certification = {
+            "schema_version": "v3_review_certification_v1",
+            "scenario_id": "photography",
+            "state": certification_state,
+            "automatic_delivery_certified": certification_state == "certified",
+            "manual_confirmation_required": certification_state == "manual_confirmation_required",
+            "final_delivery_withheld": bool(missing_role_keys or noncertifying_role_keys),
+            "roles": [
+                {
+                    "role_key": item["role_key"],
+                    "state": item["certification_state"],
+                    "review_mode": item["review_mode"],
+                    "review_status": item["review_status"],
+                    "verification_state": item["verification_state"],
+                }
+                for item in roles
+            ],
+        }
         return {
             "requested_image_count": len(expected_role_keys),
             "role_keys": expected_role_keys,
@@ -1125,6 +1174,7 @@ class V3ProductApiService:
             "noncertifying_role_keys": noncertifying_role_keys,
             "final_delivery_withheld": bool(missing_role_keys or noncertifying_role_keys),
             "append_only_history_preserved": True,
+            "review_certification": review_certification,
         }
 
     def _materialize_mock_output_records(
@@ -4178,8 +4228,23 @@ class V3ProductApiService:
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",
             "specialized_execution_summary",
+            "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        specialized_execution = status_metadata.get("specialized_execution_summary")
+        if isinstance(specialized_execution, dict):
+            status_metadata["specialized_execution_summary"] = self._public_specialized_execution_summary(
+                specialized_execution
+            )
+            scenario_id = record.scenario_resolution.manifest.scenario_id if record.scenario_resolution else ""
+            certification = request_metadata.get("review_certification") if scenario_id == "photography" else None
+            if scenario_id == "photography" and not isinstance(certification, dict):
+                # Explicit read-only adapter for pre-Doc116 Photography jobs.
+                # It projects an already-recorded shared-review outcome; it
+                # never recertifies pixels or creates a legacy execution path.
+                certification = self._review_certification_from_specialized_execution(specialized_execution)
+            if isinstance(certification, dict):
+                status_metadata["review_certification"] = certification
         result = record.generation_result or record.planning_result
         if result is not None:
             plan = self._activation_plan_from_result(result)
@@ -4201,6 +4266,102 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    @staticmethod
+    def _public_specialized_execution_summary(execution: dict[str, Any]) -> dict[str, Any]:
+        """Project-facing specialized execution state with no provider internals.
+
+        Provider output/candidate identifiers and raw error messages remain
+        append-only internal diagnostics.  Project and browser clients only
+        need the frozen role contract and whether delivery is certifying.
+        """
+
+        return {
+            "requested_image_count": execution.get("requested_image_count"),
+            "role_keys": list(execution.get("role_keys") or []),
+            "shared_execution_only": bool(execution.get("shared_execution_only")),
+            "status": execution.get("status"),
+            "missing_role_keys": list(execution.get("missing_role_keys") or []),
+            "noncertifying_role_keys": list(execution.get("noncertifying_role_keys") or []),
+            "roles": [
+                {
+                    "role_key": item.get("role_key"),
+                    "status": item.get("status"),
+                    "review_mode": item.get("review_mode"),
+                    "review_status": item.get("review_status"),
+                    "verification_state": item.get("verification_state"),
+                    "real_pixel_certified": bool(item.get("real_pixel_certified")),
+                }
+                for item in execution.get("roles", [])
+                if isinstance(item, dict)
+            ],
+            "final_delivery_withheld": bool(execution.get("final_delivery_withheld")),
+            "append_only_history_preserved": bool(execution.get("append_only_history_preserved")),
+        }
+
+    @staticmethod
+    def _review_certification_from_specialized_execution(execution: dict[str, Any]) -> dict[str, Any] | None:
+        """Read an old Photography terminal summary without trusting it as pixels.
+
+        This is a one-way public projection for records written before the
+        explicit certification object existed.  It can withhold an old result,
+        never turn an unverified one into a certified delivery.
+        """
+
+        existing = execution.get("review_certification")
+        if isinstance(existing, dict):
+            return dict(existing)
+        raw_roles = execution.get("roles")
+        if not isinstance(raw_roles, list) or not raw_roles:
+            return None
+        roles: list[dict[str, Any]] = []
+        missing = False
+        noncertifying = False
+        for raw_role in raw_roles:
+            if not isinstance(raw_role, dict):
+                continue
+            role_status = str(raw_role.get("status") or "missing").strip().lower()
+            review_mode = str(raw_role.get("review_mode") or "").strip().lower() or None
+            review_status = str(raw_role.get("review_status") or "").strip().lower() or None
+            verified = bool(raw_role.get("real_pixel_certified")) or (
+                review_mode in {"vision_model", "hybrid"} and review_status in {"pass", "warning"}
+            )
+            state = (
+                "certified"
+                if role_status == "generated" and verified
+                else "manual_confirmation_required"
+                if role_status == "generated" and review_mode in {"vision_model", "hybrid"} and review_status == "manual_review"
+                else "blocked"
+            )
+            missing = missing or role_status != "generated"
+            noncertifying = noncertifying or state != "certified"
+            roles.append(
+                {
+                    "role_key": str(raw_role.get("role_key") or "").strip() or "unknown_role",
+                    "state": state,
+                    "review_mode": review_mode,
+                    "review_status": review_status,
+                    "verification_state": str(raw_role.get("verification_state") or "").strip().lower() or None,
+                }
+            )
+        if not roles:
+            return None
+        state = (
+            "certified"
+            if not missing and not noncertifying
+            else "manual_confirmation_required"
+            if not missing and all(item["state"] == "manual_confirmation_required" for item in roles)
+            else "blocked"
+        )
+        return {
+            "schema_version": "v3_review_certification_v1",
+            "scenario_id": "photography",
+            "state": state,
+            "automatic_delivery_certified": state == "certified",
+            "manual_confirmation_required": state == "manual_confirmation_required",
+            "final_delivery_withheld": bool(execution.get("final_delivery_withheld")) or missing or noncertifying,
+            "roles": roles,
+        }
 
     def _resolve_and_pin_photographer_profile(
         self,

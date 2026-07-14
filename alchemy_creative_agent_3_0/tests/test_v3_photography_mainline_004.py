@@ -260,6 +260,82 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
     assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
 
 
+def test_metadata_only_photography_project_withholds_pixels_and_records_safe_review_state(monkeypatch) -> None:
+    """Non-certifying pixels remain history, never ordinary project delivery."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers = V3ProductRouteHandlers(service=photography_test_service())
+    project, root = _project_and_root(handlers, mode_id="single_hero")
+
+    blocked = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "metadata_only"}},
+    )
+
+    assert blocked["status"] == "blocked"
+    certification = blocked["metadata"]["review_certification"]
+    assert certification["state"] == "blocked"
+    assert certification["final_delivery_withheld"] is True
+    assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+    timeline = handlers.get_project_timeline(project["project_id"])["items"]
+    review_items = [item for item in timeline if item.get("job_id") == root["job_id"]]
+    assert any(
+        item["metadata"].get("review_certification", {}).get("state") == "blocked"
+        and item["metadata"].get("normal_project_delivery_withheld") is True
+        for item in review_items
+    )
+
+
+def test_manual_vision_confirmation_is_visible_but_never_counts_as_photography_delivery(monkeypatch) -> None:
+    """A live but inconclusive pixel review must remain visible and withheld."""
+
+    class ManualVisionProvider:
+        provider_name = "manual_confirmation_fixture"
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, resolution, *, metadata=None) -> dict:
+            return {
+                "status": "manual_review",
+                "confidence": 0.4,
+                "issue_codes": ["low_confidence_review"],
+                "scores": {"artifact_safety": 0.5, "composition": 0.5, "commercial_finish": 0.5, "overall": 0.5},
+            }
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    service = photography_test_service()
+    service.vision_inspector.vision_provider = ManualVisionProvider()
+    handlers = V3ProductRouteHandlers(service=service)
+    project, root = _project_and_root(handlers, mode_id="single_hero")
+
+    blocked = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model"}},
+    )
+
+    certification = blocked["metadata"]["review_certification"]
+    assert blocked["status"] == "blocked"
+    assert certification["state"] == "manual_confirmation_required"
+    assert certification["automatic_delivery_certified"] is False
+    assert certification["manual_confirmation_required"] is True
+    assert certification["final_delivery_withheld"] is True
+    assert certification["roles"][0]["review_mode"] == "vision_model"
+    assert certification["roles"][0]["review_status"] == "manual_review"
+    assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+    timeline = handlers.get_project_timeline(project["project_id"])["items"]
+    assert any(
+        item["metadata"].get("review_certification", {}).get("state") == "manual_confirmation_required"
+        and item["metadata"].get("normal_project_delivery_withheld") is True
+        for item in timeline
+        if item.get("job_id") == root["job_id"]
+    )
+
+
 def test_photography_project_summary_and_terminal_delivery_keep_the_photographer_binding(monkeypatch) -> None:
     """A Photography project must never be summarized as General after a terminal job."""
 
