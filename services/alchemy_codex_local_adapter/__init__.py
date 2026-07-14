@@ -1,36 +1,30 @@
-"""Doc117 local-only Codex-to-Alchemy adapter.
-
-This package is intentionally outside ``alchemy_creative_agent_3_0.app``.
-Nothing in the Web runtime imports, registers, or starts it.  An interactive
-Codex MCP client is its only supported caller.
-"""
+"""Doc118 local planning bridge; it never renders, imports, or delivers pixels."""
 
 from .contracts import (
-    LOCAL_CREATIVE_DIRECTION_OWNER,
-    LOCAL_EXECUTION_CHANNEL,
-    LOCAL_RENDERER,
-    PLATFORM_OPENAI_GPT_IMAGE_2_MODEL,
-    PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER,
-    FrozenLocalJobContract,
-    LocalJobSpec,
-    LocalModeAdapterError,
-    LocalModeDisabledError,
-    PlatformRenderedImage,
+    CONVERSATION_ONLY_DELIVERY_STATE,
+    NATIVE_CREATIVE_DIRECTION_OWNER,
+    NATIVE_EXECUTION_CHANNEL,
+    NATIVE_RENDERER,
+    CodexNativeImageGenBlockedError,
+    CodexNativeImageGenDisabledError,
+    CodexNativeImageGenError,
+    NativeImageGenPlanRequest,
+    NativeReferenceDeclaration,
 )
-from .facade import CodexLocalExecutionFacade
-from .platform_renderer import PlatformImageRenderer
+from .facade import CodexNativeImageGenFacade
+from .native_planner import CodexNativeImageGenPlanner, PlanningOnlyGenerationRouter
 
 __all__ = [
-    "CodexLocalExecutionFacade",
-    "FrozenLocalJobContract",
-    "LOCAL_CREATIVE_DIRECTION_OWNER",
-    "LOCAL_EXECUTION_CHANNEL",
-    "LOCAL_RENDERER",
-    "LocalJobSpec",
-    "LocalModeAdapterError",
-    "LocalModeDisabledError",
-    "PLATFORM_OPENAI_GPT_IMAGE_2_MODEL",
-    "PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER",
-    "PlatformImageRenderer",
-    "PlatformRenderedImage",
+    "CONVERSATION_ONLY_DELIVERY_STATE",
+    "NATIVE_CREATIVE_DIRECTION_OWNER",
+    "NATIVE_EXECUTION_CHANNEL",
+    "NATIVE_RENDERER",
+    "CodexNativeImageGenBlockedError",
+    "CodexNativeImageGenDisabledError",
+    "CodexNativeImageGenError",
+    "CodexNativeImageGenFacade",
+    "CodexNativeImageGenPlanner",
+    "NativeImageGenPlanRequest",
+    "NativeReferenceDeclaration",
+    "PlanningOnlyGenerationRouter",
 ]

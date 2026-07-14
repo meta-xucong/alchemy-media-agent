@@ -1,41 +1,31 @@
 ---
 name: alchemy-local-run
-description: Run an explicitly selected Alchemy Codex Local Mode development job through the local MCP adapter without changing Web Mode.
+description: Plan an explicitly selected Codex Native ImageGen request through local Alchemy MCP without changing Web Mode.
 ---
 
-# Alchemy Local Mode Run
+# Alchemy Codex Native ImageGen
 
-Use this skill only when the user explicitly selects Alchemy Codex Local Mode.
-It is not a Web Mode fallback and must never be invoked because a provider,
-Central Brain, or gateway call failed.
+Use this skill only after the user explicitly selects Alchemy Local Mode / Codex
+Native ImageGen Mode.  Never use it because a Web Mode, Central Brain, gateway,
+or Provider request failed.
 
-1. Call `create_local_job`, then inspect `get_render_contract`.  Preserve the
-   frozen intent, role count, reference ownership, capability envelope, and
-   constraint ledger.
-2. Record one natural-language whole-image creative direction for each frozen
-   role with `record_creative_direction`.  Do not write slot recipes, crop
-   coordinates, `CopyRenderPlan`, fonts, OCR, safe areas, canvas overlays, or
-   fixed photography camera/pose/lighting recipes.
-3. For Phase B2, call `render_platform_candidate` only after the user has
-   explicitly chosen Local Mode and supplied `live_platform_opt_in=true`.  The
-   adapter uses a dedicated key file configured by
-   `ALCHEMY_CODEX_LOCAL_IMAGE_API_KEY_FILE`; never read or forward Codex
-   sessions, root `.env`, Web Provider keys, browser cookies, or UI caches.
-4. The adapter always calls the fixed official endpoint
-   `https://api.openai.com/v1/images/generations` with `gpt-image-2`.  Do not
-   supply a base URL, request Aiself, use a Web Provider fallback, or invoke a
-   Codex CLI subprocess.  It makes one API request per frozen role.
-5. Do not call an artifact-import tool with a local path.  Only the adapter's
-   just-materialized official API response may be imported and bound to a job
-   role.  A preview, cache, session object, or arbitrary system file is not a
-   valid artifact.
-6. This Phase A--B2 adapter cannot certify, review, retry, or deliver an image.
-   Treat `shared_runtime_integration_pending`, `metadata_only`, `manual`, and
-   `blocked` as non-delivery states.  Do not claim a Provider Gate, Gate D,
-   Photography P10, or E-Commerce Gate C/D result.
+1. Call `prepare_native_imagegen_plan` exactly once with only the user's input,
+   explicit template, requested count/size, and declarations about references
+   attached in this Codex conversation.
+2. If the plan is blocked, show the public-safe reason and stop.  Do not switch
+   to another template, a web renderer, a provider, or a local workaround.
+3. For every returned output, make exactly one Codex built-in image-generation
+   call using its `imagegen_prompt`, `hard_constraints`, `text_policy`, and
+   `reference_instructions`.  When an instruction requires a conversation
+   attachment, use that exact attachment; never substitute a path or another
+   image.
+4. If the built-in image tool is unavailable, stop with
+   `codex_native_imagegen_tool_unavailable`.  Do not call an external renderer
+   and do not try to recover an image file from Codex internals.
+5. Tell the user the resulting image is conversation-only and non-certified.
+   Do not create an Alchemy artifact, candidate, review, retry, final delivery,
+   continuation, or production-gate claim.
 
-The required B2 provenance is immutable: `execution_channel=codex_local`,
-`creative_direction_owner=codex_local_agent`,
-`renderer=platform_openai_gpt_image_2`, and `renderer_model=gpt-image-2`.
-It proves a dedicated Platform API request, not a Codex/ChatGPT login-state
-export and not any existing production Gate result.
+The required provenance is `execution_channel=codex_native_imagegen`,
+`renderer=codex_builtin_imagegen`, and
+`delivery_state=conversation_only_not_certified`.
