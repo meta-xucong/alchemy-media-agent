@@ -121,28 +121,42 @@ class NativeImageGenPlanRequest:
                 "codex_native_imagegen_invalid_input",
                 "Only the documented Codex Native ImageGen planning fields are accepted.",
             )
+        if missing := (_ALLOWED_TOP_LEVEL_FIELDS - set(value)):
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_invalid_input",
+                f"Missing required planning fields: {', '.join(sorted(missing))}.",
+            )
         _reject_sensitive_structured_keys(value)
-        user_input = str(value.get("user_input") or "").strip()
+        raw_user_input = value.get("user_input")
+        if not isinstance(raw_user_input, str):
+            raise CodexNativeImageGenError("codex_native_imagegen_user_input_required", "User input must be a string.")
+        user_input = raw_user_input.strip()
         if not user_input:
             raise CodexNativeImageGenError("codex_native_imagegen_user_input_required", "User input is required.")
         if len(user_input) > 8_000:
             raise CodexNativeImageGenError("codex_native_imagegen_user_input_too_long", "User input exceeds the planning limit.")
-        template_id = str(value.get("template_id") or "").strip()
+        raw_template_id = value.get("template_id")
+        if not isinstance(raw_template_id, str):
+            raise CodexNativeImageGenError("codex_native_imagegen_template_invalid", "Template ID must be a string.")
+        template_id = raw_template_id.strip()
         if not _IDENTIFIER.fullmatch(template_id):
             raise CodexNativeImageGenError("codex_native_imagegen_template_invalid", "Template ID is invalid.")
+        raw_count = value.get("requested_image_count")
         try:
-            count = int(value.get("requested_image_count"))
+            count = int(raw_count)
         except (TypeError, ValueError):
             raise CodexNativeImageGenError("codex_native_imagegen_count_invalid", "Requested image count must be a positive integer.") from None
-        if not 1 <= count <= 16:
+        if isinstance(raw_count, bool) or not 1 <= count <= 16:
             raise CodexNativeImageGenError("codex_native_imagegen_count_invalid", "Requested image count is outside the supported planning range.")
         raw_size = value.get("requested_image_size")
-        size = str(raw_size).strip() if raw_size is not None else None
+        if raw_size is not None and not isinstance(raw_size, str):
+            raise CodexNativeImageGenError("codex_native_imagegen_size_invalid", "Requested image size must be a string or null.")
+        size = raw_size.strip() if raw_size is not None else None
         if size == "":
             size = None
         if size is not None and (len(size) > 64 or not re.fullmatch(r"(?:auto|[1-9][0-9]{1,4}x[1-9][0-9]{1,4})", size.lower())):
             raise CodexNativeImageGenError("codex_native_imagegen_size_invalid", "Requested image size is invalid.")
-        declarations_value = value.get("reference_declarations") or []
+        declarations_value = value.get("reference_declarations")
         if not isinstance(declarations_value, list):
             raise CodexNativeImageGenError(
                 "codex_native_imagegen_reference_declaration_invalid",
