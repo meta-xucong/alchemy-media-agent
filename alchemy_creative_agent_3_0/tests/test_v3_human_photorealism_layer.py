@@ -170,6 +170,87 @@ def test_doc91_ecommerce_kidswear_model_activates_human_realism_for_product_subj
     assert "age-inappropriate facial morphology" in guidance.negative_prompt_fragments
 
 
+def test_doc114_generic_human_realism_recognizes_numeric_age_and_photographic_scene_coherence() -> None:
+    layer = HumanPhotorealismLayer()
+
+    guidance = layer.build(
+        project_id="project_doc114_numeric_age",
+        job_id="job_doc114_numeric_age",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input=(
+            "Create a real-camera apparel-on-model image of a 6-year-old wearing the supplied layered dress, "
+            "with a natural candid expression in a softly lit photographed room."
+        ),
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+        metadata={"product_profile": {"product_category": "apparel"}},
+    )
+
+    plugin = guidance.metadata["human_realism_plugin"]
+    positive_text = " ".join(guidance.positive_prompt_fragments).lower()
+    negative_text = " ".join(guidance.negative_prompt_fragments).lower()
+    review_text = " ".join(guidance.review_targets).lower()
+
+    assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
+    assert "explicit_age_fidelity_signal" in plugin["reason_codes"]
+    assert plugin["universal_rendering_profile"]["scene_photographic_coherence"] == "preserve_physical_light_depth_contact"
+    assert "caught photographic moment" in positive_text
+    assert "physically coherent photographed space" in positive_text
+    assert "35mm or ccd-inspired" not in positive_text
+    assert "flat evenly lit backdrop" in negative_text
+    assert "distinct natural shutter moments" in review_text
+
+    chinese_guidance = layer.build(
+        project_id="project_doc114_numeric_age_zh",
+        job_id="job_doc114_numeric_age_zh",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        user_input="为穿着连衣裙的6岁人物生成真实摄影电商图，自然表情和真实环境光。",
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+        metadata={"product_profile": {"product_category": "apparel"}},
+    )
+
+    assert chinese_guidance.metadata["human_realism_plugin"]["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
+
+
+def test_doc114_generic_scene_and_pose_issue_codes_flow_through_shared_human_review() -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        CapabilityInput(
+            job_id="job_doc114_generic_review",
+            scenario_id="general_creative",
+            user_input="Create a realistic person wearing a jacket in a naturally lit room.",
+            metadata={
+                "template_id": "general_template",
+                "force_anti_ai_face_issue_codes": [
+                    "flat_scene_lighting",
+                    "airbrushed_background_texture",
+                    "synthetic_material_response",
+                    "frozen_centered_pose",
+                ],
+                "project_context_snapshot": {"project_id": "project_doc114_generic_review"},
+            },
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    review = result.results[-1].facts["visual_capability_cluster"]["anti_ai_face_review"]
+
+    assert review["status"] == "retry_recommended"
+    assert set(review["issue_codes"]) == {
+        "flat_scene_lighting",
+        "airbrushed_background_texture",
+        "synthetic_material_response",
+        "frozen_centered_pose",
+    }
+    assert "physical light environment" in " ".join(review["retry_patch"]["artifact_repair"])
+
+
 def test_doc92_moody_traditional_portrait_suppresses_bright_fresh_skin_pressure() -> None:
     layer = HumanPhotorealismLayer()
 

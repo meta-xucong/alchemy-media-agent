@@ -2188,6 +2188,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
         role_guidance = self._mode_role_prompt_guidance(request)
+        apparel_construction_guidance = self._apparel_construction_prompt_guidance(request)
         include_supporting_notes = allow_product_language or len(user_direction) < 180
         resolved_reference_policy = self._resolved_reference_policy_package(request)
         identity_evidence_prompt = self._identity_evidence_prompt(asset_plan)
@@ -2246,6 +2247,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             f"Style notes: {', '.join(prompt.style_notes)}" if include_supporting_notes and prompt.style_notes else "",
             f"Layout notes: {', '.join(prompt.layout_notes)}" if include_supporting_notes and prompt.layout_notes else "",
             f"Hard constraints: {'; '.join(provider_hard_constraints)}" if provider_hard_constraints else "",
+            apparel_construction_guidance,
         ]
         if role_guidance:
             parts.append("Role-specific generation contract:\n" + "\n".join(role_guidance))
@@ -2331,6 +2333,42 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "\n".join(part for part in parts if str(part or "").strip()),
             protected_user_direction=user_direction,
         )
+
+    def _apparel_construction_prompt_guidance(self, request: GenerationRequest) -> str:
+        """Materialize only the frozen garment facts from the resolved ledger."""
+
+        if not self._activation_enforced(request):
+            return ""
+        ledger = self._resolved_constraint_ledger(request)
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+        package = projection.get("apparel_construction") if isinstance(projection, dict) else None
+        if not isinstance(package, dict) or not package.get("applies"):
+            return ""
+        facts = package.get("facts")
+        if not isinstance(facts, list):
+            return ""
+        labels = {
+            "product_silhouette": "silhouette and proportion",
+            "product_pattern_registration": "print or pattern placement and scale",
+            "product_layer_topology": "layer order and transparency or mesh topology",
+            "product_construction_detail": "seams, hems, trim, fastenings, and accessory placement",
+            "product_material_response": "material weight and surface response",
+            "product_drape_behavior": "fold, tension, gravity, and drape behavior",
+        }
+        lines: list[str] = []
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            values = self._string_list(fact.get("values"))
+            label = labels.get(str(fact.get("channel") or ""))
+            if label and values:
+                strength = str(fact.get("strength") or "soft")
+                action = "Preserve" if strength == "hard" else "Keep materially consistent" if strength == "strong" else "Treat as a soft supplied signal for"
+                lines.append(f"- {action} {label}: {'; '.join(values)}")
+        if not lines:
+            return ""
+        lines.append("These are garment construction facts only; the current brief still owns pose, expression, camera, scene, lighting, mood, and styling unless separately constrained.")
+        return "Garment construction truth:\n" + "\n".join(lines)
 
     def _identity_local_repair_prompt(self, request: GenerationRequest) -> str:
         if not bool(request.metadata.get("identity_local_repair_active")):

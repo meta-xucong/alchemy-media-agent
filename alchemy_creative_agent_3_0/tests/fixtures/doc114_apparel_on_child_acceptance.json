@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "authority": "Doc114",
+  "purpose": "Pre-merge semantic acceptance matrix; this file must not activate or prescribe a children-specific runtime recipe.",
+  "fixture_asset_policy": "Textual and structured evidence only. Add consented reference-image paths only in a separately approved real-output evaluation run.",
+  "merge_validation_gates": [
+    "ecommerce_real_product_reference_brain_provider_review_retry_acceptance",
+    "photography_p10_cross_domain_acceptance",
+    "browser_gate_d_delivery_continuation_recovery_acceptance"
+  ],
+  "generic_activation_facts": [
+    "visible_person",
+    "product_on_person",
+    "explicit_age_direction",
+    "wearable_apparel_evidence",
+    "reference_channel_assignment"
+  ],
+  "forbidden_runtime_identifiers": [
+    "kidswear_module",
+    "child_template",
+    "child_provider_route",
+    "ecommerce_human_realism_plugin",
+    "shared_ecommerce_delivery_map"
+  ],
+  "cases": [
+    {
+      "case_id": "A_child_apparel_real_camera",
+      "scenario_id": "ecommerce",
+      "purpose": "Primary explicit-age apparel-on-person acceptance case.",
+      "structured_evidence": {
+        "product_reference_facts": [
+          "knee-length layered dress silhouette",
+          "visible floral print registration and scale",
+          "two-layer mesh topology with a visible hem border",
+          "lightweight fabric with non-uniform gravity-driven folds"
+        ],
+        "explicit_age_direction": "approximately six-year-old child",
+        "user_owned_direction": [
+          "real-camera commercial image",
+          "scene, pose, styling, light, and expression remain prompt-owned",
+          "no visible text"
+        ]
+      },
+      "requested_output_variants": [
+        {
+          "requested_count": 1,
+          "template_evidence_goal": "one product-first garment proof"
+        },
+        {
+          "requested_count": 7,
+          "template_evidence_goal": "seven distinct evidence purposes across view, movement, construction, context, crop, and visible-person variation"
+        }
+      ],
+      "required_normalized_facts": [
+        "visible_person",
+        "product_on_person",
+        "explicit_age_direction",
+        "wearable_apparel_evidence",
+        "reference_channel_assignment"
+      ],
+      "required_ledger_channels": [
+        "product_silhouette",
+        "product_pattern_registration",
+        "product_layer_topology",
+        "product_construction_detail",
+        "product_material_response",
+        "product_drape_behavior"
+      ],
+      "template_owner": "ecommerce_template",
+      "shared_owner": "human_realism",
+      "review_requirement": "real_or_hybrid_pixel_review",
+      "review_dimensions": [
+        "product_fidelity",
+        "applicable_age_fidelity",
+        "human_naturalness",
+        "camera_material_plausibility",
+        "role_and_count_fidelity",
+        "prompt_owned_channel_preservation"
+      ]
+    },
+    {
+      "case_id": "B_adult_apparel_on_person",
+      "scenario_id": "ecommerce",
+      "purpose": "Proves apparel truth and Human Realism remain generic rather than child-specific.",
+      "structured_evidence": {
+        "product_reference_facts": [
+          "tailored jacket silhouette",
+          "visible seam and lapel construction",
+          "matte fabric with structured folds"
+        ],
+        "explicit_age_direction": "adult",
+        "user_owned_direction": [
+          "fashion product-on-person scene",
+          "wardrobe styling and camera mood remain prompt-owned"
+        ]
+      },
+      "required_normalized_facts": [
+        "visible_person",
+        "product_on_person",
+        "explicit_age_direction",
+        "wearable_apparel_evidence",
+        "reference_channel_assignment"
+      ],
+      "required_ledger_channels": [
+        "product_silhouette",
+        "product_construction_detail",
+        "product_material_response",
+        "product_drape_behavior"
+      ],
+      "template_owner": "ecommerce_template",
+      "shared_owner": "human_realism",
+      "review_requirement": "real_or_hybrid_pixel_review"
+    },
+    {
+      "case_id": "C_same_person_portrait",
+      "scenario_id": "general_creative",
+      "purpose": "Proves Human Realism does not expand identity-reference ownership over prompt-owned channels.",
+      "structured_evidence": {
+        "identity_reference": "same-person identity evidence only",
+        "user_owned_direction": [
+          "hair",
+          "makeup",
+          "wardrobe",
+          "lighting",
+          "scene",
+          "camera mood"
+        ]
+      },
+      "required_normalized_facts": [
+        "visible_person",
+        "reference_channel_assignment"
+      ],
+      "forbidden_normalized_facts": [
+        "wearable_apparel_evidence",
+        "product_on_person"
+      ],
+      "template_owner": "general_template",
+      "shared_owner": "human_realism",
+      "review_requirement": "real_or_hybrid_pixel_review",
+      "review_dimensions": [
+        "identity_geometry_preservation",
+        "human_naturalness",
+        "prompt_owned_channel_preservation"
+      ]
+    },
+    {
+      "case_id": "D_non_person_product_object",
+      "scenario_id": "ecommerce",
+      "purpose": "Proves apparel and human logic do not leak into an object-only product request.",
+      "structured_evidence": {
+        "product_reference_facts": [
+          "ceramic mug silhouette",
+          "glazed surface response",
+          "printed mark placement"
+        ],
+        "user_owned_direction": [
+          "object-only product image",
+          "no people"
+        ]
+      },
+      "required_normalized_facts": [
+        "reference_channel_assignment"
+      ],
+      "forbidden_normalized_facts": [
+        "visible_person",
+        "product_on_person",
+        "explicit_age_direction",
+        "wearable_apparel_evidence"
+      ],
+      "template_owner": "ecommerce_template",
+      "shared_owner": "product_identity",
+      "review_requirement": "real_or_hybrid_pixel_review"
+    },
+    {
+      "case_id": "E_high_key_soft_commercial_person",
+      "scenario_id": "ecommerce",
+      "purpose": "Proves bright and soft user direction keeps its character without plastic skin or flat material response.",
+      "structured_evidence": {
+        "explicit_age_direction": "young adult",
+        "user_owned_direction": [
+          "bright high-key commercial setting",
+          "soft fresh colour grade",
+          "do not turn the image moody or documentary"
+        ]
+      },
+      "required_normalized_facts": [
+        "visible_person",
+        "explicit_age_direction"
+      ],
+      "forbidden_normalized_facts": [
+        "product_on_person",
+        "wearable_apparel_evidence"
+      ],
+      "template_owner": "ecommerce_template",
+      "shared_owner": "human_realism",
+      "review_requirement": "real_or_hybrid_pixel_review",
+      "review_dimensions": [
+        "human_naturalness",
+        "camera_material_plausibility",
+        "prompt_owned_channel_preservation"
+      ]
+    },
+    {
+      "case_id": "F_moody_cinematic_person",
+      "scenario_id": "general_creative",
+      "purpose": "Proves Human Realism preserves low-key mood rather than injecting high-key commercial skin language.",
+      "structured_evidence": {
+        "explicit_age_direction": "adult",
+        "user_owned_direction": [
+          "moody cinematic low-key portrait",
+          "controlled highlights",
+          "preserve shadow and colour mood"
+        ]
+      },
+      "required_normalized_facts": [
+        "visible_person",
+        "explicit_age_direction"
+      ],
+      "forbidden_normalized_facts": [
+        "product_on_person",
+        "wearable_apparel_evidence"
+      ],
+      "template_owner": "general_template",
+      "shared_owner": "human_realism",
+      "review_requirement": "real_or_hybrid_pixel_review",
+      "review_dimensions": [
+        "human_naturalness",
+        "prompt_owned_channel_preservation"
+      ]
+    }
+  ]
+}

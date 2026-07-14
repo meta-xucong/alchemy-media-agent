@@ -21,6 +21,24 @@ Provider/Review/Retry consume envelope and resolved ledger only
 metadata-only inspection cannot approve a pixel-dependent contract
 ```
 
+Doc113 closure is necessary but not sufficient for a Doc114 mainline merge.
+The implementation branch may proceed, but the agent must independently run
+and record all of the following acceptance gates before requesting merge:
+
+```text
+1. E-Commerce real-chain acceptance: real product reference, remote Brain,
+   Provider, and shared review/retry all complete one reliable delivery path.
+2. Photography P10: cross-domain person/reference/three-role acceptance is
+   complete and recorded as regression evidence.
+3. Browser Gate D: selected-result delivery, continuation, refresh recovery,
+   and failure presentation are trustworthy in the user path.
+```
+
+These are merge/release gates, not a requirement for an additional user-side
+pre-approval before development begins. If a gate cannot be executed because a
+required external service or browser environment is unavailable, record that
+fact as a release blocker; do not claim the corresponding behavior is proven.
+
 This is not a request for a kidswear module. The architecture remains:
 
 ```text
@@ -130,6 +148,12 @@ Provider materializes only the Doc113 ledger: final role contract, garment
 facts with strengths, generic Human Realism variables, user-owned art direction,
 text policy, resolved format, and review IDs. No independent child, beauty,
 listing-role, or studio recipe may be appended.
+
+For a multi-output E-Commerce request, the per-output review ID is frozen
+before generation by the internal `asset_id -> requested output index ->
+ledger deliverable_id` mapping. Pixel review must resolve that ID back against
+the ledger; it must not infer a Brain evidence assignment from candidate,
+provider, or shared `mode_role_recipe` metadata.
 
 Hard garment truth, explicit-age direction, visible anatomy, and role-difference
 contracts require real/hybrid pixel review. Ownership is local and bounded:
