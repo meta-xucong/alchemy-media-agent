@@ -2621,9 +2621,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or request.generation_plan.metadata.get("scenario_id")
             or ""
         ).strip()
-        if scenario_id != "general_creative" or not bool(metadata.get("require_real_images")):
+        real_image_required = bool(
+            metadata.get("require_real_images")
+            or metadata.get("real_image_generation")
+            or request.generation_plan.metadata.get("require_real_images")
+            or request.generation_plan.metadata.get("real_image_generation")
+        )
+        if scenario_id != "general_creative" or not real_image_required:
             return False
         llm_brain = metadata.get("llm_brain")
+        if not isinstance(llm_brain, dict):
+            frozen_brain = request.generation_plan.metadata.get("llm_brain")
+            llm_brain = frozen_brain if isinstance(frozen_brain, dict) else {}
         if not isinstance(llm_brain, dict) or not llm_brain.get("llm_used") or llm_brain.get("fallback_used"):
             return False
         plan = llm_brain.get("image_set_plan")
@@ -2634,6 +2643,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return ""
         metadata = dict(request.metadata or {})
         llm_brain = metadata.get("llm_brain") if isinstance(metadata.get("llm_brain"), dict) else {}
+        if not llm_brain:
+            frozen_brain = request.generation_plan.metadata.get("llm_brain")
+            llm_brain = frozen_brain if isinstance(frozen_brain, dict) else {}
         plan = llm_brain.get("image_set_plan") if isinstance(llm_brain.get("image_set_plan"), dict) else {}
         directions = self._string_list(plan.get("shot_plan"))
         try:

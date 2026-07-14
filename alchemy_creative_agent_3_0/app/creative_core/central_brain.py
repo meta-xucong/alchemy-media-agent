@@ -105,6 +105,15 @@ class CentralCreativeBrain:
                 "job_id": job.job_id,
                 "uploaded_assets": context.metadata.get("uploaded_assets", []),
                 "reference_assets": context.metadata.get("reference_assets", []),
+                # Preserve the frozen real-provider requirement with the
+                # per-asset plan. Planning consumers and Provider
+                # materialization must agree that this is an LLM-first real
+                # image request; it is not a mutable UI hint.
+                "require_real_images": bool(
+                    context.metadata.get("require_real_images")
+                    or context.metadata.get("real_image_generation")
+                ),
+                "llm_brain": self._llm_brain_metadata(context),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
                 "mode_execution_policy": mode_policy,
@@ -257,6 +266,13 @@ class CentralCreativeBrain:
                 "quality_mode": context.metadata.get("quality_mode", "standard"),
                 "uploaded_assets": context.metadata.get("uploaded_assets", []),
                 "reference_assets": context.metadata.get("reference_assets", []),
+                # Freeze the real-provider requirement alongside the Brain
+                # result. The downstream Provider may consume this frozen
+                # plan, but must not re-read mutable request metadata.
+                "require_real_images": bool(
+                    context.metadata.get("require_real_images")
+                    or context.metadata.get("real_image_generation")
+                ),
                 "llm_brain": self._llm_brain_metadata(context),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
@@ -978,6 +994,10 @@ class CentralCreativeBrain:
                     "quality_mode": generation_plan.metadata.get("quality_mode", "standard"),
                     "uploaded_assets": generation_plan.metadata.get("uploaded_assets", []),
                     "reference_assets": generation_plan.metadata.get("reference_assets", []),
+                    "require_real_images": bool(
+                        generation_plan.metadata.get("require_real_images")
+                        or generation_plan.metadata.get("real_image_generation")
+                    ),
                     "shared_capabilities": generation_plan.metadata.get("shared_capabilities", {}),
                     "visual_cluster": generation_plan.metadata.get("visual_cluster", {}),
                     "llm_brain": generation_plan.metadata.get("llm_brain", {}),

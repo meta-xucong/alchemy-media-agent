@@ -870,8 +870,11 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                 },
             }
 
+    provider_prompts: list[str] = []
+
     async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
         assert provider_name == "openai_gpt_image"
+        provider_prompts.append(str(app_request.prompt_plan.variables["generation_prompt"]))
         return ImageGenerationResult(
             provider="openai_gpt_image",
             model="test-image-model",
@@ -913,6 +916,14 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
     assert len(records) == 1
     assert generated.asset_series[0].output_id == records[0].output_id
     assert Path(records[0].file_path).is_relative_to(tmp_path / "product_api_outputs")
+    # This is an end-to-end runtime assertion, not a direct Provider unit
+    # fixture: the frozen real-image flag must reach materialization so the
+    # remote Brain direction is not expanded back into General's local suite
+    # recipe.
+    assert len(provider_prompts) == 1
+    assert "Remote Central Brain image direction: one clean summer portrait social cover with natural light" in provider_prompts[0]
+    assert "Output goal:" not in provider_prompts[0]
+    assert "Mode quality contract:" not in provider_prompts[0]
 
 
 def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_mock(tmp_path, monkeypatch) -> None:
