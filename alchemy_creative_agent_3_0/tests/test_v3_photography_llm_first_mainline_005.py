@@ -76,6 +76,16 @@ def test_photography_blocks_when_remote_brain_is_unavailable_or_role_count_is_in
 
     assert unavailable.status == ScenarioRuntimeStatus.BLOCKED
     assert "remote_creative_brain_required_for_template" in " ".join(unavailable.warnings)
+    assert unavailable.metadata["remote_creative_brain_outcome"] == {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_required_for_template",
+        "outcome_class": "remote_provider_unavailable",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": False,
+        "remote_contract_rejected_sections": [],
+    }
 
     wrong_count = ScenarioRuntime(
         llm_brain_adapter=V3LLMBrainAdapter(provider=_WrongCardinalityRemoteBrain())
@@ -83,6 +93,9 @@ def test_photography_blocks_when_remote_brain_is_unavailable_or_role_count_is_in
 
     assert wrong_count.status == ScenarioRuntimeStatus.BLOCKED
     assert "remote_creative_brain_image_set_plan_invalid" in " ".join(wrong_count.warnings)
+    invalid = wrong_count.metadata["remote_creative_brain_outcome"]
+    assert invalid["outcome_class"] == "remote_contract_invalid"
+    assert invalid["remote_contract_rejected_sections"] == ["image_set_plan"]
 
 
 def test_photography_brain_receives_only_noncreative_contract_and_owns_each_direction(monkeypatch) -> None:

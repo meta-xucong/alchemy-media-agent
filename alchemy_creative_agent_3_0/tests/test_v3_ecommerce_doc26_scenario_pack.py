@@ -74,6 +74,18 @@ def test_production_service_fails_closed_when_remote_brain_is_not_available() ->
 
     assert status.status == "blocked"
     assert "remote_creative_brain_required_for_template" in " ".join(status.warnings)
+    outcome = status.metadata["remote_creative_brain_outcome"]
+    assert outcome == {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_required_for_template",
+        "outcome_class": "remote_provider_unavailable",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": False,
+        "remote_contract_rejected_sections": [],
+    }
+    assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
 
 
 def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy() -> None:

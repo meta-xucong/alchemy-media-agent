@@ -389,15 +389,85 @@ class ScenarioRuntime:
         if not policy.requires_remote_creative_brain:
             return
         if not brain_result.llm_used or brain_result.fallback_used:
-            raise CapabilityActivationError("remote_creative_brain_required_for_template")
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_required_for_template",
+                brain_result,
+            )
         rejected_sections = brain_result.audit.get("remote_contract_rejected_sections")
         if isinstance(rejected_sections, list) and "image_set_plan" in rejected_sections:
-            raise CapabilityActivationError("remote_creative_brain_image_set_plan_invalid")
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_image_set_plan_invalid",
+                brain_result,
+                rejected_sections=rejected_sections,
+            )
         expected = self._requested_image_count_for_brain(request)
         image_plan = brain_result.image_set_plan
         directions = [str(item).strip() for item in image_plan.shot_plan if str(item).strip()]
         if image_plan.image_count != expected or len(directions) != expected:
-            raise CapabilityActivationError("remote_creative_brain_output_count_mismatch")
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_output_count_mismatch",
+                brain_result,
+                expected_image_count=expected,
+                actual_image_count=image_plan.image_count,
+                actual_direction_count=len(directions),
+            )
+
+    @staticmethod
+    def _remote_creative_brain_block(
+        reason_code: str,
+        brain_result: BrainRunResult,
+        **details: Any,
+    ) -> CapabilityActivationError:
+        """Attach safe, actionable evidence without exposing provider internals.
+
+        Specialized templates must fail closed when their remote creative
+        contract is absent or invalid.  The blocked job still needs enough
+        provenance for an operator to distinguish configuration, transport,
+        and contract failures; raw prompts, endpoint details, credentials,
+        and provider-native errors remain private.
+        """
+
+        audit = dict(brain_result.audit or {})
+        if audit.get("remote_provider_error"):
+            outcome_class = "remote_provider_error"
+        elif audit.get("remote_provider_available") is False:
+            outcome_class = "remote_provider_unavailable"
+        elif reason_code == "remote_creative_brain_image_set_plan_invalid":
+            outcome_class = "remote_contract_invalid"
+        elif reason_code == "remote_creative_brain_output_count_mismatch":
+            outcome_class = "remote_output_count_mismatch"
+        elif brain_result.skipped:
+            outcome_class = "remote_brain_skipped"
+        else:
+            outcome_class = "remote_creative_brain_required"
+
+        safe_outcome = {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": reason_code,
+            "outcome_class": outcome_class,
+            "llm_used": bool(brain_result.llm_used),
+            "fallback_used": bool(brain_result.fallback_used),
+            "remote_provider_available": audit.get("remote_provider_available"),
+            "remote_contract_rejected_sections": [
+                str(item)
+                for item in details.get("rejected_sections", [])
+                if str(item).strip()
+            ],
+            **{
+                key: value
+                for key, value in details.items()
+                if key
+                in {
+                    "expected_image_count",
+                    "actual_image_count",
+                    "actual_direction_count",
+                }
+            },
+        }
+        error = CapabilityActivationError(reason_code)
+        setattr(error, "remote_creative_brain_outcome", safe_outcome)
+        return error
 
     def _requested_image_count_for_brain(self, request: ScenarioRuntimeRequest) -> int:
         frozen_intent = request.metadata.get("normalized_v3_job_intent")
@@ -1792,6 +1862,7 @@ class ScenarioRuntime:
         }
 
     def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:
+        remote_brain_outcome = getattr(exc, "remote_creative_brain_outcome", None)
         required_failures = self._required_capability_ids(request)
         capability_run = CapabilityRunResult(
             status=CapabilityRunStatus.FAILED,
@@ -1814,6 +1885,11 @@ class ScenarioRuntime:
                 **self._runtime_metadata(request, "blocked"),
                 "capability_activation_mode": self._capability_activation_mode(request),
                 "capability_activation_error": type(exc).__name__,
+                **(
+                    {"remote_creative_brain_outcome": dict(remote_brain_outcome)}
+                    if isinstance(remote_brain_outcome, dict)
+                    else {}
+                ),
             },
         )
 
