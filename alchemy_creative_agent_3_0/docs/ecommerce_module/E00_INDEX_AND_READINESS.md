@@ -1,7 +1,9 @@
 # E-Commerce Module Documentation Set
 
-Status: LLM-native pre-acceptance closure; new E-Commerce jobs follow E17, E18, and Doc111
-Document family: `E00-E11`, corrected by V3 Doc111, E17, and E18
+Status: LLM-native pre-acceptance closure; real Provider Gate C/D is blocked
+pending authorized reference material and an enabled controlled visual-review
+deployment
+Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E19
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -21,8 +23,9 @@ commerce-specific deliverables.
 4. V3 Doc111 provider-native text and creative-direction correction.
 5. E17 LLM-native E-Commerce architecture correction.
 6. E18 LLM-native pre-acceptance closure and evidence record.
-7. This E-Commerce module family.
-8. Implementation notes and examples.
+7. E19 real Provider Gate C/D acceptance record.
+8. This E-Commerce module family.
+9. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -70,6 +73,12 @@ requires strict remote-Brain failure closure, exact output-count behavior,
 General/Photography isolation, queryable provenance, project-recovery wording,
 and an evidence record. It does not waive the real Provider Gate C/D.
 
+E19 records the real gate without turning its preparatory material into a
+claim of readiness. As of 2026-07-14 it records a controlled preflight block:
+the current process has no authorized watermark-free product reference and its
+shared visual inspection feature is not enabled. No desktop demonstration image
+may be treated as an acceptance fixture without an explicit rights record.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -84,3 +93,5 @@ Before implementation starts, the team must have accepted:
 8. E08 test and acceptance matrix.
 9. E17 LLM-native architecture correction.
 10. E18 pre-acceptance closure evidence record.
+11. E19 real Provider Gate C/D evidence record, with a passing real run only
+    when the documented external prerequisites exist.
