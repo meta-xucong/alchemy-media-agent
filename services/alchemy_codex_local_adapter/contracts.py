@@ -7,7 +7,8 @@ not required to import, test, or remove this sidecar package.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Any
@@ -24,6 +25,14 @@ LOCAL_RENDERER = PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER
 LOCAL_EVIDENCE_SCOPE = "codex_local_development_evidence"
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SENSITIVE_KEY_FRAGMENTS = (
+    "apikey",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "credential",
+)
 
 
 class LocalModeAdapterError(RuntimeError):
@@ -59,6 +68,55 @@ def _clean_direction(value: str) -> str:
     return cleaned
 
 
+def _is_sensitive_structured_key(value: Any) -> bool:
+    """Identify credential-like *mapping keys*, never arbitrary user text."""
+
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    return any(fragment in normalized for fragment in _SENSITIVE_KEY_FRAGMENTS)
+
+
+def reject_sensitive_structured_fields(value: Any, *, field_name: str) -> None:
+    """Fail closed when an incoming structured contract contains a credential key.
+
+    This intentionally examines mapping keys only.  A protected user prompt or
+    creative direction remains opaque user text and is never heuristically
+    scanned, transformed, or persisted as a purported credential.
+    """
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _is_sensitive_structured_key(key):
+                raise LocalModeAdapterError(
+                    "codex_local_sensitive_structured_field_forbidden",
+                    f"Credential-like field is forbidden in {field_name}.",
+                )
+            reject_sensitive_structured_fields(item, field_name=field_name)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            reject_sensitive_structured_fields(item, field_name=field_name)
+
+
+def redact_sensitive_structured_fields(value: Any) -> Any:
+    """Drop credential-like mapping keys from legacy/published structures.
+
+    New MCP and ``LocalJobSpec`` inputs are rejected instead.  This defensive
+    copier exists solely so old local JSON, provenance, and public records can
+    never re-expose a value that an earlier spike version wrote to disk.
+    """
+
+    if isinstance(value, dict):
+        return {
+            str(key): redact_sensitive_structured_fields(item)
+            for key, item in value.items()
+            if not _is_sensitive_structured_key(key)
+        }
+    if isinstance(value, list):
+        return [redact_sensitive_structured_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_sensitive_structured_fields(item) for item in value]
+    return deepcopy(value)
+
+
 @dataclass(frozen=True)
 class LocalJobSpec:
     """An already-frozen Local Mode job supplied by an explicit caller."""
@@ -85,6 +143,21 @@ class LocalJobSpec:
         if not str(self.protected_user_intent or "").strip():
             raise LocalModeAdapterError("codex_local_protected_intent_required", "Protected user intent is required.")
         object.__setattr__(self, "role_ids", roles)
+        for field_name in (
+            "normalized_intent",
+            "capability_execution_envelope",
+            "resolved_constraint_ledger",
+        ):
+            structured_value = getattr(self, field_name)
+            if not isinstance(structured_value, dict):
+                raise LocalModeAdapterError(
+                    "codex_local_invalid_structured_contract",
+                    f"{field_name} must be a structured object.",
+                )
+            reject_sensitive_structured_fields(structured_value, field_name=field_name)
+            # Caller-owned dictionaries remain mutable after construction.  A
+            # defensive copy prevents a later mutation from reaching storage.
+            object.__setattr__(self, field_name, redact_sensitive_structured_fields(structured_value))
 
     def safe_render_contract(self) -> dict[str, Any]:
         """Expose only frozen, caller-owned data and never credentials."""
@@ -97,28 +170,45 @@ class LocalJobSpec:
             "protected_user_intent": self.protected_user_intent,
             "role_ids": list(self.role_ids),
             "requested_output_count": len(self.role_ids),
-            "normalized_intent": _public_copy(self.normalized_intent),
-            "capability_execution_envelope": _public_copy(self.capability_execution_envelope),
-            "resolved_constraint_ledger": _public_copy(self.resolved_constraint_ledger),
+            "normalized_intent": redact_sensitive_structured_fields(self.normalized_intent),
+            "capability_execution_envelope": redact_sensitive_structured_fields(self.capability_execution_envelope),
+            "resolved_constraint_ledger": redact_sensitive_structured_fields(self.resolved_constraint_ledger),
             "permitted_reference_files": list(self.permitted_reference_files),
         }
 
     def storage_record(self) -> dict[str, Any]:
-        return asdict(self)
+        """Return the sole durable shape, defensively redacted before I/O."""
+
+        return {
+            "job_id": self.job_id,
+            "project_id": self.project_id,
+            "template_id": self.template_id,
+            "scenario_id": self.scenario_id,
+            "protected_user_intent": self.protected_user_intent,
+            "role_ids": list(self.role_ids),
+            "normalized_intent": redact_sensitive_structured_fields(self.normalized_intent),
+            "capability_execution_envelope": redact_sensitive_structured_fields(self.capability_execution_envelope),
+            "resolved_constraint_ledger": redact_sensitive_structured_fields(self.resolved_constraint_ledger),
+            "permitted_reference_files": list(self.permitted_reference_files),
+        }
 
     @classmethod
     def from_storage_record(cls, value: dict[str, Any]) -> "LocalJobSpec":
+        # Historical Phase B2 records may predate credential-key rejection.
+        # Strip only structured keys before rebuilding the validated contract;
+        # never inspect or modify normal string content.
+        clean_value = redact_sensitive_structured_fields(value)
         return cls(
-            job_id=str(value.get("job_id") or ""),
-            project_id=str(value.get("project_id") or ""),
-            template_id=str(value.get("template_id") or ""),
-            scenario_id=str(value.get("scenario_id") or ""),
-            protected_user_intent=str(value.get("protected_user_intent") or ""),
-            role_ids=tuple(value.get("role_ids") or ()),
-            normalized_intent=dict(value.get("normalized_intent") or {}),
-            capability_execution_envelope=dict(value.get("capability_execution_envelope") or {}),
-            resolved_constraint_ledger=dict(value.get("resolved_constraint_ledger") or {}),
-            permitted_reference_files=tuple(value.get("permitted_reference_files") or ()),
+            job_id=str(clean_value.get("job_id") or ""),
+            project_id=str(clean_value.get("project_id") or ""),
+            template_id=str(clean_value.get("template_id") or ""),
+            scenario_id=str(clean_value.get("scenario_id") or ""),
+            protected_user_intent=str(clean_value.get("protected_user_intent") or ""),
+            role_ids=tuple(clean_value.get("role_ids") or ()),
+            normalized_intent=dict(clean_value.get("normalized_intent") or {}),
+            capability_execution_envelope=dict(clean_value.get("capability_execution_envelope") or {}),
+            resolved_constraint_ledger=dict(clean_value.get("resolved_constraint_ledger") or {}),
+            permitted_reference_files=tuple(clean_value.get("permitted_reference_files") or ()),
         )
 
 
@@ -150,37 +240,29 @@ class ImportedLocalCandidate:
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def storage_record(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["imported_path"] = str(self.imported_path)
-        return payload
+        return {
+            "candidate_id": self.candidate_id,
+            "job_id": self.job_id,
+            "role_id": self.role_id,
+            "imported_path": str(self.imported_path),
+            "sha256": self.sha256,
+            "mime_type": self.mime_type,
+            "width": self.width,
+            "height": self.height,
+            "provenance": redact_sensitive_structured_fields(self.provenance),
+        }
 
     @classmethod
     def from_storage_record(cls, value: dict[str, Any]) -> "ImportedLocalCandidate":
+        clean_value = redact_sensitive_structured_fields(value)
         return cls(
-            candidate_id=str(value.get("candidate_id") or ""),
-            job_id=str(value.get("job_id") or ""),
-            role_id=str(value.get("role_id") or ""),
-            imported_path=Path(str(value.get("imported_path") or "")),
-            sha256=str(value.get("sha256") or ""),
-            mime_type=str(value.get("mime_type") or ""),
-            width=int(value.get("width") or 0),
-            height=int(value.get("height") or 0),
-            provenance=dict(value.get("provenance") or {}),
+            candidate_id=str(clean_value.get("candidate_id") or ""),
+            job_id=str(clean_value.get("job_id") or ""),
+            role_id=str(clean_value.get("role_id") or ""),
+            imported_path=Path(str(clean_value.get("imported_path") or "")),
+            sha256=str(clean_value.get("sha256") or ""),
+            mime_type=str(clean_value.get("mime_type") or ""),
+            width=int(clean_value.get("width") or 0),
+            height=int(clean_value.get("height") or 0),
+            provenance=dict(clean_value.get("provenance") or {}),
         )
-
-
-def _public_copy(value: Any) -> Any:
-    """Redact credential-like fields even if an invalid caller supplied them."""
-
-    sensitive_fragments = ("api_key", "apikey", "secret", "token", "password", "authorization", "credential")
-    if isinstance(value, dict):
-        return {
-            str(key): _public_copy(item)
-            for key, item in value.items()
-            if not any(fragment in str(key).lower() for fragment in sensitive_fragments)
-        }
-    if isinstance(value, list):
-        return [_public_copy(item) for item in value]
-    if isinstance(value, tuple):
-        return [_public_copy(item) for item in value]
-    return value

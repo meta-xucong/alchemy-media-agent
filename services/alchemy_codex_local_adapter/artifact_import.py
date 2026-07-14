@@ -21,6 +21,7 @@ from .contracts import (
     LocalModeAdapterError,
     PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER,
     PlatformRenderedImage,
+    redact_sensitive_structured_fields,
 )
 from .provenance import imported_artifact_provenance
 
@@ -56,6 +57,17 @@ class LocalArtifactImporter:
             raise LocalModeAdapterError("codex_local_platform_renderer_empty_response", "Platform response did not contain image bytes.")
         if len(rendered.image_bytes) > self.max_bytes:
             raise LocalModeAdapterError("codex_local_artifact_too_large", "Platform image exceeds the local import limit.")
+
+        # Never retain a credential-like key from a mocked or future transport
+        # summary in the staging object that later feeds durable provenance.
+        rendered = PlatformRenderedImage(
+            image_bytes=rendered.image_bytes,
+            mime_type=rendered.mime_type,
+            request_summary=redact_sensitive_structured_fields(rendered.request_summary),
+            response_summary=redact_sensitive_structured_fields(rendered.response_summary),
+            renderer=rendered.renderer,
+            renderer_model=rendered.renderer_model,
+        )
 
         self._staging_root.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(24)
@@ -183,12 +195,15 @@ class LocalArtifactImporter:
             raise LocalModeAdapterError("codex_local_claim_store_unreadable", "Local artifact claim store is unreadable.") from exc
         if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
             raise LocalModeAdapterError("codex_local_claim_store_unreadable", "Local artifact claim store is invalid.")
-        return payload
+        clean_payload = redact_sensitive_structured_fields(payload)
+        if clean_payload != payload:
+            self._save_claims(clean_payload)
+        return clean_payload
 
     def _save_claims(self, claims: list[dict[str, Any]]) -> None:
         self.storage_root.mkdir(parents=True, exist_ok=True)
         temporary = self._claims_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(claims, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.write_text(json.dumps(redact_sensitive_structured_fields(claims), ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self._claims_path)
 
     @staticmethod

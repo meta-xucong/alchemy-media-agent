@@ -10,6 +10,7 @@ from .contracts import (
     LOCAL_EVIDENCE_SCOPE,
     LOCAL_EXECUTION_CHANNEL,
     LOCAL_RENDERER,
+    redact_sensitive_structured_fields,
 )
 
 
@@ -54,10 +55,10 @@ def imported_artifact_provenance(
             "renderer": renderer,
             "renderer_model": renderer_model,
             "renderer_model_evidence": "official_platform_request_model",
-            "platform_request_summary": dict(request_summary),
-            "platform_response_summary": dict(response_summary),
+            "platform_request_summary": redact_sensitive_structured_fields(request_summary),
+            "platform_response_summary": redact_sensitive_structured_fields(response_summary),
             "certification_state": "not_certified_development_artifact",
             "imported_at": utc_now_iso(),
         }
     )
-    return result
+    return redact_sensitive_structured_fields(result)

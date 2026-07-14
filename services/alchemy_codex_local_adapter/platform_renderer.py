@@ -105,6 +105,7 @@ class PlatformImageRenderer:
         *,
         live_platform_opt_in: bool = False,
         transport: PlatformHttpTransport | None = None,
+        contract_test_mode: bool = False,
         environment: Mapping[str, str] | None = None,
         user_home: str | Path | None = None,
         repository_root: str | Path | None = None,
@@ -118,9 +119,14 @@ class PlatformImageRenderer:
             )
         if not 5.0 <= float(request_timeout_s) <= 180.0:
             raise LocalModeAdapterError("codex_local_platform_renderer_invalid_timeout", "Platform renderer timeout must be between 5 and 180 seconds.")
+        if contract_test_mode and transport is None:
+            raise LocalModeAdapterError(
+                "codex_local_platform_renderer_contract_transport_required",
+                "Contract-test mode requires an explicit non-network transport.",
+            )
         self._live_platform_opt_in = bool(live_platform_opt_in)
         self._transport = transport or UrllibOfficialImageTransport()
-        self._mock_transport = transport is not None
+        self._contract_test_mode = bool(contract_test_mode)
         self._environment = environment
         self._user_home = Path(user_home).resolve() if user_home else Path.home().resolve()
         self._repository_root = Path(repository_root).resolve() if repository_root else Path(__file__).resolve().parents[2]
@@ -213,8 +219,9 @@ class PlatformImageRenderer:
         )
 
     def _authorization_header(self) -> str:
-        if self._mock_transport:
-            # Test transports exercise the contract without a user credential or live request.
+        if self._contract_test_mode:
+            # This is an explicit test-only mode.  Passing a custom transport
+            # alone must not bypass the production opt-in/key-file gate.
             return "Bearer mock-local-contract-only"
         if not self._live_platform_opt_in:
             raise LocalModeAdapterError(

@@ -15,8 +15,9 @@ existing V3 Web Mode
   -> V3 Central Brain + configured GPT Image 2 gateway
 
 optional Codex Local Mode
-  -> Codex Desktop / local agent plans and invokes its image-generation tool
-  -> Alchemy records constraints, project state, shared review, and delivery
+  -> Codex local agent owns explicit creative direction through stdio MCP
+  -> B2 may use a separately configured official Platform Image API request
+  -> Alchemy stores only a non-certified development artifact until Phase C
 ```
 
 Codex Local Mode is an independently installable plugin plus a local MCP
@@ -55,18 +56,24 @@ Provider stays the sole V3 **web-production** renderer.  Codex Local Mode does
 not modify its routing, credential configuration, retry policy, or release
 gates.
 
-The new mode has a distinct, user-visible provenance:
+The current B2 route has a distinct, user-visible provenance:
 
 ```text
 execution_channel = codex_local
 creative_direction_owner = codex_local_agent
-renderer = codex_imagegen
+renderer = platform_openai_gpt_image_2
+renderer_model = gpt-image-2
 ```
 
-`renderer_model` may be recorded only when Codex exposes a concrete value in
-the actual execution environment.  V3 must not infer, invent, or label the
-artifact as a direct API `gpt-image-2` call merely because the local Codex
-surface used an image-generation tool.
+This is an explicit, independently configured Platform API call, not a Codex
+Desktop/ChatGPT login-state export.  `renderer_model` is recorded only because
+the B2 request itself contains the official model identifier.  The adapter
+must never label a B2 artifact `codex_imagegen`, and it must not read or reuse
+Codex/ChatGPT authentication or Web Mode Provider settings.
+
+The earlier Codex Desktop interactive-artifact investigation remains a blocked
+Phase B1 evidence path: no supported durable artifact handoff was available.
+It is retained as a security boundary, not as an active renderer contract.
 
 ## 3. Product Boundary
 
@@ -74,7 +81,7 @@ surface used an image-generation tool.
 
 - a no-browser local workflow for creating an Alchemy project/job;
 - an explicit, inspectable render contract for a Codex agent;
-- Codex-owned natural-language creative direction and image-tool invocation;
+- Codex-owned natural-language creative direction and explicit local-adapter invocation;
 - secure import of the resulting image artifact into Alchemy;
 - existing Alchemy project history, constraints, review, bounded revision,
   selection, and continuation semantics where the shared runtime supports them;
@@ -193,10 +200,23 @@ after a web Provider failure.
 ### 7.2 Artifact handoff
 
 The image handoff is the first implementation spike and a release blocker.
+Phase B1 investigated an interactive Codex Desktop artifact handoff and is
+blocked: the supported surface did not expose a durable, safe artifact transfer
+mechanism.  It must not be emulated by scraping UI state, cache, session files,
+or a Codex/ChatGPT login credential.
 
-The adapter must accept a complete, local materialized file or an explicit
-artifact handle that the current Codex surface guarantees is readable by the
-adapter.  It must then:
+Phase B2 is the only implemented materialization route.  It uses a separately
+configured, explicit OpenAI Platform API key file, fixes the endpoint to
+`https://api.openai.com/v1/images/generations`, sends exactly one `gpt-image-2`
+request with `n=1` for each frozen role, receives API `b64_json` image bytes,
+and materializes them in importer-owned temporary storage.  It never accepts a
+caller-selected local file.  Live B2 fails closed unless Local Mode and the
+per-call opt-in are both explicit, and the dedicated key file is under the user
+home directory, outside the repository, and not a symlink.  It does not read
+root `.env`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, Codex auth/session state, or
+any Web Provider/Aiself setting.
+
+The controlled importer must then:
 
 1. validate image type, size, and configured local size limits;
 2. copy/import it into Alchemy-controlled local storage rather than retain an
@@ -204,13 +224,13 @@ adapter.  It must then:
 3. calculate a content hash and record immutable origin/provenance;
 4. bind it to exactly one job attempt and, when relevant, one frozen role;
 5. create an append-only candidate record;
-6. reject duplicate, missing, or cross-job artifact handles with an explicit
+6. reject duplicate, missing, or cross-job materializations with an explicit
    terminal/held state.
 
-The initial implementation must prove this handoff with a real Codex Desktop
-image artifact.  If the environment does not expose a durable image file or
-safe transfer mechanism, the mode remains a design/proof-of-concept and must
-not claim usable generation.
+The B2 materialization proves a direct Platform API artifact only.  It does
+not prove an interactive Codex image export, a supported production Local Mode,
+or any existing Web Mode Provider Gate C/D, General Gate D, Photography P10,
+or E-Commerce Gate C/D.
 
 ### 7.3 Review, revision, and delivery
 
@@ -301,7 +321,7 @@ not introduce the deprecated structured routes below:
 | Plugin absent/disabled | No Local Mode option or code path is active; Web Mode is unchanged. |
 | User did not explicitly choose Local Mode | Use the existing web path only. |
 | MCP adapter unavailable | Fail before job execution with `codex_local_adapter_unavailable`; never fall back to the web Provider. |
-| Codex image tool unavailable | Block with `codex_local_renderer_unavailable`; do not invoke Aiself or a local CLI substitute. |
+| Local renderer unavailable, disabled, or key gate fails | Block with a structured `codex_local_platform_renderer_*` error; do not invoke Aiself, a Web Provider, Codex CLI, or an interactive-session substitute. |
 | Artifact cannot be materialized | Hold/block without creating a deliverable candidate. |
 | Direction conflicts with immutable contract | Block with a structured constraint conflict; do not silently rewrite user truth. |
 | Review is metadata-only/manual/blocked | Retain candidate and audit record but withhold certification/delivery as required by shared policy. |
@@ -319,11 +339,23 @@ not introduce the deprecated structured routes below:
 
 ### Phase B — Real artifact-handoff spike
 
-- Use one Codex Desktop interactive image-generation run.
-- Materialize and import one image through the adapter.
-- Prove hash, source, job binding, and reopen/persistence behavior.
-- Stop if Codex does not expose a stable transfer mechanism; document the gap
-  instead of emulating it by scraping UI state or session files.
+- **B1 — Codex Desktop artifact-handoff investigation (blocked):** attempt an
+  interactive handoff only through a supported, durable artifact mechanism.
+  Stop and record the blocker when none exists; never scrape UI state, caches,
+  session files, or login credentials, and never emit `codex_imagegen` without
+  that evidence.
+- **B2 — explicit Platform API materialization route:** Codex owns the
+  natural-language direction and invokes the local stdio MCP adapter.  The
+  adapter makes one official `gpt-image-2` API request with `n=1` per frozen
+  role, then materializes only returned image bytes through importer-owned
+  staging.
+- B2 reads only `ALCHEMY_CODEX_LOCAL_IMAGE_API_KEY_FILE`; it must be a
+  non-symlink file under user home and outside the repository.  The base URL is
+  fixed to `https://api.openai.com/v1` and cannot inherit Web Provider
+  configuration.
+- Prove B2 hash, direct-API source, role/job binding, and reopen/persistence.
+  Record `renderer=platform_openai_gpt_image_2`, never `codex_imagegen`.
+- B2 remains an independent, non-certified development/acceptance channel.
 
 ### Phase C — Shared runtime integration
 
@@ -366,6 +398,12 @@ architecture review and an explicit user-approved security/reliability gate.
 - explicit selection produces a job with immutable Local Mode provenance;
 - `get_render_contract` returns the frozen envelope/ledger and never Provider
   credentials or mutable raw metadata fallback;
+- credential-like structured keys (including nested `api_key`, `secret`,
+  `token`, `password`, `authorization`, and `credential` variants) fail closed
+  before persistence; legacy local JSON is scrubbed on recovery;
+- B2 reads only its dedicated key-file environment name, rejects repository,
+  symlink, unreadable, missing, and invalid key files before any network
+  request, and never inherits `OPENAI_API_KEY` or `OPENAI_BASE_URL`;
 - one declared requested output creates exactly one candidate/delivery role;
 - materialized artifact hash and role binding survive restart/reopen;
 - missing, duplicated, cross-job, or non-image artifacts block safely;
@@ -385,13 +423,14 @@ architecture review and an explicit user-approved security/reliability gate.
 - E-Commerce and Photography Local Mode requests retain their existing
   template gates, immutable bindings, count checks, and fail-closed rules.
 
-### Real controlled acceptance
+### B2 controlled acceptance
 
-- one interactive Codex Desktop image artifact imports without copying a
-  Codex session token or scraping a private UI cache;
+- a separately authorized, dedicated Platform API key can produce one
+  `platform_openai_gpt_image_2` development artifact without copying a Codex
+  session token or using a Web Provider configuration;
 - one rights-clear General project completes through materialization, shared
   review, final delivery, project reopen, and append-only history;
-- an intentionally unavailable image tool and a missing artifact each show
+- an intentionally unavailable B2 key/renderer and a missing artifact each show
   clear non-web fallback failures;
 - no result is recorded as web Provider Gate C/D, General Gate D, P10, or
   E-Commerce production evidence solely because it ran through Local Mode.
@@ -404,7 +443,9 @@ The initial development version is accepted only when all are true:
    existing Web Mode configuration or behavior;
 2. control direction is Codex -> MCP -> Alchemy, with no reverse web-server
    Codex CLI invocation;
-3. artifact handoff has been proven with an actual supported Codex surface;
+3. either a supported Codex artifact handoff is proven, or the separately
+   authorized B2 Platform API materialization route is proven and labelled
+   truthfully as a non-Codex-export development artifact;
 4. every Local Mode image has explicit, immutable provenance and materialized
    local storage;
 5. shared constraints, review, retry, final-winner, and history behavior are
@@ -422,11 +463,14 @@ durable image binaries, or that a ChatGPT/Codex login may be repurposed as an
 OpenAI Platform API credential.  Those are separate surface and account
 contracts.
 
-If Phase B demonstrates a stable artifact handoff, the module is a practical
-local development/creative-execution mode.  If it does not, retain this
-document and use the current web Provider path for real image generation; do
-not weaken the boundary by scraping session state, turning a browser into an
-unattended provider, or wiring a local Codex account into V3's public service.
+Phase B1 remains blocked until Codex exposes a supported artifact handoff.
+Phase B2 may be used only with a separately authorized Platform API key and is
+not a Codex login-state route or production Local Mode certification.  Until a
+future approved Phase C shared-runtime bridge and production review establish
+otherwise, retain the current web Provider path for real production generation;
+do not weaken the boundary by scraping session state, turning a browser into
+an unattended provider, or wiring a local Codex account into V3's public
+service.
 
 ## 16. Authority
 

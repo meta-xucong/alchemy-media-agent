@@ -18,6 +18,7 @@ from .contracts import (
     LocalModeAdapterError,
     LocalModeDisabledError,
     _clean_direction,
+    redact_sensitive_structured_fields,
 )
 from .platform_renderer import PlatformImageRenderer
 from .provenance import local_job_provenance, utc_now_iso
@@ -157,7 +158,7 @@ class CodexLocalExecutionFacade:
         return {
             "job_id": job_id,
             "status": str(record.get("status") or "unknown"),
-            "provenance": dict(record.get("provenance") or {}),
+            "provenance": redact_sensitive_structured_fields(dict(record.get("provenance") or {})),
             "creative_directions": [
                 {"role_id": item.get("role_id"), "recorded_at": item.get("recorded_at")}
                 for item in record.get("creative_directions") or []
@@ -222,10 +223,17 @@ class CodexLocalExecutionFacade:
             raise LocalModeAdapterError("codex_local_job_store_unreadable", "Local job store is unreadable.") from exc
         if not isinstance(payload, dict):
             raise LocalModeAdapterError("codex_local_job_store_unreadable", "Local job store is invalid.")
-        return payload
+        clean_payload = redact_sensitive_structured_fields(payload)
+        if clean_payload != payload:
+            # Records written by an earlier spike may have accepted a
+            # credential-like structured key.  Scrub it during read/recovery
+            # so it cannot remain on disk or reach a public result.
+            self._save_records(clean_payload)
+        return clean_payload
 
     def _save_records(self, records: dict[str, Any]) -> None:
         self.storage_root.mkdir(parents=True, exist_ok=True)
         temporary = self._jobs_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        safe_records = redact_sensitive_structured_fields(records)
+        temporary.write_text(json.dumps(safe_records, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self._jobs_path)

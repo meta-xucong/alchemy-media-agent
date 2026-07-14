@@ -72,6 +72,14 @@ The adapter reads no root `.env`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, Codex
 Provider key.  Its base URL has no override setting and remains exactly
 `https://api.openai.com/v1`.
 
+At the MCP/`LocalJobSpec` boundary, a recursively nested structured mapping
+with a credential-like key is rejected before a job is created.  Matching is
+case-insensitive and covers `api_key`/`apikey`, `secret`, `token`, `password`,
+`authorization`, and `credential` forms.  This is key-name validation only:
+ordinary user text is not inspected or rewritten.  Storage, provenance, and
+public records also defensively drop those mapping keys.  On recovery, a
+legacy local JSON record is scrubbed and re-written before it can be exposed.
+
 Mock transports may exercise the response contract with no key and no network
 request.  They are test evidence only and cannot turn into a live renderer.
 
@@ -99,3 +107,16 @@ path, Web Provider Gate C/D, General Gate D, Photography P10, or E-Commerce
 Gate C/D.  It adds no CopyRenderPlan, font/OCR/overlay path, static E-Commerce
 or Photography recipe, browser route, worker, provider fallback, or Codex CLI
 process control.
+
+## Focused Test Count
+
+The security-correction focused command is exactly:
+
+```powershell
+python -m pytest tests/test_doc117_codex_local_mode.py -q
+```
+
+At this milestone it reports **27 passed**.  That is the actual count in this
+module: each scenario is an independently reported pytest test, not a loop
+inside one test and not an aggregate count from unrelated V3 suites.  Broader
+regression commands must report their own total separately.
