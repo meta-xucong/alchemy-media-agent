@@ -215,6 +215,27 @@ def test_public_contract_rejects_private_paths_jobs_provider_metadata_and_struct
         assert "must-not-leak" not in failure.value.message
 
 
+def test_public_contract_requires_all_schema_fields_even_when_called_without_schema_validation() -> None:
+    for missing_field in (
+        "user_input",
+        "template_id",
+        "requested_image_count",
+        "requested_image_size",
+        "reference_declarations",
+    ):
+        arguments = _arguments()
+        arguments.pop(missing_field)
+        with pytest.raises(CodexNativeImageGenError) as failure:
+            NativeImageGenPlanRequest.from_mcp_arguments(arguments)
+        assert failure.value.code == "codex_native_imagegen_invalid_input"
+
+    for field, invalid_value in (("user_input", ["not a string"]), ("template_id", 123), ("requested_image_count", True), ("requested_image_size", 1024)):
+        arguments = _arguments(requested_image_count=1)
+        arguments[field] = invalid_value
+        with pytest.raises(CodexNativeImageGenError):
+            NativeImageGenPlanRequest.from_mcp_arguments(arguments)
+
+
 def test_plain_user_text_is_not_secret_scanned_but_nested_secret_keys_are_rejected() -> None:
     request = NativeImageGenPlanRequest.from_mcp_arguments(
         _arguments(requested_image_count=1, user_input="Make an image about the literal phrase api_key in a programming textbook.")
