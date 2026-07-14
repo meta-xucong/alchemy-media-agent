@@ -86,6 +86,144 @@ def _requires_apparel_evidence_dimensions(
     return isinstance(profile, dict) and bool(profile.get("applies"))
 
 
+def _compact_specialized_project_context(project_context: dict[str, object]) -> dict[str, object]:
+    """Keep continuation intent, never transport provider/local-storage history."""
+
+    compact: dict[str, object] = {}
+    goal = _compact_text(project_context.get("goal_summary"), 480)
+    if goal:
+        compact["goal_summary"] = goal
+    tones = _compact_text_list(project_context.get("confirmed_visual_tone"), limit=6, item_limit=140)
+    if tones:
+        compact["confirmed_visual_tone"] = tones
+    negatives = _compact_text_list(project_context.get("negative_direction_notes"), limit=6, item_limit=220)
+    if negatives:
+        compact["negative_direction_notes"] = negatives
+    selected_ids = _compact_reference_ids(project_context.get("selected_output_assets"), limit=6)
+    if selected_ids:
+        compact["selected_output_ids"] = selected_ids
+    return compact
+
+
+def _compact_specialized_assets(items: list[dict[str, object]], *, limit: int = 8) -> list[dict[str, object]]:
+    compact: list[dict[str, object]] = []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        asset_id = _compact_text(
+            item.get("asset_id") or item.get("asset_ref_id") or item.get("output_id") or item.get("reference_id"),
+            180,
+        )
+        if not asset_id:
+            continue
+        value: dict[str, object] = {"asset_id": asset_id}
+        for key in ("role", "use_policy", "strength"):
+            text = _compact_text(item.get(key), 120)
+            if text:
+                value[key] = text
+        locks = _compact_text_list(item.get("lock_targets"), limit=8, item_limit=80)
+        if locks:
+            value["lock_targets"] = locks
+        compact.append(value)
+    return compact
+
+
+def _compact_specialized_product_profile(product_profile: dict[str, object]) -> dict[str, object]:
+    allowed = (
+        "product_name",
+        "product_category",
+        "materials",
+        "color",
+        "dimensions",
+        "must_keep_facts",
+        "core_selling_points",
+        "avoid_claims",
+        "claims",
+    )
+    compact: dict[str, object] = {}
+    for key in allowed:
+        value = product_profile.get(key)
+        if isinstance(value, list):
+            values = _compact_text_list(value, limit=10, item_limit=220)
+            if values:
+                compact[key] = values
+        else:
+            text = _compact_text(value, 300)
+            if text:
+                compact[key] = text
+    return compact
+
+
+def _compact_reference_ids(value: object, *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    ids: list[str] = []
+    for item in value[:limit]:
+        if not isinstance(item, dict):
+            continue
+        identifier = _compact_text(item.get("output_id") or item.get("asset_id") or item.get("asset_ref_id"), 180)
+        if identifier:
+            ids.append(identifier)
+    return list(dict.fromkeys(ids))
+
+
+def _compact_text_list(value: object, *, limit: int, item_limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    compact = [_compact_text(item, item_limit) for item in value[:limit]]
+    return list(dict.fromkeys(item for item in compact if item))
+
+
+def _compact_text(value: object, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _compact_specialized_payload(
+    request: BrainRunRequest,
+    *,
+    ecommerce_context: dict[str, object] | None,
+    photography_context: dict[str, object] | None,
+) -> dict[str, object]:
+    """Build the minimal evidence envelope for an LLM-first specialized run.
+
+    The Brain needs user intent, frozen output cardinality, factual/reference
+    evidence, and template-specific non-creative constraints.  Full project
+    snapshots, local paths, catalog dumps, and pre-activation traces neither
+    improve its creative direction nor belong in a remote request.
+    """
+
+    policy = request.template_capability_policy
+    payload: dict[str, object] = {
+        "task": "prepare_pre_generation_image_reasoning",
+        "stage": request.stage,
+        "user_input": request.user_input,
+        "scenario_id": request.scenario_id,
+        "template_id": request.template_id,
+        "project_id": request.project_id,
+        "requested_image_count": request.requested_image_count,
+        "requested_image_size": request.requested_image_size,
+        "reasoning_depth": request.reasoning_depth,
+        "project_context": _compact_specialized_project_context(request.project_context),
+        "selected_output_assets": _compact_specialized_assets(request.selected_output_assets),
+        "reference_assets": _compact_specialized_assets(request.reference_assets),
+        "uploaded_assets": _compact_specialized_assets(request.uploaded_assets),
+        "product_profile": _compact_specialized_product_profile(request.product_profile),
+        "template_capability_policy": {
+            "policy_id": policy.policy_id,
+            "deliverable_role_owner": policy.deliverable_role_owner,
+            "creative_direction_owner": policy.metadata.get("creative_direction_owner"),
+            "requires_remote_creative_brain": True,
+        },
+    }
+    if ecommerce_context:
+        payload["ecommerce_creative_context"] = ecommerce_context
+        payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
+    if photography_context:
+        payload["photography_creative_context"] = photography_context
+        payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
+    return payload
+
+
 def build_remote_payload(request: BrainRunRequest) -> str:
     payload = {
         "task": "prepare_pre_generation_image_reasoning",
@@ -234,6 +372,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
     if isinstance(photography_context, dict) and photography_context:
         payload["photography_creative_context"] = photography_context
         payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
+    if request.template_capability_policy.requires_remote_creative_brain:
+        payload = _compact_specialized_payload(
+            request,
+            ecommerce_context=ecommerce_context if isinstance(ecommerce_context, dict) else None,
+            photography_context=photography_context if isinstance(photography_context, dict) else None,
+        )
     if not request.capability_catalog:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)

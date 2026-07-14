@@ -136,6 +136,47 @@ def test_required_remote_photography_contract_uses_compact_schema() -> None:
     assert "strictly valid JSON" in payload["remote_response_contract"]
 
 
+def test_required_remote_specialized_payload_keeps_only_relevant_evidence() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    request = BrainRunRequest(
+        user_input="Create one product image from the supplied bottle facts.",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        project_context={
+            "goal_summary": "Preserve the approved bottle.",
+            "negative_direction_notes": ["No claims"],
+            "selected_output_assets": [{"output_id": "v3_output_selected", "file_path": "D:/private/selected.png"}],
+            "general_suite_role_plan": {"roles": ["must_not_reach_brain"]},
+        },
+        uploaded_assets=[{"asset_id": "product_reference", "role": "product", "file_path": "D:/private/product.jpg"}],
+        reference_assets=[{"asset_ref_id": "product_reference", "use_policy": "product_identity", "uri": "private://asset"}],
+        product_profile={"product_name": "Pink bottle", "must_keep_facts": ["cork", "pink liquid"]},
+        requested_image_count=1,
+        capability_catalog={"private_capability": {"internal": True}},
+        pre_activation_capabilities={"private_trace": {"file_path": "D:/private/trace.json"}},
+        metadata={
+            "ecommerce_creative_context": {
+                "product_truth": {"hard_facts": ["cork", "pink liquid"]},
+                "platform_constraints": {"content_constraints": ["no claim"]},
+            }
+        },
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    payload = json.loads(build_remote_payload(request))
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["project_context"]["selected_output_ids"] == ["v3_output_selected"]
+    assert payload["reference_assets"] == [{"asset_id": "product_reference", "use_policy": "product_identity"}]
+    assert payload["uploaded_assets"] == [{"asset_id": "product_reference", "role": "product"}]
+    assert payload["ecommerce_creative_context"]["product_truth"]["hard_facts"] == ["cork", "pink liquid"]
+    assert "file_path" not in serialized
+    assert "private_capability" not in serialized
+    assert "pre_activation_capabilities" not in serialized
+    assert "general_suite_role_plan" not in serialized
+
+
 def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     adapter = V3LLMBrainAdapter()
