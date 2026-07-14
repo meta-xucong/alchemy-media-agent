@@ -58,7 +58,10 @@ class V3LLMBrainProvider:
         try:
             from openai import OpenAI
 
-            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url)
+            # Central Brain has one bounded remote attempt.  SDK-level retries
+            # would silently multiply a logical request and hide the actual
+            # upstream terminal state from the specialized fail-closed gate.
+            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
             client = OpenAI(**kwargs)
             response = client.responses.create(
                 model=self.model,
@@ -95,7 +98,9 @@ class V3LLMBrainProvider:
         try:
             from openai import OpenAI
 
-            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url)
+            # Keep the DeepSeek-compatible transport to the same one-attempt
+            # contract as Responses and the managed image gateway.
+            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
             client = OpenAI(**kwargs)
             response = client.chat.completions.create(
                 model=self.model,
@@ -189,13 +194,13 @@ def _settings_value(name: str) -> Any:
         return None
 
 
-def _openai_client_kwargs(*, api_key: str, base_url: str | None) -> dict[str, Any]:
+def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:
     try:
         from app.config import openai_sdk_client_kwargs
 
-        return openai_sdk_client_kwargs(api_key=api_key, base_url=base_url)
+        return openai_sdk_client_kwargs(api_key=api_key, base_url=base_url, **extra)
     except Exception:
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key, **extra}
         if base_url:
             kwargs["base_url"] = base_url
         return kwargs
