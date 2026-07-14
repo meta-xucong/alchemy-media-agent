@@ -44,6 +44,17 @@ class V3LLMBrainProvider:
 
     def _run_openai_compatible(self, request: BrainRunRequest) -> dict[str, Any]:
         api_key, base_url = self._credentials()
+        # DeepSeek is OpenAI-compatible but its deployed endpoint exposes the
+        # broadly supported Chat Completions contract rather than the newer
+        # Responses contract.  Choosing the transport by the declared Brain
+        # provider keeps an image gateway credential from deciding how the
+        # Central Brain talks to its own remote model.
+        if self.provider == "deepseek":
+            return self._run_openai_chat_completions(
+                api_key=api_key,
+                base_url=base_url,
+                request=request,
+            )
         try:
             from openai import OpenAI
 
@@ -62,6 +73,43 @@ class V3LLMBrainProvider:
             text = getattr(response, "output_text", None) or ""
             if not text:
                 text = _response_text_from_openai(response)
+            return _loads_json_object(text)
+        except Exception as exc:
+            raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
+
+    def _run_openai_chat_completions(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        request: BrainRunRequest,
+    ) -> dict[str, Any]:
+        """Run a JSON-only Central Brain request through Chat Completions.
+
+        This is a remote-provider transport adaptation, not a deterministic
+        creative fallback.  Callers still receive a provider error and
+        specialized templates still fail closed if the remote answer is absent
+        or violates its frozen image-set contract.
+        """
+
+        try:
+            from openai import OpenAI
+
+            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url)
+            client = OpenAI(**kwargs)
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": build_remote_payload(request)},
+                ],
+                response_format={"type": "json_object"},
+                timeout=self.timeout,
+                max_tokens=self.max_tokens,
+            )
+            choices = getattr(response, "choices", None) or []
+            message = getattr(choices[0], "message", None) if choices else None
+            text = getattr(message, "content", None) or ""
             return _loads_json_object(text)
         except Exception as exc:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc

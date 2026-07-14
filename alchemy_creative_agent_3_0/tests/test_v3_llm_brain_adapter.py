@@ -1,4 +1,6 @@
 import base64
+import sys
+from types import SimpleNamespace
 from io import BytesIO
 from pathlib import Path
 
@@ -344,6 +346,55 @@ def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monk
     api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
     assert api_key == "deepseek-test-key"
     assert base_url == "https://brain.example.test/v1"
+
+
+def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypatch) -> None:
+    """DeepSeek remains a remote Brain without depending on Responses support."""
+
+    from app.config import settings
+
+    calls: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls["chat_kwargs"] = kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"remote": true}'))]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            calls["client_kwargs"] = kwargs
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        @property
+        def responses(self):
+            raise AssertionError("DeepSeek Brain must not use the Responses transport")
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    provider = V3LLMBrainProvider()
+    result = provider._run_openai_compatible(  # noqa: SLF001 - provider transport contract
+        BrainRunRequest(user_input="Create one remote photography direction.")
+    )
+
+    assert result == {"remote": True}
+    assert calls["client_kwargs"] == {
+        "api_key": "deepseek-test-key",
+        "base_url": "https://brain.example.test/v1",
+    }
+    chat_kwargs = calls["chat_kwargs"]
+    assert isinstance(chat_kwargs, dict)
+    assert chat_kwargs["model"] == "deepseek-primary"
+    assert chat_kwargs["response_format"] == {"type": "json_object"}
 
 
 def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:
