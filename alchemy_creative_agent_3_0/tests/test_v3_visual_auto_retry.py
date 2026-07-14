@@ -43,9 +43,17 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
 
     internal_result = _internal_generation_result(service, created.job_id)
     retry_summary = internal_result.metadata["visual_auto_retry"]
-    internal_candidates = service._candidate_summaries(internal_result)  # noqa: SLF001
-    retry_candidates = [candidate for candidate in internal_candidates if candidate.metadata.get("visual_auto_retry_output")]
-    original_candidates = [candidate for candidate in internal_candidates if not candidate.metadata.get("visual_auto_retry_output")]
+    internal_assets = internal_result.asset_pack.assets
+    retry_candidates = [
+        asset
+        for asset in internal_assets
+        if asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
+    ]
+    original_candidates = [
+        asset
+        for asset in internal_assets
+        if not asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
+    ]
 
     assert generated.status == ProductJobStatusValue.GENERATED
     assert retry_summary["enabled"] is True
@@ -55,10 +63,13 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
     assert "visible_text_artifact" in retry_summary["issue_codes"]
     assert original_candidates
     assert retry_candidates
-    assert {candidate.candidate_id for candidate in original_candidates}.isdisjoint(
-        {candidate.candidate_id for candidate in retry_candidates}
+    assert {candidate.metadata["selected_candidate_id"] for candidate in original_candidates}.isdisjoint(
+        {candidate.metadata["selected_candidate_id"] for candidate in retry_candidates}
     )
-    assert all(candidate.metadata["visual_auto_retry_attempt"] == 1 for candidate in retry_candidates)
+    assert all(
+        candidate.metadata["candidate_metadata"]["visual_auto_retry_attempt"] == 1
+        for candidate in retry_candidates
+    )
     assert generated.metadata["visual_auto_retry"]["append_only"] is True
     assert "retry_patch" not in generated.metadata["visual_auto_retry"]["records"][0]
 
@@ -163,8 +174,10 @@ def test_visual_auto_retry_skips_empty_patch_without_provider_loop(tmp_path) -> 
     assert retry_summary["executed_count"] == 0
     assert retry_summary["records"][0]["status"] == "skipped"
     assert retry_summary["records"][0]["blocked_reason"] == "empty_retry_patch"
-    internal_candidates = service._candidate_summaries(internal_result)  # noqa: SLF001
-    assert not any(candidate.metadata.get("visual_auto_retry_output") for candidate in internal_candidates)
+    assert not any(
+        candidate.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
+        for candidate in internal_result.asset_pack.assets
+    )
 
 
 def test_visual_auto_retry_is_off_by_default_in_explore_mode(tmp_path) -> None:

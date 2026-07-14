@@ -4504,7 +4504,9 @@ class V3ProductApiService:
                 "balance_adapter": self.balance_adapter.adapter_name,
                 "selected_vertical_pack": result.metadata.get("selected_vertical_pack"),
                 "scenario_id": result.metadata.get("scenario_id"),
-                "shared_capabilities": result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run),
+                "shared_capabilities": self._public_metadata_projection(
+                    result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run)
+                ),
                 "visual_auto_retry": public_visual_retry,
                 "post_generation_review": public_review,
                 "text_pixel_delivery": result.metadata.get("text_pixel_delivery", {}),
@@ -4588,6 +4590,48 @@ class V3ProductApiService:
             "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
             "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
         }
+
+    @classmethod
+    def _public_metadata_projection(cls, value: Any) -> Any:
+        """Remove execution-only data from nested public Job metadata.
+
+        Capability and candidate records are intentionally verbose inside the
+        durable audit ledger. Public Job responses may retain safe facts needed
+        by existing project views, but must not recreate a prompt compiler,
+        provider trace, storage path, or retry-execution surface.
+        """
+
+        hidden_keys = {
+            "retry_patch",
+            "blocked_reason",
+            "file_path",
+            "provider_failure_retry",
+            "provider_failure_retry_exhausted",
+            "provider_reason",
+            "provider_response_summary",
+            "runtime_transport",
+            "final_provider_prompt",
+        }
+        if isinstance(value, dict):
+            projected: dict[str, Any] = {}
+            for key, nested in value.items():
+                key_text = str(key)
+                if key_text in hidden_keys or key_text.endswith("_retry_patch"):
+                    continue
+                # Capability executor stages are internal diagnostics.  A
+                # literal ``retry_patch`` stage would otherwise make the
+                # public response look as though it carries a retry payload.
+                # Keep the safe, user-facing retry summary as the sole public
+                # retry surface instead.
+                if key_text == "stages" and isinstance(nested, list):
+                    nested = [item for item in nested if str(item) != "retry_patch"]
+                projected[key_text] = cls._public_metadata_projection(nested)
+            return projected
+        if isinstance(value, list):
+            return [cls._public_metadata_projection(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._public_metadata_projection(item) for item in value]
+        return value
 
     def _empty_status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
         nav = get_navigation_entry()
@@ -5261,7 +5305,9 @@ class V3ProductApiService:
             packaged = packaged_by_id.get(asset.asset_id)
             render_manifest = packaged.metadata.get("render_manifest") if packaged else None
             selected_candidate_id = packaged.metadata.get("selected_candidate_id") if packaged else None
-            candidate_metadata = packaged.metadata.get("candidate_metadata", {}) if packaged else {}
+            candidate_metadata = self._public_metadata_projection(
+                packaged.metadata.get("candidate_metadata", {}) if packaged else {}
+            )
             item_status = "generated" if selected_candidate_id else status.value
             if status == ProductJobStatusValue.SELECTED and selected_candidate_id:
                 item_status = "selected"
@@ -5283,7 +5329,7 @@ class V3ProductApiService:
                     metadata={
                         "requires_text_overlay": asset.requires_text_overlay,
                         "requires_brand_consistency": asset.requires_brand_consistency,
-                        "asset_metadata": dict(asset.metadata),
+                        "asset_metadata": self._public_metadata_projection(dict(asset.metadata)),
                         "ecommerce_slot": asset.metadata.get("ecommerce_slot"),
                         **self._legacy_ecommerce_recipe_metadata(asset.metadata),
                         "candidate_metadata": candidate_metadata,
@@ -5309,8 +5355,10 @@ class V3ProductApiService:
                 continue
             report = evals_by_candidate_id.get(candidate_id)
             asset_spec = assets_by_id.get(asset.asset_id)
-            candidate_metadata = asset.metadata.get("candidate_metadata", {})
-            asset_metadata = dict(asset_spec.metadata) if asset_spec else dict(asset.metadata.get("asset_metadata", {}))
+            candidate_metadata = self._public_metadata_projection(asset.metadata.get("candidate_metadata", {}))
+            asset_metadata = self._public_metadata_projection(
+                dict(asset_spec.metadata) if asset_spec else dict(asset.metadata.get("asset_metadata", {}))
+            )
             candidates.append(
                 CandidateSummary(
                     candidate_id=candidate_id,

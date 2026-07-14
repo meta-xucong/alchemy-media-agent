@@ -204,6 +204,31 @@ def test_public_review_projection_hides_retry_prompt_and_upstream_failure_detail
     assert "retry_patch" not in inspection
 
 
+def test_public_job_status_redacts_nested_retry_execution_data_but_keeps_durable_audit() -> None:
+    service, _, _ = _service("public_retry_redaction")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+
+    public_status = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "force_visual_retry_issue_codes": ["visible_text_artifact"],
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+    public_payload = public_status.model_dump_json()
+    record = service.job_store.get(created.job_id)
+
+    assert record is not None and record.generation_result is not None
+    assert "retry_patch" in str(record.generation_result.metadata["visual_auto_retry"])
+    assert "retry_patch" not in public_payload
+    assert "blocked_reason" not in public_payload
+    assert "file_path" not in public_payload
+    assert public_status.metadata["visual_auto_retry"]["append_only"] is True
+
+
 def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_reopen_it() -> None:
     service, _, _ = _service("gateway_background_timeout")
     created = service.create_job({"user_input": "Create one clean still-life image."})
