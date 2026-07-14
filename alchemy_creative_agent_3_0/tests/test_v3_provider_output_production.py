@@ -300,6 +300,140 @@ def test_production_provider_empty_result_is_auditable_single_request_failure(tm
         "sdk_max_retries": 0,
         "client_timeout_seconds": 660.0,
     }
+    assert summary["final_failure_code"] == "empty_provider_output"
+    assert summary["reference_input_execution"]["operation_outcome"] == "empty_provider_output"
+
+
+def test_required_reference_admission_blocks_before_any_provider_request(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        raise AssertionError("a missing required reference must not reach the image provider")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    request = _generation_request(tmp_path / "missing-reference.png")
+    request.metadata["uploaded_assets"][0]["provider_input_required"] = True
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(request)
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert calls == []
+    summary = exc_info.value.provider_failure_retry
+    assert summary["fresh_upstream_requests"] == 0
+    assert summary["final_failure_code"] == "reference_input_unsupported"
+    assert summary["reference_input_execution"]["admission_outcome"] == "ineligible"
+    assert summary["reference_input_execution"]["reference_requirement"] == "required"
+
+
+def test_corrupt_required_reference_is_blocked_by_decoded_media_admission(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        raise AssertionError("corrupt required image data must not reach the provider")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    corrupt_path = tmp_path / "corrupt-reference.png"
+    corrupt_path.write_bytes(b"not-an-image")
+    request = _generation_request(corrupt_path)
+    request.metadata["uploaded_assets"][0]["provider_input_required"] = True
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(request)
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    audit = exc_info.value.provider_failure_retry["reference_input_execution"]
+    assert audit["admission_outcome"] == "ineligible"
+    assert audit["failure_code"] == "reference_input_unsupported"
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected_failure_code"),
+    [
+        (False, "image_generation_invalid_request_unattributed"),
+        (True, "image_edit_invalid_request_unattributed"),
+    ],
+)
+def test_generic_provider_400_stays_unattributed_by_operation(tmp_path, monkeypatch, reference, expected_failure_code) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = True
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        calls.append(provider_name)
+        raise ProviderRuntimeError(
+            "OpenAI image request failed. Error code: 400 - request may be unsuitable.",
+            provider="openai_gpt_image",
+            detail={"error_type": "invalid_request_error", "message": "request may be unsuitable"},
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        reference_path = _reference_image(tmp_path / "reference.png") if reference else None
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(_generation_request(reference_path))
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
+
+    assert calls == ["openai_gpt_image"]
+    summary = exc_info.value.provider_failure_retry
+    assert summary["final_failure_code"] == expected_failure_code
+    assert summary["reference_input_execution"]["operation_outcome"] == "failed"
+    assert summary["reference_input_execution"]["outer_request_count"] == 1
+
+
+def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_400(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        raise ProviderRuntimeError(
+            "OpenAI image request failed.",
+            provider="openai_gpt_image",
+            detail={"error_type": "invalid_request_error", "code": "content_policy_violation"},
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(_generation_request())
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert exc_info.value.provider_failure_retry["final_failure_code"] == "provider_policy_blocked"
 
 
 def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request(tmp_path, monkeypatch) -> None:

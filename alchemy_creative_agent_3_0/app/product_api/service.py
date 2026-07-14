@@ -4607,6 +4607,7 @@ class V3ProductApiService:
             "file_path",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
+            "reference_input_execution",
             "provider_reason",
             "provider_response_summary",
             "runtime_transport",
@@ -4714,6 +4715,12 @@ class V3ProductApiService:
             "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        raw_provider_failure = status_metadata.get("provider_failure_retry")
+        if isinstance(raw_provider_failure, dict):
+            status_metadata["provider_failure_retry"] = self._public_provider_failure_retry(raw_provider_failure)
+        provider_execution = self._public_provider_execution_status(record)
+        if provider_execution is not None:
+            status_metadata["provider_execution"] = provider_execution
         specialized_execution = status_metadata.get("specialized_execution_summary")
         if isinstance(specialized_execution, dict):
             status_metadata["specialized_execution_summary"] = self._public_specialized_execution_summary(
@@ -4749,6 +4756,107 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    @staticmethod
+    def _public_provider_failure_retry(summary: dict[str, Any]) -> dict[str, Any]:
+        """Expose retry counts and classified outcomes without raw provider data."""
+
+        attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
+        return {
+            "executed_count": max(0, int(summary.get("executed_count") or 0)),
+            "max_attempts": max(0, int(summary.get("max_attempts") or 0)),
+            "fresh_upstream_requests": max(0, int(summary.get("fresh_upstream_requests") or 0)),
+            "final_status": str(summary.get("final_status") or "unknown"),
+            "final_classification": str(summary.get("final_classification") or "unknown"),
+            "final_failure_code": str(summary.get("final_failure_code") or "") or None,
+            "attempts": [
+                {
+                    "attempt": max(0, int(item.get("attempt") or 0)),
+                    "status": str(item.get("status") or "unknown"),
+                    "classification": str(item.get("classification") or "unknown"),
+                    "failure_code": str(item.get("failure_code") or "") or None,
+                    "retryable": bool(item.get("retryable")),
+                }
+                for item in attempts
+            ],
+        }
+
+    def _public_provider_execution_status(self, record: ProductJobRecord) -> dict[str, Any] | None:
+        """Derive a safe Provider/Reference execution read model for Job UI.
+
+        The durable source remains candidate metadata or the existing
+        ``provider_failure_retry`` record.  This method never changes a Job
+        state, certifies pixels, or reconstructs a Provider request.
+        """
+
+        audits: list[dict[str, Any]] = []
+        result = record.generation_result or record.planning_result
+        if result is not None:
+            for packaged in result.asset_pack.assets:
+                metadata = packaged.metadata.get("candidate_metadata") if isinstance(packaged.metadata, dict) else None
+                audit = metadata.get("reference_input_execution") if isinstance(metadata, dict) else None
+                if isinstance(audit, dict):
+                    audits.append(dict(audit))
+        if not audits:
+            summary = record.request.metadata.get("provider_failure_retry")
+            audit = summary.get("reference_input_execution") if isinstance(summary, dict) else None
+            if isinstance(audit, dict):
+                audits.append(dict(audit))
+        if not audits:
+            return None
+        operations = [self._public_provider_execution_operation(audit) for audit in audits]
+        automatic_delivery_available = bool(operations) and all(
+            bool(item["automatic_delivery_available"]) for item in operations
+        )
+        manual_confirmation_required = any(bool(item["manual_confirmation_required"]) for item in operations)
+        return {
+            "operation_count": len(operations),
+            "automatic_delivery_available": automatic_delivery_available,
+            "manual_confirmation_required": manual_confirmation_required,
+            "operations": operations,
+        }
+
+    @staticmethod
+    def _public_provider_execution_operation(audit: dict[str, Any]) -> dict[str, Any]:
+        operation_outcome = str(audit.get("operation_outcome") or "failed")
+        failure_code = str(audit.get("failure_code") or "") or None
+        reference_count = max(0, int(audit.get("reference_count") or 0))
+        if operation_outcome == "pixels_received":
+            reference_state = "ready" if reference_count else "not_applicable"
+            automatic_delivery_available = True
+            manual_confirmation_required = False
+            safe_reason_code = "provider_pixels_received"
+        elif failure_code == "reference_input_rejected":
+            reference_state = "rejected"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        elif failure_code in {"reference_input_unsupported", "reference_input_capability_mismatch", "provider_policy_blocked"}:
+            reference_state = "blocked"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        elif failure_code in {"provider_timeout", "provider_unavailable"}:
+            reference_state = "unavailable"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        else:
+            # An ambiguous invalid request or empty result has no pixels to
+            # inspect. It is blocked, not a visual-review warning and not a
+            # candidate that a user can certify manually.
+            reference_state = "blocked"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code or "provider_result_unavailable"
+        return {
+            "operation": str(audit.get("operation") or "image_generate"),
+            "reference_execution_state": reference_state,
+            "reference_count": reference_count,
+            "automatic_delivery_available": automatic_delivery_available,
+            "manual_confirmation_required": manual_confirmation_required,
+            "safe_reason_code": safe_reason_code,
+        }
 
     @staticmethod
     def _public_specialized_execution_summary(execution: dict[str, Any]) -> dict[str, Any]:

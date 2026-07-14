@@ -22,6 +22,16 @@ from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.casebook_recipes import provider_casebook_prompt_lines
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
+from app.providers.base import ProviderRuntimeError
+
+
+class ReferenceInputAdmissionError(ProviderRuntimeError, ValueError):
+    """Backward-compatible local admission failure for a required reference.
+
+    Doc109 callers already treat an unmaterialized selected reference as a
+    ``ValueError``.  The mixed type preserves that public contract while also
+    carrying the Provider-style provenance required by Doc117.
+    """
 
 
 class GenerationRequest(BaseModel):
@@ -557,7 +567,21 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
-        app_request, provider_name, reference_assets = self._build_app_request(request)
+        # A required reference is an input contract, rather than optional
+        # prompt context.  Preserve a derived failure record when local
+        # admission stops the operation before an upstream request exists.
+        # This deliberately reuses the existing Provider failure channel: it
+        # is not a second Job lifecycle or a reference-specific retry path.
+        try:
+            app_request, provider_name, reference_assets = self._build_app_request(request)
+        except Exception as exc:
+            summary = self._preflight_provider_failure_summary(request, exc)
+            self._last_provider_failure_retry_summary = summary
+            try:
+                setattr(exc, "provider_failure_retry", dict(summary))
+            except Exception:
+                pass
+            raise
         asset_plan = app_request.prompt_plan.variables.get("asset_plan") if getattr(app_request.prompt_plan, "variables", None) else {}
         asset_plan = asset_plan if isinstance(asset_plan, dict) else {}
         provider_input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan.get("provider_input_plan"), dict) else {}
@@ -567,6 +591,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         provider_reference_resolution_audit = asset_plan.get("provider_reference_resolution_audit", {})
         reference_asset_ids = _dedupe([str(asset.get("asset_id") or "") for asset in reference_assets])
         reference_asset_count = len(reference_asset_ids)
+        reference_input_execution = self._reference_input_execution_audit(
+            request,
+            reference_assets=reference_assets,
+            operation="image_edit" if reference_assets else "image_generate",
+            admission_outcome="admitted",
+        )
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
@@ -597,7 +627,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         strong_reference_closure = self._strong_reference_closure_package(request)
         mode_quality_profile = self._mode_quality_profile(request)
         auto_identity_anchor_applied = bool(request.metadata.get("auto_batch_identity_anchor_applied"))
-        result = self._run_app_provider_with_timeout_retry(provider_name, app_request, reference_assets)
+        result = self._run_app_provider_with_timeout_retry(
+            provider_name,
+            app_request,
+            reference_assets,
+            reference_input_execution=reference_input_execution,
+        )
         provider_failure_retry = dict(self._last_provider_failure_retry_summary or {})
         candidates: list[CandidateResult] = []
         warnings: list[str] = []
@@ -654,8 +689,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "fresh_upstream_requests": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
                 "final_status": "failed",
                 "final_classification": "empty_provider_output",
+                "final_failure_code": "empty_provider_output",
                 "attempts": failed_attempts,
                 "provider_response_summary": safe_summary,
+                "reference_input_execution": {
+                    **reference_input_execution,
+                    "operation_outcome": "empty_provider_output",
+                    "outer_request_count": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
+                    "failure_code": "empty_provider_output",
+                    "failure_retry_link": "provider_failure_retry",
+                    "safe_message": "The image provider returned no image pixels.",
+                },
             }
             self._last_provider_failure_retry_summary = dict(provider_failure_retry)
             error = ProviderRuntimeError(
@@ -728,6 +772,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
                     "provider_failure_retry": provider_failure_retry,
+                    "reference_input_execution": {
+                        **reference_input_execution,
+                        "operation_outcome": "pixels_received",
+                        "outer_request_count": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
+                        "failure_code": None,
+                        "failure_retry_link": "provider_failure_retry",
+                        "safe_message": "Image pixels were received from the provider.",
+                    },
                     "api_operation": output.get("api_operation"),
                     "input_fidelity_requested": output.get("input_fidelity_requested"),
                     "input_fidelity_required": bool(output.get("input_fidelity_required")),
@@ -805,6 +857,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                         "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                         "provider_failure_retry": provider_failure_retry,
+                        "reference_input_execution": {
+                            **reference_input_execution,
+                            "operation_outcome": "pixels_received",
+                            "outer_request_count": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
+                            "failure_code": None,
+                            "failure_retry_link": "provider_failure_retry",
+                            "safe_message": "Image pixels were received from the provider.",
+                        },
                         "api_operation": output.get("api_operation"),
                         "input_fidelity_requested": output.get("input_fidelity_requested"),
                         "input_fidelity_required": bool(output.get("input_fidelity_required")),
@@ -875,6 +935,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "strong_reference_closure_package": strong_reference_closure,
                 "mode_quality_profile": mode_quality_profile,
                 "provider_failure_retry": provider_failure_retry,
+                "reference_input_execution": {
+                    **reference_input_execution,
+                    "operation_outcome": "pixels_received",
+                    "outer_request_count": max(1, int(provider_failure_retry.get("fresh_upstream_requests") or 0)),
+                    "failure_code": None,
+                    "failure_retry_link": "provider_failure_retry",
+                    "safe_message": "Image pixels were received from the provider.",
+                },
                 "api_operations": [output.get("api_operation") for output in outputs if output.get("api_operation")],
                 "input_fidelity_requested": next(
                     (output.get("input_fidelity_requested") for output in outputs if output.get("input_fidelity_requested")),
@@ -896,7 +964,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         provider = self._app_provider(provider_name)
         return await provider.generate(app_request)
 
-    def _run_app_provider_with_timeout_retry(self, provider_name: str, app_request, reference_assets: list[dict[str, Any]]):
+    def _run_app_provider_with_timeout_retry(
+        self,
+        provider_name: str,
+        app_request,
+        reference_assets: list[dict[str, Any]],
+        *,
+        reference_input_execution: dict[str, Any],
+    ):
         timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
         max_attempts = self._app_provider_max_attempts()
         execution_audit = self._provider_execution_audit(
@@ -916,6 +991,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "reference_asset_count": len(reference_assets),
             "provider_prompt_chars": provider_prompt_chars,
             "execution_audit": execution_audit,
+            "reference_input_execution": dict(reference_input_execution),
         }
         for attempt in range(1, max_attempts + 1):
             retry_metadata = self._provider_failure_retry_metadata(
@@ -939,17 +1015,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "reference_asset_count": len(reference_assets),
                     "provider_prompt_chars": provider_prompt_chars,
                     "execution_audit": execution_audit,
+                    "reference_input_execution": {
+                        **reference_input_execution,
+                        "operation_outcome": "pixels_received",
+                        "outer_request_count": attempt,
+                        "failure_code": None,
+                        "failure_retry_link": "provider_failure_retry",
+                        "safe_message": "Image pixels were received from the provider.",
+                    },
                 }
                 return result
             except BaseException as exc:
                 last_error = exc
                 classification = self._classify_provider_failure(exc)
+                failure_code = self._provider_failure_code(exc, reference_assets=reference_assets)
                 retryable = classification in {"retryable_provider_failure", "unknown_retryable_failure"}
                 attempts.append(
                     {
                         "attempt": attempt,
                         "status": "failed",
                         "classification": classification,
+                        "failure_code": failure_code,
                         "error_type": exc.__class__.__name__,
                         "message": self._provider_failure_message(exc),
                         "retryable": retryable,
@@ -967,6 +1053,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "provider_prompt_chars": provider_prompt_chars,
                         "execution_audit": execution_audit,
                         "final_classification": classification,
+                        "final_failure_code": failure_code,
+                        "reference_input_execution": {
+                            **reference_input_execution,
+                            "operation_outcome": "failed",
+                            "outer_request_count": attempt,
+                            "failure_code": failure_code,
+                            "failure_retry_link": "provider_failure_retry",
+                            "safe_message": self._safe_provider_failure_message(failure_code),
+                        },
                     }
                     try:
                         setattr(exc, "provider_failure_retry", dict(self._last_provider_failure_retry_summary))
@@ -1104,6 +1199,100 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return "retryable_provider_failure"
         return "unknown_retryable_failure"
 
+    def _provider_failure_code(
+        self,
+        exc: BaseException,
+        *,
+        reference_assets: list[dict[str, Any]],
+    ) -> str:
+        """Classify a terminal materialization failure without guessing policy.
+
+        The existing retry classifier intentionally stays coarse because it
+        owns transport behaviour.  This narrower code is provenance only: a
+        generic HTTP 400 must remain unattributed unless its structured error
+        evidence explicitly identifies a reference or policy decision.
+        """
+
+        detail = getattr(exc, "detail", None)
+        detail = dict(detail) if isinstance(detail, dict) else {}
+        declared = str(detail.get("reference_input_failure_code") or "").strip()
+        if declared in {
+            "reference_input_unsupported",
+            "reference_input_capability_mismatch",
+            "reference_input_rejected",
+        }:
+            return declared
+
+        code = str(getattr(exc, "code", "") or detail.get("code") or detail.get("error_code") or "").lower()
+        detail_text = " ".join(str(value) for value in detail.values() if value is not None).lower()
+        message = f"{exc.__class__.__name__} {code} {str(exc)} {detail_text}".lower()
+        has_references = bool(reference_assets)
+
+        # A policy conclusion requires an explicit provider signal.  Do not
+        # infer it from a child, a garment, an opaque 400, or the word
+        # "unsuitable" in an otherwise ambiguous gateway message.
+        explicit_policy_markers = (
+            "content_policy_violation",
+            "content policy violation",
+            "safety_policy_violation",
+            "safety policy violation",
+            "policy_violation",
+        )
+        if any(marker in message for marker in explicit_policy_markers):
+            return "provider_policy_blocked"
+
+        if "providercapabilitymismatcherror" in message or "provider_capability_mismatch" in message:
+            return "reference_input_capability_mismatch" if has_references else "provider_unavailable"
+
+        reference_markers = (
+            "invalid uploaded asset",
+            "reference image rejected",
+            "invalid reference image",
+            "unsupported reference image",
+            "reference input rejected",
+        )
+        if has_references and any(marker in message for marker in reference_markers):
+            return "reference_input_rejected"
+
+        timeout_markers = ("timeouterror", "timeout", "timed out", "gateway timeout", "read timeout")
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(marker in message for marker in timeout_markers):
+            return "provider_timeout"
+
+        unavailable_markers = (
+            "connection",
+            "temporary unavailable",
+            "bad gateway",
+            "upstream request failed",
+            "502",
+            "503",
+            "504",
+            "500",
+        )
+        if any(marker in message for marker in unavailable_markers):
+            return "provider_unavailable"
+
+        # Invalid-request variants remain intentionally unattributed.  The
+        # operation is known, but the gateway may have rejected its prompt,
+        # parameter, reference, or its own transport wrapper.
+        if "400" in message or "bad request" in message or "invalid_request" in message:
+            return "image_edit_invalid_request_unattributed" if has_references else "image_generation_invalid_request_unattributed"
+        return "provider_unavailable"
+
+    @staticmethod
+    def _safe_provider_failure_message(failure_code: str) -> str:
+        messages = {
+            "reference_input_unsupported": "The supplied reference image could not be admitted by the configured image route.",
+            "reference_input_capability_mismatch": "The configured image route cannot accept the required reference image.",
+            "reference_input_rejected": "The image provider rejected the submitted reference input.",
+            "image_edit_invalid_request_unattributed": "The image-edit request was rejected before image pixels were returned.",
+            "image_generation_invalid_request_unattributed": "The image-generation request was rejected before image pixels were returned.",
+            "provider_policy_blocked": "The image provider blocked this request before image pixels were returned.",
+            "provider_timeout": "The image provider timed out before image pixels were returned.",
+            "provider_unavailable": "The image provider was unavailable before image pixels were returned.",
+            "empty_provider_output": "The image provider returned no image pixels.",
+        }
+        return messages.get(failure_code, "The image provider did not return image pixels.")
+
     def _provider_failure_message(self, exc: BaseException) -> str:
         message = str(exc).strip() or exc.__class__.__name__
         detail = getattr(exc, "detail", None)
@@ -1112,6 +1301,136 @@ class ProductionImageGenerationProvider(GenerationProvider):
             if detail_message and detail_message not in message:
                 message = f"{message} {detail_message}"
         return message[:500]
+
+    def _preflight_provider_failure_summary(
+        self,
+        request: GenerationRequest,
+        exc: BaseException,
+    ) -> dict[str, Any]:
+        """Attach local reference-admission failures to the existing ledger."""
+
+        audit = request.metadata.get("provider_reference_resolution_audit")
+        audit = dict(audit) if isinstance(audit, dict) else {}
+        raw_assets = self._raw_reference_assets(request)
+        operation = "image_edit" if raw_assets else "image_generate"
+        failure_code = self._provider_failure_code(exc, reference_assets=raw_assets)
+        reference_execution = self._reference_input_execution_audit(
+            request,
+            reference_assets=raw_assets,
+            operation=operation,
+            admission_outcome="ineligible" if failure_code == "reference_input_unsupported" else "admitted",
+        )
+        reference_execution = {
+            **reference_execution,
+            "operation_outcome": "failed",
+            "outer_request_count": 0,
+            "failure_code": failure_code,
+            "failure_retry_link": "provider_failure_retry",
+            "safe_message": self._safe_provider_failure_message(failure_code),
+        }
+        if audit.get("required_reference_unresolved"):
+            reference_execution["admission_outcome"] = "ineligible"
+            reference_execution["reference_requirement"] = "required"
+        return {
+            "executed_count": 0,
+            "max_attempts": 0,
+            "fresh_upstream_requests": 0,
+            "final_status": "failed",
+            "final_classification": "non_retryable_provider_failure",
+            "final_failure_code": failure_code,
+            "attempts": [
+                {
+                    "attempt": 0,
+                    "status": "failed",
+                    "classification": "non_retryable_provider_failure",
+                    "failure_code": failure_code,
+                    "error_type": exc.__class__.__name__,
+                    "message": self._provider_failure_message(exc),
+                    "retryable": False,
+                }
+            ],
+            "reference_asset_count": len(raw_assets),
+            "execution_audit": {
+                "gateway_managed_failover": False,
+                "operation": operation,
+                "preflight": True,
+            },
+            "reference_input_execution": reference_execution,
+        }
+
+    @staticmethod
+    def _raw_reference_assets(request: GenerationRequest) -> list[dict[str, Any]]:
+        """Read declared reference evidence without materializing or mutating it."""
+
+        values: list[Any] = []
+        for source in (
+            request.metadata.get("reference_assets"),
+            request.metadata.get("uploaded_assets"),
+            request.generation_plan.metadata.get("reference_assets"),
+            request.generation_plan.metadata.get("uploaded_assets"),
+        ):
+            if isinstance(source, list):
+                values.extend(source)
+        records: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in values:
+            try:
+                record = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+            except (TypeError, ValueError):
+                continue
+            identity = (
+                str(record.get("asset_id") or record.get("output_id") or record.get("reference_id") or ""),
+                str(record.get("file_path") or ""),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            records.append(record)
+        return records
+
+    def _reference_input_execution_audit(
+        self,
+        request: GenerationRequest,
+        *,
+        reference_assets: list[dict[str, Any]],
+        operation: str,
+        admission_outcome: str,
+    ) -> dict[str, Any]:
+        """Create a safe, derived Doc117 audit projection for one operation."""
+
+        reference_ids = [str(asset.get("asset_id") or asset.get("output_id") or "") for asset in reference_assets]
+        required = any(
+            bool(asset.get("provider_input_required"))
+            or bool((asset.get("metadata") or {}).get("provider_input_required"))
+            for asset in reference_assets
+            if isinstance(asset, dict)
+        )
+        try:
+            from app.config import settings as app_settings
+
+            gateway_managed = bool(getattr(app_settings, "openai_image_gateway_managed_failover", False))
+        except Exception:
+            gateway_managed = False
+        return {
+            "schema_version": "v3_reference_input_execution_v1",
+            "delivery_binding_id": stable_id(
+                "reference_materialization",
+                request.metadata.get("job_id"),
+                request.generation_plan.asset_id,
+                *reference_ids,
+            ),
+            "admission_outcome": admission_outcome,
+            "operation_outcome": "submitted" if admission_outcome == "admitted" else "failed",
+            "reference_requirement": "required" if required else "optional" if reference_assets else "not_applicable",
+            "operation": operation,
+            "reference_count": len(reference_assets),
+            "transport_profile": "openai_gpt_image",
+            "request_budget_owner": "gateway" if gateway_managed else "direct_provider",
+            "outer_request_count": 0,
+            "failure_code": None,
+            "failure_retry_link": None,
+            "safe_message": None,
+        }
 
     def _build_app_request(self, request: GenerationRequest):
         from app import schemas as app_schemas
@@ -1278,11 +1597,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "retained": [],
             "suppressed": [],
             "unresolved": [],
+            "required_unavailable": [],
         }
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             path = data.get("file_path")
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            provider_input_required = bool(data.get("provider_input_required") or metadata.get("provider_input_required"))
             source_type = str(data.get("source_type") or metadata.get("source_type") or "")
             source_id = str(
                 data.get("output_id")
@@ -1296,7 +1617,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 is_selected_generated
                 and (
                     request.metadata.get("project_id")
-                    or data.get("provider_input_required")
+                    or provider_input_required
                     or metadata.get("selected_project_anchor")
                 )
             )
@@ -1321,17 +1642,33 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         else "selected_generated_output_not_canonical",
                     }
                 )
+                if provider_input_required:
+                    resolution_audit["required_unavailable"].append(
+                        {"source_id": source_id, "reason": "selected_generated_output_not_materialized"}
+                    )
                 continue
             if not path:
                 resolution_audit["suppressed"].append({"source_id": source_id, "reason": "missing_file_path"})
+                if provider_input_required:
+                    resolution_audit["required_unavailable"].append({"source_id": source_id, "reason": "missing_file_path"})
                 continue
             try:
                 file_path = Path(str(path))
             except TypeError:
                 resolution_audit["suppressed"].append({"source_id": source_id, "reason": "invalid_file_path"})
+                if provider_input_required:
+                    resolution_audit["required_unavailable"].append({"source_id": source_id, "reason": "invalid_file_path"})
                 continue
             if not file_path.exists() or not file_path.is_file():
                 resolution_audit["suppressed"].append({"source_id": source_id, "reason": "file_not_available"})
+                if provider_input_required:
+                    resolution_audit["required_unavailable"].append({"source_id": source_id, "reason": "file_not_available"})
+                continue
+            admitted, admission_reason = self._reference_technical_admission(file_path)
+            if not admitted:
+                resolution_audit["suppressed"].append({"source_id": source_id, "reason": admission_reason})
+                if provider_input_required:
+                    resolution_audit["required_unavailable"].append({"source_id": source_id, "reason": admission_reason})
                 continue
             resolved_path = str(file_path.resolve())
             role = str(data.get("role") or data.get("use_policy") or "unknown_reference")
@@ -1350,7 +1687,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if not existing.get("source_type") and source_type:
                     existing["source_type"] = source_type
                 existing["provider_input_required"] = bool(
-                    existing.get("provider_input_required") or data.get("provider_input_required")
+                    existing.get("provider_input_required") or provider_input_required
                 )
                 metadata = dict(existing.get("metadata") or {})
                 duplicate_ids = self._string_list(metadata.get("deduplicated_source_asset_ids"))
@@ -1379,7 +1716,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "strength": data.get("strength"),
                     "use_policy": use_policy,
                     "lock_targets": list(lock_targets),
-                    "provider_input_required": bool(data.get("provider_input_required")),
+                    "provider_input_required": provider_input_required,
                     "prompt_only_fallback": bool(data.get("prompt_only_fallback")),
                     "metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
                 }
@@ -1393,15 +1730,47 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         required_unresolved = [
             entry
-            for entry in resolution_audit["unresolved"]
+            for entry in [*resolution_audit["unresolved"], *resolution_audit["required_unavailable"]]
             if entry.get("source_id")
         ]
         resolution_audit["no_substitution"] = True
         resolution_audit["required_reference_unresolved"] = bool(required_unresolved)
         request.metadata["provider_reference_resolution_audit"] = resolution_audit
         if required_unresolved:
-            raise ValueError("A required selected generated reference is not materialized; no substitute provider input is allowed.")
+            raise ReferenceInputAdmissionError(
+                "A required reference image could not be admitted for provider materialization; no substitute provider input is allowed.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_unsupported",
+                    "required_reference_count": len(required_unresolved),
+                },
+            )
         return assets[:6]
+
+    @staticmethod
+    def _reference_technical_admission(file_path: Path) -> tuple[bool, str]:
+        """Verify that a file is real image media without judging its content.
+
+        The upstream remains the only authority for content-policy eligibility.
+        This local check guards against corrupt bytes, zero-size images, and
+        file-name/MIME spoofing before a required reference could silently
+        disappear from an image-edit request.
+        """
+
+        try:
+            if file_path.stat().st_size <= 0:
+                return False, "empty_reference_file"
+            from PIL import Image
+
+            with Image.open(file_path) as image:
+                image.verify()
+            with Image.open(file_path) as image:
+                width, height = image.size
+            if width <= 0 or height <= 0:
+                return False, "invalid_reference_dimensions"
+        except (OSError, ValueError, SyntaxError):
+            return False, "unreadable_reference_image"
+        return True, "admitted"
 
     def _apply_adaptive_reference_selection(
         self,

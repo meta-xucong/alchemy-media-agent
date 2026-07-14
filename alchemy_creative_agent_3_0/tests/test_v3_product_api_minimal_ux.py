@@ -304,6 +304,70 @@ def test_background_worker_failure_is_terminal_without_claiming_a_provider_timeo
     assert late_worker.status == ProductJobStatusValue.BLOCKED
 
 
+def test_no_pixel_provider_failure_has_safe_reference_execution_projection() -> None:
+    service, _, _ = _service("doc117_safe_provider_execution")
+    created = service.create_job({"user_input": "Create one realistic person wearing the supplied garment."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.request.metadata["provider_failure_retry"] = {
+        "executed_count": 0,
+        "max_attempts": 1,
+        "fresh_upstream_requests": 1,
+        "final_status": "failed",
+        "final_classification": "non_retryable_provider_failure",
+        "final_failure_code": "image_edit_invalid_request_unattributed",
+        "attempts": [
+            {
+                "attempt": 1,
+                "status": "failed",
+                "classification": "non_retryable_provider_failure",
+                "failure_code": "image_edit_invalid_request_unattributed",
+                "message": "upstream private explanation must not be exposed",
+                "retryable": False,
+            }
+        ],
+        "reference_input_execution": {
+            "schema_version": "v3_reference_input_execution_v1",
+            "delivery_binding_id": "internal-binding-must-not-leak",
+            "operation": "image_edit",
+            "reference_count": 1,
+            "operation_outcome": "failed",
+            "failure_code": "image_edit_invalid_request_unattributed",
+            "safe_message": "The image-edit request was rejected before image pixels were returned.",
+        },
+    }
+    service.job_store.save(record)
+
+    status = service.get_job(created.job_id)
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert all(item.selected_candidate_id is None for item in status.asset_series)
+    assert status.candidates == []
+    assert status.metadata["provider_execution"] == {
+        "operation_count": 1,
+        "automatic_delivery_available": False,
+        "manual_confirmation_required": False,
+        "operations": [
+            {
+                "operation": "image_edit",
+                "reference_execution_state": "blocked",
+                "reference_count": 1,
+                "automatic_delivery_available": False,
+                "manual_confirmation_required": False,
+                "safe_reason_code": "image_edit_invalid_request_unattributed",
+            }
+        ],
+    }
+    public_payload = status.model_dump_json()
+    assert "internal-binding-must-not-leak" not in public_payload
+    assert "upstream private explanation" not in public_payload
+    assert "image_edit_invalid_request_unattributed" in public_payload
+    assert service._public_metadata_projection(  # noqa: SLF001
+        {"reference_input_execution": {"delivery_binding_id": "internal-binding-must-not-leak"}}
+    ) == {}
+
+
 def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_job() -> None:
     output_store = V3GeneratedOutputStore(storage_root=_test_store_root("partial_output") / "outputs")
     brand_service = BrandProfileService(BrandProfileStore(_test_store_root("partial_output_brand")))

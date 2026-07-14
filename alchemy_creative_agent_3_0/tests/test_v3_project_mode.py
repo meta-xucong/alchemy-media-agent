@@ -1029,6 +1029,21 @@ def test_project_generation_blocked_records_provider_retry_timeline() -> None:
                     },
                 ],
             }
+            metadata["provider_execution"] = {
+                "operation_count": 1,
+                "automatic_delivery_available": False,
+                "manual_confirmation_required": False,
+                "operations": [
+                    {
+                        "operation": "image_edit",
+                        "reference_execution_state": "blocked",
+                        "reference_count": 1,
+                        "automatic_delivery_available": False,
+                        "manual_confirmation_required": False,
+                        "safe_reason_code": "image_edit_invalid_request_unattributed",
+                    }
+                ],
+            }
             return status.model_copy(
                 update={
                     "status": ProductJobStatusValue.BLOCKED,
@@ -1052,6 +1067,9 @@ def test_project_generation_blocked_records_provider_retry_timeline() -> None:
     assert "job_blocked" in item_types
     assert timeline["items"][-1]["summary"].startswith("上游生图暂时超时")
     assert timeline["items"][-1]["metadata"]["provider_failure_retry"]["executed_count"] == 1
+    assert timeline["items"][-1]["metadata"]["provider_execution"]["operations"][0]["safe_reason_code"] == (
+        "image_edit_invalid_request_unattributed"
+    )
 
 
 def test_selected_output_creates_active_generated_reference_and_selection_state() -> None:

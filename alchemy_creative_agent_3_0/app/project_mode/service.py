@@ -1361,6 +1361,7 @@ class V3ProjectModeService:
                 )
         elif status.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
             provider_retry = status.metadata.get("provider_failure_retry") if isinstance(status.metadata, dict) else None
+            provider_execution = status.metadata.get("provider_execution") if isinstance(status.metadata, dict) else None
             specialized_execution = (
                 status.metadata.get("specialized_execution_summary")
                 if isinstance(status.metadata, dict)
@@ -1419,6 +1420,7 @@ class V3ProjectModeService:
                     "status": str(status.status),
                     "warnings": list(status.warnings or [])[:3],
                     "provider_failure_retry": provider_retry if isinstance(provider_retry, dict) else {},
+                    "provider_execution": provider_execution if isinstance(provider_execution, dict) else {},
                     "specialized_execution_summary": specialized_execution if final_delivery_withheld else {},
                     "review_certification": review_certification if isinstance(review_certification, dict) else {},
                     "normal_project_delivery_withheld": final_delivery_withheld,
