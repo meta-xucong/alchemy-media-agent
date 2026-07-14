@@ -1,7 +1,8 @@
 # E19 Real Provider Gate C/D Acceptance Record
 
-Status: blocked pending authorized reference material and an enabled controlled
-visual-review deployment
+Status: Gate C has one controlled real-provider pass; Gate D and production
+readiness remain blocked pending the remaining human/front-end acceptance
+matrix.
 
 ## Purpose
 
@@ -106,7 +107,7 @@ The real acceptance package must also reference the automated evidence for:
 The focused test set in E18 is the baseline for this evidence. It validates
 contracts; it cannot certify a real provider output.
 
-## 2026-07-14 Preflight Record
+## 2026-07-14 Preflight Record (historical; Gate C blockers later cleared below)
 
 | Field | Result |
 | --- | --- |
@@ -125,3 +126,30 @@ This record deliberately does not infer success from credential presence, unit
 tests, General Gate D, or a single unreviewed image. Once the two blockers are
 removed, run a new controlled E19 entry and retain the full real-output
 evidence outside Git before changing any readiness state.
+
+## 2026-07-14 Controlled Gate C Evidence — one authorized product case
+
+This is a bounded development acceptance record, not a production release.
+The user explicitly authorized use of one existing V3 historical upload for
+this controlled test in the current mainline session. That authorization does
+not make the source a reusable public fixture or expand its rights beyond this
+acceptance run.
+
+| Field | Result |
+| --- | --- |
+| Main code | `origin/main@42eda8f` for the executed run; follow-up provenance-only de-duplication correction is `2875c25` |
+| Controlled runtime | local port 8017 only; Photography production gate temporarily enabled only in this controlled process; no production default changed |
+| Material authority | user-authorized historical V3 upload `v3_asset_4b12e066339a4817`; one watermark-free square bottle reference, restricted to this controlled evidence |
+| Request | explicit `ecommerce_template`; one 1024×1024 product image; preserve the bottle, cork, pink liquid, and source label without inventing/rewriting copy or claims |
+| Brain | `deepseek` / `deepseek-v4-pro-260425`; `llm_used=true`, `fallback_used=false`; exactly one natural-language direction frozen at planning and reused at generation |
+| Renderer | job `job_3c3c2a5b57`; output `v3_output_a4399af63c5f4c41a605`; `openai_gpt_image` / `gpt-image-2`; one PNG at 1024×1024 |
+| Reference path | provider-native edit path; exactly two physical provider inputs: one product-truth crop and one original, both from the same source asset; no duplicate source upload |
+| Review | shared `hybrid` inspection by `openai_compatible_vision`; `pass`, verification state `verified`, confidence `0.88`, no detected/retryable issue codes |
+| Retry/delivery | visual automatic retry intentionally disabled for the single-request gateway test; zero retry attempts were needed; one final output remained in append-only job history |
+| Persistence | final job query returned `generated`, one candidate, frozen-Brain reuse provenance, GPT Image 2 provenance, and post-generation hybrid-review evidence |
+| Human decision | mainline visual inspection found the source bottle shape, cork, pink liquid, label placement, and existing label structure preserved; a user commercial-quality signoff is still required for Gate D |
+
+The preflight blockers for this one Gate C case are therefore cleared. This
+does **not** clear Gate D, multilingual/text acceptance, the full requested
+count matrix, or the E-Commerce production gate. No static recipe, local text
+renderer, font/OCR path, or private E-Commerce review/retry path was added.
