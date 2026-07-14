@@ -4473,9 +4473,9 @@ class V3ProductApiService:
         public_visual_retry = self._public_visual_auto_retry_summary(result.metadata.get("visual_auto_retry"))
         public_review = self._public_post_generation_review(result.metadata.get("post_generation_review_package"))
         public_warnings = list(record.warnings + asset_pack.manifest.get("warnings", []))
-        if public_visual_retry.get("manual_confirmation_required"):
+        if public_visual_retry.get("manual_confirmation_required") or public_review.get("manual_confirmation_required"):
             public_warnings.append(
-                "The image was generated, but the automatic refinement did not complete; manual confirmation is required."
+                "The image was generated, but real-pixel review did not automatically certify the retained result; manual confirmation is required."
             )
         return ProductJobStatus(
             job_id=record.job_id,
@@ -4580,6 +4580,31 @@ class V3ProductApiService:
                     "detected_issues": issues,
                 }
             )
+        final_review = package.get("final_review") if isinstance(package.get("final_review"), dict) else {}
+        final_status = str(final_review.get("status") or "").strip().lower()
+        inspection_statuses = {str(item["status"] or "").strip().lower() for item in inspections}
+        certifying_modes = {"vision_model", "hybrid"}
+        automatic_delivery_certified = bool(inspections) and all(
+            str(item["mode"] or "").strip().lower() in certifying_modes
+            and str(item["status"] or "").strip().lower() in {"pass", "warning"}
+            for item in inspections
+        )
+        failed_final = final_status == "failed_final" or "fail_final" in inspection_statuses
+        has_review_result = bool(inspections) or bool(final_status)
+        manual_confirmation_required = (
+            has_review_result
+            and not automatic_delivery_certified
+            and not failed_final
+        )
+        certification_state = (
+            "blocked"
+            if failed_final
+            else "certified"
+            if automatic_delivery_certified
+            else "manual_confirmation_required"
+            if manual_confirmation_required
+            else "unverified"
+        )
         return {
             "user_visible_summary": [
                 str(line)[:300]
@@ -4589,6 +4614,14 @@ class V3ProductApiService:
             "inspections": inspections,
             "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
             "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
+            # This is deliberately a compact outcome projection.  It lets the
+            # browser distinguish a usable image from an automatically
+            # certified one without exposing provider diagnostics, retry
+            # patches, storage paths, or prompt material.
+            "final_status": final_status or "not_evaluated",
+            "certification_state": certification_state,
+            "automatic_delivery_certified": automatic_delivery_certified,
+            "manual_confirmation_required": manual_confirmation_required,
         }
 
     @classmethod

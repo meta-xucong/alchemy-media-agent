@@ -204,6 +204,55 @@ def test_public_review_projection_hides_retry_prompt_and_upstream_failure_detail
     assert "retry_patch" not in inspection
 
 
+def test_public_review_projection_requires_confirmation_after_exhausted_retryable_review() -> None:
+    raw_retry = {
+        "enabled": True,
+        "executed_count": 1,
+        "max_attempts": 1,
+        "issue_codes": ["plastic_skin"],
+        "records": [
+            {
+                "attempt_index": 1,
+                "status": "executed",
+                "reason_codes": ["plastic_skin"],
+            }
+        ],
+    }
+    raw_review = {
+        "inspections": [
+            {
+                "output_id": "retry_output",
+                "mode": "hybrid",
+                "status": "fail_retryable",
+                "verification_state": "verified",
+                "detected_issues": [
+                    {
+                        "code": "plastic_skin",
+                        "severity": "medium",
+                        "retryable": True,
+                        "message": "Skin may look too smooth.",
+                    }
+                ],
+            }
+        ],
+        "final_review": {
+            "status": "failed_after_retry",
+            "additional_retry_allowed": False,
+            "output_ids": ["retry_output"],
+        },
+    }
+
+    public_retry = V3ProductApiService._public_visual_auto_retry_summary(raw_retry)
+    public_review = V3ProductApiService._public_post_generation_review(raw_review)
+
+    assert public_retry["manual_confirmation_required"] is False
+    assert public_review["final_status"] == "failed_after_retry"
+    assert public_review["certification_state"] == "manual_confirmation_required"
+    assert public_review["automatic_delivery_certified"] is False
+    assert public_review["manual_confirmation_required"] is True
+    assert "output_ids" not in public_review
+
+
 def test_public_job_status_redacts_nested_retry_execution_data_but_keeps_durable_audit() -> None:
     service, _, _ = _service("public_retry_redaction")
     created = service.create_job({"user_input": "Create one clean still-life image."})

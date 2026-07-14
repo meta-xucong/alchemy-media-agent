@@ -3714,6 +3714,11 @@ function v3PostGenerationReviewLines(job = v3State.currentJob) {
   if (retrySummary.manual_confirmation_required) {
     lines.push("图片已生成，但自动修复未完成；用于正式交付前请人工确认细节。");
   }
+  if (review?.manual_confirmation_required) {
+    lines.push("真实像素审查尚未自动认证该结果；用于正式交付前请人工确认细节。");
+  } else if (review?.certification_state === "blocked") {
+    lines.push("真实像素审查未通过，该结果不能作为已认证交付。");
+  }
   if (!lines.length && inspections.length) {
     lines.push("V3 已检查生成结果");
   }
