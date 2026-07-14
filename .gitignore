@@ -8,6 +8,7 @@
 # Runtime-generated media, history, and logs
 .media_storage/
 .codex-longrun/
+.codex-local-mode-storage/
 src_skeleton/.media_storage/*
 src_skeleton/.media_storage/generated_images/
 src_skeleton/.media_storage/history/

@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 from typing import Any, Callable
 
-from .contracts import LocalArtifactImportRequest, LocalJobSpec, LocalModeAdapterError
+from .contracts import LocalJobSpec, LocalModeAdapterError
 from .facade import CodexLocalExecutionFacade
+from .platform_renderer import PlatformImageRenderer
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -62,18 +62,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "import_generated_candidate",
-        "description": "Import one materialized local PNG/JPEG bound to one job and frozen role.",
+        "name": "render_platform_candidate",
+        "description": "Explicitly render one frozen role through the official Platform Image API, then import its API materialization.",
         "inputSchema": {
             "type": "object",
-            "required": ["job_id", "role_id", "artifact_path", "declared_mime_type"],
+            "required": ["job_id", "role_id", "live_platform_opt_in"],
             "properties": {
                 "job_id": {"type": "string"},
                 "role_id": {"type": "string"},
-                "artifact_path": {"type": "string"},
-                "declared_mime_type": {"type": "string", "enum": ["image/png", "image/jpeg"]},
-                "declared_origin": {"type": "string", "const": "codex_desktop_image_tool"},
-                "codex_run_id": {"type": "string"},
+                "live_platform_opt_in": {"type": "boolean", "const": True},
             },
         },
     },
@@ -125,16 +122,11 @@ def _create_job(adapter: CodexLocalExecutionFacade, args: dict[str, Any]) -> Any
     )
 
 
-def _import_candidate(adapter: CodexLocalExecutionFacade, args: dict[str, Any]) -> Any:
-    candidate = adapter.import_generated_candidate(
-        LocalArtifactImportRequest(
-            job_id=str(args.get("job_id") or ""),
-            role_id=str(args.get("role_id") or ""),
-            artifact_path=Path(str(args.get("artifact_path") or "")),
-            declared_mime_type=str(args.get("declared_mime_type") or ""),
-            declared_origin=str(args.get("declared_origin") or "codex_desktop_image_tool"),
-            codex_run_id=args.get("codex_run_id"),
-        )
+def _render_platform_candidate(adapter: CodexLocalExecutionFacade, args: dict[str, Any]) -> Any:
+    candidate = adapter.render_platform_candidate(
+        str(args.get("job_id") or ""),
+        str(args.get("role_id") or ""),
+        renderer=PlatformImageRenderer(live_platform_opt_in=bool(args.get("live_platform_opt_in"))),
     )
     return candidate.storage_record()
 
@@ -148,7 +140,7 @@ def dispatch(adapter: CodexLocalExecutionFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-local-mode", "version": "0.1.0-doc117-spike"},
+            "serverInfo": {"name": "alchemy-codex-local-mode", "version": "0.2.0-doc117-b2"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -162,7 +154,7 @@ def dispatch(adapter: CodexLocalExecutionFacade, request: dict[str, Any]) -> dic
             "record_creative_direction": lambda service, value: service.record_creative_direction(
                 str(value.get("job_id") or ""), str(value.get("role_id") or ""), str(value.get("direction") or "")
             ),
-            "import_generated_candidate": _import_candidate,
+            "render_platform_candidate": _render_platform_candidate,
             "get_local_job_status": lambda service, value: service.get_local_job_status(str(value.get("job_id") or "")),
             "review_candidate": lambda service, value: service.review_candidate(
                 str(value.get("job_id") or ""), str(value.get("candidate_id") or "")
@@ -187,8 +179,9 @@ def dispatch(adapter: CodexLocalExecutionFacade, request: dict[str, Any]) -> dic
 def main() -> int:
     parser = argparse.ArgumentParser(description="Doc117 local stdio MCP bridge")
     parser.add_argument("--storage-root", default=".codex-local-mode-storage")
+    parser.add_argument("--enable-local-mode", action="store_true")
     arguments = parser.parse_args()
-    adapter = CodexLocalExecutionFacade(arguments.storage_root, enabled=True)
+    adapter = CodexLocalExecutionFacade(arguments.storage_root, enabled=arguments.enable_local_mode)
     for raw_line in sys.stdin:
         try:
             request = json.loads(raw_line)

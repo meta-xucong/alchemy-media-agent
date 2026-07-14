@@ -4,7 +4,8 @@
       "command": "python",
       "args": [
         "-m",
-        "services.alchemy_codex_local_adapter.mcp_server"
+        "services.alchemy_codex_local_adapter.mcp_server",
+        "--enable-local-mode"
       ],
       "cwd": "../.."
     }

@@ -1,100 +1,178 @@
-"""Controlled materialized-file import for the Doc117 spike."""
+"""Controlled API-response import for the Doc117 Phase B2 spike.
+
+The importer deliberately has no public path-based import method.  Only a
+``PlatformRenderedImage`` returned by the local renderer can enter its private
+staging directory, then be copied into durable Local Mode storage.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import secrets
 import shutil
 from typing import Any
 
 from .contracts import (
     ImportedLocalCandidate,
-    LocalArtifactImportRequest,
     LocalJobSpec,
     LocalModeAdapterError,
+    PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER,
+    PlatformRenderedImage,
 )
 from .provenance import imported_artifact_provenance
 
 
+@dataclass(frozen=True)
+class StagedPlatformArtifact:
+    """An in-memory capability proving importer-owned API materialization."""
+
+    control_token: str
+    source_path: Path
+    mime_type: str
+    rendered: PlatformRenderedImage
+
+
 class LocalArtifactImporter:
-    """Import one image once, with content and source-handle binding."""
+    """Import a renderer-materialized image once, with content/job/role binding."""
 
     def __init__(self, storage_root: str | Path, *, max_bytes: int = 25 * 1024 * 1024) -> None:
         self.storage_root = Path(storage_root).resolve()
         self.max_bytes = max(1, int(max_bytes))
         self._claims_path = self.storage_root / "artifact_claims.json"
+        self._staging_root = self.storage_root / "_controlled_staging" / "platform"
+        self._staged_artifacts: dict[str, StagedPlatformArtifact] = {}
 
-    def import_candidate(
-        self,
-        request: LocalArtifactImportRequest,
-        contract: LocalJobSpec,
-    ) -> ImportedLocalCandidate:
-        if request.job_id != contract.job_id:
-            raise LocalModeAdapterError("codex_local_job_binding_mismatch", "Artifact job does not match the frozen contract.")
-        if request.role_id not in contract.role_ids:
-            raise LocalModeAdapterError("codex_local_role_binding_mismatch", "Artifact role is not frozen for this job.")
+    def stage_platform_response(self, rendered: PlatformRenderedImage) -> StagedPlatformArtifact:
+        """Write API bytes into importer-owned staging; never accept caller paths."""
 
-        source_path = self._materialized_file(request.artifact_path)
-        size = source_path.stat().st_size
-        if size <= 0:
-            raise LocalModeAdapterError("codex_local_empty_artifact", "Artifact file is empty.")
-        if size > self.max_bytes:
-            raise LocalModeAdapterError("codex_local_artifact_too_large", "Artifact exceeds the local import limit.")
+        if rendered.renderer != PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER:
+            raise LocalModeAdapterError("codex_local_platform_renderer_origin_invalid", "Only the official Platform renderer may stage an artifact.")
+        if rendered.mime_type not in {"image/png", "image/jpeg"}:
+            raise LocalModeAdapterError("codex_local_platform_renderer_mime_mismatch", "Platform response MIME type is unsupported.")
+        if not rendered.image_bytes:
+            raise LocalModeAdapterError("codex_local_platform_renderer_empty_response", "Platform response did not contain image bytes.")
+        if len(rendered.image_bytes) > self.max_bytes:
+            raise LocalModeAdapterError("codex_local_artifact_too_large", "Platform image exceeds the local import limit.")
 
-        mime_type, width, height = _inspect_image(source_path)
-        if mime_type != request.declared_mime_type:
-            raise LocalModeAdapterError("codex_local_mime_mismatch", "Declared image MIME type does not match file pixels.")
-        digest = _sha256_file(source_path)
-        source_handle_digest = _source_handle_digest(source_path)
-        claims = self._load_claims()
-        self._reject_existing_claim(claims, request=request, digest=digest, source_handle_digest=source_handle_digest)
-
-        candidate_id = f"codex_local_candidate_{digest[:24]}"
-        suffix = ".png" if mime_type == "image/png" else ".jpg"
-        target = self.storage_root / "jobs" / request.job_id / "candidates" / f"{candidate_id}{suffix}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _copy_without_overwrite(source_path, target)
-        provenance = imported_artifact_provenance(
-            job_id=request.job_id,
-            project_id=contract.project_id,
-            role_id=request.role_id,
-            sha256=digest,
-            declared_origin=request.declared_origin,
-            codex_run_id=request.codex_run_id,
-        )
-        candidate = ImportedLocalCandidate(
-            candidate_id=candidate_id,
-            job_id=request.job_id,
-            role_id=request.role_id,
-            imported_path=target,
-            sha256=digest,
-            mime_type=mime_type,
-            width=width,
-            height=height,
-            provenance=provenance,
-        )
-        claims.append(
-            {
-                "job_id": request.job_id,
-                "role_id": request.role_id,
-                "candidate_id": candidate_id,
-                "sha256": digest,
-                "source_handle_digest": source_handle_digest,
-                "imported_path": str(target),
-            }
-        )
-        self._save_claims(claims)
-        return candidate
-
-    def _materialized_file(self, value: Path) -> Path:
+        self._staging_root.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(24)
+        suffix = ".png" if rendered.mime_type == "image/png" else ".jpg"
+        source_path = self._staging_root / f"platform_{token}{suffix}"
+        temporary = source_path.with_suffix(f"{suffix}.tmp")
         try:
-            path = value.resolve(strict=True)
-        except (FileNotFoundError, OSError) as exc:
-            raise LocalModeAdapterError("codex_local_artifact_missing", "Artifact must be a readable materialized local file.") from exc
-        if value.is_symlink() or not path.is_file():
-            raise LocalModeAdapterError("codex_local_artifact_not_materialized", "Artifact must be a regular local file, not a link or preview.")
-        return path
+            temporary.write_bytes(rendered.image_bytes)
+            temporary.replace(source_path)
+            detected_mime, _, _ = _inspect_image(source_path)
+        except LocalModeAdapterError:
+            source_path.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
+            raise
+        except OSError as exc:
+            source_path.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
+            raise LocalModeAdapterError("codex_local_platform_renderer_materialization_failed", "Platform image could not be materialized locally.") from exc
+        if detected_mime != rendered.mime_type:
+            source_path.unlink(missing_ok=True)
+            raise LocalModeAdapterError("codex_local_platform_renderer_mime_mismatch", "Platform response pixels did not match the requested output format.")
+
+        staged = StagedPlatformArtifact(
+            control_token=token,
+            source_path=source_path,
+            mime_type=detected_mime,
+            rendered=rendered,
+        )
+        self._staged_artifacts[token] = staged
+        return staged
+
+    def import_staged_platform_candidate(
+        self,
+        *,
+        job_id: str,
+        role_id: str,
+        contract: LocalJobSpec,
+        staged: StagedPlatformArtifact,
+    ) -> ImportedLocalCandidate:
+        """Bind one controlled staging file to exactly one frozen job role."""
+
+        if job_id != contract.job_id:
+            raise LocalModeAdapterError("codex_local_job_binding_mismatch", "Artifact job does not match the frozen contract.")
+        if role_id not in contract.role_ids:
+            raise LocalModeAdapterError("codex_local_role_binding_mismatch", "Artifact role is not frozen for this job.")
+        registered = self._staged_artifacts.get(staged.control_token)
+        if registered != staged:
+            raise LocalModeAdapterError("codex_local_external_artifact_import_forbidden", "Only importer-controlled API materializations may be imported.")
+
+        try:
+            try:
+                source_path = staged.source_path.resolve(strict=True)
+            except (FileNotFoundError, OSError) as exc:
+                raise LocalModeAdapterError("codex_local_artifact_missing", "Controlled staged artifact is no longer available.") from exc
+            if self._staging_root.resolve() not in source_path.parents or not source_path.is_file():
+                raise LocalModeAdapterError("codex_local_external_artifact_import_forbidden", "Artifact is outside controlled Platform staging.")
+            size = source_path.stat().st_size
+            if size <= 0:
+                raise LocalModeAdapterError("codex_local_empty_artifact", "Artifact file is empty.")
+            if size > self.max_bytes:
+                raise LocalModeAdapterError("codex_local_artifact_too_large", "Artifact exceeds the local import limit.")
+            mime_type, width, height = _inspect_image(source_path)
+            if mime_type != staged.mime_type:
+                raise LocalModeAdapterError("codex_local_platform_renderer_mime_mismatch", "Staged artifact MIME type changed before import.")
+            digest = _sha256_file(source_path)
+            source_handle_digest = _source_handle_digest(source_path)
+            claims = self._load_claims()
+            self._reject_existing_claim(claims, job_id=job_id, digest=digest, source_handle_digest=source_handle_digest)
+
+            candidate_id = f"codex_local_candidate_{digest[:24]}"
+            suffix = ".png" if mime_type == "image/png" else ".jpg"
+            target = self.storage_root / "jobs" / job_id / "candidates" / f"{candidate_id}{suffix}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _copy_without_overwrite(source_path, target)
+            provenance = imported_artifact_provenance(
+                job_id=job_id,
+                project_id=contract.project_id,
+                role_id=role_id,
+                sha256=digest,
+                renderer=staged.rendered.renderer,
+                renderer_model=staged.rendered.renderer_model,
+                request_summary=staged.rendered.request_summary,
+                response_summary=staged.rendered.response_summary,
+            )
+            candidate = ImportedLocalCandidate(
+                candidate_id=candidate_id,
+                job_id=job_id,
+                role_id=role_id,
+                imported_path=target,
+                sha256=digest,
+                mime_type=mime_type,
+                width=width,
+                height=height,
+                provenance=provenance,
+            )
+            claims.append(
+                {
+                    "job_id": job_id,
+                    "role_id": role_id,
+                    "candidate_id": candidate_id,
+                    "sha256": digest,
+                    "source_handle_digest": source_handle_digest,
+                    "imported_path": str(target),
+                }
+            )
+            self._save_claims(claims)
+            return candidate
+        finally:
+            self._staged_artifacts.pop(staged.control_token, None)
+            staged.source_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def reject_uncontrolled_external_import() -> None:
+        raise LocalModeAdapterError(
+            "codex_local_external_artifact_import_forbidden",
+            "Callers cannot import arbitrary system files as Local Mode artifacts.",
+        )
 
     def _load_claims(self) -> list[dict[str, Any]]:
         if not self._claims_path.exists():
@@ -117,7 +195,7 @@ class LocalArtifactImporter:
     def _reject_existing_claim(
         claims: list[dict[str, Any]],
         *,
-        request: LocalArtifactImportRequest,
+        job_id: str,
         digest: str,
         source_handle_digest: str,
     ) -> None:
@@ -126,7 +204,7 @@ class LocalArtifactImporter:
             same_content = claim.get("sha256") == digest
             if not same_source and not same_content:
                 continue
-            if str(claim.get("job_id") or "") != request.job_id:
+            if str(claim.get("job_id") or "") != job_id:
                 raise LocalModeAdapterError("codex_local_artifact_cross_job", "Artifact content or handle is already bound to another job.")
             raise LocalModeAdapterError("codex_local_artifact_duplicate", "Artifact is already imported for this local job.")
 
@@ -139,6 +217,7 @@ def _copy_without_overwrite(source: Path, target: Path) -> None:
         shutil.copyfile(source, temporary)
         temporary.replace(target)
     except OSError as exc:
+        temporary.unlink(missing_ok=True)
         raise LocalModeAdapterError("codex_local_artifact_copy_failed", "Artifact could not be copied into local storage.") from exc
 
 

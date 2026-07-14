@@ -14,12 +14,12 @@ from typing import Any
 from .artifact_import import LocalArtifactImporter
 from .contracts import (
     ImportedLocalCandidate,
-    LocalArtifactImportRequest,
     LocalJobSpec,
     LocalModeAdapterError,
     LocalModeDisabledError,
     _clean_direction,
 )
+from .platform_renderer import PlatformImageRenderer
 from .provenance import local_job_provenance, utc_now_iso
 
 
@@ -97,21 +97,59 @@ class CodexLocalExecutionFacade:
         self._save_records(records)
         return {"job_id": contract.job_id, "role_id": role_id, "recorded": True}
 
-    def import_generated_candidate(self, request: LocalArtifactImportRequest) -> ImportedLocalCandidate:
+    def render_platform_candidate(
+        self,
+        job_id: str,
+        role_id: str,
+        *,
+        renderer: PlatformImageRenderer,
+    ) -> ImportedLocalCandidate:
+        """Render/import one role through the explicitly selected Platform path."""
+
         self._require_enabled()
         records = self._load_records()
-        record = self._record_for(request.job_id, records)
+        record = self._record_for(job_id, records)
         contract = LocalJobSpec.from_storage_record(dict(record.get("contract") or {}))
         directions = list(record.get("creative_directions") or [])
-        if not any(str(item.get("role_id") or "") == request.role_id for item in directions if isinstance(item, dict)):
+        direction_entry = next(
+            (item for item in directions if isinstance(item, dict) and str(item.get("role_id") or "") == role_id),
+            None,
+        )
+        if direction_entry is None:
             raise LocalModeAdapterError("codex_local_direction_required", "Record a creative direction before importing an artifact.")
-        candidate = self._artifact_importer.import_candidate(request, contract)
+        rendered = renderer.render(direction=str(direction_entry.get("direction") or ""), role_id=role_id)
+        staged = self._artifact_importer.stage_platform_response(rendered)
+        candidate = self._artifact_importer.import_staged_platform_candidate(
+            job_id=job_id,
+            role_id=role_id,
+            contract=contract,
+            staged=staged,
+        )
         candidates = list(record.get("candidates") or [])
         candidates.append(candidate.storage_record())
         record["candidates"] = candidates
         record["status"] = "imported_not_certified"
         self._save_records(records)
         return candidate
+
+    def render_platform_candidates(
+        self,
+        job_id: str,
+        role_ids: list[str],
+        *,
+        renderer: PlatformImageRenderer,
+    ) -> list[ImportedLocalCandidate]:
+        """Run exactly one bounded API request for each explicit frozen role."""
+
+        if not role_ids or len(role_ids) != len(set(role_ids)):
+            raise LocalModeAdapterError("codex_local_invalid_role_binding", "Platform render roles must be non-empty and unique.")
+        return [self.render_platform_candidate(job_id, role_id, renderer=renderer) for role_id in role_ids]
+
+    def import_generated_candidate(self, *_: Any, **__: Any) -> None:
+        """Former Phase A path; never trust a caller-supplied artifact path."""
+
+        self._require_enabled()
+        self._artifact_importer.reject_uncontrolled_external_import()
 
     def get_local_job_status(self, job_id: str) -> dict[str, Any]:
         self._require_enabled()
@@ -130,7 +168,7 @@ class CodexLocalExecutionFacade:
                     "candidate_id": item.get("candidate_id"),
                     "role_id": item.get("role_id"),
                     "sha256": item.get("sha256"),
-                    "certification_state": "not_certified_phase_a_b",
+                    "certification_state": "not_certified_development_artifact",
                 }
                 for item in record.get("candidates") or []
                 if isinstance(item, dict)

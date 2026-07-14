@@ -37,22 +37,27 @@ def imported_artifact_provenance(
     project_id: str,
     role_id: str,
     sha256: str,
-    declared_origin: str,
-    codex_run_id: str | None,
+    renderer: str,
+    renderer_model: str,
+    request_summary: dict[str, Any],
+    response_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return provenance without inventing a provider model or API route."""
+    """Return API-proven provenance without retaining credentials or image bytes."""
 
     result = local_job_provenance(job_id=job_id, project_id=project_id)
     result.update(
         {
-            "artifact_origin": declared_origin,
+            "artifact_origin": "official_platform_image_api_materialized_response",
             "artifact_materialization": "local_file_copy",
             "artifact_sha256": f"sha256:{sha256}",
             "role_id": role_id,
-            "certification_state": "not_certified_phase_a_b",
+            "renderer": renderer,
+            "renderer_model": renderer_model,
+            "renderer_model_evidence": "official_platform_request_model",
+            "platform_request_summary": dict(request_summary),
+            "platform_response_summary": dict(response_summary),
+            "certification_state": "not_certified_development_artifact",
             "imported_at": utc_now_iso(),
         }
     )
-    if codex_run_id:
-        result["opaque_codex_run_id"] = codex_run_id
     return result

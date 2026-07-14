@@ -6,6 +6,11 @@
 Codex Desktop/CLI surface.**  This is a Phase B blocker, not a successful
 local-image acceptance or a fallback authorization.
 
+Doc117 Phase B2 later adds a separate official Platform API materialization
+spike.  It does not change this conclusion about Codex Desktop artifact
+handoff, and it is documented separately in
+`117_V3_CODEX_LOCAL_MODE_PLATFORM_IMAGE_API_B2.md`.
+
 Date checked: 2026-07-14 (Asia/Shanghai).  The check deliberately used only
 public command help and the supported task tool contracts.  It did not read
 Codex/ChatGPT authentication, session files, browser cookies, UI caches, or

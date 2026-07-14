@@ -15,7 +15,12 @@ from typing import Any
 
 LOCAL_EXECUTION_CHANNEL = "codex_local"
 LOCAL_CREATIVE_DIRECTION_OWNER = "codex_local_agent"
-LOCAL_RENDERER = "codex_imagegen"
+PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER = "platform_openai_gpt_image_2"
+PLATFORM_OPENAI_GPT_IMAGE_2_MODEL = "gpt-image-2"
+# Kept only to make historical Phase A records readable.  Phase B2 never emits
+# this value because no supported Codex Desktop artifact handoff exists.
+LEGACY_CODEX_IMAGEGEN_RENDERER = "codex_imagegen"
+LOCAL_RENDERER = PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER
 LOCAL_EVIDENCE_SCOPE = "codex_local_development_evidence"
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -121,29 +126,15 @@ FrozenLocalJobContract = LocalJobSpec
 
 
 @dataclass(frozen=True)
-class LocalArtifactImportRequest:
-    job_id: str
-    role_id: str
-    artifact_path: Path
-    declared_mime_type: str
-    declared_origin: str = "codex_desktop_image_tool"
-    codex_run_id: str | None = None
+class PlatformRenderedImage:
+    """A final API image response before controlled local materialization."""
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "job_id", require_identifier(self.job_id, "job_id"))
-        object.__setattr__(self, "role_id", require_identifier(self.role_id, "role_id"))
-        object.__setattr__(self, "artifact_path", Path(self.artifact_path))
-        mime = str(self.declared_mime_type or "").strip().lower()
-        if mime not in {"image/png", "image/jpeg"}:
-            raise LocalModeAdapterError("codex_local_unsupported_mime", "Only PNG and JPEG artifacts are accepted in the spike.")
-        object.__setattr__(self, "declared_mime_type", mime)
-        if self.declared_origin != "codex_desktop_image_tool":
-            raise LocalModeAdapterError("codex_local_invalid_origin", "Artifact origin must be the Codex Desktop image tool.")
-        if self.codex_run_id is not None:
-            run_id = str(self.codex_run_id).strip()
-            if not run_id or len(run_id) > 256 or any(ord(char) < 32 for char in run_id):
-                raise LocalModeAdapterError("codex_local_invalid_run_id", "Opaque Codex run identifier is invalid.")
-            object.__setattr__(self, "codex_run_id", run_id)
+    image_bytes: bytes = field(repr=False)
+    mime_type: str = "image/png"
+    request_summary: dict[str, Any] = field(default_factory=dict)
+    response_summary: dict[str, Any] = field(default_factory=dict)
+    renderer: str = PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER
+    renderer_model: str = PLATFORM_OPENAI_GPT_IMAGE_2_MODEL
 
 
 @dataclass(frozen=True)

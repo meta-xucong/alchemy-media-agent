@@ -16,21 +16,26 @@ Central Brain, or gateway call failed.
    role with `record_creative_direction`.  Do not write slot recipes, crop
    coordinates, `CopyRenderPlan`, fonts, OCR, safe areas, canvas overlays, or
    fixed photography camera/pose/lighting recipes.
-3. Before image-tool invocation, disclose the exact permitted references when
-   the current Codex surface can do so.  Never read or forward Codex session
-   files, auth tokens, browser cookies, provider keys, or UI caches.
-4. Use the interactive Codex image tool only when it exposes a durable,
-   materialized local image file readable by the adapter.  A preview-only
-   result, data URL, copied cache reference, or undocumented session object is
-   not a valid handoff; record the limitation and stop.
-5. Import a single artifact with `import_generated_candidate`, declaring the
-   exact job and frozen role.  Do not reuse an artifact across jobs or roles.
-6. This Phase A--B adapter cannot certify, review, retry, or deliver an image.
+3. For Phase B2, call `render_platform_candidate` only after the user has
+   explicitly chosen Local Mode and supplied `live_platform_opt_in=true`.  The
+   adapter uses a dedicated key file configured by
+   `ALCHEMY_CODEX_LOCAL_IMAGE_API_KEY_FILE`; never read or forward Codex
+   sessions, root `.env`, Web Provider keys, browser cookies, or UI caches.
+4. The adapter always calls the fixed official endpoint
+   `https://api.openai.com/v1/images/generations` with `gpt-image-2`.  Do not
+   supply a base URL, request Aiself, use a Web Provider fallback, or invoke a
+   Codex CLI subprocess.  It makes one API request per frozen role.
+5. Do not call an artifact-import tool with a local path.  Only the adapter's
+   just-materialized official API response may be imported and bound to a job
+   role.  A preview, cache, session object, or arbitrary system file is not a
+   valid artifact.
+6. This Phase A--B2 adapter cannot certify, review, retry, or deliver an image.
    Treat `shared_runtime_integration_pending`, `metadata_only`, `manual`, and
    `blocked` as non-delivery states.  Do not claim a Provider Gate, Gate D,
    Photography P10, or E-Commerce Gate C/D result.
 
-The required provenance is immutable: `execution_channel=codex_local`,
-`creative_direction_owner=codex_local_agent`, and `renderer=codex_imagegen`.
-Never call the renderer a direct `gpt-image-2` API invocation unless a future
-supported surface provides verifiable provenance for that claim.
+The required B2 provenance is immutable: `execution_channel=codex_local`,
+`creative_direction_owner=codex_local_agent`,
+`renderer=platform_openai_gpt_image_2`, and `renderer_model=gpt-image-2`.
+It proves a dedicated Platform API request, not a Codex/ChatGPT login-state
+export and not any existing production Gate result.

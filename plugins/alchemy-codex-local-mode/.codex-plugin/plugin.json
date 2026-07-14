@@ -1,6 +1,6 @@
 {
   "name": "alchemy-codex-local-mode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Explicit local Codex-to-Alchemy image artifact handoff (development spike)",
   "author": {
     "name": "Local developer"

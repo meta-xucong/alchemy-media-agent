@@ -9,13 +9,16 @@ from .contracts import (
     LOCAL_CREATIVE_DIRECTION_OWNER,
     LOCAL_EXECUTION_CHANNEL,
     LOCAL_RENDERER,
+    PLATFORM_OPENAI_GPT_IMAGE_2_MODEL,
+    PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER,
     FrozenLocalJobContract,
-    LocalArtifactImportRequest,
     LocalJobSpec,
     LocalModeAdapterError,
     LocalModeDisabledError,
+    PlatformRenderedImage,
 )
 from .facade import CodexLocalExecutionFacade
+from .platform_renderer import PlatformImageRenderer
 
 __all__ = [
     "CodexLocalExecutionFacade",
@@ -23,8 +26,11 @@ __all__ = [
     "LOCAL_CREATIVE_DIRECTION_OWNER",
     "LOCAL_EXECUTION_CHANNEL",
     "LOCAL_RENDERER",
-    "LocalArtifactImportRequest",
     "LocalJobSpec",
     "LocalModeAdapterError",
     "LocalModeDisabledError",
+    "PLATFORM_OPENAI_GPT_IMAGE_2_MODEL",
+    "PLATFORM_OPENAI_GPT_IMAGE_2_RENDERER",
+    "PlatformImageRenderer",
+    "PlatformRenderedImage",
 ]
