@@ -4724,6 +4724,8 @@ class V3ProjectModeService:
             project_id=project.project_id,
             title=project.title,
             goal=project.short_summary,
+            primary_template_id=project.primary_template_id,
+            scenario_id=self._scenario_id_for_template(project.primary_template_id),
             active_template_label=self._template_label(project.primary_template_id),
             latest_thumbnail_urls=latest_thumbnails,
             confirmed_style_chips=self._style_chips(project),
@@ -5172,6 +5174,10 @@ class V3ProjectModeService:
         if template_id == PHOTOGRAPHER_TEMPLATE_ID:
             return "摄影师模板"
         return "通用模板"
+
+    def _scenario_id_for_template(self, template_id: str | None) -> str:
+        manifest = self.template_registry.get_manifest(template_id)
+        return manifest.scenario_pack_id if manifest is not None else GENERAL_SCENARIO_ID
 
     def _next_actions(self, project: ProjectRecord) -> list[str]:
         has_active_selected_outputs = bool(self._build_context(project).selected_output_assets) if project.project_id else False

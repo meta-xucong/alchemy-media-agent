@@ -275,6 +275,33 @@ def test_ecommerce_project_memory_summary_uses_ecommerce_template_default_chip()
     assert summary["confirmed_style_chips"] == ["电商模板"]
 
 
+def test_recent_project_summary_preserves_photography_template_identity_across_reopen(monkeypatch) -> None:
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers = V3ProductRouteHandlers()
+    created = handlers.post_projects(
+        {
+            "user_goal": "Create a quiet, natural editorial portrait.",
+            "primary_template_id": "photographer_template",
+        }
+    )
+    project = created["project"]
+    summary = next(
+        item
+        for item in handlers.get_projects(limit=10)["projects"]
+        if item["project_id"] == project["project_id"]
+    )
+    reopened = handlers.get_project(project["project_id"])["project"]
+
+    assert summary["primary_template_id"] == "photographer_template"
+    assert summary["scenario_id"] == "photography"
+    assert summary["active_template_label"] == "摄影师模板"
+    assert reopened["primary_template_id"] == "photographer_template"
+    cards = {card["template_id"]: card for card in handlers.get_projects(limit=10)["templates"]}
+    assert cards["photographer_template"]["project_can_create_jobs"] is True
+    assert cards["general_template"]["project_can_create_jobs"] is True
+    assert cards["ecommerce_template"]["project_can_create_jobs"] is True
+
+
 def test_general_project_job_preserves_variation_mode_contract() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects(

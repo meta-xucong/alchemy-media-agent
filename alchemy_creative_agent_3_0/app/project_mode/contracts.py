@@ -325,6 +325,11 @@ class ProjectMemorySummary(V3BaseModel):
     project_id: str
     title: str
     goal: str
+    # A visible label is not an ownership contract.  Recent-project surfaces
+    # need the immutable template identity so a refresh cannot reinterpret a
+    # Photography or E-Commerce project as General.
+    primary_template_id: str | None = None
+    scenario_id: str | None = None
     active_template_label: str = "通用模板"
     latest_thumbnail_urls: list[str] = Field(default_factory=list)
     confirmed_style_chips: list[str] = Field(default_factory=list)

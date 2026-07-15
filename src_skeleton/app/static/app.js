@@ -1754,8 +1754,28 @@ function v3TemplateById(templateId) {
 }
 
 function v3TemplatePlainLabel(templateId) {
+  const stableLabels = {
+    general_template: "通用模板",
+    ecommerce_template: "电商模板",
+    photographer_template: "摄影师模板",
+  };
+  if (stableLabels[templateId]) return stableLabels[templateId];
   const template = v3TemplateById(templateId);
-  return template?.display_name || (templateId === "ecommerce_template" ? "电商模板" : "通用模板");
+  return template?.display_name || "通用模板";
+}
+
+function v3ProjectTemplateId(project) {
+  const canonicalId = String(project?.primary_template_id || project?.template_id || "").trim();
+  if (canonicalId) return canonicalId;
+  // Read-compatible adapter for summaries persisted before the canonical field
+  // was projected.  It accepts only the exact historic public labels; it does
+  // not infer a specialized template from the user's goal or image content.
+  const legacyLabels = {
+    "通用模板": "general_template",
+    "电商模板": "ecommerce_template",
+    "摄影师模板": "photographer_template",
+  };
+  return legacyLabels[String(project?.active_template_label || "").trim()] || "general_template";
 }
 
 function v3LatestConfirmedBrandMemory(project = v3State.currentProject) {
@@ -1871,6 +1891,10 @@ function selectV3HomeTemplate(templateId, { silent = false } = {}) {
 
 function renderV3HomeTemplateChooser() {
   if (!els.v3TemplateChooser) return;
+  if (v3State.loading && !v3State.templates.length) {
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-loading\">正在读取模板可用状态…</span>";
+    return;
+  }
   const templates = v3AvailableTemplates();
   if (!templates.some((template) => template.template_id === v3State.selectedTemplate && template.project_can_create_jobs)) {
     v3State.selectedTemplate = "general_template";
@@ -2403,6 +2427,8 @@ function v3ProjectSummaryFromProject(project) {
     project_id: project.project_id,
     title: v3ProjectDisplayTitle(project),
     goal: v3ProjectDisplayGoal(project),
+    primary_template_id: project.primary_template_id || "general_template",
+    scenario_id: v3ScenarioForTemplate(project.primary_template_id || "general_template"),
     active_template_label: v3TemplatePlainLabel(project.primary_template_id || "general_template"),
     latest_thumbnail_urls: referenceThumbs.length
       ? referenceThumbs
@@ -2501,6 +2527,7 @@ function renderV3Projects() {
         <p>${escapeHtml(projectGoal)}</p>
       </div>
       <div class="v3-history-meta">
+        <span>${escapeHtml(v3TemplatePlainLabel(v3ProjectTemplateId(item)))}</span>
         <span>${Number(item.job_count || 0)} 次生成 · ${Number(item.selected_asset_count || 0)} 个已选</span>
       </div>
       <div class="v3-project-card-actions">
@@ -2613,7 +2640,7 @@ function v3OutputProjectGroupMap(items = v3State.imageHistory) {
         projectId,
         title: v3ProjectDisplayTitle(item, v3ProjectDisplayTitle(project, "V3 项目图片")),
         goal: v3ProjectDisplayGoal(item, v3ProjectDisplayGoal(project, "")),
-        templateId: item?.template_id || project.primary_template_id || "general_template",
+        templateId: item?.template_id || v3ProjectTemplateId(project),
         project,
         items: [],
         latestItem: null,
@@ -2648,7 +2675,7 @@ function v3ProjectThumbnailItem(project) {
     project_id: project.project_id,
     project_title: v3ProjectDisplayTitle(project),
     project_goal: v3ProjectDisplayGoal(project),
-    template_id: project.primary_template_id || "general_template",
+    template_id: v3ProjectTemplateId(project),
     thumbnail_url: thumbnailUrl,
     preview_url: thumbnailUrl,
     download_url: thumbnailUrl,
@@ -2656,7 +2683,7 @@ function v3ProjectThumbnailItem(project) {
     updated_at: project.updated_at || project.created_at || "",
     metadata: {
       project_id: project.project_id,
-      template_id: project.primary_template_id || "general_template",
+      template_id: v3ProjectTemplateId(project),
       thumbnail_url: thumbnailUrl,
       display_only_project_cover: true,
     },
@@ -2669,7 +2696,7 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
     projectId: String(project.project_id),
     title: v3ProjectDisplayTitle(project, outputGroup?.title || "V3 项目图片"),
     goal: v3ProjectDisplayGoal(project, outputGroup?.goal || ""),
-    templateId: project.primary_template_id || outputGroup?.templateId || "general_template",
+    templateId: v3ProjectTemplateId(project) || outputGroup?.templateId || "general_template",
     project,
     items: outputGroup?.items || [],
     latestItem,
