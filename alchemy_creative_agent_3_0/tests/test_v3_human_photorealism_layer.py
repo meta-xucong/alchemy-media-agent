@@ -41,6 +41,66 @@ def test_human_photorealism_layer_does_not_override_stylized_requests() -> None:
     assert guidance.metadata["disabled_reason"] == "stylized_request"
 
 
+def test_human_photorealism_keeps_object_illustration_fact_separate_from_rendering_style() -> None:
+    guidance = HumanPhotorealismLayer().build(
+        project_id="project_object_artwork",
+        job_id="job_object_artwork",
+        scenario_id="general_creative",
+        template_id="general_creative",
+        user_input=(
+            "Create a realistic photo of a model wearing a product with a front illustration placement; "
+            "preserve that visible surface detail while keeping natural skin texture and proportions."
+        ),
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+    )
+
+    assert guidance.applies is True
+    assert guidance.metadata["human_realism_plugin"]["disabled_by_style"] is False
+    assert any("natural human skin texture" in item for item in guidance.positive_prompt_fragments)
+
+
+def test_human_photorealism_keeps_incidental_hands_inside_visible_person_contract() -> None:
+    guidance = HumanPhotorealismLayer().build(
+        project_id="project_visible_person",
+        job_id="job_visible_person",
+        scenario_id="general_creative",
+        template_id="general_creative",
+        user_input="Create a full-length natural photo of a model with relaxed visible hands and natural skin texture.",
+        subject_type="product",
+        variation_mode="delivery_suite",
+        has_identity_reference=False,
+    )
+
+    assert guidance.applies is True
+    assert guidance.metadata["human_realism_plugin"]["human_subject_kind"] == "person"
+    assert not any("adult hand or forearm" in item for item in guidance.positive_prompt_fragments)
+    assert not any("keep any face out of frame" in item for item in guidance.positive_prompt_fragments)
+
+
+def test_visual_cluster_keeps_real_person_guidance_when_reference_fact_mentions_illustration() -> None:
+    result = SharedCapabilityRegistry.with_default_modules().run(
+        CapabilityInput(
+            job_id="job_reference_surface_artwork",
+            scenario_id="general_creative",
+            user_input=(
+                "Create one full-length fully clothed school-age child wearing a blue dress with front illustration "
+                "placement, relaxed hands, and natural skin texture in an ordinary natural outdoor garden."
+            ),
+            metadata={"template_id": "general_creative", "requested_image_count": 1},
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    guidance = result.results[-1].facts["visual_capability_cluster"]["human_photorealism_guidance"]
+
+    assert guidance["applies"] is True
+    assert guidance["metadata"]["human_realism_plugin"]["human_subject_kind"] == "product_on_person"
+    assert not any("adult hand or forearm" in item for item in guidance["positive_prompt_fragments"])
+    assert not any("keep any face out of frame" in item for item in guidance["positive_prompt_fragments"])
+
+
 def test_human_photorealism_layer_does_not_activate_for_nonhuman_photoreal_style() -> None:
     layer = HumanPhotorealismLayer()
 
@@ -189,6 +249,7 @@ def test_doc114_generic_human_realism_recognizes_numeric_age_and_photographic_sc
     )
 
     plugin = guidance.metadata["human_realism_plugin"]
+    provider_safety = guidance.metadata["provider_safety_profile"]
     positive_text = " ".join(guidance.positive_prompt_fragments).lower()
     negative_text = " ".join(guidance.negative_prompt_fragments).lower()
     review_text = " ".join(guidance.review_targets).lower()
@@ -196,6 +257,13 @@ def test_doc114_generic_human_realism_recognizes_numeric_age_and_photographic_sc
     assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
     assert "explicit_age_fidelity_signal" in plugin["reason_codes"]
     assert plugin["universal_rendering_profile"]["scene_photographic_coherence"] == "preserve_physical_light_depth_contact"
+    assert plugin["safety_sensitive_person"] is True
+    assert provider_safety == {
+        "applies": True,
+        "contract": "safety_sensitive_person_v1",
+        "internal_anatomy_or_quality_terms_suppressed": True,
+        "reference_scope": "resolved_channels_only",
+    }
     assert "caught photographic moment" in positive_text
     assert "physically coherent photographed space" in positive_text
     assert "35mm or ccd-inspired" not in positive_text

@@ -1679,6 +1679,7 @@ class V3ProductApiService:
                 resolution,
                 metadata={
                     **review_metadata,
+                    **self._admitted_review_reference_metadata(record, resolution),
                     "frozen_output_review_contract": self._frozen_output_review_contract(
                         resolution,
                         frozen_output_review_contracts,
@@ -1760,6 +1761,99 @@ class V3ProductApiService:
             }
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _admitted_review_reference_metadata(
+        self,
+        record: ProductJobRecord,
+        resolution,
+    ) -> dict[str, Any]:
+        """Return only the exact admitted job assets for pixel comparison.
+
+        The image materializer already records which uploaded references were
+        admitted for each successful Provider operation.  A post-generation
+        reviewer must receive that same, job-scoped evidence when it is asked
+        to assess reference truth.  Passing every current upload (or every
+        project reference) would let a later or unrelated asset change the
+        review's factual basis, while passing none makes a reference-truth
+        verdict non-certifying.
+
+        This remains internal reviewer metadata.  The public Job projection
+        continues to expose only its safe review/provider summaries.
+        """
+
+        candidate_records: list[dict[str, Any]] = []
+        resolution_metadata = resolution.metadata if isinstance(getattr(resolution, "metadata", None), dict) else {}
+        direct_candidate = resolution_metadata.get("candidate_metadata")
+        if isinstance(direct_candidate, dict):
+            candidate_records.append(direct_candidate)
+        asset_metadata = resolution_metadata.get("asset_metadata")
+        if isinstance(asset_metadata, dict):
+            candidate_candidate = asset_metadata.get("candidate_metadata")
+            if isinstance(candidate_candidate, dict):
+                candidate_records.append(candidate_candidate)
+        output_record = resolution_metadata.get("output_record")
+        if isinstance(output_record, dict):
+            output_metadata = output_record.get("metadata")
+            if isinstance(output_metadata, dict):
+                candidate_records.append(output_metadata)
+
+        admitted_records: list[dict[str, Any]] = []
+        for candidate_metadata in candidate_records:
+            audit = candidate_metadata.get("reference_input_execution")
+            if not isinstance(audit, dict):
+                continue
+            if str(audit.get("admission_outcome") or "").lower() != "admitted":
+                continue
+            if str(audit.get("operation_outcome") or "").lower() != "pixels_received":
+                continue
+            if (self._safe_int(audit.get("reference_count"), default=0) or 0) <= 0:
+                continue
+            admitted_records.append(candidate_metadata)
+
+        if not admitted_records:
+            return {}
+
+        source_ids = self._dedupe_strings(
+            source_id
+            for candidate_metadata in admitted_records
+            for source_id in (
+                candidate_metadata.get("reference_truth_source_ids")
+                or candidate_metadata.get("reference_asset_ids")
+                or []
+            )
+        )
+        job_upload_ids = set(self._dedupe_strings(record.request.uploaded_asset_ids))
+        admitted_source_ids = [asset_id for asset_id in source_ids if asset_id in job_upload_ids]
+        if not admitted_source_ids:
+            return {
+                "review_reference_evidence_required": True,
+                "review_reference_evidence_available": False,
+            }
+
+        review_assets: list[dict[str, Any]] = []
+        for asset in self.asset_store.resolve_uploaded_assets(admitted_source_ids):
+            if asset.asset_id not in job_upload_ids or not asset.file_path:
+                continue
+            path = Path(asset.file_path)
+            if not path.is_file():
+                continue
+            review_assets.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "role": asset.role.value if asset.role else None,
+                    "source_type": "uploaded",
+                    "use_policy": "admitted_generation_reference",
+                    "file_path": str(path),
+                    "mime_type": asset.mime_type,
+                }
+            )
+        metadata: dict[str, Any] = {
+            "review_reference_evidence_required": True,
+            "review_reference_evidence_available": bool(review_assets),
+        }
+        if review_assets:
+            metadata["uploaded_assets"] = review_assets
+        return metadata
 
     @staticmethod
     def _frozen_output_review_contracts_by_asset_id(
@@ -2106,6 +2200,7 @@ class V3ProductApiService:
                 break
 
             if retry_runtime_result.generation_result is None:
+                retry_outcome = self._retry_no_result_outcome(retry_runtime_result)
                 records.append(
                     self._visual_retry_execution_record(
                         record=record,
@@ -2115,7 +2210,8 @@ class V3ProductApiService:
                         reason_codes=reason_codes,
                         retry_patch=retry_patch,
                         source="scenario_runtime",
-                        blocked_reason="retry_generation_returned_no_result",
+                        blocked_reason=retry_outcome["reason_code"],
+                        retry_outcome=retry_outcome,
                     )
                 )
                 break
@@ -4167,6 +4263,7 @@ class V3ProductApiService:
         retry_output_ids: list[str] | None = None,
         retry_candidate_ids: list[str] | None = None,
         blocked_reason: str | None = None,
+        retry_outcome: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         job_id = record.job_id if record is not None else "job_unavailable"
         project_id = None
@@ -4187,7 +4284,64 @@ class V3ProductApiService:
             "blocked_reason": blocked_reason,
             "source": source,
             "created_at": _utc_now_iso(),
-            "metadata": {"append_only": True, "doc": "53"},
+            "metadata": {
+                "append_only": True,
+                "doc": "53",
+                **({"retry_outcome": dict(retry_outcome)} if retry_outcome else {}),
+            },
+        }
+
+    @staticmethod
+    def _retry_no_result_outcome(runtime_result: Any) -> dict[str, Any]:
+        """Preserve a safe, pre-provider reason when a retry has no result.
+
+        A Scenario Runtime result with no generation payload is an explicit
+        runtime terminal state, not evidence that a Provider image request was
+        made.  Keep only its stable state and already-safe activation/Brain
+        projection; raw prompts, exception text, endpoints, and credentials
+        must remain out of the retry history.
+        """
+
+        raw_status = getattr(runtime_result, "status", None)
+        runtime_status = str(getattr(raw_status, "value", raw_status) or "unknown").strip().lower()
+        metadata = dict(getattr(runtime_result, "metadata", {}) or {})
+        remote_outcome = metadata.get("remote_creative_brain_outcome")
+        safe_remote_outcome = (
+            {
+                key: remote_outcome.get(key)
+                for key in (
+                    "schema_version",
+                    "state",
+                    "reason_code",
+                    "outcome_class",
+                    "llm_used",
+                    "fallback_used",
+                    "remote_provider_available",
+                    "remote_error_class",
+                    "remote_http_status_code",
+                )
+                if key in remote_outcome
+            }
+            if isinstance(remote_outcome, dict)
+            else {}
+        )
+        capability_run = getattr(runtime_result, "capability_run", None)
+        capability_status = str(getattr(getattr(capability_run, "status", None), "value", "") or "").lower()
+        if safe_remote_outcome:
+            reason_code = "retry_remote_brain_blocked"
+        elif metadata.get("capability_activation_error"):
+            reason_code = "retry_capability_activation_blocked"
+        elif capability_status == "failed":
+            reason_code = "retry_capability_execution_failed"
+        elif runtime_status == "blocked":
+            reason_code = "retry_generation_blocked_before_provider"
+        else:
+            reason_code = "retry_generation_returned_no_result"
+        return {
+            "reason_code": reason_code,
+            "runtime_status": runtime_status,
+            "provider_request_started": False,
+            "remote_brain_outcome": safe_remote_outcome,
         }
 
     def _visual_auto_retry_summary(self, records: list[dict[str, Any]], max_attempts: int) -> dict[str, Any]:
@@ -4301,6 +4455,35 @@ class V3ProductApiService:
                 job_status=self._status_from_record(record),
                 warnings=list(record.warnings),
                 metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
+            )
+
+        final_delivery, _eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
+        if final_delivery["delivery_gate_applies"] and not final_delivery["automatic_delivery_available"]:
+            manual_confirmation_required = bool(final_delivery["manual_confirmation_required"])
+            selected = SelectedResult(
+                metadata={
+                    "selection_status": "final_delivery_withheld",
+                    "manual_confirmation_required": manual_confirmation_required,
+                }
+            )
+            return SelectionResponse(
+                job_id=job_id,
+                status=record.status,
+                selected_result=selected,
+                job_status=self._status_from_record(record),
+                warnings=[
+                    (
+                        "The generated image needs manual confirmation before it can be selected as final delivery."
+                        if manual_confirmation_required
+                        else "The generated image is not eligible for final delivery or selection."
+                    )
+                ],
+                metadata={
+                    "source": "V3ProductApiService",
+                    "rules_version": RULE_VERSION,
+                    "selection_held": True,
+                    "hold_reason": final_delivery["final_delivery_status"],
+                },
             )
 
         selected_assets = self._selected_assets(result, select_request)
@@ -4470,13 +4653,32 @@ class V3ProductApiService:
         asset_pack = result.asset_pack
         nav = get_navigation_entry()
         delivery_settling = record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
-        public_visual_retry = self._public_visual_auto_retry_summary(result.metadata.get("visual_auto_retry"))
+        final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
+        public_visual_retry = self._public_visual_auto_retry_summary(
+            result.metadata.get("visual_auto_retry"),
+            manual_confirmation_required=bool(final_delivery["manual_confirmation_required"]),
+        )
         public_review = self._public_post_generation_review(result.metadata.get("post_generation_review_package"))
+        if final_delivery["delivery_gate_applies"]:
+            # The public review summary may explain the final decision, but it
+            # must not become a second route to a candidate that the delivery
+            # gate intentionally withheld. Candidate/output lineage remains
+            # append-only in internal history.
+            public_review["recommended_output_ids"] = (
+                sorted(eligible_output_ids) if final_delivery["automatic_delivery_available"] else []
+            )
+            public_review["hidden_output_ids"] = []
         public_warnings = list(record.warnings + asset_pack.manifest.get("warnings", []))
         if public_visual_retry.get("manual_confirmation_required"):
             public_warnings.append(
                 "The image was generated, but the automatic refinement did not complete; manual confirmation is required."
             )
+        elif final_delivery["final_delivery_status"] == "withheld_review_failure":
+            public_warnings.append(
+                "The image was generated, but no review-certified final delivery is available."
+            )
+        visible_output_ids = eligible_output_ids if final_delivery["delivery_gate_applies"] else None
+        automatic_delivery_available = bool(final_delivery["automatic_delivery_available"])
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -4488,12 +4690,29 @@ class V3ProductApiService:
             asset_pack_id=asset_pack.asset_pack_id,
             scenario=self._scenario_summary(record),
             campaign=self._campaign_summary(record, result),
-            asset_series=[] if delivery_settling else self._asset_series(result, record.status),
-            candidates=[] if delivery_settling else self._candidate_summaries(result),
+            asset_series=[]
+            if delivery_settling
+            else self._asset_series(
+                result,
+                record.status,
+                visible_output_ids=visible_output_ids,
+                visible_asset_ids=eligible_asset_ids if final_delivery["delivery_gate_applies"] else None,
+            ),
+            candidates=[]
+            if delivery_settling
+            else self._candidate_summaries(
+                result,
+                visible_output_ids=visible_output_ids,
+                visible_asset_ids=eligible_asset_ids if final_delivery["delivery_gate_applies"] else None,
+            ),
             style_continuation=self._style_continuation_summary(record, result),
-            general_creative=self._general_creative_summary(record),
+            general_creative=self._general_creative_summary(record, result=result, final_delivery=final_delivery),
             ecommerce=self._ecommerce_summary(record),
-            selected_result=record.selected_result,
+            selected_result=(
+                record.selected_result
+                if not final_delivery["delivery_gate_applies"] or automatic_delivery_available
+                else None
+            ),
             balance_estimate=dict(record.balance_estimate),
             routes=get_route_contracts(),
             warnings=list(dict.fromkeys(public_warnings)),
@@ -4509,6 +4728,7 @@ class V3ProductApiService:
                 ),
                 "visual_auto_retry": public_visual_retry,
                 "post_generation_review": public_review,
+                "final_delivery": final_delivery,
                 "text_pixel_delivery": result.metadata.get("text_pixel_delivery", {}),
                 "text_pixel_delivery_batch": result.metadata.get("text_pixel_delivery_batch", {}),
                 "exposes_product_concepts_only": True,
@@ -4522,7 +4742,11 @@ class V3ProductApiService:
         )
 
     @staticmethod
-    def _public_visual_auto_retry_summary(value: Any) -> dict[str, Any]:
+    def _public_visual_auto_retry_summary(
+        value: Any,
+        *,
+        manual_confirmation_required: bool = False,
+    ) -> dict[str, Any]:
         """Project only user-actionable retry status to public Job surfaces.
 
         The durable record intentionally retains the full retry patch and raw
@@ -4541,7 +4765,13 @@ class V3ProductApiService:
             }
             for item in records
         ]
-        manual_confirmation_required = any(item["status"] in {"failed", "blocked"} for item in public_records)
+        # A transport/runtime failure of the bounded retry does not make an
+        # otherwise withheld candidate user-actionable.  The final-delivery
+        # gate is the only authority for manual confirmation; it is passed in
+        # by ``_status_from_record`` after it has evaluated reviewed outputs.
+        # Keep the retry record visible for workflow transparency without
+        # advertising a confirmation path that cannot deliver an image.
+        manual_confirmation_required = bool(manual_confirmation_required)
         return {
             "enabled": bool(summary.get("enabled")),
             "executed_count": max(0, int(summary.get("executed_count") or 0)),
@@ -4591,6 +4821,102 @@ class V3ProductApiService:
             "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
         }
 
+    @staticmethod
+    def _is_verified_real_pixel_inspection(inspection: dict[str, Any]) -> bool:
+        return (
+            str(inspection.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+            and str(inspection.get("verification_state") or "").strip().lower() == "verified"
+        )
+
+    def _public_final_delivery_projection(self, result: PlanningResult) -> tuple[dict[str, Any], set[str], set[str]]:
+        """Derive one safe final-delivery gate from canonical real-pixel review.
+
+        Generated assets remain append-only in the durable result.  This helper
+        controls only what a beginner-facing status treats as final delivery;
+        it never re-scores pixels, creates a new lifecycle, or reinterprets a
+        manual review as a successful retry.
+        """
+
+        package = result.metadata.get("post_generation_review_package")
+        inspections = package.get("inspections") if isinstance(package, dict) else []
+        inspections = [dict(item) for item in inspections if isinstance(item, dict)]
+        real_review_attempted = any(
+            str(item.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+            for item in inspections
+        )
+        real_inspections = [
+            item
+            for item in inspections
+            if self._is_verified_real_pixel_inspection(item)
+        ]
+        if not real_inspections:
+            manual_confirmation_required = any(
+                str(item.get("status") or "").strip().lower() in {"manual_review", "fail_retryable"}
+                for item in inspections
+            ) and real_review_attempted
+            return (
+                {
+                    "final_delivery_status": (
+                        "withheld_manual_confirmation" if manual_confirmation_required else "not_evaluated"
+                    ),
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": manual_confirmation_required,
+                    "reviewed_output_count": 0,
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": real_review_attempted,
+                },
+                set(),
+                set(),
+            )
+
+        statuses = {str(item.get("status") or "").strip().lower() for item in real_inspections}
+        eligible_output_ids = {
+            str(item.get("output_id") or "").strip()
+            for item in real_inspections
+            if str(item.get("status") or "").strip().lower() in {"pass", "warning"}
+            and str(item.get("output_id") or "").strip()
+        }
+        eligible_asset_ids = {
+            str(item.get("asset_id") or "").strip()
+            for item in real_inspections
+            if str(item.get("status") or "").strip().lower() in {"pass", "warning"}
+            and str(item.get("asset_id") or "").strip()
+        }
+        if "manual_review" in statuses:
+            state = "withheld_manual_confirmation"
+            automatic_delivery_available = False
+            manual_confirmation_required = True
+            eligible_output_ids = set()
+            eligible_asset_ids = set()
+        elif statuses.intersection({"fail_retryable", "fail_final"}):
+            state = "withheld_review_failure"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            eligible_output_ids = set()
+            eligible_asset_ids = set()
+        elif eligible_output_ids and statuses.issubset({"pass", "warning"}):
+            state = "ready"
+            automatic_delivery_available = True
+            manual_confirmation_required = False
+        else:
+            state = "not_evaluated"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            eligible_output_ids = set()
+            eligible_asset_ids = set()
+        return (
+            {
+                "final_delivery_status": state,
+                "automatic_delivery_available": automatic_delivery_available,
+                "manual_confirmation_required": manual_confirmation_required,
+                "reviewed_output_count": len(real_inspections),
+                "final_delivery_output_count": len(eligible_output_ids),
+                "delivery_gate_applies": True,
+            },
+            eligible_output_ids,
+            eligible_asset_ids,
+        )
+
     @classmethod
     def _public_metadata_projection(cls, value: Any) -> Any:
         """Remove execution-only data from nested public Job metadata.
@@ -4607,6 +4933,7 @@ class V3ProductApiService:
             "file_path",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
+            "reference_input_execution",
             "provider_reason",
             "provider_response_summary",
             "runtime_transport",
@@ -4714,6 +5041,12 @@ class V3ProductApiService:
             "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        raw_provider_failure = status_metadata.get("provider_failure_retry")
+        if isinstance(raw_provider_failure, dict):
+            status_metadata["provider_failure_retry"] = self._public_provider_failure_retry(raw_provider_failure)
+        provider_execution = self._public_provider_execution_status(record)
+        if provider_execution is not None:
+            status_metadata["provider_execution"] = provider_execution
         specialized_execution = status_metadata.get("specialized_execution_summary")
         if isinstance(specialized_execution, dict):
             status_metadata["specialized_execution_summary"] = self._public_specialized_execution_summary(
@@ -4749,6 +5082,107 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    @staticmethod
+    def _public_provider_failure_retry(summary: dict[str, Any]) -> dict[str, Any]:
+        """Expose retry counts and classified outcomes without raw provider data."""
+
+        attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
+        return {
+            "executed_count": max(0, int(summary.get("executed_count") or 0)),
+            "max_attempts": max(0, int(summary.get("max_attempts") or 0)),
+            "fresh_upstream_requests": max(0, int(summary.get("fresh_upstream_requests") or 0)),
+            "final_status": str(summary.get("final_status") or "unknown"),
+            "final_classification": str(summary.get("final_classification") or "unknown"),
+            "final_failure_code": str(summary.get("final_failure_code") or "") or None,
+            "attempts": [
+                {
+                    "attempt": max(0, int(item.get("attempt") or 0)),
+                    "status": str(item.get("status") or "unknown"),
+                    "classification": str(item.get("classification") or "unknown"),
+                    "failure_code": str(item.get("failure_code") or "") or None,
+                    "retryable": bool(item.get("retryable")),
+                }
+                for item in attempts
+            ],
+        }
+
+    def _public_provider_execution_status(self, record: ProductJobRecord) -> dict[str, Any] | None:
+        """Derive a safe Provider/Reference execution read model for Job UI.
+
+        The durable source remains candidate metadata or the existing
+        ``provider_failure_retry`` record.  This method never changes a Job
+        state, certifies pixels, or reconstructs a Provider request.
+        """
+
+        audits: list[dict[str, Any]] = []
+        result = record.generation_result or record.planning_result
+        if result is not None:
+            for packaged in result.asset_pack.assets:
+                metadata = packaged.metadata.get("candidate_metadata") if isinstance(packaged.metadata, dict) else None
+                audit = metadata.get("reference_input_execution") if isinstance(metadata, dict) else None
+                if isinstance(audit, dict):
+                    audits.append(dict(audit))
+        if not audits:
+            summary = record.request.metadata.get("provider_failure_retry")
+            audit = summary.get("reference_input_execution") if isinstance(summary, dict) else None
+            if isinstance(audit, dict):
+                audits.append(dict(audit))
+        if not audits:
+            return None
+        operations = [self._public_provider_execution_operation(audit) for audit in audits]
+        automatic_delivery_available = bool(operations) and all(
+            bool(item["automatic_delivery_available"]) for item in operations
+        )
+        manual_confirmation_required = any(bool(item["manual_confirmation_required"]) for item in operations)
+        return {
+            "operation_count": len(operations),
+            "automatic_delivery_available": automatic_delivery_available,
+            "manual_confirmation_required": manual_confirmation_required,
+            "operations": operations,
+        }
+
+    @staticmethod
+    def _public_provider_execution_operation(audit: dict[str, Any]) -> dict[str, Any]:
+        operation_outcome = str(audit.get("operation_outcome") or "failed")
+        failure_code = str(audit.get("failure_code") or "") or None
+        reference_count = max(0, int(audit.get("reference_count") or 0))
+        if operation_outcome == "pixels_received":
+            reference_state = "ready" if reference_count else "not_applicable"
+            automatic_delivery_available = True
+            manual_confirmation_required = False
+            safe_reason_code = "provider_pixels_received"
+        elif failure_code == "reference_input_rejected":
+            reference_state = "rejected"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        elif failure_code in {"reference_input_unsupported", "reference_input_capability_mismatch", "provider_policy_blocked"}:
+            reference_state = "blocked"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        elif failure_code in {"provider_timeout", "provider_unavailable"}:
+            reference_state = "unavailable"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code
+        else:
+            # An ambiguous invalid request or empty result has no pixels to
+            # inspect. It is blocked, not a visual-review warning and not a
+            # candidate that a user can certify manually.
+            reference_state = "blocked"
+            automatic_delivery_available = False
+            manual_confirmation_required = False
+            safe_reason_code = failure_code or "provider_result_unavailable"
+        return {
+            "operation": str(audit.get("operation") or "image_generate"),
+            "reference_execution_state": reference_state,
+            "reference_count": reference_count,
+            "automatic_delivery_available": automatic_delivery_available,
+            "manual_confirmation_required": manual_confirmation_required,
+            "safe_reason_code": safe_reason_code,
+        }
 
     @staticmethod
     def _public_specialized_execution_summary(execution: dict[str, Any]) -> dict[str, Any]:
@@ -5304,7 +5738,14 @@ class V3ProductApiService:
             },
         )
 
-    def _asset_series(self, result: PlanningResult, status: ProductJobStatusValue) -> list[AssetSeriesItem]:
+    def _asset_series(
+        self,
+        result: PlanningResult,
+        status: ProductJobStatusValue,
+        *,
+        visible_output_ids: set[str] | None = None,
+        visible_asset_ids: set[str] | None = None,
+    ) -> list[AssetSeriesItem]:
         packaged_by_id = {asset.asset_id: asset for asset in result.asset_pack.assets}
         items: list[AssetSeriesItem] = []
         for asset in result.series_plan.assets:
@@ -5314,6 +5755,14 @@ class V3ProductApiService:
             candidate_metadata = self._public_metadata_projection(
                 packaged.metadata.get("candidate_metadata", {}) if packaged else {}
             )
+            output_id = str(candidate_metadata.get("output_id") or "").strip()
+            if (
+                visible_output_ids is not None
+                and visible_asset_ids is not None
+                and output_id not in visible_output_ids
+                and asset.asset_id not in visible_asset_ids
+            ):
+                continue
             item_status = "generated" if selected_candidate_id else status.value
             if status == ProductJobStatusValue.SELECTED and selected_candidate_id:
                 item_status = "selected"
@@ -5327,7 +5776,7 @@ class V3ProductApiService:
                     status=item_status,
                     selected_candidate_id=selected_candidate_id,
                     preview_uri=self._output_preview_uri(packaged.uri if packaged else None, candidate_metadata),
-                    output_id=candidate_metadata.get("output_id"),
+                    output_id=output_id or None,
                     download_url=candidate_metadata.get("download_url") or candidate_metadata.get("url"),
                     preview_url=candidate_metadata.get("preview_url"),
                     thumbnail_url=candidate_metadata.get("thumbnail_url"),
@@ -5344,7 +5793,13 @@ class V3ProductApiService:
             )
         return items
 
-    def _candidate_summaries(self, result: PlanningResult) -> list[CandidateSummary]:
+    def _candidate_summaries(
+        self,
+        result: PlanningResult,
+        *,
+        visible_output_ids: set[str] | None = None,
+        visible_asset_ids: set[str] | None = None,
+    ) -> list[CandidateSummary]:
         candidates: list[CandidateSummary] = []
         evals_by_candidate_id = {
             report.candidate_id: report for report in result.evaluation_reports if report.candidate_id is not None
@@ -5362,6 +5817,14 @@ class V3ProductApiService:
             report = evals_by_candidate_id.get(candidate_id)
             asset_spec = assets_by_id.get(asset.asset_id)
             candidate_metadata = self._public_metadata_projection(asset.metadata.get("candidate_metadata", {}))
+            output_id = str(candidate_metadata.get("output_id") or "").strip()
+            if (
+                visible_output_ids is not None
+                and visible_asset_ids is not None
+                and output_id not in visible_output_ids
+                and asset.asset_id not in visible_asset_ids
+            ):
+                continue
             asset_metadata = self._public_metadata_projection(
                 dict(asset_spec.metadata) if asset_spec else dict(asset.metadata.get("asset_metadata", {}))
             )
@@ -5371,7 +5834,7 @@ class V3ProductApiService:
                     asset_id=asset.asset_id,
                     platform=asset_spec.platform if asset_spec else asset.platform,
                     preview_uri=self._output_preview_uri(asset.uri, candidate_metadata),
-                    output_id=candidate_metadata.get("output_id"),
+                    output_id=output_id or None,
                     download_url=candidate_metadata.get("download_url") or candidate_metadata.get("url"),
                     preview_url=candidate_metadata.get("preview_url"),
                     thumbnail_url=candidate_metadata.get("thumbnail_url"),
@@ -5882,13 +6345,29 @@ class V3ProductApiService:
             warnings.extend(warning.message for warning in record.capability_run.warnings)
         return self._public_warnings_from(warnings, scenario_id="ecommerce")
 
-    def _general_creative_summary(self, record: ProductJobRecord) -> GeneralCreativeCapabilitySummary | None:
+    def _general_creative_summary(
+        self,
+        record: ProductJobRecord,
+        *,
+        result: PlanningResult | None = None,
+        final_delivery: dict[str, Any] | None = None,
+    ) -> GeneralCreativeCapabilitySummary | None:
         scenario_id = record.scenario_resolution.manifest.scenario_id if record.scenario_resolution else None
         if scenario_id != "general_creative":
             return None
         capability_run = record.capability_run
         results = {result.module_id: result for result in capability_run.results} if capability_run else {}
-        warnings = self._general_creative_public_warnings(record)
+        result = result or record.generation_result or record.planning_result
+        review_package = result.metadata.get("post_generation_review_package") if result is not None else None
+        real_review_ran = isinstance(review_package, dict) and any(
+            isinstance(item, dict) and self._is_verified_real_pixel_inspection(item)
+            for item in review_package.get("inspections", [])
+        )
+        warnings = self._general_creative_public_warnings(record, real_review_ran=real_review_ran)
+        if real_review_ran:
+            review_hints = self._final_review_hint_summary(review_package, final_delivery or {})
+        else:
+            review_hints = self._review_hint_summary(results)
         return GeneralCreativeCapabilitySummary(
             enabled=bool(results),
             scenario_id="general_creative",
@@ -5899,9 +6378,15 @@ class V3ProductApiService:
             reference_bindings=self._reference_binding_summary(results),
             visual_grammar=self._visual_grammar_summary(results),
             information_integrity=self._information_integrity_summary(results),
-            review_hints=self._review_hint_summary(results),
+            review_hints=review_hints,
             history_continuation=self._history_continuation_summary(record, results),
-            closure_checks=self._general_creative_closure_checks(record, results, warnings),
+            closure_checks=self._general_creative_closure_checks(
+                record,
+                results,
+                warnings,
+                real_review_ran=real_review_ran,
+                final_delivery=final_delivery or {},
+            ),
             warnings=warnings,
             metadata={
                 "prompt_language": "neutral_subject",
@@ -5910,6 +6395,27 @@ class V3ProductApiService:
                 "internal_module_count": len(results),
             },
         )
+
+    def _final_review_hint_summary(self, package: dict[str, Any], final_delivery: dict[str, Any]) -> list[str]:
+        inspections = [
+            item
+            for item in package.get("inspections", [])
+            if isinstance(item, dict) and self._is_verified_real_pixel_inspection(item)
+        ]
+        modes = list(dict.fromkeys(str(item.get("mode") or "").strip() for item in inspections if item.get("mode")))
+        status = str(final_delivery.get("final_delivery_status") or "not_evaluated")
+        summary = [
+            "Generated pixels were checked through " + ", ".join(modes) + "."
+            if modes
+            else "Generated pixels were checked through a real visual review."
+        ]
+        if status == "ready":
+            summary.append("The reviewed output is available as final delivery.")
+        elif status == "withheld_manual_confirmation":
+            summary.append("The reviewed output needs manual confirmation before final delivery.")
+        else:
+            summary.append("The reviewed output is retained in history and is not final delivery.")
+        return summary
 
     def _reference_understanding_summary(self, results: dict[str, Any]) -> list[str]:
         result = results.get("asset_role_analyzer")
@@ -6065,12 +6571,15 @@ class V3ProductApiService:
         record: ProductJobRecord,
         results: dict[str, Any],
         warnings: list[str],
+        *,
+        real_review_ran: bool = False,
+        final_delivery: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         has_assets = bool(record.request.uploaded_asset_ids)
         has_product_profile = bool(record.request.product_profile)
         has_history = bool(record.request.continue_style_from_brand_id or record.request.brand_id)
         visual_cluster_result = results.get("visual_capability_cluster")
-        return [
+        checks = [
             self._closure_check(
                 "reference_understanding",
                 "Reference understanding",
@@ -6120,6 +6629,19 @@ class V3ProductApiService:
                 "detail": f"{len(warnings)} warning(s) need review." if warnings else "No user-visible warnings.",
             },
         ]
+        if real_review_ran:
+            delivery_status = str((final_delivery or {}).get("final_delivery_status") or "not_evaluated")
+            checks[4] = {
+                "id": "output_review",
+                "label": "Output review hints",
+                "status": "done" if delivery_status == "ready" else "attention",
+                "detail": (
+                    "Real-pixel output review completed."
+                    if delivery_status == "ready"
+                    else "Real-pixel review completed, but final delivery is withheld."
+                ),
+            }
+        return checks
 
     def _visual_cluster_from_results(self, results: dict[str, Any]) -> dict[str, Any]:
         result = results.get("visual_capability_cluster")
@@ -6154,12 +6676,25 @@ class V3ProductApiService:
             detail = not_applicable_detail
         return {"id": check_id, "label": label, "status": public_status, "detail": detail}
 
-    def _general_creative_public_warnings(self, record: ProductJobRecord) -> list[str]:
+    def _general_creative_public_warnings(
+        self,
+        record: ProductJobRecord,
+        *,
+        real_review_ran: bool = False,
+    ) -> list[str]:
         warnings = list(record.warnings)
         if record.capability_run is not None:
             warnings.extend(warning.message for warning in record.capability_run.warnings)
             for result in record.capability_run.results:
                 warnings.extend(warning.message for warning in result.warnings)
+        if real_review_ran:
+            warnings = [
+                warning
+                for warning in warnings
+                if "output_review_metadata_only" not in str(warning).lower()
+                and "output review ran without live image inspection" not in str(warning).lower()
+                and "no candidate pixels supplied; review is metadata-only" not in str(warning).lower()
+            ]
         return self._public_warnings_from(warnings, scenario_id="general_creative")
 
     def _public_warnings_from(self, warnings: list[Any], *, scenario_id: str) -> list[str]:
@@ -6296,7 +6831,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         runtime_result: Any,
     ) -> None:
-        """Persist a specialized remote creative answer with its frozen plan.
+        """Persist a verified remote creative answer with its frozen plan.
 
         This is a server-owned execution binding, not browser-supplied
         metadata.  ScenarioRuntime validates the exact plan/template/scenario
@@ -6305,8 +6840,6 @@ class V3ProductApiService:
 
         resolution = getattr(runtime_result, "scenario_resolution", None)
         scenario_id = str(getattr(getattr(resolution, "manifest", None), "scenario_id", "") or "")
-        if scenario_id not in {"ecommerce", "photography"}:
-            return
         runtime_metadata = dict(getattr(runtime_result, "metadata", {}) or {})
         plan = runtime_metadata.get("capability_activation_plan")
         brain_result = runtime_metadata.get("llm_brain")

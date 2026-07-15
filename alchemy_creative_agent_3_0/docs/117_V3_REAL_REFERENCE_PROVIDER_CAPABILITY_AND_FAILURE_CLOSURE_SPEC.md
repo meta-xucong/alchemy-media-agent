@@ -1,11 +1,12 @@
 # Doc117 V3 Real Reference Provider Capability and Failure Closure
 
 Status: post-Doc113/Doc114 corrective foundation authority and gated
-acceptance contract. `e458d23` is a **not-yet-mainline integration candidate**
-which proves the shared real-visible-person activation guard. It is not a
-claim that the provider-admission, failure-classification, or public-projection
-phases in this document already exist. This document retains the regression
-contract and must not introduce a second activation mechanism or lifecycle.
+acceptance contract. The shared real-visible-person activation guard from
+`e458d23` is integrated in the Doc117 implementation candidate. The derived
+provider-admission, no-pixel classification, and public-safe projection phases
+are implemented there as well; they remain subject to mainline integration and
+real-chain acceptance. This document retains the regression contract and must
+not introduce a second activation mechanism or lifecycle.
 
 Scope: V3 normalized evidence, capability activation, reference policy/Product
 Identity, Provider materialization, Product API/Project Mode failure projection,
@@ -20,10 +21,10 @@ statement.
 
 | Item | Current evidence | Meaning |
 | --- | --- | --- |
-| Shared Human Realism activation | Candidate `e458d23` freezes `human_realism` as required for a non-stylized, visible real person even when the remote Brain omits it. Its focused regression suite passed. | This is the activation regression lock to integrate and re-run on current `main`; it is not a child-specific feature. |
+| Shared Human Realism activation | `e458d23`, cherry-picked as `497b6ac` in the Doc117 implementation candidate, freezes `human_realism` as required for a non-stylized, visible real person even when the remote Brain omits it. Its focused regression suite passed. | This is the shared activation regression lock; it is not a child-specific feature. |
 | Adult real-pixel smoke | `job_8f8ac7de18` produced a GPT Image 2 candidate with `hybrid / pass / verified / 0.92`. | It is positive evidence for the existing shared chain, not a blanket production gate for every template. |
 | Controlled school-age-child smoke | `job_3863e5d5f2` reached the remote Brain, froze Human Realism, then received a generic provider `400` before pixels. The raw message says the request *may* be policy-blocked or unsuitable. | Classify it as `image_generation_invalid_request_unattributed` until the upstream supplies structured or correlated policy evidence. It is neither a visual-quality pass nor a visual-quality failure. |
-| Reference-provider closure | This document specifies the derived admission/result projection, classifier, and safe UI state. | These phases remain to implement after the activation candidate is integrated. They must reuse the existing envelope, Provider result, retry record, and Job lifecycle. |
+| Reference-provider closure | The Doc117 implementation candidate derives admission/result provenance, classifies no-pixel outcomes, and projects safe Product API/Project/Browser state. | The implementation reuses the existing envelope, Provider result, retry record, and Job lifecycle. Real Provider acceptance remains open. |
 
 The forward execution model is intentionally short:
 
@@ -396,23 +397,23 @@ required-reference rejection, ambiguous 4xx attribution, explicit policy
 block, safe public projection, and no-pixel review suppression. Freeze the
 existing gateway-owned routing behavior and GPT Image 2 sole-renderer rule.
 
-### Phase 1 -- activation integrity regression lock (implemented candidate)
+### Phase 1 -- activation integrity regression lock (implemented)
 
-`e458d23` computes/enforces the shared real-visible-person activation invariant
+`e458d23`, integrated as `497b6ac` in the implementation candidate, computes/enforces the shared real-visible-person activation invariant
 before Provider execution, even when the remote Brain omits the capability.
 Keep its regression coverage across entry paths. Do not add a second local
 activator, child detector, or template-specific merge path. Compatibility fields
 from a compact Brain response remain non-authoritative and cannot weaken the
 enforced plan.
 
-### Phase 2 -- reference input admission and provenance
+### Phase 2 -- reference input admission and provenance (implemented)
 
 Create the derived `ReferenceInputExecution` projection at reference
 materialization. Implement local technical admission, required/optional channel
 semantics, decoded-media validation, safe derivative provenance, and
 per-operation request accounting without adding a second Job lifecycle.
 
-### Phase 3 -- classified Provider closure
+### Phase 3 -- classified Provider closure (implemented)
 
 Map known technical/capability/reference-input failures to the taxonomy above.
 Sanitize upstream messages before persistence/public projection. Preserve
@@ -420,7 +421,7 @@ gateway-owned failover. Preserve Doc93's existing direct-Provider, narrowly
 scoped compatibility/transient retry only where it already applies; do not add
 generic SDK/HTTP retries around gateway-owned image edits.
 
-### Phase 4 -- lifecycle and result-surface closure
+### Phase 4 -- lifecycle and result-surface closure (implemented)
 
 Project the safe terminal reference state through Product API, Project Mode,
 history/recovery, and browser results. Ensure blocked/rejected requests produce
@@ -568,20 +569,21 @@ and amended to the then-current local-Codex architecture decision. Do not merge
 two documents numbered 117 or treat its abandoned Platform-key adapter as a
 fallback for the web/provider path.
 
-Implementation proceeds in this order:
+Implementation sequence and current checkpoint:
 
-1. rebase and integrate `e458d23` into the then-current mainline, then rerun
-   its activation regression across all entry paths;
-2. build a **derived** reference-input audit projection from existing asset
+1. `e458d23` was cherry-picked as `497b6ac` into the Doc117 implementation
+   candidate and its activation regression was rerun;
+2. the implementation derives `ReferenceInputExecution` from existing asset
    plans, materialization attempts, Provider results, retry records, and Job
-   lifecycle;
-3. add the narrow no-pixel result classifier, including the two unattributed
+   lifecycle, including required-reference technical admission;
+3. it adds the narrow no-pixel classifier, including the two unattributed
    invalid-request states and the higher-evidence policy classification;
-4. project only safe terminal status to Product API, Project Mode, history,
-   and browser surfaces; and
-5. run the cross-template real-chain matrix with authorized references and
-   vision/hybrid review. A real result is accepted only when candidate pixels,
-   review provenance, and the final delivery lineage all exist.
+4. it projects safe terminal status to Product API, Project Mode/history, and
+   browser results without exposing raw Provider errors; and
+5. mainline integration and the cross-template real-chain matrix with
+   authorized references and vision/hybrid review remain required. A real
+   result is accepted only when candidate pixels, review provenance, and the
+   final delivery lineage all exist.
 
 During every phase, creative direction remains remote-Brain owned. The local
 system may enforce facts, capability activation, reference admission, count,

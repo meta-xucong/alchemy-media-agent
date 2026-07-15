@@ -5514,6 +5514,24 @@ function v3EcommerceFailureMessage(job) {
 function v3ProviderFailureUserMessage(job) {
   const ecommerceFailure = v3EcommerceFailureMessage(job);
   if (ecommerceFailure) return ecommerceFailure;
+  const providerExecution = job?.metadata?.provider_execution;
+  const operations = Array.isArray(providerExecution?.operations) ? providerExecution.operations : [];
+  const failureCode = String(operations.find((operation) => !operation?.automatic_delivery_available)?.safe_reason_code || "");
+  if (failureCode === "reference_input_unsupported") {
+    return "提供的参考图片无法被当前生图链路读取。本次没有生成图片，也没有用文字替代参考图；请更换有效的原图后再试。";
+  }
+  if (failureCode === "reference_input_capability_mismatch") {
+    return "当前生图线路不支持这次必须保留的参考图。本次已安全阻断，不会降级成纯文字生图。";
+  }
+  if (failureCode === "reference_input_rejected") {
+    return "上游拒绝了这次提交的参考图。本次没有生成图片，也没有自动换图或改写需求。";
+  }
+  if (failureCode === "image_edit_invalid_request_unattributed" || failureCode === "image_generation_invalid_request_unattributed") {
+    return "上游在返回图片前拒绝了本次请求，但原因尚无法可靠归因。本次没有生成图片，系统没有把它误判为画面质量问题或自动改写需求。";
+  }
+  if (failureCode === "provider_policy_blocked") {
+    return "上游在返回图片前阻断了本次请求。本次没有生成图片，系统不会通过换年龄、换场景或改写参考图来规避该阻断。";
+  }
   const summary = v3JobProviderRetrySummary(job);
   const executed = Number(summary.executed_count || 0);
   const warnings = Array.isArray(job?.warnings) ? job.warnings.join(" ") : "";

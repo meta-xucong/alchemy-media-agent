@@ -107,8 +107,55 @@ class OutputQualityReviewMerger:
         *,
         max_attempts: int,
     ) -> list[AutoRetryDecision]:
-        retryable = [inspection for inspection in inspections if inspection.status == "fail_retryable" and inspection.retryable]
+        retryable = [inspection for inspection in inspections if self._retry_eligible(inspection)]
         if not retryable:
+            manual = [inspection for inspection in inspections if inspection.status == "manual_review"]
+            unverified_retryable = [
+                inspection
+                for inspection in inspections
+                if inspection.status == "fail_retryable"
+                and inspection.retryable
+                and not self._retry_eligible(inspection)
+            ]
+            held = [*manual, *unverified_retryable]
+            if held:
+                reason_codes = _dedupe(
+                    issue.get("code")
+                    for inspection in held
+                    for issue in inspection.detected_issues
+                    if issue.get("code")
+                )
+                blocked_reason = "manual_confirmation_required" if manual else "review_not_verified"
+                return [
+                    AutoRetryDecision(
+                        decision_id=stable_id(
+                            "visual_auto_retry_decision",
+                            job_id,
+                            "post_generation",
+                            blocked_reason,
+                        ),
+                        job_id=job_id,
+                        project_id=project_id,
+                        should_retry=False,
+                        max_attempts=max_attempts,
+                        reason_codes=reason_codes,
+                        blocked_reason=blocked_reason,
+                        user_visible_reason=(
+                            "V3 checked the generated images, but the review needs manual confirmation before any "
+                            "automatic refinement or final delivery."
+                            if manual
+                            else "V3 could not verify the visual review, so it will not automatically refine or "
+                            "deliver this image."
+                        ),
+                        metadata={
+                            "post_generation": True,
+                            "retryable_report_count": 0,
+                            "manual_review_count": len(manual),
+                            "unverified_retryable_count": len(unverified_retryable),
+                            "source_inspection_ids": [inspection.inspection_id for inspection in held],
+                        },
+                    )
+                ]
             return [
                 AutoRetryDecision(
                     decision_id=stable_id("visual_auto_retry_decision", job_id, "post_generation", "pass"),
@@ -163,7 +210,10 @@ class OutputQualityReviewMerger:
             signal.candidate_id
             for signal in candidate_signals
             if signal.candidate_id
-            and signal.status in {"fail_final", "manual_review"}
+            and (
+                signal.status in {"fail_final", "manual_review"}
+                or (signal.status == "fail_retryable" and not signal.retryable_issue_codes)
+            )
             and not signal.retryable_issue_codes
         )
         issue_summary: dict[str, int] = {}
@@ -189,23 +239,30 @@ class OutputQualityReviewMerger:
             issue_groups=issue_groups,
             mode_quality_status=self._group_status(candidate_signals, "mode"),
             reference_continuity_status=self._group_status(candidate_signals, "identity", "product"),
-            commercial_readiness_status="retryable_issue" if retryable else "manual_review" if "manual_review" in statuses else "pass",
+            commercial_readiness_status=(
+                "retryable_issue"
+                if retryable
+                else "manual_review"
+                if "manual_review" in statuses or "fail_retryable" in statuses
+                else "pass"
+            ),
             user_visible_summary=self._real_review_summary(candidate_signals, retryable),
             metadata={"doc": "66", "post_generation": True, "signal_count": len(candidate_signals)},
         )
 
     def _candidate_signal(self, inspection: VisualInspectionReport) -> RealReviewCandidateSignal:
         issue_codes = _dedupe(issue.get("code") for issue in inspection.detected_issues if issue.get("code"))
+        retry_eligible = self._retry_eligible(inspection)
         retryable_issue_codes = _dedupe(
             issue.get("code")
             for issue in inspection.detected_issues
-            if issue.get("code") and bool(issue.get("retryable"))
+            if retry_eligible and issue.get("code") and bool(issue.get("retryable"))
         )
-        if inspection.status == "fail_retryable" and inspection.retryable and retryable_issue_codes:
+        if retry_eligible and retryable_issue_codes:
             action = "retry"
         elif inspection.status == "fail_final":
             action = "hide"
-        elif inspection.status == "manual_review":
+        elif inspection.status in {"manual_review", "fail_retryable"}:
             action = "review"
         elif inspection.status == "warning":
             action = "keep_with_warning"
@@ -218,7 +275,7 @@ class OutputQualityReviewMerger:
             status=inspection.status,
             issue_codes=issue_codes,
             retryable_issue_codes=retryable_issue_codes,
-            retry_patch=dict(inspection.retry_patch),
+            retry_patch=dict(inspection.retry_patch) if retry_eligible else {},
             recommended_action=action,
             user_visible_summary=list(inspection.user_visible_summary) or [self._candidate_summary(action)],
             metadata={
@@ -227,6 +284,26 @@ class OutputQualityReviewMerger:
                 "confidence": inspection.confidence,
                 "issue_groups": issue_groups,
             },
+        )
+
+    @staticmethod
+    def _retry_eligible(inspection: VisualInspectionReport) -> bool:
+        test_fixture_retry = (
+            inspection.mode == "fake_for_tests"
+            and bool((inspection.metadata or {}).get("fake_for_tests"))
+        )
+        deterministic_local_retry = (
+            inspection.mode == "local_image_heuristic"
+            and inspection.verification_state == "locally_checked"
+        )
+        return bool(
+            inspection.status == "fail_retryable"
+            and inspection.retryable
+            and (
+                inspection.verification_state == "verified"
+                or deterministic_local_retry
+                or test_fixture_retry
+            )
         )
 
     def _group_status(self, signals: list[RealReviewCandidateSignal], *groups: str) -> str:
@@ -240,7 +317,7 @@ class OutputQualityReviewMerger:
             return "pass"
         if any(signal.retryable_issue_codes for signal in matched):
             return "retryable_issue"
-        if any(signal.status == "manual_review" for signal in matched):
+        if any(signal.recommended_action == "review" for signal in matched):
             return "manual_review"
         return "warning"
 
@@ -262,7 +339,7 @@ class OutputQualityReviewMerger:
     ) -> list[str]:
         if retryable:
             return ["V3 checked the real images.", "Fixable issues were found and scoped to the affected candidate."]
-        if any(signal.status == "manual_review" for signal in signals):
+        if any(signal.recommended_action == "review" for signal in signals):
             return ["V3 checked the real images.", "Some images need manual confirmation before retry."]
         if any(signal.status == "warning" for signal in signals):
             return ["V3 checked the real images.", "The set is usable with minor warnings."]
@@ -294,7 +371,7 @@ class OutputQualityReviewMerger:
     ) -> list[str]:
         if any(decision.should_retry for decision in decisions):
             return ["V3 checked the generated images.", "Fixable issues were found and a cleaner retry is ready."]
-        if any(inspection.status == "manual_review" for inspection in inspections):
+        if any(decision.blocked_reason for decision in decisions):
             return ["V3 checked the generated images.", "Some images need manual confirmation before automatic retry."]
         if any(inspection.status == "warning" for inspection in inspections):
             return ["V3 checked the generated images.", "Small risks were found, but the images can still be reviewed."]

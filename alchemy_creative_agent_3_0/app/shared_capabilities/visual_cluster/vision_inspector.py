@@ -263,6 +263,7 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "provider_error",
     "metadata_only_non_certifying",
     "hard_semantic_contract_unverified",
+    "reference_evidence_unavailable",
     "feedback_or_similarity_not_verifiable",
 }
 
@@ -295,6 +296,18 @@ class VisionOutputInspector:
         if resolution.status != "ready":
             return self._manual_report(resolution, resolution.status, metadata)
         mode = self._inspection_mode(metadata)
+        if _reference_evidence_unavailable(metadata):
+            return self._manual_report(
+                resolution,
+                "reference_evidence_unavailable",
+                metadata,
+                mode=mode,
+                evidence_extra={
+                    "reference_evidence_required": True,
+                    "reference_evidence_available": False,
+                    "not_verifiable": ["reference_truth"],
+                },
+            )
         review_contract = active_review_contract(metadata)
         if review_contract["requires_pixel_review"] and mode == "local_image_heuristic":
             # A local check cannot certify semantic fidelity, but it can still
@@ -1566,6 +1579,16 @@ def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             "vision_model",
         }
     }
+
+
+def _reference_evidence_unavailable(metadata: dict[str, Any]) -> bool:
+    """Keep reference-truth review non-certifying without its admitted input."""
+
+    if not _truthy(metadata.get("review_reference_evidence_required")):
+        return False
+    if not _truthy(metadata.get("review_reference_evidence_available")):
+        return True
+    return not inspection_reference_paths(metadata)
 
 
 def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:

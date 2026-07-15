@@ -205,6 +205,31 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert len(exported.manifest["remote_brain_output_intents"]) == 2
 
 
+def test_general_remote_brain_is_pinned_for_generation_and_retry_stability() -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(brain_provider=provider)
+    created = service.create_job(
+        {
+            "user_input": "Create one natural outdoor portrait with a clear visual direction.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+
+    assert created.status == "planned"
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    frozen = record.request.metadata["frozen_remote_creative_brain"]
+    assert frozen["scenario_id"] == "general_creative"
+    assert frozen["capability_plan_id"] == record.request.metadata["capability_activation_plan"]["plan_id"]
+
+    generated = service.generate_job(created.job_id, {"quality_mode": "standard"})
+
+    assert generated.status == "generated"
+    assert len(provider.requests) == 1
+    assert provider.requests[0]["scenario_id"] == "general_creative"
+
+
 def test_general_brain_request_has_no_ecommerce_context_or_instruction() -> None:
     request = V3LLMBrainAdapter().build_request(
         user_input="给夏日饮料做一张社交媒体海报",

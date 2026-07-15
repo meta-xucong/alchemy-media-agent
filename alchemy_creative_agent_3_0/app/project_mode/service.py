@@ -1313,15 +1313,44 @@ class V3ProjectModeService:
         status = self.product_service.generate_job(job_id, payload)
         status.metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
         if status.status == ProductJobStatusValue.GENERATED:
+            final_delivery = status.metadata.get("final_delivery") if isinstance(status.metadata, dict) else None
+            final_delivery_withheld = (
+                isinstance(final_delivery, dict)
+                and bool(final_delivery.get("delivery_gate_applies"))
+                and not bool(final_delivery.get("automatic_delivery_available"))
+            )
+            manual_confirmation_required = bool(
+                isinstance(final_delivery, dict) and final_delivery.get("manual_confirmation_required")
+            )
             self._append_timeline(
                 project.project_id,
                 TimelineItemType.JOB_GENERATED,
-                "生成了一组电商套图" if template_id == ECOMMERCE_TEMPLATE_ID else "生成了一组创意图",
-                "套图已生成，请先检查商品细节和卖点是否准确。" if template_id == ECOMMERCE_TEMPLATE_ID else "图片已生成，可以选中喜欢的结果作为后续风格参考。",
+                (
+                    "生成结果需要人工确认"
+                    if manual_confirmation_required
+                    else "生成结果未通过自动验收"
+                    if final_delivery_withheld
+                    else "生成了一组电商套图"
+                    if template_id == ECOMMERCE_TEMPLATE_ID
+                    else "生成了一组创意图"
+                ),
+                (
+                    "真实像素已生成并完成审查，但需要人工确认；暂不作为最终交付。"
+                    if manual_confirmation_required
+                    else "真实像素已生成，但没有可自动交付的最终结果。"
+                    if final_delivery_withheld
+                    else "套图已生成，请先检查商品细节和卖点是否准确。"
+                    if template_id == ECOMMERCE_TEMPLATE_ID
+                    else "图片已生成，可以选中喜欢的结果作为后续风格参考。"
+                ),
                 job_id=job_id,
                 asset_ids=[asset.asset_id for asset in status.asset_series],
                 candidate_ids=[candidate.candidate_id for candidate in status.candidates],
-                metadata={"template_id": template_id, "scenario_pack_id": status.scenario.scenario_id if status.scenario else None},
+                metadata={
+                    "template_id": template_id,
+                    "scenario_pack_id": status.scenario.scenario_id if status.scenario else None,
+                    "final_delivery": dict(final_delivery) if isinstance(final_delivery, dict) else {},
+                },
             )
             review_package = status.metadata.get("post_generation_review") if isinstance(status.metadata, dict) else None
             review_certification = status.metadata.get("review_certification") if isinstance(status.metadata, dict) else None
@@ -1341,6 +1370,7 @@ class V3ProjectModeService:
                         "recommended_output_ids": list(review_package.get("recommended_output_ids") or []),
                         "hidden_output_ids": list(review_package.get("hidden_output_ids") or []),
                         "review_certification": review_certification if isinstance(review_certification, dict) else {},
+                        "final_delivery": dict(final_delivery) if isinstance(final_delivery, dict) else {},
                     },
                 )
             retry_summary = status.metadata.get("visual_auto_retry") if isinstance(status.metadata, dict) else None
@@ -1361,6 +1391,7 @@ class V3ProjectModeService:
                 )
         elif status.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
             provider_retry = status.metadata.get("provider_failure_retry") if isinstance(status.metadata, dict) else None
+            provider_execution = status.metadata.get("provider_execution") if isinstance(status.metadata, dict) else None
             specialized_execution = (
                 status.metadata.get("specialized_execution_summary")
                 if isinstance(status.metadata, dict)
@@ -1419,6 +1450,7 @@ class V3ProjectModeService:
                     "status": str(status.status),
                     "warnings": list(status.warnings or [])[:3],
                     "provider_failure_retry": provider_retry if isinstance(provider_retry, dict) else {},
+                    "provider_execution": provider_execution if isinstance(provider_execution, dict) else {},
                     "specialized_execution_summary": specialized_execution if final_delivery_withheld else {},
                     "review_certification": review_certification if isinstance(review_certification, dict) else {},
                     "normal_project_delivery_withheld": final_delivery_withheld,

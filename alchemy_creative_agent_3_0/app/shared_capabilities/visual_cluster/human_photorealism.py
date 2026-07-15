@@ -119,6 +119,21 @@ _NEGATION_TERMS = {
     "不是",
 }
 
+# These patterns describe a rendered-looking word as a physical object's
+# content or placement, rather than as the requested rendering medium for the
+# complete image.  They deliberately name only generic surface semantics: the
+# same distinction applies to packaging, a book cover, a garment, a sign, or
+# another reference-bound object.
+_ILLUSTRATION_OBJECT_DETAIL_PATTERNS = (
+    re.compile(
+        r"\b(?:illustration|illustrated)\s+(?:placement|print|pattern|motif|graphic|detail|element|artwork|design)\b"
+    ),
+    re.compile(
+        r"\b(?:front|back|side|surface|cover|label|package|product)\s+(?:illustration|illustrated)\b"
+    ),
+    re.compile(r"(?:插画|插图|漫画)(?:位置|摆放|图案|印花|元素|细节|设计)"),
+)
+
 _PRODUCT_WITH_HUMAN_TERMS = {
     "apparel",
     "clothing",
@@ -175,6 +190,10 @@ _CHILD_TERMS = {
     "girl",
     "teen",
     "toddler",
+    "minor",
+    "school-age",
+    "school age",
+    "schoolchild",
 }
 
 _CHINESE_CHILD_TERMS = {
@@ -186,6 +205,8 @@ _CHINESE_CHILD_TERMS = {
     "\u5973\u5b69",
     "\u5c11\u5e74",
     "\u5c11\u5973",
+    "\u5b66\u9f84",
+    "\u672a\u6210\u5e74",
 }
 
 _EXPLICIT_AGE_TERMS = _CHILD_TERMS | {
@@ -579,6 +600,14 @@ class HumanPhotorealismLayer:
                 "doc92_style_aware_ai_feel_suppression": True,
                 "doc94_universal_rendering_profile": True,
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
+                "provider_safety_profile": {
+                    "applies": bool(activation.get("safety_sensitive_person")),
+                    "contract": "safety_sensitive_person_v1",
+                    "internal_anatomy_or_quality_terms_suppressed": bool(
+                        activation.get("safety_sensitive_person")
+                    ),
+                    "reference_scope": "resolved_channels_only",
+                },
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": has_identity_reference,
                 "doc68_casebook_recipe": True,
@@ -778,6 +807,16 @@ class HumanPhotorealismLayer:
         template_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
+        text = _combined_activation_text(
+            user_input=user_input,
+            scenario_id=scenario_id,
+            template_id=template_id,
+            subject_type=subject_type,
+            metadata=metadata,
+        )
+        safety_sensitive_person = _is_safety_sensitive_person(text) or _truthy(
+            metadata.get("safety_sensitive_person")
+        )
         if _truthy(metadata.get("disable_human_photorealism")):
             return _activation_payload(
                 applies=False,
@@ -799,15 +838,9 @@ class HumanPhotorealismLayer:
                 style_profile=str(metadata.get("human_realism_style_profile") or rendering_profile["profile_id"]),
                 universal_rendering_profile=rendering_profile,
                 evidence={"metadata": ["force_human_realism_plugin"]},
+                safety_sensitive_person=safety_sensitive_person,
             )
 
-        text = _combined_activation_text(
-            user_input=user_input,
-            scenario_id=scenario_id,
-            template_id=template_id,
-            subject_type=subject_type,
-            metadata=metadata,
-        )
         if _stylized_requested(text):
             return _activation_payload(
                 applies=False,
@@ -890,6 +923,7 @@ class HumanPhotorealismLayer:
             )
 
         evidence["text_signals"] = reason_codes
+        evidence["safety_sensitive_person"] = safety_sensitive_person
         rendering_profile = _universal_rendering_profile(
             text,
             metadata={**metadata, "age_fidelity": "follow_explicit_prompt" if explicit_age_signal else metadata.get("age_fidelity")},
@@ -904,6 +938,7 @@ class HumanPhotorealismLayer:
             style_profile=rendering_profile["profile_id"],
             universal_rendering_profile=rendering_profile,
             evidence=evidence,
+            safety_sensitive_person=safety_sensitive_person,
         )
 
     def _realism_level(self, user_input: str, metadata: dict[str, Any]) -> str:
@@ -954,6 +989,23 @@ def _has_explicit_age_direction(text: str) -> bool:
         or re.search(r"\b\d{1,2}\s*(?:-| )?year(?:s)?[- ]old\b", normalized)
         or re.search(r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*岁", normalized)
     )
+
+
+def _is_safety_sensitive_person(text: str) -> bool:
+    """Recognize an explicitly young person without inferring age from appearance.
+
+    This is a narrow, shared Human Realism auxiliary signal.  It controls only
+    framework-owned Provider wording; it neither rewrites a user's request nor
+    creates a template, deliverable, or Provider route for children.
+    """
+
+    if _contains_any(text, _CHILD_TERMS) or _contains_any(text, _CHINESE_CHILD_TERMS):
+        return True
+    normalized = str(text or "").lower()
+    matches = re.findall(r"\b(?:age|aged)\s*(\d{1,2})\b|\b(\d{1,2})\s*(?:-| )?year(?:s)?[- ]old\b", normalized)
+    if any(0 <= int(first or second) < 18 for first, second in matches):
+        return True
+    return bool(re.search(r"\b\d{1,2}\s*\u5c81", normalized))
 
 
 def _combined_activation_text(
@@ -1010,10 +1062,29 @@ def _stylized_requested(text: str) -> bool:
         index = text.find(term)
         while index >= 0:
             prefix = text[max(0, index - 28) : index]
+            if _stylized_term_describes_object_detail(text, term, index):
+                index = text.find(term, index + len(term))
+                continue
             if not any(negation in prefix for negation in _NEGATION_TERMS):
                 return True
             index = text.find(term, index + len(term))
     return False
+
+
+def _stylized_term_describes_object_detail(text: str, term: str, index: int) -> bool:
+    """Keep an object's artwork fact from changing the whole-image style.
+
+    A word such as ``illustration`` is a style signal only when it directs the
+    rendering of the image or subject.  In a reference-truth request it can
+    also describe a product's visible print, motif, or placement.  Treating
+    the latter as a style instruction would silently suppress shared Human
+    Realism for an otherwise real-person photograph.
+    """
+
+    if term not in {"illustration", "illustrated", "插画", "插图", "漫画"}:
+        return False
+    window = text[max(0, index - 48) : index + len(term) + 72]
+    return any(pattern.search(window) for pattern in _ILLUSTRATION_OBJECT_DETAIL_PATTERNS)
 
 
 def _universal_rendering_profile(text: str, *, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -1141,6 +1212,7 @@ def _activation_payload(
     style_profile: str = "neutral_real_camera",
     universal_rendering_profile: dict[str, Any] | None = None,
     evidence: dict[str, Any] | None = None,
+    safety_sensitive_person: bool = False,
 ) -> dict[str, Any]:
     if applies and human_subject_kind == "none":
         human_subject_kind = "person"
@@ -1158,6 +1230,7 @@ def _activation_payload(
         "strictness": strictness,
         "style_profile": style_profile if applies else "stylized_disabled" if disabled_by_style else "off",
         "universal_rendering_profile": dict(universal_rendering_profile or {}),
+        "safety_sensitive_person": bool(safety_sensitive_person),
         "review_issue_codes": review_codes,
         "evidence": evidence or {},
         "doc": "91",
