@@ -2237,6 +2237,7 @@ function setV3Preset(presetId) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  syncV3GenerationCountControl();
 }
 
 function setV3VariationMode(mode) {
@@ -5125,11 +5126,42 @@ function v3BoundedGenerationCount(value) {
   return Math.max(1, Math.min(4, number));
 }
 
+function v3FixedGenerationCountForSelectedScenario() {
+  const scenarioId = v3State.selectedScenario
+    || v3ScenarioForTemplate(v3State.currentProject?.primary_template_id || v3State.selectedTemplate || "general_template");
+  if (scenarioId !== "photography") return null;
+  return v3State.selectedPreset === "professional_set" ? 3 : 1;
+}
+
+function syncV3GenerationCountControl() {
+  const fixedCount = v3FixedGenerationCountForSelectedScenario();
+  const input = els.v3CountInput;
+  if (fixedCount === null) {
+    if (input) {
+      input.disabled = false;
+      input.removeAttribute("aria-label");
+    }
+    return;
+  }
+  v3State.generationCount = fixedCount;
+  if (input) {
+    input.value = String(fixedCount);
+    input.disabled = true;
+    input.setAttribute("aria-label", `摄影模式固定生成数量 ${fixedCount} 张`);
+  }
+  if (els.v3CountValue) els.v3CountValue.textContent = String(fixedCount);
+}
+
 function v3CurrentGenerationSettings() {
-  const count = v3BoundedGenerationCount(els.v3CountInput?.value || v3State.generationCount || 2);
+  const fixedCount = v3FixedGenerationCountForSelectedScenario();
+  const count = fixedCount ?? v3BoundedGenerationCount(els.v3CountInput?.value || v3State.generationCount || 2);
   const size = v3State.selectedSize || document.querySelector("[data-v3-size].active")?.dataset.v3Size || "";
   v3State.generationCount = count;
   v3State.selectedSize = size;
+  if (els.v3CountInput) {
+    els.v3CountInput.value = String(count);
+    els.v3CountInput.disabled = fixedCount !== null;
+  }
   if (els.v3CountValue) els.v3CountValue.textContent = String(count);
   return {
     count,

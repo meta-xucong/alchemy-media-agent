@@ -1982,6 +1982,26 @@ def test_v3_template_catalog_rerenders_after_initial_loading_settles() -> None:
     assert settled < rerender < page_ready
 
 
+def test_v3_photography_generation_count_is_fixed_by_delivery_mode() -> None:
+    """Photography modes own their deliverable count, not the generic range input."""
+
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    helper_start = source.index("function v3FixedGenerationCountForSelectedScenario()")
+    helper_end = source.index("\nfunction syncV3GenerationCountControl()", helper_start)
+    helper = source[helper_start:helper_end]
+    current_start = source.index("function v3CurrentGenerationSettings()")
+    current_end = source.index("\nfunction v3AdvancedReferenceControlsPayload()", current_start)
+    current = source[current_start:current_end]
+
+    assert 'scenarioId !== "photography"' in helper
+    assert 'v3State.selectedPreset === "professional_set" ? 3 : 1' in helper
+    assert "const fixedCount = v3FixedGenerationCountForSelectedScenario();" in current
+    assert "const count = fixedCount ??" in current
+    assert "els.v3CountInput.disabled = fixedCount !== null;" in current
+
+
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(
