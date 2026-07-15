@@ -1,6 +1,13 @@
 # Doc126: V3 Codex Native ImageGen Conversation-only Plugin
 
-Status: isolated planning-only technical verification. This specification was
+Status: **superseded for active Local Mode behavior by Doc129.** This document
+remains an archived N1 isolation record only. Its original planning-only
+surface correctly proved that Codex-native generation needs no Platform API,
+browser/session access, or artifact handoff, but it incorrectly allowed a
+deterministic General fallback to become an outward-facing image prompt. Do
+not enable or restore that prompt projection.
+
+This specification was
 originally numbered Doc118 on its feature branch. The cumulative shared-runtime
 correction series now owns Docs118–124 on mainline, so this document is
 renumbered to Doc126 before integration. The old feature-branch Doc118 path is
@@ -11,12 +18,13 @@ superseded and must not be imported alongside the mainline Doc118 authority.
 **Phase N1 implemented as a developer-preview planning surface; not a Web
 Provider, not a V3 delivery path, and not a production gate.**
 
-This is the only approved local-Codex direction:
+Doc129 is the only approved active local-Codex direction:
 
 ```text
 explicit user choice in Codex
--> local Alchemy planning MCP
--> frozen whole-image direction and guardrails
+-> local Alchemy constraint-admission MCP
+-> protected user truth and frozen guardrails
+-> Codex conversation authors a whole-image direction
 -> Codex built-in ImageGen, one call per output
 -> image remains in the Codex conversation
 ```
@@ -26,7 +34,7 @@ configured Web Central Brain or image gateway. Codex owns the built-in image
 tool and its authentication; Alchemy never reads Codex authentication, a
 browser session, cache, or an undocumented image handle.
 
-## What Phase N1 provides
+## Historical N1 behavior (withdrawn)
 
 `prepare_native_imagegen_plan` is the sole MCP tool. It accepts only:
 
@@ -36,13 +44,17 @@ browser session, cache, or an undocumented image handle.
 - named reference channels plus whether their attachment exists in the current
   Codex conversation.
 
-It invokes V3's planning-only path with a generation sentinel and a no-remote
+It invoked V3's planning-only path with a generation sentinel and a no-remote
 Brain provider. Therefore it may reuse normalized intent, the activation
 envelope, constraint ledger, and General's natural-language compilation, but
 cannot create a production renderer, make a Web Brain call, or create a
 candidate, output record, review, retry, or delivery.
 
-Every successful plan is marked:
+The N1 provenance values below are historical. New Local Mode calls must use
+Doc129's `alchemy_v3_constraint_admission` planning authority and
+`codex_conversation_llm` creative-direction owner.
+
+Every historical N1 plan was marked:
 
 ```text
 execution_channel = codex_native_imagegen
@@ -54,7 +66,7 @@ These values describe a prompt plan, never an image result. They cannot be
 used for Provider Gate C/D, General Gate D, Photography P10, E-Commerce Gate
 C/D, project continuation, or production readiness.
 
-## Deliberate limits
+## Historical N1 limits
 
 1. **General only.** `ecommerce_template` and `photographer_template` return
    `codex_native_imagegen_template_not_enabled`. They must not fall back to
@@ -66,10 +78,10 @@ C/D, project continuation, or production readiness.
    are always hard channels; callers cannot send `required=false` to weaken
    them. Attachment quality and pixel fidelity remain non-certified until a
    supported artifact handoff exists.
-3. **No structured prompt pile-up.** The returned `imagegen_prompt` is the
-   whole-image direction. Constraint, text, and reference fields are
-   accountable guardrails for Codex to preserve, not a recipe, keyword list,
-   local overlay, or extra creative direction.
+3. **Prompt projection withdrawn.** N1 intended to expose a whole-image
+direction, but the deterministic fallback could include a legacy recipe. Its
+`imagegen_prompt` is therefore withdrawn. Doc129 returns a non-creative
+constraint brief and makes the Codex conversation the direction author.
 4. **Exact count or block.** The facade never silently truncates. A mismatch
    between requested count, frozen deliverables, or compilations is blocked.
 
@@ -108,13 +120,14 @@ For a cached desktop-plugin installation, set that environment variable to the
 checked-out repository root and restart Codex. The variable is a local path,
 not a credential, and must not contain a token or an API key.
 
-## N1 acceptance contract
+## Historical N1 isolation evidence
 
 - MCP `tools/list` exposes only `prepare_native_imagegen_plan`.
 - The public schema rejects job IDs, paths, Provider metadata, credentials,
   raw envelopes, B2 keys, and a caller-controlled `required` flag.
-- A General plan returns precisely the frozen requested count and no image
-  bytes, file path, hash, candidate, review, retry, or delivery state.
+- The original General plan returned precisely the requested count and no
+  image bytes, file path, hash, candidate, review, retry, or delivery state.
+  Doc129 preserves that isolation while removing its prompt projection.
 - The launcher can run from a source tree or resolve an explicit repository
   path from a cached plugin installation; an invalid path fail-closes.
 - Source scans prove active N1 code has no Platform API, Web Provider,
@@ -123,7 +136,7 @@ not a credential, and must not contain a token or an API key.
 - The bundled Skill directs Codex to call native ImageGen once per returned
   output and to label the result conversation-only/non-certified.
 
-## Deferred work
+## Remaining boundary
 
 No future phase may claim image certification merely because Codex displayed an
 image. A supported platform artifact handoff would require a new document and

@@ -1,4 +1,4 @@
-"""Doc126 planning-only bridge from local stdio MCP to frozen V3 planning."""
+"""Doc129 constraint-admission bridge from local stdio MCP to Codex ImageGen."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .provenance import native_plan_provenance
 
 _TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
 _DEFERRED_TEMPLATE_IDS = frozenset({"ecommerce_template", "photographer_template"})
+_FORBIDDEN_LOCAL_CREATIVE_CAPABILITIES = frozenset({"suite_direction"})
 
 
 class PlanningOnlyGenerationRouter:
@@ -28,7 +29,12 @@ class PlanningOnlyGenerationRouter:
 
 
 class NativePlanningNoRemoteBrainProvider:
-    """Keep Local Mode independent from Web Mode's configured remote Brain."""
+    """Keep Local Mode independent from Web Mode's configured remote Brain.
+
+    The resulting deterministic runtime answer is allowed to help V3 freeze
+    admission contracts, but it is never surfaced as a creative direction.
+    The current Codex conversation owns the natural-language direction.
+    """
 
     provider = "codex_native_no_remote_brain"
     model = "not-applicable"
@@ -41,7 +47,7 @@ class NativePlanningNoRemoteBrainProvider:
 
 
 class CodexNativeImageGenPlanner:
-    """Build public-safe image-tool prompts without creating images or outputs."""
+    """Freeze non-creative V3 guardrails without creating images or outputs."""
 
     def __init__(self, runtime_factory: Callable[[], ScenarioRuntime] | None = None) -> None:
         self._runtime_factory = runtime_factory or self._default_runtime
@@ -97,37 +103,40 @@ class CodexNativeImageGenPlanner:
         if result.status != ScenarioRuntimeStatus.PLANNED or result.planning_result is None:
             return self._blocked_from_runtime(result.metadata, "Codex Native ImageGen planning was blocked before any image was created.")
 
-        frozen_plan = result.metadata.get("template_deliverable_plan")
         ledger = result.metadata.get("resolved_constraint_ledger")
         envelope = result.metadata.get("capability_execution_envelope")
         normalized = result.metadata.get("normalized_v3_job_intent")
-        if not all(isinstance(item, dict) for item in (frozen_plan, ledger, envelope, normalized)):
+        if not all(isinstance(item, dict) for item in (ledger, envelope, normalized)):
             return self._blocked("codex_native_imagegen_frozen_plan_missing", "V3 planning did not produce a complete frozen planning contract.")
-        deliverables = frozen_plan.get("deliverables")
-        prompts = result.planning_result.prompt_compilations
-        if not isinstance(deliverables, list) or len(deliverables) != request.requested_image_count or len(prompts) != request.requested_image_count:
-            return self._blocked("codex_native_imagegen_role_count_mismatch", "V3 planning returned a count that does not match the requested outputs.")
         if int(normalized.get("effective_image_count") or 0) != request.requested_image_count:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 planning did not preserve the requested image count.")
+        if str(envelope.get("activation_mode") or "") != "enforced":
+            return self._blocked("codex_native_imagegen_envelope_not_enforced", "Codex Native ImageGen requires an enforced V3 admission envelope.")
 
         instructions = public_reference_instructions(request.reference_declarations)
+        guardrails = self._public_guardrails(normalized, envelope)
+        capability_ids = self._public_capability_ids(envelope)
         outputs: list[dict[str, Any]] = []
-        for index, (deliverable, prompt) in enumerate(zip(deliverables, prompts, strict=True), 1):
-            if not isinstance(deliverable, dict) or deliverable.get("output_index") != index:
-                return self._blocked("codex_native_imagegen_role_lineage_invalid", "V3 planning returned an invalid frozen output lineage.")
-            role_lineage = str(deliverable.get("deliverable_id") or "").strip()
-            if not role_lineage:
-                return self._blocked("codex_native_imagegen_role_lineage_invalid", "V3 planning did not provide a frozen output lineage.")
-            image_prompt = str(prompt.visual_prompt or "").strip()
-            if not image_prompt:
-                return self._blocked("codex_native_imagegen_prompt_missing", "V3 planning did not produce an ImageGen-ready prompt.")
+        envelope_id = str(envelope.get("envelope_id") or "").strip()
+        if not envelope_id:
+            return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
+        for index in range(1, request.requested_image_count + 1):
             outputs.append(
                 {
                     "output_index": index,
-                    "role_lineage": role_lineage,
-                    "imagegen_prompt": image_prompt,
-                    "hard_constraints": [str(item) for item in prompt.hard_constraints if str(item).strip()],
-                    "text_policy": str(prompt.text_policy or normalized.get("text_policy") or "provider_native_no_forced_text"),
+                    "output_binding_id": f"codex_native_output_{envelope_id.rsplit('_', 1)[-1]}_{index}",
+                    "creative_direction_brief": {
+                        "protected_user_intent": str(normalized.get("protected_user_intent") or request.user_input),
+                        "requested_image_size": normalized.get("effective_image_size"),
+                        "text_policy": str(normalized.get("text_policy") or "provider_native_no_forced_text"),
+                        "constraints_to_preserve": guardrails,
+                        "active_quality_capabilities": capability_ids,
+                        "direction_authoring_instruction": (
+                            "Author one self-contained natural-language whole-image direction for this output. "
+                            "Use the protected user intent as the creative source and preserve the listed guardrails. "
+                            "Do not turn the brief into a keyword stack or add an unrequested predefined image recipe."
+                        ),
+                    },
                     "reference_instructions": list(instructions),
                 }
             )
@@ -143,9 +152,50 @@ class CodexNativeImageGenPlanner:
                 output_count=request.requested_image_count,
                 activation_plan_id=str(envelope.get("envelope_id") or ""),
                 constraint_ledger_id=str(ledger.get("ledger_id") or ""),
-                fallback_used=bool((result.metadata.get("llm_brain") or {}).get("fallback_used")),
+                admission_fallback_observed=bool((result.metadata.get("llm_brain") or {}).get("fallback_used")),
             ),
         }
+
+    @staticmethod
+    def _public_capability_ids(envelope: dict[str, Any]) -> list[str]:
+        plan = envelope.get("activation_plan") if isinstance(envelope.get("activation_plan"), dict) else {}
+        raw = plan.get("active_capabilities") if isinstance(plan.get("active_capabilities"), list) else []
+        return [
+            capability_id
+            for capability_id in (
+                str(item.get("capability_id") or "").strip()
+                for item in raw
+                if isinstance(item, dict)
+            )
+            if capability_id and capability_id not in _FORBIDDEN_LOCAL_CREATIVE_CAPABILITIES
+        ]
+
+    @staticmethod
+    def _public_guardrails(normalized: dict[str, Any], envelope: dict[str, Any]) -> list[str]:
+        """Return bounded, non-creative invariants for the Codex conversation.
+
+        This deliberately does not read PromptCompiler output, template
+        deliverable directions, capability prompt fragments, retry patches, or
+        legacy General suite metadata.  Those fields can contain historical
+        role/camera recipes and must never influence Codex-native creation.
+        """
+
+        guardrails = ["Preserve the user's explicitly stated subject, facts, and intended use."]
+        text_policy = str(normalized.get("text_policy") or "")
+        if text_policy == "provider_native_text_forbidden":
+            guardrails.append("Do not include visible text, labels, logos, watermarks, or decorative copy.")
+        elif text_policy == "provider_native_no_forced_text":
+            guardrails.append("Do not invent prominent visible copy, labels, logos, or watermarks unless the user explicitly asks for them.")
+        else:
+            guardrails.append("Any visible text must be explicitly requested by the user; this conversation-only mode cannot certify text fidelity.")
+        capability_ids = set(CodexNativeImageGenPlanner._public_capability_ids(envelope))
+        if "human_realism" in capability_ids:
+            guardrails.append(
+                "For any visibly real person, keep appearance, anatomy, expression, and age presentation natural and consistent with the user's requested styling; do not introduce beauty-filter or anatomy-focused details."
+            )
+        if capability_ids & {"portrait_identity", "product_identity", "nonhuman_subject_identity", "reference_channel_policy"}:
+            guardrails.append("Treat each declared reference channel as truth only for that channel; do not substitute or broaden its meaning.")
+        return guardrails
 
     @staticmethod
     def _blocked(code: str, message: str) -> dict[str, Any]:
