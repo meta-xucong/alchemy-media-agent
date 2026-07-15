@@ -11,18 +11,26 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
+from alchemy_creative_agent_3_0.app.photography_profiles import (
+    GENERAL_PHOTOGRAPHY_PROFILE_ID,
+    default_photographer_profile_catalog,
+)
 
 from .contracts import (
     NATIVE_EXECUTION_CHANNEL,
     NativeImageGenPlanRequest,
+    NativeSpecializedImageGenPlanRequest,
     reference_mime_type,
     reference_role_for_channel,
 )
 from .provenance import native_plan_provenance
 
 
-_TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
-_DEFERRED_TEMPLATE_IDS = frozenset({"ecommerce_template", "photographer_template"})
+_GENERAL_TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
+_SPECIALIZED_TEMPLATE_SCENARIOS = {
+    "ecommerce_template": "ecommerce",
+    "photographer_template": "photography",
+}
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
@@ -46,23 +54,104 @@ class CodexNativeImageGenPlanner:
         )
 
     def prepare_native_imagegen_plan(self, request: NativeImageGenPlanRequest) -> dict[str, Any]:
-        if request.template_id in _DEFERRED_TEMPLATE_IDS:
+        """Prepare the stable General-only Local Mode contract.
+
+        Specialist templates deliberately have their own public entry point;
+        accepting them here would make a caller unable to see or validate the
+        specialist factual/profile contract that is part of the frozen plan.
+        """
+
+        if request.template_id in _SPECIALIZED_TEMPLATE_SCENARIOS:
             return self._blocked(
                 "codex_native_imagegen_template_not_enabled",
-                "This specialized template is not enabled for Codex Native ImageGen Mode.",
+                "This specialized template requires the explicit frozen specialized-plan Local Mode tool.",
             )
-        scenario_id = _TEMPLATE_SCENARIOS.get(request.template_id)
+        scenario_id = _GENERAL_TEMPLATE_SCENARIOS.get(request.template_id)
         if scenario_id is None:
             return self._blocked("codex_native_imagegen_template_invalid", "The selected template is unavailable for Codex Native ImageGen Mode.")
+        return self._prepare_frozen_plan(
+            request,
+            scenario_id=scenario_id,
+            scenario_selection={
+                "scenario_id": scenario_id,
+                "parameters": {"requested_image_count": request.requested_image_count},
+            },
+            metadata={},
+        )
+
+    def prepare_frozen_specialized_native_imagegen_plan(
+        self,
+        request: NativeSpecializedImageGenPlanRequest,
+    ) -> dict[str, Any]:
+        """Relay a specialist's *existing* runtime plan to Codex ImageGen.
+
+        The adapter contributes no creative direction.  It only constructs
+        the same product-level scenario request that the shared runtime needs
+        to freeze the template-owned contract, then projects the same
+        materialized Web Provider prompt/reference inputs for conversation
+        use.  No Project, Provider, review, retry, candidate, or delivery is
+        created.
+        """
+
+        scenario_id = _SPECIALIZED_TEMPLATE_SCENARIOS.get(request.template_id)
+        if scenario_id is None:
+            return self._blocked("codex_native_imagegen_template_invalid", "The selected specialized template is unavailable for Codex Native ImageGen Mode.")
+
+        if request.template_id == "ecommerce_template":
+            return self._prepare_frozen_plan(
+                request,
+                scenario_id=scenario_id,
+                scenario_selection={
+                    "scenario_id": scenario_id,
+                    "platform_profile": request.platform_profile,
+                    "parameters": {
+                        "requested_image_count": request.requested_image_count,
+                        **({"requested_image_size": request.requested_image_size} if request.requested_image_size else {}),
+                    },
+                },
+                metadata={"local_mcp_specialized_relay": True},
+            )
+
+        # Named profiles are rejected by the request contract because Local
+        # Mode has no Project/API immutable-selection transaction.  General
+        # Photography is the existing public default and is resolved by the
+        # shared catalog, then frozen into the same runtime metadata shape.
+        binding = default_photographer_profile_catalog().resolve_binding(
+            scenario_id="photography",
+            profile_id=GENERAL_PHOTOGRAPHY_PROFILE_ID,
+            selection_source=None,
+        )
+        return self._prepare_frozen_plan(
+            request,
+            scenario_id=scenario_id,
+            scenario_selection={
+                "scenario_id": scenario_id,
+                "mode_id": request.photography_mode,
+                "parameters": {
+                    "requested_image_count": request.requested_image_count,
+                    **({"requested_image_size": request.requested_image_size} if request.requested_image_size else {}),
+                },
+            },
+            metadata={
+                "local_mcp_specialized_relay": True,
+                "photographer_profile_binding": binding.model_dump(mode="json"),
+            },
+        )
+
+    def _prepare_frozen_plan(
+        self,
+        request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest,
+        *,
+        scenario_id: str,
+        scenario_selection: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
         runtime = self._runtime_factory()
         uploaded_assets = self._uploaded_assets(request)
         result = runtime.plan_job(
             {
                 "user_input": request.user_input,
-                "scenario_selection": {
-                    "scenario_id": scenario_id,
-                    "parameters": {"requested_image_count": request.requested_image_count},
-                },
+                "scenario_selection": scenario_selection,
                 "metadata": {
                     "template_id": request.template_id,
                     "requested_image_count": request.requested_image_count,
@@ -72,6 +161,7 @@ class CodexNativeImageGenPlanner:
                     # remote Central Brain contract as the Web Provider path.
                     "require_real_images": True,
                     "real_image_generation": True,
+                    **metadata,
                 },
                 # The source files are passed through the same V3 upload
                 # contract as Web Mode.  The remote Brain compact payload
@@ -98,6 +188,13 @@ class CodexNativeImageGenPlanner:
                 "Codex Native ImageGen requires a valid non-fallback remote Central Brain result.",
             )
 
+        deliverable_plan = result.metadata.get("template_deliverable_plan")
+        if not isinstance(deliverable_plan, dict):
+            return self._blocked("codex_native_imagegen_template_deliverable_plan_missing", "V3 planning did not freeze a complete template deliverable plan.")
+        deliverables = deliverable_plan.get("deliverables")
+        if not isinstance(deliverables, list) or len(deliverables) != request.requested_image_count:
+            return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not freeze one template deliverable for every requested output.")
+
         outputs: list[dict[str, Any]] = []
         envelope_id = str(envelope.get("envelope_id") or "").strip()
         if not envelope_id:
@@ -113,8 +210,8 @@ class CodexNativeImageGenPlanner:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
         for index, materialization in enumerate(materializations, start=1):
             reference_paths = [str(item["file_path"]) for item in materialization.reference_assets if item.get("file_path")]
-            outputs.append(
-                {
+            try:
+                output = {
                     "output_index": index,
                     "output_binding_id": f"codex_native_output_{envelope_id.rsplit('_', 1)[-1]}_{index}",
                     # Codex must give this exact Unicode string to ImageGen;
@@ -139,7 +236,13 @@ class CodexNativeImageGenPlanner:
                         "source_sha256": [item.source_sha256 for item in request.reference_inputs],
                     },
                 }
-            )
+                output.update(self._specialized_lineage_projection(request.template_id, deliverables[index - 1]))
+            except ValueError:
+                return self._blocked(
+                    "codex_native_imagegen_specialized_lineage_invalid",
+                    "The frozen specialized plan did not provide a valid structural lineage contract.",
+                )
+            outputs.append(output)
 
         return {
             "status": "planned_for_codex_native_imagegen",
@@ -157,7 +260,24 @@ class CodexNativeImageGenPlanner:
         }
 
     @staticmethod
-    def _uploaded_assets(request: NativeImageGenPlanRequest) -> list[UploadedAssetInfo]:
+    def _specialized_lineage_projection(template_id: str, deliverable: Any) -> dict[str, Any]:
+        """Expose only existing structural Photography lineage.
+
+        E-Commerce emits no semantic slot/recipe/role surface at all.  The
+        Photography role is a pre-existing frozen lineage key; it is never
+        creative content and cannot become a local shot/camera/crop recipe.
+        """
+
+        if template_id != "photographer_template":
+            return {}
+        metadata = deliverable.get("metadata") if isinstance(deliverable, dict) else None
+        role = metadata.get("specialized_role_key") if isinstance(metadata, dict) else None
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("photography frozen deliverable lacks its structural lineage role")
+        return {"photography_lineage_role": role}
+
+    @staticmethod
+    def _uploaded_assets(request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest) -> list[UploadedAssetInfo]:
         """Translate explicit local files into the ordinary V3 upload shape.
 
         No copy, upload store, or alternate reference resolver is created

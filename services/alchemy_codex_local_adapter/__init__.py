@@ -9,6 +9,7 @@ from .contracts import (
     CodexNativeImageGenDisabledError,
     CodexNativeImageGenError,
     NativeImageGenPlanRequest,
+    NativeSpecializedImageGenPlanRequest,
     NativeReferenceInput,
 )
 from .facade import CodexNativeImageGenFacade
@@ -25,6 +26,7 @@ __all__ = [
     "CodexNativeImageGenFacade",
     "CodexNativeImageGenPlanner",
     "NativeImageGenPlanRequest",
+    "NativeSpecializedImageGenPlanRequest",
     "NativeReferenceInput",
     "PlanningOnlyGenerationRouter",
 ]

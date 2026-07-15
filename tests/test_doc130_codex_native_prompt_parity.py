@@ -146,12 +146,18 @@ def test_plugin_launcher_exposes_only_canonical_prompt_tool() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.6.0-doc131-reference-parity"
-    assert [tool["name"] for tool in responses[1]["result"]["tools"]] == ["prepare_native_imagegen_plan"]
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.7.0-doc133-specialized-relay"
+    assert [tool["name"] for tool in responses[1]["result"]["tools"]] == [
+        "prepare_native_imagegen_plan",
+        "prepare_frozen_specialized_native_imagegen_plan",
+    ]
 
 
 def test_mcp_schema_exposes_no_provider_or_artifact_controls() -> None:
-    assert [tool["name"] for tool in TOOL_SCHEMAS] == ["prepare_native_imagegen_plan"]
+    assert [tool["name"] for tool in TOOL_SCHEMAS] == [
+        "prepare_native_imagegen_plan",
+        "prepare_frozen_specialized_native_imagegen_plan",
+    ]
     schema = TOOL_SCHEMAS[0]["inputSchema"]
     assert set(schema["properties"]) == {
         "user_input",

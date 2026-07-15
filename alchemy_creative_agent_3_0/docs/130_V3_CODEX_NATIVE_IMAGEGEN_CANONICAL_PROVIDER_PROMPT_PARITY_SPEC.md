@@ -48,9 +48,10 @@ failure blocks before Codex receives an image prompt. It must never restore
 local creative recipes, static slots, suite roles, camera/crop presets, or a
 keyword stack merely to produce a prompt.
 
-Only `general_template` is enabled. E-Commerce and Photography remain
-fail-closed because their reference, delivery, review, and gate contracts are
-not conversation-only substitutes.
+`general_template` uses the original public tool. Doc133 adds a separate,
+explicit frozen-plan relay for E-Commerce and Photography; it does not weaken
+their remote-Brain, template, reference, review, or production contracts and
+must never make either template silently become General.
 
 ## Scope and reference boundary
 
