@@ -178,7 +178,7 @@ python -m pytest alchemy_creative_agent_3_0/tests -q
 python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_0/tests
 node --check src_skeleton/app/static/app.js
 git diff --check
-python -m pytest tests/test_doc118_codex_native_imagegen.py -q
+python -m pytest tests/test_doc126_codex_native_imagegen.py -q
 ```
 
 The last test checks the planning-only plugin contract, not image quality. If
