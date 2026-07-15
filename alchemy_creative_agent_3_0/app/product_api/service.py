@@ -1679,6 +1679,7 @@ class V3ProductApiService:
                 resolution,
                 metadata={
                     **review_metadata,
+                    **self._admitted_review_reference_metadata(record, resolution),
                     "frozen_output_review_contract": self._frozen_output_review_contract(
                         resolution,
                         frozen_output_review_contracts,
@@ -1760,6 +1761,99 @@ class V3ProductApiService:
             }
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _admitted_review_reference_metadata(
+        self,
+        record: ProductJobRecord,
+        resolution,
+    ) -> dict[str, Any]:
+        """Return only the exact admitted job assets for pixel comparison.
+
+        The image materializer already records which uploaded references were
+        admitted for each successful Provider operation.  A post-generation
+        reviewer must receive that same, job-scoped evidence when it is asked
+        to assess reference truth.  Passing every current upload (or every
+        project reference) would let a later or unrelated asset change the
+        review's factual basis, while passing none makes a reference-truth
+        verdict non-certifying.
+
+        This remains internal reviewer metadata.  The public Job projection
+        continues to expose only its safe review/provider summaries.
+        """
+
+        candidate_records: list[dict[str, Any]] = []
+        resolution_metadata = resolution.metadata if isinstance(getattr(resolution, "metadata", None), dict) else {}
+        direct_candidate = resolution_metadata.get("candidate_metadata")
+        if isinstance(direct_candidate, dict):
+            candidate_records.append(direct_candidate)
+        asset_metadata = resolution_metadata.get("asset_metadata")
+        if isinstance(asset_metadata, dict):
+            candidate_candidate = asset_metadata.get("candidate_metadata")
+            if isinstance(candidate_candidate, dict):
+                candidate_records.append(candidate_candidate)
+        output_record = resolution_metadata.get("output_record")
+        if isinstance(output_record, dict):
+            output_metadata = output_record.get("metadata")
+            if isinstance(output_metadata, dict):
+                candidate_records.append(output_metadata)
+
+        admitted_records: list[dict[str, Any]] = []
+        for candidate_metadata in candidate_records:
+            audit = candidate_metadata.get("reference_input_execution")
+            if not isinstance(audit, dict):
+                continue
+            if str(audit.get("admission_outcome") or "").lower() != "admitted":
+                continue
+            if str(audit.get("operation_outcome") or "").lower() != "pixels_received":
+                continue
+            if (self._safe_int(audit.get("reference_count"), default=0) or 0) <= 0:
+                continue
+            admitted_records.append(candidate_metadata)
+
+        if not admitted_records:
+            return {}
+
+        source_ids = self._dedupe_strings(
+            source_id
+            for candidate_metadata in admitted_records
+            for source_id in (
+                candidate_metadata.get("reference_truth_source_ids")
+                or candidate_metadata.get("reference_asset_ids")
+                or []
+            )
+        )
+        job_upload_ids = set(self._dedupe_strings(record.request.uploaded_asset_ids))
+        admitted_source_ids = [asset_id for asset_id in source_ids if asset_id in job_upload_ids]
+        if not admitted_source_ids:
+            return {
+                "review_reference_evidence_required": True,
+                "review_reference_evidence_available": False,
+            }
+
+        review_assets: list[dict[str, Any]] = []
+        for asset in self.asset_store.resolve_uploaded_assets(admitted_source_ids):
+            if asset.asset_id not in job_upload_ids or not asset.file_path:
+                continue
+            path = Path(asset.file_path)
+            if not path.is_file():
+                continue
+            review_assets.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "role": asset.role.value if asset.role else None,
+                    "source_type": "uploaded",
+                    "use_policy": "admitted_generation_reference",
+                    "file_path": str(path),
+                    "mime_type": asset.mime_type,
+                }
+            )
+        metadata: dict[str, Any] = {
+            "review_reference_evidence_required": True,
+            "review_reference_evidence_available": bool(review_assets),
+        }
+        if review_assets:
+            metadata["uploaded_assets"] = review_assets
+        return metadata
 
     @staticmethod
     def _frozen_output_review_contracts_by_asset_id(

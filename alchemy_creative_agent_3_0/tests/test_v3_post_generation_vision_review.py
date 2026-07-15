@@ -4,6 +4,7 @@ from pathlib import Path
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
@@ -114,12 +115,14 @@ class _StaticVisionProvider:
         self.payload = payload
         self.available_flag = available
         self.calls: list[GeneratedOutputResolution] = []
+        self.metadata_calls: list[dict] = []
 
     def available(self, *, force: bool = False) -> bool:
         return self.available_flag
 
     def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
         self.calls.append(resolution)
+        self.metadata_calls.append(dict(metadata or {}))
         return dict(self.payload)
 
 
@@ -130,6 +133,7 @@ class _SequencedVisionProvider(_StaticVisionProvider):
 
     def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
         self.calls.append(resolution)
+        self.metadata_calls.append(dict(metadata or {}))
         index = min(len(self.calls) - 1, len(self.payloads) - 1)
         return dict(self.payloads[index])
 
@@ -158,6 +162,126 @@ class _BoundReadyResolver(_StaticReadyResolver):
                 }
             )
         ]
+
+
+def _ready_uploaded_reference(service: V3ProductApiService, *, filename: str = "reference.png") -> str:
+    content = base64.b64decode(_png_base64())
+    upload = service.create_uploaded_asset(
+        {
+            "filename": filename,
+            "mime_type": "image/png",
+            "size_bytes": len(content),
+            "role": "product_reference",
+        }
+    )
+    stored = service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": base64.b64encode(content).decode("ascii"), "mime_type": "image/png"},
+    )
+    assert stored is not None
+    completed = service.complete_uploaded_asset(upload.asset_id)
+    assert completed is not None
+    return upload.asset_id
+
+
+def test_doc121_review_uses_only_admitted_job_reference_pixels(tmp_path) -> None:
+    asset_store = V3UploadedAssetStore(tmp_path / "uploads")
+    service = _service(tmp_path, asset_store=asset_store)
+    admitted_asset_id = _ready_uploaded_reference(service, filename="admitted.png")
+    unrelated_asset_id = _ready_uploaded_reference(service, filename="unrelated.png")
+    created = service.create_job(
+        {
+            "user_input": "Create one natural outdoor full-length fashion portrait from the admitted reference.",
+            "scenario_selection": {
+                "scenario_id": "general_creative",
+                "mode_id": "social_cover",
+                "preset_id": "social_cover",
+            },
+            "uploaded_asset_ids": [admitted_asset_id, unrelated_asset_id],
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    resolution = _ready_resolution(tmp_path).model_copy(
+        update={
+            "metadata": {
+                "candidate_metadata": {
+                    "reference_asset_ids": [admitted_asset_id],
+                    "reference_input_execution": {
+                        "admission_outcome": "admitted",
+                        "operation_outcome": "pixels_received",
+                        "reference_count": 1,
+                    },
+                }
+            }
+        }
+    )
+
+    reviewer_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+
+    assert reviewer_metadata["review_reference_evidence_required"] is True
+    assert reviewer_metadata["review_reference_evidence_available"] is True
+    assert [item["asset_id"] for item in reviewer_metadata["uploaded_assets"]] == [admitted_asset_id]
+    assert reviewer_metadata["uploaded_assets"][0]["source_type"] == "uploaded"
+    assert reviewer_metadata["uploaded_assets"][0]["use_policy"] == "admitted_generation_reference"
+    assert "content_url" not in reviewer_metadata["uploaded_assets"][0]
+
+    unadmitted_resolution = resolution.model_copy(
+        update={
+            "metadata": {
+                "candidate_metadata": {
+                    "reference_asset_ids": [unrelated_asset_id],
+                    "reference_input_execution": {
+                        "admission_outcome": "admitted",
+                        "operation_outcome": "submitted",
+                        "reference_count": 1,
+                    },
+                }
+            }
+        }
+    )
+    assert service._admitted_review_reference_metadata(record, unadmitted_resolution) == {}  # noqa: SLF001
+
+    missing_source_resolution = resolution.model_copy(
+        update={
+            "metadata": {
+                "candidate_metadata": {
+                    "reference_asset_ids": ["v3_asset_unknown"],
+                    "reference_input_execution": {
+                        "admission_outcome": "admitted",
+                        "operation_outcome": "pixels_received",
+                        "reference_count": "1",
+                    },
+                }
+            }
+        }
+    )
+    assert service._admitted_review_reference_metadata(record, missing_source_resolution) == {  # noqa: SLF001
+        "review_reference_evidence_required": True,
+        "review_reference_evidence_available": False,
+    }
+
+
+def test_doc121_missing_admitted_reference_is_non_certifying(tmp_path) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    inspector = VisionOutputInspector(vision_provider=provider)
+
+    report = inspector.inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "vision_inspection_mode": "hybrid",
+            "review_reference_evidence_required": True,
+            "review_reference_evidence_available": False,
+        },
+    )
+
+    assert provider.calls == []
+    assert report.mode == "hybrid"
+    assert report.status == "manual_review"
+    assert report.verification_state == "unverified"
+    assert [item["code"] for item in report.detected_issues] == ["reference_evidence_unavailable"]
+    assert report.evidence["not_verifiable"] == ["reference_truth"]
 
 
 def test_generated_output_resolver_finds_original_file_by_output_id(tmp_path) -> None:
