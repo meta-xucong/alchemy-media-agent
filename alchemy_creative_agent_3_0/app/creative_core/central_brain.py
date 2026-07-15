@@ -107,6 +107,12 @@ class CentralCreativeBrain:
                 "reference_assets": context.metadata.get("reference_assets", []),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
+                "llm_brain": self._llm_brain_metadata(context),
+                "require_real_images": bool(
+                    context.metadata.get("require_real_images")
+                    or context.metadata.get("real_image_generation")
+                ),
+                "real_image_generation": bool(context.metadata.get("real_image_generation")),
                 "mode_execution_policy": mode_policy,
                 "role_specific_generation_plan": role_plan,
                 "mode_role_recipe": mode_role_recipe,
@@ -271,6 +277,15 @@ class CentralCreativeBrain:
                 "capability_execution_envelope": context.metadata.get("capability_execution_envelope"),
                 "requested_image_count": _bounded_requested_image_count(context.metadata.get("requested_image_count")),
                 "requested_image_size": context.metadata.get("requested_image_size"),
+                # A later Project Mode generate request does not repeat this
+                # immutable fact.  Carry it with every materialized asset so
+                # the Provider recognizes the frozen LLM-first real-image
+                # contract instead of replaying local suite recipes.
+                "require_real_images": bool(
+                    context.metadata.get("require_real_images")
+                    or context.metadata.get("real_image_generation")
+                ),
+                "real_image_generation": bool(context.metadata.get("real_image_generation")),
                 "mode_execution_policy": mode_policy,
                 "role_specific_generation_plan": role_plan,
                 "mode_role_recipe": mode_role_recipe,

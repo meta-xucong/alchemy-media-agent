@@ -351,6 +351,37 @@ def test_real_general_remote_brain_direction_does_not_replay_local_suite_recipe(
     assert len(final_provider_prompt) < 3500
 
 
+def test_real_general_planning_preserves_llm_first_provider_materialization() -> None:
+    remote_direction = "REMOTE_PLAN_ONLY: a ceramic cup and an open book in calm morning window light."
+    result = run_creative_planning(
+        "Create one natural still-life photograph with a ceramic cup and an open book.",
+        optional_template_id="general_template",
+        runtime_metadata={
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "require_real_images": True,
+            "requested_image_count": 1,
+            "effective_variation_mode": "selection_candidates",
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "image_set_plan": {"image_count": 1, "shot_plan": [remote_direction]},
+                "prompt_guidance": {"optimized_direction": remote_direction},
+            },
+        },
+    )
+
+    generation_plan = result.generation_plans[0]
+    final_provider_prompt = _provider_prompt_for_planning_result(result)
+
+    assert generation_plan.metadata["require_real_images"] is True
+    assert remote_direction in final_provider_prompt
+    assert "Role-specific generation contract:" not in final_provider_prompt
+    assert "Mode quality contract:" not in final_provider_prompt
+    assert "cover_hero" not in final_provider_prompt
+    assert "Generate near-neighbor options" not in final_provider_prompt
+
+
 def test_general_reference_asset_plan_uses_neutral_subject_language() -> None:
     request = GenerationRequest(
         asset_spec=AssetSpec(
