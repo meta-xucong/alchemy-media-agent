@@ -181,3 +181,27 @@ This job's single outer request is exhausted. Mainline must diagnose the
 controlled gateway/upstream `image_edit_invalid_request_unattributed` fault
 (including provider-native input admission and adapter request shape) before a
 fresh N=1 Gate C job can be authorized.
+
+## 2026-07-15 Current-build Gate C N=1 re-run — fail-closed Provider evidence
+
+Mainline completed the prior-run diagnosis and then expressly authorized one
+new, independent N=1 attempt. The controlled runtime for this attempt was
+`origin/main@c22718d97dc2adc2fb9bd7981f9fa690bd08c708`. The restricted
+manifest is `ACPT-20260715-ecommerce-N1-c22718d-r2`; it contains no media,
+raw request content, credentials, or endpoint configuration.
+
+| Field | Result |
+| --- | --- |
+| Project / material admission | `project_80fce72d0b` / `project_reference_0e62306e83`; explicit browser selection of `ecommerce_template`; exactly one active `product` binding to restricted material register `MAT-ACPT-20260715-KIDSWEAR-01` |
+| Planned job | `job_82c3bb2df2`; remote `deepseek` / `deepseek-v4-pro-260425`; `llm_used=true`, `fallback_used=false`; requested count, Brain plan count, natural-language direction count, and remote intent count all equal `1` |
+| Provider execution | one shared `image_edit` operation; two shared high-fidelity provider-native reference inputs; one fresh upstream/outer request |
+| Failure closure | `image_edit_invalid_request_unattributed`; classified as `non_retryable_provider_failure`; zero retry attempts, maximum one, and no second outer request |
+| Review / delivery | no media or candidates; final delivery `not_evaluated`; zero reviewed or delivered outputs; no `vision_model`/`hybrid` terminal verdict and no certified/ready output |
+| Boundary check | no General fallback, static suite, structured visual recipe, local overlay/text path, private E-Commerce retry, or production-gate change was used |
+| Gate result | **not passed** — the exact-N remote Brain contract passed, but GPT Image 2 again failed before image output and visual review. This re-run earns no Gate C credit. |
+
+The former job `job_d6dc5f5ba6` and this job are distinct restricted evidence;
+neither may be replayed. Further real E-Commerce Gate C work is blocked until
+mainline/upstream supplies a diagnosable corrective change and explicitly
+authorizes a new isolated attempt. Gate D and the E-Commerce production gate
+remain blocked.
