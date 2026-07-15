@@ -204,6 +204,14 @@ count, classified failure code, and `blocked` state. Do not expose raw Provider
 messages, endpoint details, credentials, or candidate identifiers. A generic
 role exception alone is not enough evidence for acceptance diagnosis.
 
+The in-process Project worker is not restart-resumable. On a singleton V3
+runtime restart, a persisted `generating` or `finalizing` Job whose recorded
+worker runtime differs from the current runtime must become terminal
+`background_generation_process_restarted`: `automatic_replay=false`, Provider
+outcome `unknown`, no fabricated review or delivery, and one append-only
+Project timeline record. A fresh acceptance operation requires a new Job and
+new evidence row; the interrupted Job is never resumed or silently replayed.
+
 The provider smoke is not allowed to become a separate retry router. One
 logical output becomes one gateway-managed outer materialization operation;
 the gateway alone can choose an internal healthy upstream. SDK/client retries

@@ -1465,6 +1465,7 @@ class V3ProjectModeService:
         *,
         background_attempt_id: str | None = None,
         background_timeout_seconds: float | None = None,
+        background_runtime_id: str | None = None,
     ) -> ProductJobStatus:
         """Mark a queued project job before the web layer releases its worker."""
 
@@ -1474,6 +1475,7 @@ class V3ProjectModeService:
             job_id,
             background_attempt_id=background_attempt_id,
             background_timeout_seconds=background_timeout_seconds,
+            background_runtime_id=background_runtime_id,
         )
 
     def mark_project_job_generation_timed_out(

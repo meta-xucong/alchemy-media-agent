@@ -907,6 +907,58 @@ def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_
     assert timed_out.json()["metadata"]["generation_lifecycle_timeout"]["timeout_seconds"] == 675
 
 
+def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_replay(tmp_path) -> None:
+    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    v3_route_handlers.service.job_store = InMemoryProductJobStore()
+    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    client = TestClient(app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one clean still-life image."},
+    ).json()["project"]["project_id"]
+    abandoned_job_id = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    ).json()["job_id"]
+    active_job_id = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "Create a second clean still-life image."},
+    ).json()["job_id"]
+    v3_route_handlers.mark_project_job_generating(
+        project_id,
+        abandoned_job_id,
+        background_attempt_id="abandoned_attempt",
+        background_timeout_seconds=675,
+        background_runtime_id="previous_runtime",
+    )
+    v3_route_handlers.mark_project_job_generating(
+        project_id,
+        active_job_id,
+        background_attempt_id="current_attempt",
+        background_timeout_seconds=675,
+        background_runtime_id=app_main._v3_background_generation_runtime_id,
+    )
+
+    assert app_main._recover_v3_interrupted_background_generations() == 1
+
+    abandoned = client.get(f"/api/v3/creative-agent/jobs/{abandoned_job_id}").json()
+    active = client.get(f"/api/v3/creative-agent/jobs/{active_job_id}").json()
+    timeline = v3_route_handlers.get_project_timeline(project_id)["items"]
+
+    assert abandoned["status"] == "blocked"
+    assert abandoned["metadata"]["generation_lifecycle_failure"]["failure_code"] == "background_generation_process_restarted"
+    assert abandoned["metadata"]["generation_lifecycle_failure"]["automatic_replay"] is False
+    assert "provider_failure_retry" not in abandoned["metadata"]
+    assert active["status"] == "generating"
+    blocked_items = [
+        item
+        for item in timeline
+        if item["related_job_id"] == abandoned_job_id and item["item_type"] == "job_blocked"
+    ]
+    assert len(blocked_items) == 1
+    assert blocked_items[0]["metadata"]["failure_code"] == "background_generation_process_restarted"
+
+
 def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:
     client = TestClient(app)
 

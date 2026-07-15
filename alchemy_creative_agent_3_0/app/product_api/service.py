@@ -936,6 +936,7 @@ class V3ProductApiService:
         *,
         background_attempt_id: str | None = None,
         background_timeout_seconds: float | None = None,
+        background_runtime_id: str | None = None,
     ) -> ProductJobStatus:
         """Persist the public pre-render state before a background worker starts.
 
@@ -956,6 +957,8 @@ class V3ProductApiService:
                     "enabled": background_timeout_seconds is not None,
                     "started_at": _utc_now_iso(),
                 }
+                if background_runtime_id:
+                    watchdog["runtime_id"] = str(background_runtime_id)
                 if background_timeout_seconds is not None:
                     watchdog["timeout_seconds"] = max(1, int(round(float(background_timeout_seconds))))
                 record.request.metadata = {
@@ -1082,20 +1085,38 @@ class V3ProductApiService:
             or record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
         ):
             return self._status_from_record(record)
+        requested_code = str(failure_code).strip()
         normalized_code = (
-            "background_generation_request_invalid"
-            if str(failure_code).strip() == "background_generation_request_invalid"
+            requested_code
+            if requested_code
+            in {
+                "background_generation_request_invalid",
+                "background_generation_process_restarted",
+            }
             else "background_generation_worker_error"
         )
+        owner = (
+            "v3_background_generation_recovery"
+            if normalized_code == "background_generation_process_restarted"
+            else "v3_background_generation_worker"
+        )
+        failure_metadata = {
+            "background_attempt_id": active_attempt_id,
+            "failure_code": normalized_code,
+            "status": "terminal_failure",
+            "owner": owner,
+        }
+        if normalized_code == "background_generation_process_restarted":
+            failure_metadata.update(
+                {
+                    "automatic_replay": False,
+                    "provider_outcome": "unknown",
+                }
+            )
         record.status = ProductJobStatusValue.BLOCKED
         record.request.metadata = {
             **dict(record.request.metadata),
-            "generation_lifecycle_failure": {
-                "background_attempt_id": active_attempt_id,
-                "failure_code": normalized_code,
-                "status": "terminal_failure",
-                "owner": "v3_background_generation_worker",
-            },
+            "generation_lifecycle_failure": failure_metadata,
         }
         record.warnings.append(
             "V3 background generation ended before a terminal image result "

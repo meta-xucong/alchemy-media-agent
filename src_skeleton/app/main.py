@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
+from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
@@ -94,6 +95,7 @@ _v3_generation_executor = ThreadPoolExecutor(
 _v3_background_generation_jobs: dict[str, str] = {}
 _v3_background_generation_watchdogs: dict[str, threading.Timer] = {}
 _v3_background_generation_jobs_lock = threading.Lock()
+_v3_background_generation_runtime_id = uuid4().hex
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
@@ -418,6 +420,7 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             job_id,
             background_attempt_id=background_attempt_id,
             background_timeout_seconds=timeout_seconds,
+            background_runtime_id=_v3_background_generation_runtime_id,
         )
     except Exception:
         with _v3_background_generation_jobs_lock:
@@ -451,6 +454,69 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
         background_attempt_id,
     )
     return True
+
+
+def _recover_v3_interrupted_background_generations() -> int:
+    """Fail closed for persisted in-process work that cannot survive a restart.
+
+    V3 Project Mode deliberately owns one asynchronous worker per logical Job.
+    The worker and its timer live in this process, so a process restart cannot
+    safely resume their in-flight Provider call or infer whether the Gateway
+    received it.  A durable ``generating`` record from another runtime must
+    therefore become an explicit terminal interruption, never a silent wait or
+    automatic replay.  This runtime uses a singleton local worker/store pair;
+    distributed worker recovery requires a durable queue and is outside this
+    in-process executor contract.
+    """
+
+    try:
+        records = v3_route_handlers.service.job_store.list_recent(limit=100)
+    except Exception:
+        logger.exception("V3 background restart recovery could not list persisted jobs")
+        return 0
+
+    recovered = 0
+    for record in records:
+        if record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            continue
+        metadata = dict(record.request.metadata)
+        watchdog = metadata.get("background_generation_watchdog")
+        if not isinstance(watchdog, dict) or not watchdog.get("enabled"):
+            continue
+        attempt_id = str(watchdog.get("background_attempt_id") or "")
+        project_id = str(metadata.get("project_id") or "")
+        prior_runtime_id = str(watchdog.get("runtime_id") or "")
+        if not attempt_id or not project_id or prior_runtime_id == _v3_background_generation_runtime_id:
+            continue
+        try:
+            status = _run_v3_handler(
+                v3_route_handlers.mark_project_job_generation_worker_failed,
+                project_id,
+                record.job_id,
+                background_attempt_id=attempt_id,
+                failure_code="background_generation_process_restarted",
+            )
+        except Exception:
+            logger.exception(
+                "V3 background restart recovery could not close project=%s job=%s",
+                project_id,
+                record.job_id,
+            )
+            continue
+        failure = status.get("metadata", {}).get("generation_lifecycle_failure", {}) if isinstance(status, dict) else {}
+        if isinstance(failure, dict) and failure.get("failure_code") == "background_generation_process_restarted":
+            recovered += 1
+    return recovered
+
+
+@app.on_event("startup")
+def _recover_v3_interrupted_background_generations_on_startup() -> None:
+    recovered = _recover_v3_interrupted_background_generations()
+    if recovered:
+        logger.warning(
+            "V3 restart recovery closed %s interrupted in-process background generation attempt(s) without replay.",
+            recovered,
+        )
 
 
 def _mark_v3_background_generation_response(response: dict, *, started: bool) -> dict:

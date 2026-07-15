@@ -310,6 +310,35 @@ def test_background_worker_failure_is_terminal_without_claiming_a_provider_timeo
     assert late_worker.status == ProductJobStatusValue.BLOCKED
 
 
+def test_background_process_restart_is_terminal_without_fabricating_provider_outcome() -> None:
+    service, _, _ = _service("background_process_restart")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+    service.mark_job_generating(
+        created.job_id,
+        background_attempt_id="interrupted_attempt",
+        background_timeout_seconds=675,
+        background_runtime_id="previous_runtime",
+    )
+
+    failed = service.mark_job_generation_worker_failed(
+        created.job_id,
+        background_attempt_id="interrupted_attempt",
+        failure_code="background_generation_process_restarted",
+    )
+
+    assert failed.status == ProductJobStatusValue.BLOCKED
+    assert failed.metadata["generation_lifecycle_failure"] == {
+        "background_attempt_id": "interrupted_attempt",
+        "failure_code": "background_generation_process_restarted",
+        "status": "terminal_failure",
+        "owner": "v3_background_generation_recovery",
+        "automatic_replay": False,
+        "provider_outcome": "unknown",
+    }
+    assert "provider_failure_retry" not in failed.metadata
+    assert "background_generation_process_restarted" in " ".join(failed.warnings)
+
+
 def test_no_pixel_provider_failure_has_safe_reference_execution_projection() -> None:
     service, _, _ = _service("doc117_safe_provider_execution")
     created = service.create_job({"user_input": "Create one realistic person wearing the supplied garment."})
