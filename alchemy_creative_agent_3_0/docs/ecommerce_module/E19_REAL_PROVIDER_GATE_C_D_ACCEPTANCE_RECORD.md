@@ -164,17 +164,20 @@ endpoint is recorded in Git.
 
 | Field | Result |
 | --- | --- |
-| Main code | `origin/main@c628e64035663ba25e7e5ea6d485caaf87468f1d` |
+| Planning code / execution runtime | planned at `c628e64035663ba25e7e5ea6d485caaf87468f1d`; the controlled runtime was refreshed to `origin/main@cf170833c8720bcec1d837c1c5c62e74a159f42d` before generation (Project-summary UI-only change) |
 | Project / reference | `project_3cec293a47` / `project_reference_d19f6ab45c`, binding the restricted material register `MAT-ACPT-20260715-KIDSWEAR-01` as active `product` reference |
 | Browser admission | user explicitly selected the E-Commerce template; the rendered project showed the fixed template and one active product reference |
 | Planned job | `job_d6dc5f5ba6`; remote `deepseek` / `deepseek-v4-pro-260425`; `llm_used=true`, `fallback_used=false`, one plan image, one natural-language direction, and one remote intent |
 | Continuation-identity clarification | `ecommerce_output_1` is an E17-allowed opaque continuation identity, bound only after the remote Brain returns the exact N=1 natural-language intent. It is not a semantic visual recipe and does not enter Brain input or the Provider prompt. The earlier contrary interpretation is a non-result. |
-| Provider / review / retry | **not yet invoked**: no generation result, zero candidates, zero final-delivery outputs, no review and no retry. The same planned job is eligible for its single shared generation. |
-| Gate C result | **pending** — the Brain planning contract has passed, but Provider, review, retry, delivery, and persistence evidence are still required. |
-| Gate D / production | **not started / not production ready**; all production gates remain closed. |
+| Provider | exactly one shared `image_edit` operation with two provider-native reference inputs and one fresh upstream request; it failed before media with `image_edit_invalid_request_unattributed` |
+| Retry | shared failure policy classified the error as `non_retryable_provider_failure`; `max_attempts=1`, so no duplicate outer request or retry was made |
+| Review / delivery | no media, candidate, or final delivery was created. The only review state is `metadata_preflight` / `review_needed`, not `vision_model` or `hybrid`. |
+| Gate C result | **blocked** — the exact-N remote Brain plan passed, but the actual Provider request failed before image output and cannot satisfy real visual-review evidence. |
+| Gate D / production | **blocked / not production ready**; all production gates remain closed. |
 
-The current controlled instance subsequently advanced to
-`origin/main@cf170833`; its Project-summary UI fix does not alter this
-E-Commerce runtime/Brain contract. Continue the one permitted shared generate
-for this same planned job, then record the actual GPT Image 2, review, retry,
-delivery, and post-refresh result before deciding Gate C.
+The current controlled instance advanced to `origin/main@cf170833`; its
+Project-summary UI fix does not alter this E-Commerce runtime/Brain contract.
+This job's single outer request is exhausted. Mainline must diagnose the
+controlled gateway/upstream `image_edit_invalid_request_unattributed` fault
+(including provider-native input admission and adapter request shape) before a
+fresh N=1 Gate C job can be authorized.
