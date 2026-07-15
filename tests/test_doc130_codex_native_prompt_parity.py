@@ -343,6 +343,28 @@ def test_multiple_same_channel_references_preserve_web_asset_order_and_prompt_pa
     assert result["outputs"][0]["reference_image_paths"] == [str(front.resolve()), str(back.resolve())]
 
 
+def test_same_content_references_report_shared_provider_deduplication(tmp_path: Path) -> None:
+    source = _write_png(tmp_path / "source.png")
+    duplicate = tmp_path / "duplicate.png"
+    duplicate.write_bytes(source.read_bytes())
+    request = NativeImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(source)},
+                {"channel": "product_truth", "file_path": str(duplicate)},
+            ]
+        )
+    )
+    result = _planner_for(
+        _canonical_runtime_result(uploaded_assets=CodexNativeImageGenPlanner._uploaded_assets(request))
+    ).prepare_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert result["outputs"][0]["reference_input_contract"]["declared_reference_count"] == 2
+    assert result["outputs"][0]["reference_input_contract"]["admitted_reference_count"] == 1
+    assert result["outputs"][0]["reference_image_paths"] == [str(source.resolve())]
+
+
 def test_reference_path_is_not_sent_to_remote_brain_compact_payload(tmp_path: Path) -> None:
     source = _write_png(tmp_path / "brain-private.png")
     request = NativeImageGenPlanRequest.from_mcp_arguments(

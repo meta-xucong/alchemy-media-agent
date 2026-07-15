@@ -36,11 +36,13 @@ does not send the file path to the remote Brain; the LLM-first compact Brain
 payload receives only safe asset evidence.
 
 `channel` describes evidence ownership, not a one-image slot. Multiple
-user-approved files may therefore share `product_truth` (for example, a
-product's front and back) or another declared channel. Their supplied order,
-paths, and hashes are preserved through ordinary V3 admission. Local Mode must
-not drop, relabel, merge, crop, or replace same-channel evidence to make the
-request fit a private schema.
+distinct user-approved files may therefore share `product_truth` (for example,
+a product's front and back) or another declared channel. Their supplied order,
+paths, and hashes are preserved through ordinary V3 admission. Identical
+source bytes are one physical evidence item and are coalesced by the shared
+Provider boundary; the returned declared/admitted counts make that explicit.
+Local Mode must not drop, relabel, merge, crop, or replace distinct
+same-channel evidence to make the request fit a private schema.
 
 For each output, the response contains:
 
