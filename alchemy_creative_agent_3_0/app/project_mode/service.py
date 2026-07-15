@@ -4733,10 +4733,34 @@ class V3ProjectModeService:
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
             job_count=len(project.job_ids),
+            latest_job_status=self._latest_project_job_status(project),
             last_action_label=last_action,
             updated_at=project.updated_at,
             next_suggested_actions=self._next_actions(project),
         )
+
+    def _latest_project_job_status(self, project: ProjectRecord) -> str | None:
+        """Return one safe lifecycle value for recent-project rendering.
+
+        Project cards must not imply that a terminally blocked/failed job is
+        still generating merely because it has no output thumbnail.  This is a
+        derived read model: the Product API record remains the source of truth,
+        and no provider/review payload is copied into the project summary.
+        """
+
+        for job_id in reversed(project.job_ids):
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            if value is None:
+                continue
+            normalized = getattr(value, "value", value)
+            normalized = str(normalized or "").strip().lower()
+            if normalized and normalized != ProductJobStatusValue.NOT_FOUND.value:
+                return normalized
+        return None
 
     def _latest_generated_thumbnail_urls(self, project: ProjectRecord, limit: int = 3) -> list[str]:
         output_store = getattr(self.product_service, "output_store", None)

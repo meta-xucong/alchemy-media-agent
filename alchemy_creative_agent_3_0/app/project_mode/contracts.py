@@ -335,6 +335,10 @@ class ProjectMemorySummary(V3BaseModel):
     confirmed_style_chips: list[str] = Field(default_factory=list)
     selected_asset_count: int = 0
     job_count: int = 0
+    # This is intentionally only the terminal/active lifecycle state. Recent
+    # project cards need to distinguish an in-progress request from a safely
+    # blocked one without exposing a prompt, provider payload, or diagnostics.
+    latest_job_status: str | None = None
     last_action_label: str = "项目已创建"
     updated_at: str
     next_suggested_actions: list[str] = Field(default_factory=list)

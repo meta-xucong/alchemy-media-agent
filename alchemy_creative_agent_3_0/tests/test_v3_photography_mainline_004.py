@@ -343,6 +343,9 @@ def test_frontend_uses_safe_specialized_provider_failure_when_a_role_has_no_deli
 
     assert "function v3SpecializedProviderFailure(job)" in script
     assert "|| specializedFailure.failure_code" in script
+    assert "function v3RemoteCreativeBrainFailureMessage(job)" in script
+    assert "function v3ProjectEmptyImageLabel(project)" in script
+    assert "latest_job_status" in script
 
 
 def test_metadata_only_photography_project_withholds_pixels_and_records_safe_review_state(monkeypatch) -> None:
@@ -363,6 +366,12 @@ def test_metadata_only_photography_project_withholds_pixels_and_records_safe_rev
     assert certification["state"] == "blocked"
     assert certification["final_delivery_withheld"] is True
     assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+    recent_summary = next(
+        item
+        for item in handlers.get_projects(limit=10)["projects"]
+        if item["project_id"] == project["project_id"]
+    )
+    assert recent_summary["latest_job_status"] == "blocked"
 
     timeline = handlers.get_project_timeline(project["project_id"])["items"]
     review_items = [item for item in timeline if item.get("job_id") == root["job_id"]]

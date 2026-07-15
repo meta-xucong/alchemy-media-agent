@@ -2438,10 +2438,20 @@ function v3ProjectSummaryFromProject(project) {
       : [v3TemplatePlainLabel(project.primary_template_id || "general_template")],
     selected_asset_count: activeReferences.length || selectedRefs.length,
     job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
+    latest_job_status: project.latest_job_status
+      || (v3State.currentJob?.project_id === project.project_id ? v3State.currentJob.status : null),
     last_action_label: "项目已创建",
     updated_at: project.updated_at || new Date().toISOString(),
     next_suggested_actions: ["继续同风格生成", "上传新参考图继续", "挑选满意结果"],
   };
+}
+
+function v3ProjectEmptyImageLabel(project) {
+  const status = String(project?.latest_job_status || "").trim().toLowerCase();
+  if (["blocked", "failed"].includes(status)) return "本次未生成图片";
+  if (["generating", "finalizing", "planned"].includes(status)) return "图片准备中";
+  if (Number(project?.job_count || 0) > 0) return "等待生成结果";
+  return "尚未生成图片";
 }
 
 async function createV3Project() {
@@ -2572,6 +2582,7 @@ function renderV3History() {
   }
   visibleGroups.forEach((group) => {
     const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem);
+    const emptyImageLabel = v3ProjectEmptyImageLabel(group.project);
     const stackCount = Math.min(Math.max(Number(group.count || 0), 1), 5);
     const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
     const card = document.createElement("article");
@@ -2582,7 +2593,7 @@ function renderV3History() {
         <span class="v3-history-stack" aria-hidden="true">
           ${Array.from({ length: stackCount }, () => "<span></span>").join("")}
         </span>
-        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">图片准备中</span>`}
+        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">${escapeHtml(emptyImageLabel)}</span>`}
       </button>
       <div class="v3-history-body">
         <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
@@ -5558,9 +5569,28 @@ function v3EcommerceFailureMessage(job) {
   return "\u7535\u5546\u56fe\u50cf\u96c6\u672a\u8fbe\u5230\u53ef\u4ea4\u4ed8\u7684\u8fdc\u7a0b\u521b\u610f\u8ba1\u5212\u5408\u540c\uff0c\u5df2\u4fdd\u7559\u9879\u76ee\u548c\u5931\u8d25\u539f\u56e0\u3002";
 }
 
+function v3RemoteCreativeBrainFailureMessage(job) {
+  const outcome = job?.metadata?.remote_creative_brain_outcome;
+  if (!outcome || String(outcome.state || "").toLowerCase() !== "blocked") return "";
+  const outcomeClass = String(outcome.outcome_class || "").toLowerCase();
+  const reason = String(outcome.reason_code || "").toLowerCase();
+  if (outcomeClass === "remote_provider_error") {
+    return "中央大脑暂时没有返回可用的创意方向，本次已安全阻断；未调用图片生成，也没有回退到本地规则。";
+  }
+  if (reason.includes("output_count_mismatch")) {
+    return "中央大脑返回的图像方向数量与请求不一致，本次已安全阻断；没有补出本地方案。";
+  }
+  if (reason.includes("image_set_plan")) {
+    return "中央大脑没有返回完整的图像方向，本次已安全阻断；没有调用图片生成。";
+  }
+  return "中央大脑的创意合同暂时不可用，本次已安全阻断；项目已保留且没有生成图片。";
+}
+
 function v3ProviderFailureUserMessage(job) {
   const ecommerceFailure = v3EcommerceFailureMessage(job);
   if (ecommerceFailure) return ecommerceFailure;
+  const remoteBrainFailure = v3RemoteCreativeBrainFailureMessage(job);
+  if (remoteBrainFailure) return remoteBrainFailure;
   const providerExecution = job?.metadata?.provider_execution;
   const operations = Array.isArray(providerExecution?.operations) ? providerExecution.operations : [];
   const specializedFailure = v3SpecializedProviderFailure(job);
