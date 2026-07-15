@@ -41,6 +41,18 @@ PERSON_SIGNALS = (
     "宝宝",
     "真人",
 )
+# ``child`` and ``kid`` cannot be bare substring signals: a product-only
+# request such as "children's dress flat lay" must not manufacture a visible
+# person.  These patterns instead require an explicit, visible young-person
+# direction.  They are a shared task-profile distinction, not a child or
+# apparel capability.
+EXPLICIT_YOUNG_PERSON_PATTERNS = (
+    re.compile(r"\b(?:school[- ]age|schoolage)\s+(?:child|kid|person)\b"),
+    re.compile(r"\b(?:a|an|one|the|this|that)\s+(?:fully[- ](?:dressed|clothed)\s+)?(?:child|kid|schoolchild)\b"),
+    re.compile(r"\b(?:child|children|kid|kids|schoolchild)\s+(?:wearing|walking|standing|playing|sitting|running|outdoors|in\s+(?:an?|the)\s+(?:garden|park|scene|room))\b"),
+    re.compile(r"\b(?:[0-9]|1[0-7])\s*(?:-| )?year(?:s)?[- ]old\b"),
+    re.compile(r"(?:\u5b66\u9f84\s*(?:\u513f\u7ae5|\u5b69\u5b50)|(?:\u513f\u7ae5|\u5b69\u5b50)\s*(?:\u7a7f\u7740|\u7ad9\u5728|\u5728|\u6b63\u5728))"),
+)
 STYLIZED_PERSON_SIGNALS = ("anime", "cartoon", "illustration", "3d character", "动漫", "漫画", "插画", "卡通", "三维角色")
 HUMAN_SURFACE_SIGNALS = (
     "hand",
@@ -287,7 +299,10 @@ def _explicitly_excludes_humans(text: str) -> bool:
 
 
 def _has_non_negated_person_signal(text: str) -> bool:
-    return not _explicitly_excludes_humans(text) and any(signal in text for signal in PERSON_SIGNALS)
+    return not _explicitly_excludes_humans(text) and (
+        any(signal in text for signal in PERSON_SIGNALS)
+        or any(pattern.search(text) for pattern in EXPLICIT_YOUNG_PERSON_PATTERNS)
+    )
 
 
 def _has_product_facts(product_profile: dict[str, Any]) -> bool:

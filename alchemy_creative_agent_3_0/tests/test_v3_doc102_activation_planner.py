@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     VisualCapabilityRegistry,
     VisualSubjectEntity,
     VisualTaskProfile,
+    build_task_profile_and_intent,
     general_capability_policy,
 )
 
@@ -116,3 +117,62 @@ def test_visible_real_person_fails_closed_if_a_template_forbids_shared_realism()
             catalog_version="catalog",
             activation_mode="enforced",
         )
+
+
+def test_explicit_young_person_direction_is_shared_visible_person_evidence() -> None:
+    profile, intent = build_task_profile_and_intent(
+        user_input=(
+            "Create one fully dressed school-age child wearing the supplied blue dress "
+            "in an ordinary daytime garden."
+        ),
+        job_id="young-person",
+        project_id=None,
+        template_id="general_template",
+        scenario_id="general_creative",
+        uploaded_assets=[{"asset_id": "dress", "role": "product_reference"}],
+        reference_assets=[],
+        product_profile={},
+        metadata={"requested_image_count": 1},
+        template_policy=general_capability_policy(),
+    )
+
+    assert {"person", "product"} <= {entity.entity_type for entity in profile.subject_entities}
+    assert any(item.evidence_type == "visible_person" for item in profile.evidence)
+
+    plan = _planner().plan(
+        task_profile=profile,
+        intent=intent,
+        template_policy=general_capability_policy(),
+        catalog_version="catalog",
+        activation_mode="enforced",
+    )
+    human = plan.active("human_realism")
+    assert human is not None
+    assert human.activation_mode == "required"
+    assert human.reason_codes == ["visible_real_person_execution_invariant"]
+
+
+def test_children_garment_flat_lay_does_not_infer_a_visible_person() -> None:
+    profile, intent = build_task_profile_and_intent(
+        user_input="Create a flat-lay catalog photo of a children's blue dress, no people.",
+        job_id="children-garment-flat-lay",
+        project_id=None,
+        template_id="general_template",
+        scenario_id="general_creative",
+        uploaded_assets=[{"asset_id": "dress", "role": "product_reference"}],
+        reference_assets=[],
+        product_profile={},
+        metadata={"requested_image_count": 1},
+        template_policy=general_capability_policy(),
+    )
+
+    assert "person" not in {entity.entity_type for entity in profile.subject_entities}
+    assert not any(item.evidence_type == "visible_person" for item in profile.evidence)
+    plan = _planner().plan(
+        task_profile=profile,
+        intent=intent,
+        template_policy=general_capability_policy(),
+        catalog_version="catalog",
+        activation_mode="enforced",
+    )
+    assert plan.active("human_realism") is None

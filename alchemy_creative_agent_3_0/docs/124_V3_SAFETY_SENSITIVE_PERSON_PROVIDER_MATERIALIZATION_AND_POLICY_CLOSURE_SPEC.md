@@ -41,6 +41,11 @@ any image pixel was returned. This establishes the following distinction:
    clothing/material clarity, scene coherence, reference-channel fidelity,
    and the same safe context. It never serializes `bad_hands_or_body`,
    `ai_face_render`, raw vision messages, or anatomy/beauty repair text.
+6. Before planning, an explicit visible-young-person direction must become
+   ordinary shared `person` plus `visible_person` evidence. A product-only
+   phrase such as a children's garment flat lay must not do so. This is what
+   lets the existing enforced planner freeze Human Realism; it does not
+   introduce a young-person capability or route.
 
 ## 2. Provider policy closure
 
@@ -93,6 +98,10 @@ any image pixel was returned. This establishes the following distinction:
 5. Provider admission, source MIME/decode validation, image-generation versus
    image-edit selection, append-only review history, and final-delivery
    withholding retain their existing contracts.
+6. A school-age person explicitly described as wearing a referenced garment
+   produces visible-person evidence and the existing required Human Realism
+   planner activation. A people-excluded children's-garment flat lay produces
+   neither one.
 
 ## 5. Acceptance boundary
 
