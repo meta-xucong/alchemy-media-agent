@@ -77,7 +77,18 @@ class OpenAIVisionInspectionProvider:
         try:
             from openai import OpenAI
 
-            client = OpenAI(**_openai_client_kwargs(api_key=api_key, base_url=self._base_url()))
+            # Pixel inspection is part of the same bounded Job lifecycle as
+            # generation.  The OpenAI SDK retries failed transport calls by
+            # default, which can silently turn one 90-second inspection into
+            # several network requests and strand a Job in ``finalizing``.
+            # Keep retries owned by the shared review lifecycle instead.
+            client = OpenAI(
+                **_openai_client_kwargs(
+                    api_key=api_key,
+                    base_url=self._base_url(),
+                    max_retries=0,
+                )
+            )
             prompt = _inspection_prompt(metadata)
             data_url = _image_data_url(path, resolution.mime_type)
             response_payload = self._inspect_with_responses(client, prompt, data_url, metadata)
@@ -591,13 +602,13 @@ def _response_text_from_openai(response: Any) -> str:
     return "\n".join(chunks)
 
 
-def _openai_client_kwargs(*, api_key: str, base_url: str | None) -> dict[str, Any]:
+def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:
     try:
         from app.config import openai_sdk_client_kwargs
 
-        return openai_sdk_client_kwargs(api_key=api_key, base_url=base_url)
+        return openai_sdk_client_kwargs(api_key=api_key, base_url=base_url, **extra)
     except Exception:
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key, **{key: value for key, value in extra.items() if value is not None}}
         if base_url:
             kwargs["base_url"] = base_url
         return kwargs

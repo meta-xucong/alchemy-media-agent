@@ -1,6 +1,8 @@
 import base64
 from io import BytesIO
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
@@ -10,6 +12,7 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
     _inspection_prompt,
     _is_timeout_error,
@@ -77,6 +80,31 @@ def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
         height=72,
         status="ready",
     )
+
+
+def test_vision_provider_transport_disables_sdk_level_retries(tmp_path, monkeypatch) -> None:
+    """One shared review attempt must make one upstream transport attempt."""
+
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
+
+    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert payload["status"] == "pass"
+    assert captured["max_retries"] == 0
 
 
 def _openai_resolution_with_aigc_metadata(tmp_path: Path) -> GeneratedOutputResolution:
