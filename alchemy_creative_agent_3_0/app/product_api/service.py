@@ -5205,8 +5205,14 @@ class V3ProductApiService:
                 {
                     "role_key": item.get("role_key"),
                     "status": item.get("status"),
-                    "provider_failure": V3ProductApiService._public_specialized_provider_failure(
-                        item.get("provider_failure")
+                    **(
+                        {"provider_failure": provider_failure}
+                        if (
+                            provider_failure := V3ProductApiService._public_specialized_provider_failure(
+                                item.get("provider_failure")
+                            )
+                        )
+                        else {}
                     ),
                     "review_mode": item.get("review_mode"),
                     "review_status": item.get("review_status"),

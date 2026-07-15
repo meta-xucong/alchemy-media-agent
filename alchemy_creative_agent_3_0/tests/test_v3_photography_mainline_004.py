@@ -278,6 +278,8 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
         "reference_count": 0,
         "outer_request_count": 1,
     }
+    successful_role = next(item for item in summary["roles"] if item["role_key"] == "session_hero")
+    assert "provider_failure" not in successful_role
     assert "private_provider_message" not in str(summary)
 
     timeline = handlers.get_project_timeline(project["project_id"])["items"]
