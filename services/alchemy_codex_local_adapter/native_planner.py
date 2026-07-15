@@ -1,11 +1,14 @@
-"""Doc129 constraint-admission bridge from local stdio MCP to Codex ImageGen."""
+"""Doc130 canonical-provider-prompt bridge from local stdio MCP to Codex ImageGen."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
 
-from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.generation_router import (
+    ProductionImageGenerationProvider,
+    build_provider_generation_request,
+)
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 
 from .contracts import (
@@ -18,9 +21,6 @@ from .provenance import native_plan_provenance
 
 _TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
 _DEFERRED_TEMPLATE_IDS = frozenset({"ecommerce_template", "photographer_template"})
-_FORBIDDEN_LOCAL_CREATIVE_CAPABILITIES = frozenset({"suite_direction"})
-
-
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
@@ -28,26 +28,8 @@ class PlanningOnlyGenerationRouter:
         raise RuntimeError("Doc126 planning-only facade must never call a generation provider")
 
 
-class NativePlanningNoRemoteBrainProvider:
-    """Keep Local Mode independent from Web Mode's configured remote Brain.
-
-    The resulting deterministic runtime answer is allowed to help V3 freeze
-    admission contracts, but it is never surfaced as a creative direction.
-    The current Codex conversation owns the natural-language direction.
-    """
-
-    provider = "codex_native_no_remote_brain"
-    model = "not-applicable"
-
-    def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
-        return False
-
-    def run(self, *_: Any, **__: Any) -> Any:
-        raise RuntimeError("Doc126 Local Mode must never call a remote Central Brain")
-
-
 class CodexNativeImageGenPlanner:
-    """Freeze non-creative V3 guardrails without creating images or outputs."""
+    """Freeze and expose V3's canonical final provider prompts, never pixels."""
 
     def __init__(self, runtime_factory: Callable[[], ScenarioRuntime] | None = None) -> None:
         self._runtime_factory = runtime_factory or self._default_runtime
@@ -59,7 +41,6 @@ class CodexNativeImageGenPlanner:
         # it, so provide a fail-closed sentinel instead.
         return ScenarioRuntime(
             generation_router=PlanningOnlyGenerationRouter(),
-            llm_brain_adapter=V3LLMBrainAdapter(provider=NativePlanningNoRemoteBrainProvider()),
         )
 
     def prepare_native_imagegen_plan(self, request: NativeImageGenPlanRequest) -> dict[str, Any]:
@@ -77,6 +58,11 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_required_reference_missing",
                 "A required reference is not attached in the current Codex conversation.",
             )
+        if request.reference_declarations:
+            return self._blocked(
+                "codex_native_imagegen_reference_prompt_parity_unavailable",
+                "Codex Native ImageGen prompt parity currently supports text-only requests; it cannot prove the same provider-normalized reference input without a supported attachment handoff.",
+            )
 
         runtime = self._runtime_factory()
         result = runtime.plan_job(
@@ -90,6 +76,11 @@ class CodexNativeImageGenPlanner:
                     "template_id": request.template_id,
                     "requested_image_count": request.requested_image_count,
                     "requested_image_size": request.requested_image_size,
+                    # Local Mode has no image transport, but it must plan as a
+                    # real-image job so the shared Runtime requires the same
+                    # remote Central Brain contract as the Web Provider path.
+                    "require_real_images": True,
+                    "real_image_generation": True,
                     "codex_native_reference_declarations": [
                         {
                             "channel": item.channel,
@@ -112,30 +103,41 @@ class CodexNativeImageGenPlanner:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 planning did not preserve the requested image count.")
         if str(envelope.get("activation_mode") or "") != "enforced":
             return self._blocked("codex_native_imagegen_envelope_not_enforced", "Codex Native ImageGen requires an enforced V3 admission envelope.")
+        llm_brain = result.metadata.get("llm_brain") if isinstance(result.metadata.get("llm_brain"), dict) else {}
+        if not bool(llm_brain.get("llm_used")) or bool(llm_brain.get("fallback_used")):
+            return self._blocked(
+                "codex_native_imagegen_remote_brain_required",
+                "Codex Native ImageGen requires a valid non-fallback remote Central Brain result.",
+            )
 
         instructions = public_reference_instructions(request.reference_declarations)
-        guardrails = self._public_guardrails(normalized, envelope)
-        capability_ids = self._public_capability_ids(envelope)
         outputs: list[dict[str, Any]] = []
         envelope_id = str(envelope.get("envelope_id") or "").strip()
         if not envelope_id:
             return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
-        for index in range(1, request.requested_image_count + 1):
+        try:
+            materializations = self._canonical_materializations(result.planning_result)
+        except ValueError:
+            return self._blocked(
+                "codex_native_imagegen_canonical_prompt_unavailable",
+                "V3 could not materialize one canonical Provider prompt for every requested output.",
+            )
+        if len(materializations) != request.requested_image_count:
+            return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
+        for index, materialization in enumerate(materializations, start=1):
             outputs.append(
                 {
                     "output_index": index,
                     "output_binding_id": f"codex_native_output_{envelope_id.rsplit('_', 1)[-1]}_{index}",
-                    "creative_direction_brief": {
-                        "protected_user_intent": str(normalized.get("protected_user_intent") or request.user_input),
-                        "requested_image_size": normalized.get("effective_image_size"),
-                        "text_policy": str(normalized.get("text_policy") or "provider_native_no_forced_text"),
-                        "constraints_to_preserve": guardrails,
-                        "active_quality_capabilities": capability_ids,
-                        "direction_authoring_instruction": (
-                            "Author one self-contained natural-language whole-image direction for this output. "
-                            "Use the protected user intent as the creative source and preserve the listed guardrails. "
-                            "Do not turn the brief into a keyword stack or add an unrequested predefined image recipe."
-                        ),
+                    # Codex must give this exact Unicode string to ImageGen;
+                    # the hash is a safe parity receipt, not a second prompt.
+                    "imagegen_prompt": materialization.generation_prompt,
+                    "provider_prompt_sha256": materialization.prompt_sha256,
+                    "rendering_contract": {
+                        "model": "gpt-image-2",
+                        "size": materialization.size,
+                        "quality": materialization.quality,
+                        "output_format": materialization.output_format,
                     },
                     "reference_instructions": list(instructions),
                 }
@@ -152,50 +154,39 @@ class CodexNativeImageGenPlanner:
                 output_count=request.requested_image_count,
                 activation_plan_id=str(envelope.get("envelope_id") or ""),
                 constraint_ledger_id=str(ledger.get("ledger_id") or ""),
-                admission_fallback_observed=bool((result.metadata.get("llm_brain") or {}).get("fallback_used")),
+                admission_fallback_observed=False,
             ),
         }
 
     @staticmethod
-    def _public_capability_ids(envelope: dict[str, Any]) -> list[str]:
-        plan = envelope.get("activation_plan") if isinstance(envelope.get("activation_plan"), dict) else {}
-        raw = plan.get("active_capabilities") if isinstance(plan.get("active_capabilities"), list) else []
-        return [
-            capability_id
-            for capability_id in (
-                str(item.get("capability_id") or "").strip()
-                for item in raw
-                if isinstance(item, dict)
-            )
-            if capability_id and capability_id not in _FORBIDDEN_LOCAL_CREATIVE_CAPABILITIES
-        ]
+    def _canonical_materializations(planning_result: Any) -> list[Any]:
+        """Materialize every output through the exact Web Provider boundary.
 
-    @staticmethod
-    def _public_guardrails(normalized: dict[str, Any], envelope: dict[str, Any]) -> list[str]:
-        """Return bounded, non-creative invariants for the Codex conversation.
-
-        This deliberately does not read PromptCompiler output, template
-        deliverable directions, capability prompt fragments, retry patches, or
-        legacy General suite metadata.  Those fields can contain historical
-        role/camera recipes and must never influence Codex-native creation.
+        This creates no Web client, does not select an upstream account, and
+        does not send a request.  The shared provider class is used solely as
+        the canonical final-prompt materializer.
         """
 
-        guardrails = ["Preserve the user's explicitly stated subject, facts, and intended use."]
-        text_policy = str(normalized.get("text_policy") or "")
-        if text_policy == "provider_native_text_forbidden":
-            guardrails.append("Do not include visible text, labels, logos, watermarks, or decorative copy.")
-        elif text_policy == "provider_native_no_forced_text":
-            guardrails.append("Do not invent prominent visible copy, labels, logos, or watermarks unless the user explicitly asks for them.")
-        else:
-            guardrails.append("Any visible text must be explicitly requested by the user; this conversation-only mode cannot certify text fidelity.")
-        capability_ids = set(CodexNativeImageGenPlanner._public_capability_ids(envelope))
-        if "human_realism" in capability_ids:
-            guardrails.append(
-                "For any visibly real person, keep appearance, anatomy, expression, and age presentation natural and consistent with the user's requested styling; do not introduce beauty-filter or anatomy-focused details."
+        assets = {item.asset_id: item for item in planning_result.series_plan.assets}
+        layouts = {item.asset_id: item for item in planning_result.layout_plans}
+        prompts = {item.asset_id: item for item in planning_result.prompt_compilations}
+        conditions = {item.asset_id: item for item in planning_result.condition_plans}
+        generation_plans = {item.asset_id: item for item in planning_result.generation_plans}
+        if not assets or set(assets) != set(layouts) or set(assets) != set(prompts) or set(assets) != set(conditions) or set(assets) != set(generation_plans):
+            raise ValueError("planning result does not have one complete provider contract per asset")
+        materializer = ProductionImageGenerationProvider(output_store=object())
+        materializations: list[Any] = []
+        for asset in planning_result.series_plan.assets:
+            request = build_provider_generation_request(
+                asset_spec=asset,
+                layout_plan=layouts[asset.asset_id],
+                prompt_compilation=prompts[asset.asset_id],
+                condition_plan=conditions[asset.asset_id],
+                generation_plan=generation_plans[asset.asset_id],
+                job_id=planning_result.creative_job.job_id,
             )
-        if capability_ids & {"portrait_identity", "product_identity", "nonhuman_subject_identity", "reference_channel_policy"}:
-            guardrails.append("Treat each declared reference channel as truth only for that channel; do not substitute or broaden its meaning.")
-        return guardrails
+            materializations.append(materializer.materialize_final_prompt(request))
+        return materializations
 
     @staticmethod
     def _blocked(code: str, message: str) -> dict[str, Any]:

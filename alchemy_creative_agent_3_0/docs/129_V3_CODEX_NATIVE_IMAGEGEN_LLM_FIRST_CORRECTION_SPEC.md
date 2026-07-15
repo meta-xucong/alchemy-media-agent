@@ -1,8 +1,14 @@
 # Doc129: V3 Codex Native ImageGen LLM-first Correction
 
-Status: implemented developer-preview contract. It replaces Doc126 N1's
-outward prompt projection, while preserving its isolation and conversation-only
-boundaries.
+Status: **superseded for active Local Mode behavior by Doc130.** It remains a
+historical correction record for the rejected independently authored-prompt
+route. Preserve its isolation lessons, but do not restore Codex-authored
+creative directions for new Local Mode calls.
+
+> **Authority note:** Doc130 makes canonical Provider Prompt parity the Local
+> Mode invariant: the MCP returns the exact final `generation_prompt` that the
+> V3 Web Provider materializes for the same frozen plan. This document's
+> previous "Codex conversation authors" language is archival only.
 
 ## Why N1 is superseded
 

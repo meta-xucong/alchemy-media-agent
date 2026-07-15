@@ -19,7 +19,12 @@ from ..agents import (
 )
 from ..brand_memory.profile_service import BrandProfileService
 from ..evaluation import MockScoringProvider, RuleBasedPlanningScorer, RuleBasedRefinementProvider
-from ..generation_router import GenerationRequest, GenerationRouter, safe_runtime_execution_budget, select_best_candidate
+from ..generation_router import (
+    GenerationRouter,
+    build_provider_generation_request,
+    safe_runtime_execution_budget,
+    select_best_candidate,
+)
 from ..schemas import CandidateResult, EvaluationReport, PlanningResult, ProviderStrategy, Recommendation, ReferenceAsset
 from ..vertical_agents import VerticalAgentRegistry
 
@@ -1062,61 +1067,14 @@ class CentralCreativeBrain:
         selected_evaluation: EvaluationReport | None = None
         warnings: list[str] = []
         for refine_round in range(generation_plan.max_refine_rounds + 1):
-            request = GenerationRequest(
+            request = build_provider_generation_request(
                 asset_spec=asset,
                 layout_plan=layout_plan,
                 prompt_compilation=prompt,
                 condition_plan=condition_plan,
                 generation_plan=generation_plan,
-                metadata={
-                    "refine_round": refine_round,
-                    "mock_profile": generation_plan.metadata.get("mock_profile", "balanced"),
-                    "job_id": context.creative_job.job_id if context.creative_job else generation_plan.metadata.get("job_id"),
-                    "quality_mode": generation_plan.metadata.get("quality_mode", "standard"),
-                    "uploaded_assets": generation_plan.metadata.get("uploaded_assets", []),
-                    "reference_assets": generation_plan.metadata.get("reference_assets", []),
-                    "shared_capabilities": generation_plan.metadata.get("shared_capabilities", {}),
-                    "visual_cluster": generation_plan.metadata.get("visual_cluster", {}),
-                    "llm_brain": generation_plan.metadata.get("llm_brain", {}),
-                    "requested_image_count": generation_plan.metadata.get("requested_image_count"),
-                    "requested_image_size": generation_plan.metadata.get("requested_image_size"),
-                    # The planning record freezes real-image/LLM-first
-                    # status.  Carry it into the actual Provider request;
-                    # Project Mode's later generate payload intentionally
-                    # does not repeat this immutable decision.
-                    "require_real_images": bool(generation_plan.metadata.get("require_real_images")),
-                    "real_image_generation": bool(generation_plan.metadata.get("real_image_generation")),
-                    "normalized_v3_job_intent": generation_plan.metadata.get("normalized_v3_job_intent"),
-                    "template_deliverable_plan": generation_plan.metadata.get("template_deliverable_plan"),
-                    "resolved_constraint_ledger": generation_plan.metadata.get("resolved_constraint_ledger"),
-                    "capability_execution_envelope": generation_plan.metadata.get("capability_execution_envelope"),
-                    "mode_execution_policy": generation_plan.metadata.get("mode_execution_policy", {}),
-                    "role_specific_generation_plan": generation_plan.metadata.get("role_specific_generation_plan", {}),
-                    "mode_role_recipe": generation_plan.metadata.get("mode_role_recipe", {}),
-                    "mode_role_key": generation_plan.metadata.get("mode_role_key"),
-                    "mode_role_label": generation_plan.metadata.get("mode_role_label"),
-                    "project_id": generation_plan.metadata.get("project_id"),
-                    "template_id": generation_plan.metadata.get("template_id"),
-                    "scenario_id": generation_plan.metadata.get("scenario_id"),
-                    "visual_auto_retry_active": generation_plan.metadata.get("visual_auto_retry_active", False),
-                    "visual_auto_retry_attempt": generation_plan.metadata.get("visual_auto_retry_attempt"),
-                    "retry_attempt": generation_plan.metadata.get("retry_attempt"),
-                    "visual_retry_reason_codes": generation_plan.metadata.get("visual_retry_reason_codes", []),
-                    "visual_retry_patch": generation_plan.metadata.get("visual_retry_patch", {}),
-                    "auto_batch_identity_anchor_policy": generation_plan.metadata.get("auto_batch_identity_anchor_policy", {}),
-                    "auto_batch_identity_anchor_applied": generation_plan.metadata.get("auto_batch_identity_anchor_applied", False),
-                    "auto_batch_identity_anchor_source_output_id": generation_plan.metadata.get(
-                        "auto_batch_identity_anchor_source_output_id"
-                    ),
-                    "auto_batch_identity_anchor_source_candidate_id": generation_plan.metadata.get(
-                        "auto_batch_identity_anchor_source_candidate_id"
-                    ),
-                    "industry": generation_plan.metadata.get("industry"),
-                    "user_input": generation_plan.metadata.get("user_input"),
-                    "normalized_input": generation_plan.metadata.get("normalized_input"),
-                    "veyra_user_id": generation_plan.metadata.get("veyra_user_id"),
-                    "provider_strategy": generation_plan.provider_strategy.value,
-                },
+                job_id=context.creative_job.job_id if context.creative_job else None,
+                refine_round=refine_round,
             )
             response = self.generation_router.generate(request)
             warnings.extend(response.warnings)

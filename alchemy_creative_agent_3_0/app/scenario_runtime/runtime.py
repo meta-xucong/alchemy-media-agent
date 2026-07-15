@@ -2017,9 +2017,37 @@ class ScenarioRuntime:
                 }
             }
         )
+        # A planning result is also the source of any later provider request.
+        # Carry the same immutable execution records down to every planned
+        # asset now, rather than making a non-rendering consumer reconstruct a
+        # partial request from mutable result-level metadata.  Central Brain's
+        # generation loop uses these identical per-asset fields.
+        frozen_provider_metadata = {
+            key: activation_metadata.get(key)
+            for key in (
+                "capability_activation_plan",
+                "normalized_v3_job_intent",
+                "template_deliverable_plan",
+                "resolved_constraint_ledger",
+                "capability_execution_envelope",
+            )
+            if activation_metadata.get(key) is not None
+        }
+        generation_plans = [
+            generation_plan.model_copy(
+                update={
+                    "metadata": {
+                        **dict(generation_plan.metadata),
+                        **frozen_provider_metadata,
+                    }
+                }
+            )
+            for generation_plan in result.generation_plans
+        ]
         return result.model_copy(
             update={
                 "creative_job": creative_job,
+                "generation_plans": generation_plans,
                 "metadata": {
                     **dict(result.metadata),
                     **activation_metadata,

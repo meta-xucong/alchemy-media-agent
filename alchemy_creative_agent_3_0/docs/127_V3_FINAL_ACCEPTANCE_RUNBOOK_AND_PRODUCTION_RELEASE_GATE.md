@@ -53,7 +53,7 @@ different behaviour.
 | General project continuation/browser behavior | Doc104, Doc108, and Doc109 | The General browser path remains scenario-neutral and is independently observable after refresh/reopen. |
 | E-Commerce | E17–E19 and Doc104/105 continuation portions | The user explicitly selects E-Commerce; remote Brain makes N whole-image directions; shared runtime executes them. E19 is the real-provider evidence record. |
 | Photography | Doc106, Doc112, Doc115, Doc116, P10, and P11 | Photography has remote-Brain creative direction, shared real-pixel certification, and template-owned structural roles only. |
-| Codex native planner | Doc129 (Doc126 archived) | It is General-only, conversation-only constraint admission. Codex authors the natural-language direction and it cannot generate certified files, import artefacts, or satisfy any Web/Provider/Gate C/Gate D/P10 gate. |
+| Codex native planner | Doc130 (Docs126/129 archived) | It is General-only, conversation-only canonical Provider Prompt planning. Codex passes the exact materialized prompt to its built-in renderer; it cannot create certified files, import artefacts, or satisfy any Web/Provider/Gate C/Gate D/P10 gate. |
 
 ### 2.1 Explicitly superseded historical material
 
@@ -80,7 +80,7 @@ current release approval.
 | Shared real-reference/human chain | A controlled branch report describes a hybrid-reviewed young-person apparel result, but its job/output provenance is not durable in the present service. | Run the Doc114 cross-domain matrix below on the controlled current deployment. |
 | E-Commerce Gate C | E19 records one bounded, authorized, hybrid-reviewed historical case. | Re-certify on the frozen release build, then complete exact-count, browser, human commercial review, and failure evidence for Gate D. |
 | Photography P10 | A controlled single-image front-end chain has been observed; it did not by itself prove every real-pixel certification condition or a complete three-role set. | Complete P10's four-scene, two-input-mode, single/professional-set matrix with visible review provenance. |
-| Codex native planner | Doc129 constraint-admission contract and tests are integrated. | No production acceptance is pending from it. It stays excluded from image delivery gates. |
+| Codex native planner | Doc130 canonical Provider Prompt parity contract and tests are integrated. | No production acceptance is pending from it. It stays excluded from image delivery gates. |
 
 Until Sections 5–11 are complete, the E-Commerce and Photography production
 flags stay off. General may remain available only under its existing controlled
@@ -185,7 +185,7 @@ python -m pytest alchemy_creative_agent_3_0/tests -q
 python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_0/tests
 node --check src_skeleton/app/static/app.js
 git diff --check
-python -m pytest tests/test_doc126_codex_native_imagegen.py -q
+python -m pytest tests/test_doc130_codex_native_prompt_parity.py -q
 ```
 
 The last test checks the planning-only plugin contract, not image quality. If
@@ -396,7 +396,7 @@ Before release, execute the following final audit against the same commit.
 | Process lifecycle | `job_created`, generating, generated/blocked/failed/withheld, project aggregation, restart, polling, and refresh all reach an honest terminal state. No background job can remain indefinitely in a false generating state. |
 | Browser rendering | reference thumbnails load; existing final images rehydrate after refresh; blocked/held/failed results are distinguishable from empty output; no stale spinner or duplicated result card remains. |
 | Legacy compatibility | old projects/jobs can be read. Old recipe/slot/overlay/text-plan aliases cannot enter new Brain/provider prompts, execution envelopes, or delivery logic. |
-| Codex native planner boundary | plugin remains opt-in constraint admission only: Codex owns its conversation direction and built-in renderer; Alchemy has no API key/artifact import/review/retry/delivery path, and cannot alter Web acceptance results. |
+| Codex native planner boundary | plugin remains opt-in canonical-prompt planning only: Alchemy materializes the same final Provider Prompt, Codex owns its built-in renderer; Alchemy has no API key/artifact import/review/retry/delivery path, and cannot alter Web acceptance results. |
 
 If a check detects a defect, classify it rather than masking it:
 
@@ -464,7 +464,7 @@ evidence across a change that can alter its premise.
 | E-Commerce template/plan/UI | E-Commerce Phase 4 plus isolation checks. |
 | Photography template/profile/identity/UI | complete affected P10 matrix cells plus isolation checks; rerun all sixteen if role-count or shared execution changes. |
 | upstream account health only, no V3 code/config change | record a new provider health/preflight result and rerun only interrupted real cases. |
-| Codex native planner only | Doc129/Doc126 archival tests; it does not reopen Web production gates. |
+| Codex native planner only | Doc130 parity tests plus Docs126/129 archival records; it does not reopen Web production gates. |
 
 ## 14. One-Page Operator Checklist
 

@@ -1,4 +1,4 @@
-"""Public-safe, constraint-admission provenance for Doc129."""
+"""Public-safe canonical-provider-prompt provenance for Doc130."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ def native_plan_provenance(
         "delivery_state": CONVERSATION_ONLY_DELIVERY_STATE,
         "admission_fallback_observed": bool(admission_fallback_observed),
         "legacy_creative_output_projected": False,
+        "canonical_provider_prompt_projected": True,
         "template_id": template_id,
         "scenario_id": scenario_id,
         "requested_output_count": output_count,

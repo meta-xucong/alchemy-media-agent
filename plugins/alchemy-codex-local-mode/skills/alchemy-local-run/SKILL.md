@@ -10,19 +10,18 @@ Native ImageGen Mode.  Never use it because a Web Mode, Central Brain, gateway,
 or Provider request failed.
 
 1. Call `prepare_native_imagegen_plan` exactly once with only the user's input,
-   explicit template, requested count/size, and declarations about references
-   attached in this Codex conversation.
+   explicit template, requested count/size, and reference declarations. The
+   current exact-parity surface is text-to-image only, so any declaration will
+   return a safe blocked response.
 2. If the plan is blocked, show the public-safe reason and stop.  Do not switch
    to another template, a web renderer, a provider, or a local workaround.
-3. For every returned output, use `creative_direction_brief` to author exactly
-   one self-contained, natural-language whole-image direction in this Codex
-   conversation. The brief is not an image prompt and must not be copied as a
-   structured keyword stack. Preserve its user truth, guardrails, text policy,
-   and reference instructions, but do not add a static role, suite, shot
-   family, camera distance, angle, crop rule, or local recipe. Then make
-   exactly one Codex built-in image-generation call for that authored direction.
-   When an instruction requires a conversation attachment, use that exact
-   attachment; never substitute a path or another image.
+3. For every returned output, make exactly one Codex built-in image-generation
+   call using that output's `imagegen_prompt` verbatim. Do not append, remove,
+   summarize, translate, normalize, or add any instruction, static role,
+   suite, shot family, camera distance, angle, crop rule, or local recipe. The
+   accompanying `provider_prompt_sha256` is a parity receipt: it identifies
+   the same UTF-8 final prompt that V3 Web Provider materializes for GPT Image
+   2 from the same frozen plan.
 4. If the built-in image tool is unavailable, stop with
    `codex_native_imagegen_tool_unavailable`.  Do not call an external renderer
    and do not try to recover an image file from Codex internals.

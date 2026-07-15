@@ -1,9 +1,11 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Doc129 plugin gives an interactive Codex agent one local stdio
-MCP constraint-admission tool: `prepare_native_imagegen_plan`. It does not create images,
-open a listener, start a background worker, control Codex, call the configured
-Web Brain or image Provider, or change Web Mode.
+This isolated Doc130 plugin gives an interactive Codex agent one local stdio
+MCP canonical-prompt tool: `prepare_native_imagegen_plan`. It does not create
+images, open a listener, start a background worker, control Codex, call an
+image Provider, or change Web Mode. It does use the configured remote Central
+Brain because an exact final Provider prompt cannot be created from a local
+creative fallback.
 
 The flow is intentionally one-way:
 
@@ -29,13 +31,16 @@ capability envelope, or credential. `portrait_identity`, `product_truth`, and
 `nonhuman_identity` are always hard channels: callers cannot set a flag to
 downgrade them.
 
-For every successful output, Codex uses `creative_direction_brief` to author
-one natural-language whole-image direction in the conversation, then makes
-exactly one built-in image-generation call. Alchemy owns the protected user
-truth and guardrails; Codex owns this local creative direction. Do not turn
-the brief into a keyword list, and do not add a static role, suite, camera,
-crop, or other structured recipe. If admission is blocked or the built-in tool
-is unavailable, stop without a fallback.
+For every successful output, Codex passes the returned `imagegen_prompt`
+verbatim to exactly one built-in image-generation call. The MCP returns the
+same final Unicode prompt and rendering parameters that Web Mode's Provider
+would materialize for the same frozen V3 plan; its SHA-256 is the parity
+receipt. Codex must not add a role, suite, camera, crop, keyword stack, or any
+other text. If remote Brain planning, canonical materialization, admission, or
+the built-in tool is unavailable, stop without a fallback.
+
+This first parity surface is text-to-image only. Any declared reference blocks
+until a future supported attachment handoff can prove reference parity.
 
 ## Local repository setup
 

@@ -1,19 +1,19 @@
 {
   "name": "alchemy-codex-local-mode",
-  "version": "0.4.0",
-  "description": "Explicit Codex-native constraint admission for conversation-only images",
+  "version": "0.5.0+codex.20260715141815",
+  "description": "Exact V3 Provider Prompt parity for conversation-only Codex images",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Alchemy Codex Local Mode",
-    "shortDescription": "Alchemy guardrails for Codex native ImageGen.",
-    "longDescription": "A disabled-by-default constraint-admission plugin. Alchemy freezes facts and guardrails; Codex authors the natural-language direction and creates the conversation-only image itself.",
+    "shortDescription": "Exact Alchemy Provider Prompts for Codex native ImageGen.",
+    "longDescription": "A disabled-by-default canonical-prompt plugin. Alchemy uses its remote Brain and the same final Provider materializer; Codex renders the returned prompt verbatim as a conversation-only image.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use Codex Native ImageGen Mode only when I explicitly request it. Obtain Alchemy guardrails, author each natural-language image direction here, then create the conversation-only image; do not treat it as an Alchemy delivery."
+    "defaultPrompt": "Use Codex Native ImageGen Mode only when I explicitly request it. Obtain each canonical Alchemy Provider Prompt, pass it to native ImageGen verbatim once, and do not treat the conversation-only image as an Alchemy delivery."
   },
   "mcpServers": "./.mcp.json"
 }

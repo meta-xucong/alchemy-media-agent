@@ -1,4 +1,4 @@
-"""Public-safe contracts for the Doc129 Codex Native ImageGen planner."""
+"""Public-safe contracts for the Doc130 canonical-prompt MCP planner."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any
 
 
 NATIVE_EXECUTION_CHANNEL = "codex_native_imagegen"
-NATIVE_PLANNING_AUTHORITY = "alchemy_v3_constraint_admission"
-NATIVE_CREATIVE_DIRECTION_OWNER = "codex_conversation_llm"
+NATIVE_PLANNING_AUTHORITY = "alchemy_v3_canonical_provider_materialization"
+NATIVE_CREATIVE_DIRECTION_OWNER = "remote_v3_llm_brain"
 NATIVE_RENDERER = "codex_builtin_imagegen"
 CONVERSATION_ONLY_DELIVERY_STATE = "conversation_only_not_certified"
 
@@ -106,7 +106,7 @@ class NativeReferenceDeclaration:
 
 @dataclass(frozen=True)
 class NativeImageGenPlanRequest:
-    """The entire public MCP input contract for Doc129 N2."""
+    """The entire public MCP input contract for Doc130 canonical prompt parity."""
 
     user_input: str
     template_id: str

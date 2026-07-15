@@ -1,4 +1,4 @@
-"""Explicit, disabled-by-default facade for Doc129 constraint admission."""
+"""Explicit, disabled-by-default facade for Doc130 canonical prompt planning."""
 
 from __future__ import annotations
 
