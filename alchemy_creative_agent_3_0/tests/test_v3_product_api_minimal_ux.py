@@ -568,6 +568,33 @@ def test_persistent_product_job_store_restores_project_job_contract_after_restar
     assert created["job_id"] in restored_project["project"]["job_ids"]
 
 
+def test_persistent_job_store_refreshes_a_cached_lifecycle_after_background_terminal_write() -> None:
+    """Polling must not preserve a stale ``generating`` state across workers."""
+
+    root = _test_store_root("persistent_product_job_refresh")
+    job_root = root / "jobs"
+    writer = V3ProductApiService(job_store=PersistentProductJobStore(job_root))
+    created = writer.create_job({"user_input": "Create one clean still-life image."})
+    writer.mark_job_generating(
+        created.job_id,
+        background_attempt_id="writer_attempt",
+        background_timeout_seconds=675,
+    )
+
+    polling_service = V3ProductApiService(job_store=PersistentProductJobStore(job_root))
+    assert polling_service.get_job(created.job_id).status == ProductJobStatusValue.GENERATING
+
+    writer.mark_job_generation_worker_failed(
+        created.job_id,
+        background_attempt_id="writer_attempt",
+        failure_code="background_generation_worker_error",
+    )
+
+    refreshed = polling_service.get_job(created.job_id)
+    assert refreshed.status == ProductJobStatusValue.BLOCKED
+    assert refreshed.metadata["generation_lifecycle_failure"]["failure_code"] == "background_generation_worker_error"
+
+
 def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts() -> None:
     service, _, _ = _service("campaign")
     brand = service.create_brand(

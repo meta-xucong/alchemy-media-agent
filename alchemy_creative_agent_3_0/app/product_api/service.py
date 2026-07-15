@@ -532,13 +532,22 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         return saved
 
     def get(self, job_id: str) -> ProductJobRecord | None:
-        cached = super().get(job_id)
-        if cached is not None:
-            return cached
+        # Project generation runs in a background worker and the browser may
+        # poll through a second service instance (or after a controlled
+        # reload).  The JSON record is the durable lifecycle authority.  A
+        # cache-first read can therefore leave the user seeing ``generating``
+        # after the worker has already persisted a terminal review/delivery
+        # outcome.  Refresh this one record before falling back to the cache;
+        # writes use atomic replacement, so a reader sees either the prior
+        # complete record or the new complete record, never a partial file.
         restored = self._read_record(job_id)
         if restored is not None:
             self._records[restored.job_id] = restored
-        return restored
+            return restored
+        cached = super().get(job_id)
+        if cached is not None:
+            return cached
+        return None
 
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
         self._load_all_records()
