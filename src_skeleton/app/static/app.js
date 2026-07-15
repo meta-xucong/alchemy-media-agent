@@ -339,7 +339,6 @@ const v3State = {
   longRunNoticeKey: "",
   presetByScenario: {
     general_creative: "campaign_poster",
-    ecommerce: "one_click_product_set",
   },
 };
 
@@ -1731,9 +1730,9 @@ function v3TemplateCanCreate(templateId) {
 }
 
 function v3DefaultPresetForScenario(scenarioId) {
+  if (scenarioId === "ecommerce") return null;
   const defaults = {
     general_creative: "campaign_poster",
-    ecommerce: "one_click_product_set",
     photography: "single_hero",
   };
   return defaults[scenarioId] || "campaign_poster";
@@ -2230,8 +2229,13 @@ function confirmV3PhotographerProfile() {
 }
 
 function setV3Preset(presetId) {
-  v3State.selectedPreset = presetId || "campaign_poster";
-  v3State.presetByScenario[v3State.selectedScenario || "general_creative"] = v3State.selectedPreset;
+  const scenarioId = v3State.selectedScenario || "general_creative";
+  v3State.selectedPreset = presetId || v3DefaultPresetForScenario(scenarioId);
+  if (v3State.selectedPreset) {
+    v3State.presetByScenario[scenarioId] = v3State.selectedPreset;
+  } else {
+    delete v3State.presetByScenario[scenarioId];
+  }
   document.querySelectorAll("[data-v3-preset]").forEach((button) => {
     const active = button.dataset.v3Preset === v3State.selectedPreset;
     button.classList.toggle("active", active);
@@ -5324,8 +5328,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       frontend_surface: "commercial_v3_project_mode",
       interaction_style: "project_card_module",
       advanced_reference_controls: advancedReferenceControls,
-      selected_mode_id: v3State.selectedPreset,
-      selected_preset_id: v3State.selectedPreset,
+      selected_mode_id: scenarioId === "ecommerce" ? undefined : v3State.selectedPreset,
+      selected_preset_id: scenarioId === "ecommerce" ? undefined : v3State.selectedPreset,
       variation_mode: scenarioId === "general_creative" ? selectedVariationMode : undefined,
       inferred_variation_mode: scenarioId === "general_creative" ? inferredVariationMode : undefined,
       effective_variation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,

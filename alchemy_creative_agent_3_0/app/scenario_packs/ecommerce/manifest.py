@@ -11,7 +11,10 @@ ECOMMERCE_MANIFEST = ScenarioPackManifest(
     category="specialized",
     status=ScenarioPackStatus.ACTIVE,
     description="LLM-directed product image sets using factual commerce context and shared V3 delivery.",
-    default_mode_id="one_click_product_set",
+    # Legacy mode IDs remain in the compatibility allow-list below so old
+    # records can still be read.  New E-Commerce requests have no default
+    # preset or executable mode: the remote Brain authors every output intent.
+    default_mode_id=None,
     supported_mode_ids=[
         "one_click_product_set",
         "marketplace_listing_set",

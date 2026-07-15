@@ -701,7 +701,9 @@ def test_project_mode_creates_ecommerce_project_job_through_template_registry(tm
 
     assert job["status"] == "planned"
     assert job["scenario"]["scenario_id"] == "ecommerce"
-    assert job["scenario"]["selected_preset_id"] == "marketplace_listing_set"
+    # Historical identifiers are accepted for read compatibility, but a new
+    # E-Commerce forward path never re-emits them into the Brain/runtime.
+    assert job["scenario"]["selected_preset_id"] is None
     assert job["metadata"]["template_id"] == "ecommerce_template"
     assert job["metadata"]["project_id"] == project["project_id"]
     assert job["metadata"]["project_context_snapshot"]["template_id"] == "ecommerce_template"

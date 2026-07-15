@@ -228,3 +228,30 @@ authorize replay, a new job, or Gate C/D credit. A new Gate C attempt remains
 blocked pending a payload-free, diagnosable image-edit transaction cause and
 explicit owner authorization for new controlled material and one fresh outer
 request.
+
+## 2026-07-15 Current-build Gate C N=1 re-run after shared remediation
+
+Mainline expressly authorized one new, isolated attempt on the refreshed
+controlled runtime at `origin/main@a41bec36902c847ec8d263158b0c79465179da53`.
+The restricted manifest is `ACPT-20260715-ecommerce-N1-a41bec3`; it remains
+outside Git and contains no media, raw prompt, endpoint, credential, or
+provider payload. This run is distinct from and does not replay
+`job_d6dc5f5ba6` or `job_82c3bb2df2`.
+
+| Field | Result |
+| --- | --- |
+| Project / material admission | `project_d287bd46dc` / `project_reference_0753c60b21`; explicit browser selection of `ecommerce_template`; exactly one active `product` binding to restricted material register `MAT-ACPT-20260715-KIDSWEAR-01` |
+| Planned job | `job_a4fb554eea`; remote `deepseek` / `deepseek-v4-pro-260425`; `llm_used=true`, `fallback_used=false`; requested count, Brain-plan count, natural-language direction count, and remote intent count all equal `1` |
+| Provider execution | exactly one shared `image_edit` operation; two provider-native reference inputs; one gateway-owned fresh upstream request; managed failover enabled with a 660-second gateway budget and `outer_max_attempts=1` |
+| Failure closure | `image_edit_invalid_request_unattributed`; classified as `non_retryable_provider_failure`; zero retry attempts were executed, so no second outer request was made |
+| Review / delivery | no media or candidates; final delivery `not_evaluated`; zero reviewed or delivered outputs; no `vision_model`/`hybrid` verdict and no certified/ready output |
+| Boundary check | no General fallback, static suite, structured visual recipe, local overlay/text path, private E-Commerce retry, or production-gate change was used |
+| Gate result | **not passed** — the exact-N remote Brain and provider-native reference admission contracts passed, but GPT Image 2 failed before media and visual review. This run earns no Gate C credit. |
+
+This job's one outer request is exhausted. The safe failure classification still
+does not attribute the rejection to a prompt, reference, policy, adapter, or
+gateway cause. Do not create another E-Commerce project/job or change model,
+prompt, reference treatment, retry behavior, or production gates locally.
+Gate C/D remains blocked pending mainline's payload-free provider-native
+transaction diagnosis and a new explicit authorization for a future isolated
+attempt.
