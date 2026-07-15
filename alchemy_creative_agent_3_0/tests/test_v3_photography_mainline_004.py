@@ -352,6 +352,54 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
     assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
 
 
+def test_single_hero_provider_failure_without_pixels_skips_metadata_only_review(monkeypatch, tmp_path) -> None:
+    """No-pixel specialized failures are terminal Provider outcomes, not reviews."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path, fail_role="hero_photograph")
+    project, root = _project_and_root(handlers, mode_id="single_hero")
+
+    blocked = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    )
+
+    assert blocked["status"] == "blocked"
+    assert len(provider.requests) == 1
+    failure = blocked["metadata"]["provider_failure_retry"]
+    assert failure["executed_count"] == 0
+    assert failure["fresh_upstream_requests"] == 1
+    assert failure["final_status"] == "failed"
+    assert failure["final_failure_code"] == "image_generation_invalid_request_unattributed"
+    assert failure["attempts"] == [
+        {
+            "attempt": 1,
+            "status": "failed",
+            "classification": "non_retryable_provider_failure",
+            "failure_code": "image_generation_invalid_request_unattributed",
+            "retryable": False,
+        }
+    ]
+    assert blocked["metadata"]["provider_execution"]["operations"] == [
+        {
+            "operation": "image_generate",
+            "reference_execution_state": "blocked",
+            "reference_count": 0,
+            "automatic_delivery_available": False,
+            "manual_confirmation_required": False,
+            "safe_reason_code": "image_generation_invalid_request_unattributed",
+        }
+    ]
+    assert blocked["metadata"]["review_certification"]["state"] == "blocked"
+    record = handlers.service.get_job_record(root["job_id"])
+    assert record is not None
+    assert record.generation_result is not None
+    assert "post_generation_review_package" not in record.generation_result.metadata
+    assert not any("output_review_metadata_only" in warning for warning in record.warnings)
+    assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+
 def test_frontend_uses_safe_specialized_provider_failure_when_a_role_has_no_delivery() -> None:
     script = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
         encoding="utf-8"

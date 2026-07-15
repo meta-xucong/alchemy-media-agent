@@ -1253,6 +1253,57 @@ class V3ProductApiService:
         generation_result = generation_runtime_result.generation_result
         if provider_strategy == ProviderStrategy.MOCK_GENERATION:
             generation_result = self._materialize_mock_output_records(record, generation_result)
+        # Specialized templates intentionally let the shared executor finish
+        # the remaining frozen roles after one role fails.  That is necessary
+        # for a professional set, but it also means a single-role Photography
+        # run can return a planning result with no pixels instead of raising
+        # the Provider exception through this outer method.  Do not turn that
+        # empty result into a metadata-only review: no pixels means there is
+        # nothing to inspect, retry visually, or deliver.
+        no_pixel_failure = self._specialized_no_pixel_failure_summary(generation_result)
+        if no_pixel_failure is not None:
+            record.generation_result = generation_result
+            record.scenario_resolution = generation_runtime_result.scenario_resolution
+            record.capability_run = generation_runtime_result.capability_run
+            request_metadata = dict(record.request.metadata)
+            provider_failure_retry = no_pixel_failure.get("provider_failure_retry")
+            if isinstance(provider_failure_retry, dict):
+                request_metadata.update(
+                    {
+                        "provider_failure_retry": provider_failure_retry,
+                        "provider_failure_retry_exhausted": True,
+                    }
+                )
+            specialized_execution = self._specialized_role_execution_terminal_summary(record, generation_result)
+            if specialized_execution is not None:
+                request_metadata.update(
+                    {
+                        "specialized_execution_summary": specialized_execution,
+                        "review_certification": specialized_execution["review_certification"],
+                    }
+                )
+            record.request.metadata = request_metadata
+            record.status = ProductJobStatusValue.BLOCKED
+            failure_code = str(no_pixel_failure.get("failure_code") or "").strip()
+            # The planning capability can truthfully warn that it had no
+            # pixels *before* materialization.  Here materialization has
+            # reached a terminal no-pixel failure, so leaving that planning
+            # warning visible would falsely suggest an actual metadata-only
+            # review occurred.
+            record.warnings = [
+                warning
+                for warning in record.warnings
+                if "output_review_metadata_only" not in str(warning).lower()
+                and "output review ran without live image inspection" not in str(warning).lower()
+            ]
+            record.warnings.append(
+                "Shared generation produced no image pixels; final project delivery is withheld"
+                + (f" ({failure_code})." if failure_code else ".")
+            )
+            record.balance_estimate = self._estimate_for_result(generation_result)
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            return self._status_from_record(record)
         # Outputs may already be in the local store at this point.  They remain
         # process artifacts until review, optional text delivery, and bounded
         # visual retry decide the final delivery set.
@@ -1448,6 +1499,103 @@ class V3ProductApiService:
             "append_only_history_preserved": True,
             "review_certification": review_certification,
         }
+
+    def _specialized_no_pixel_failure_summary(self, generation_result: PlanningResult) -> dict[str, Any] | None:
+        """Normalize swallowed specialized-role failures before review.
+
+        The Central Brain records per-role Provider failures so a multi-role
+        job can finish every independent materialization operation.  At the
+        Product boundary, however, an all-empty result is a terminal shared
+        generation failure.  It must not create a metadata-only inspection or
+        be mistaken for an uncertified image.  This helper promotes only safe
+        Provider facts; raw exception text and Provider internals stay in the
+        append-only executor history.
+        """
+
+        if self._visual_result_output_ids(generation_result):
+            return None
+        raw_execution = generation_result.metadata.get("specialized_role_execution")
+        raw_roles = raw_execution.get("roles") if isinstance(raw_execution, dict) else []
+        failed_roles = [
+            dict(item)
+            for item in raw_roles
+            if isinstance(item, dict) and str(item.get("status") or "").strip().lower() != "generated"
+        ]
+        if not failed_roles:
+            return None
+
+        role_failures = [
+            (item, dict(item.get("provider_failure") or {}))
+            for item in failed_roles
+            if isinstance(item.get("provider_failure"), dict)
+        ]
+        if not role_failures:
+            return {
+                "failure_code": "specialized_generation_no_pixels",
+                "provider_failure_retry": None,
+            }
+        safe_failures = [failure for _, failure in role_failures]
+
+        classifications = {
+            str(item.get("classification") or "").strip().lower()
+            for item in safe_failures
+            if str(item.get("classification") or "").strip()
+        }
+        failure_codes = {
+            str(item.get("failure_code") or "").strip().lower()
+            for item in safe_failures
+            if str(item.get("failure_code") or "").strip()
+        }
+        operations = {
+            str(item.get("operation") or "").strip().lower()
+            for item in safe_failures
+            if str(item.get("operation") or "").strip()
+        }
+        reference_counts = {
+            max(0, int(item.get("reference_count") or 0))
+            for item in safe_failures
+        }
+        outer_request_count = sum(max(0, int(item.get("outer_request_count") or 0)) for item in safe_failures)
+        classification = classifications.pop() if len(classifications) == 1 else "unknown_retryable_failure"
+        failure_code = failure_codes.pop() if len(failure_codes) == 1 else "specialized_provider_failure"
+        operation = operations.pop() if len(operations) == 1 else "multiple"
+        reference_count = reference_counts.pop() if len(reference_counts) == 1 else 0
+        attempts = []
+        for index, (role, failure) in enumerate(role_failures, start=1):
+            role_classification = str(failure.get("classification") or classification).strip().lower()
+            role_failure_code = str(failure.get("failure_code") or failure_code).strip().lower()
+            attempts.append(
+                {
+                    "attempt": index,
+                    "status": "failed",
+                    "classification": role_classification,
+                    "failure_code": role_failure_code,
+                    "retryable": role_classification
+                    in {"retryable_provider_failure", "unknown_retryable_failure", "empty_provider_output"},
+                    "role_key": str(role.get("role_key") or "").strip() or None,
+                }
+            )
+        execution_audit = safe_failures[0].get("runtime_budget") if len(safe_failures) == 1 else None
+        summary = {
+            "executed_count": 0,
+            "max_attempts": len(attempts),
+            "fresh_upstream_requests": outer_request_count,
+            "final_status": "failed",
+            "final_classification": classification,
+            "final_failure_code": failure_code,
+            "attempts": attempts,
+            "reference_input_execution": {
+                "operation": operation,
+                "reference_count": reference_count,
+                "operation_outcome": "failed",
+                "outer_request_count": outer_request_count,
+                "failure_code": failure_code,
+                "failure_retry_link": "provider_failure_retry",
+            },
+        }
+        if isinstance(execution_audit, dict):
+            summary["execution_audit"] = dict(execution_audit)
+        return {"failure_code": failure_code, "provider_failure_retry": summary}
 
     def _materialize_mock_output_records(
         self,
