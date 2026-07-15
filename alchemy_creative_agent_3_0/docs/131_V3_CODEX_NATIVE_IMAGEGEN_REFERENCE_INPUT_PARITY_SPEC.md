@@ -56,6 +56,15 @@ If the attachment has no supported path handle, the planner returns
 `codex_native_imagegen_reference_path_unavailable`.  It must not probe a
 Codex session, cache, token, or private artifact store to manufacture a path.
 
+## Local Brain setup
+
+Local Mode still requires the same remote Central Brain that owns V3 creative
+direction.  An MCP configuration may set `ALCHEMY_CODEX_LOCAL_ENV_FILE` to an
+existing local `.env` file containing that Brain configuration.  The setting is
+only a file path: keys remain in the existing file, are loaded before V3
+imports, retain ordinary process-environment precedence, and are never copied
+into the plugin response or Codex configuration.
+
 ## Boundaries and acceptance meaning
 
 This proves that the same V3 reference evidence, LLM-first planning, frozen

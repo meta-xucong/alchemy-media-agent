@@ -418,3 +418,17 @@ def test_plugin_launcher_requires_a_non_secret_checkout_root(tmp_path: Path) -> 
     assert launcher.resolve_repository_root(environ={"ALCHEMY_CODEX_LOCAL_REPO_ROOT": str(ROOT)}, cwd=tmp_path) == ROOT
     with pytest.raises(RuntimeError, match="ALCHEMY_CODEX_LOCAL_REPO_ROOT"):
         launcher.resolve_repository_root(environ={}, cwd=tmp_path)
+
+
+def test_plugin_launcher_loads_only_an_explicit_existing_environment_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = _load_plugin_launcher()
+    env_file = tmp_path / "brain.env"
+    env_file.write_text("V3_LLM_BRAIN_REMOTE_ENABLED=true\n", encoding="utf-8")
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.setenv("ALCHEMY_CODEX_LOCAL_ENV_FILE", str(env_file))
+    launcher.load_runtime_environment()
+    assert os.environ["V3_LLM_BRAIN_REMOTE_ENABLED"] == "true"
+
+    monkeypatch.setenv("ALCHEMY_CODEX_LOCAL_ENV_FILE", str(tmp_path / "missing.env"))
+    with pytest.raises(RuntimeError, match="ALCHEMY_CODEX_LOCAL_ENV_FILE"):
+        launcher.load_runtime_environment()
