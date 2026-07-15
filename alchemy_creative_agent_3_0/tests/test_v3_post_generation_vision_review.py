@@ -142,6 +142,24 @@ class _StaticReadyResolver:
         return [self.resolution.model_copy(update={"project_id": project_id or self.resolution.project_id})]
 
 
+class _BoundReadyResolver(_StaticReadyResolver):
+    """Bind a fixture's pixels to the result's actual append-only candidate."""
+
+    def resolve_result(self, result, project_id: str | None = None):
+        packaged = result.asset_pack.assets[0]
+        metadata = packaged.metadata.get("candidate_metadata", {})
+        return [
+            self.resolution.model_copy(
+                update={
+                    "project_id": project_id or self.resolution.project_id,
+                    "candidate_id": packaged.metadata.get("selected_candidate_id"),
+                    "asset_id": packaged.asset_id,
+                    "output_id": metadata.get("output_id"),
+                }
+            )
+        ]
+
+
 def test_generated_output_resolver_finds_original_file_by_output_id(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(
@@ -634,6 +652,94 @@ def test_product_api_low_confidence_doc55_signal_does_not_retry(tmp_path) -> Non
     assert not any(candidate.metadata.get("visual_auto_retry_output") for candidate in generated.candidates)
 
 
+def test_doc118_verified_manual_review_withholds_final_delivery_and_replaces_planning_hint(tmp_path) -> None:
+    provider = _StaticVisionProvider(
+        {
+            "status": "fail_retryable",
+            "confidence": 0.44,
+            "issue_codes": ["visible_text_artifact"],
+        }
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "vision_inspection_mode": "hybrid",
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+
+    review = generated.metadata["post_generation_review"]
+    delivery = generated.metadata["final_delivery"]
+
+    assert review["inspections"][0]["mode"] == "hybrid"
+    assert review["inspections"][0]["verification_state"] == "verified"
+    assert review["inspections"][0]["status"] == "manual_review"
+    assert generated.metadata["visual_auto_retry"]["executed_count"] == 0
+    assert generated.metadata["visual_auto_retry"]["manual_confirmation_required"] is True
+    assert delivery == {
+        "final_delivery_status": "withheld_manual_confirmation",
+        "automatic_delivery_available": False,
+        "manual_confirmation_required": True,
+        "reviewed_output_count": 1,
+        "final_delivery_output_count": 0,
+        "delivery_gate_applies": True,
+    }
+    assert generated.asset_series == []
+    assert generated.candidates == []
+    assert generated.general_creative is not None
+    assert any("Generated pixels were checked through hybrid." == item for item in generated.general_creative.review_hints)
+    assert not any("metadata-only" in item.lower() or "no candidate pixels" in item.lower() for item in generated.general_creative.review_hints)
+    assert generated.metadata["post_generation_review"]["recommended_output_ids"] == []
+    assert generated.metadata["post_generation_review"]["hidden_output_ids"] == []
+
+    selection = service.select_result(created.job_id, {})
+
+    assert selection.selected_result.metadata["selection_status"] == "final_delivery_withheld"
+    assert selection.selected_result.metadata["manual_confirmation_required"] is True
+    assert selection.metadata["selection_held"] is True
+    assert selection.metadata["hold_reason"] == "withheld_manual_confirmation"
+
+
+def test_doc118_verified_warning_remains_eligible_for_final_delivery(tmp_path) -> None:
+    provider = _StaticVisionProvider(
+        {
+            "status": "warning",
+            "confidence": 0.93,
+            "issue_codes": [],
+        }
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_BoundReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0},
+        },
+    )
+
+    assert generated.metadata["post_generation_review"]["inspections"][0]["status"] == "warning"
+    assert generated.metadata["final_delivery"]["final_delivery_status"] == "ready"
+    assert generated.metadata["final_delivery"]["automatic_delivery_available"] is True
+    assert len(generated.asset_series) == 1
+    assert len(generated.candidates) == 1
+
+
 def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output(tmp_path) -> None:
     provider = _StaticVisionProvider(
         {
@@ -959,3 +1065,13 @@ def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:
     assert review["inspections"][0]["status"] == "manual_review"
     assert review["inspections"][0]["detected_issues"][0]["code"] == "vision_provider_unavailable"
     assert retry_summary["executed_count"] == 0
+    assert generated.metadata["final_delivery"] == {
+        "final_delivery_status": "withheld_manual_confirmation",
+        "automatic_delivery_available": False,
+        "manual_confirmation_required": True,
+        "reviewed_output_count": 0,
+        "final_delivery_output_count": 0,
+        "delivery_gate_applies": True,
+    }
+    assert generated.asset_series == []
+    assert generated.candidates == []

@@ -388,7 +388,13 @@ def test_generic_provider_400_stays_unattributed_by_operation(tmp_path, monkeypa
         raise ProviderRuntimeError(
             "OpenAI image request failed. Error code: 400 - request may be unsuitable.",
             provider="openai_gpt_image",
-            detail={"error_type": "invalid_request_error", "message": "request may be unsuitable"},
+            detail={
+                "error_type": "invalid_request_error",
+                "message": "request may be unsuitable",
+                "status_code": 400,
+                "operation_timeout_seconds": 665.0,
+                "operation_timeout_exhausted": False,
+            },
         )
 
     monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)

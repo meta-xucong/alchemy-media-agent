@@ -1254,6 +1254,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if has_references and any(marker in message for marker in reference_markers):
             return "reference_input_rejected"
 
+        structured_status_code = detail.get("status_code")
+        try:
+            structured_status_code = int(structured_status_code)
+        except (TypeError, ValueError):
+            structured_status_code = None
+        # The provider adapter deliberately carries operation timeout *settings*
+        # in its diagnostic detail. Those settings are not evidence that an
+        # upstream 4xx was a timeout. A concrete client-side 4xx therefore
+        # wins over generic text markers such as ``operation_timeout_seconds``.
+        # Explicit policy/reference conclusions above still have precedence.
+        if (
+            structured_status_code is not None
+            and 400 <= structured_status_code < 500
+            and structured_status_code not in {408, 429}
+        ):
+            return (
+                "image_edit_invalid_request_unattributed"
+                if has_references
+                else "image_generation_invalid_request_unattributed"
+            )
+
         timeout_markers = ("timeouterror", "timeout", "timed out", "gateway timeout", "read timeout")
         if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(marker in message for marker in timeout_markers):
             return "provider_timeout"

@@ -92,6 +92,7 @@ def test_doc66_post_generation_review_builds_candidate_scoped_signal_package() -
         output_id="output_doc66_retry",
         mode="vision",
         status="fail_retryable",
+        verification_state="verified",
         confidence=0.91,
         detected_issues=[
             {"code": "faint_corner_watermark", "retryable": True},
@@ -131,6 +132,105 @@ def test_doc66_post_generation_review_builds_candidate_scoped_signal_package() -
     assert signal_package.candidate_signals[0].recommended_action == "retry"
     assert "artifact" in signal_package.candidate_signals[0].metadata["issue_groups"]
     assert "identity" in signal_package.candidate_signals[0].metadata["issue_groups"]
+
+
+def test_doc118_manual_review_does_not_reinterpret_diagnostic_issue_as_an_auto_retry() -> None:
+    merger = OutputQualityReviewMerger()
+    inspection = VisualInspectionReport(
+        inspection_id="inspection_doc118_manual",
+        project_id="project_doc118_review",
+        job_id="job_doc118_review",
+        candidate_id="candidate_doc118_manual",
+        output_id="output_doc118_manual",
+        mode="hybrid",
+        status="manual_review",
+        verification_state="verified",
+        confidence=0.78,
+        detected_issues=[
+            {"code": "low_confidence_review", "retryable": False},
+            {"code": "uncanny_micro_detail", "retryable": True},
+        ],
+        retryable=False,
+    )
+
+    package = merger.build_package(
+        job_id="job_doc118_review",
+        project_id="project_doc118_review",
+        resolutions=[
+            GeneratedOutputResolution(
+                resolution_id="resolution_doc118",
+                project_id="project_doc118_review",
+                job_id="job_doc118_review",
+                candidate_id="candidate_doc118_manual",
+                output_id="output_doc118_manual",
+                status="ready",
+            )
+        ],
+        inspections=[inspection],
+        max_attempts=1,
+    )
+
+    signal = package.real_review_signal_package
+    assert signal is not None
+    assert signal.retryable_candidate_ids == []
+    assert signal.retryable_output_ids == []
+    assert signal.commercial_readiness_status == "manual_review"
+    assert signal.candidate_signals[0].recommended_action == "review"
+    assert signal.candidate_signals[0].retryable_issue_codes == []
+    assert signal.candidate_signals[0].retry_patch == {}
+    assert package.auto_retry_decisions[0]["should_retry"] is False
+    assert package.auto_retry_decisions[0]["blocked_reason"] == "manual_confirmation_required"
+
+
+def test_doc118_unverified_retryable_issue_cannot_trigger_auto_retry_or_pass_projection() -> None:
+    merger = OutputQualityReviewMerger()
+    inspection = VisualInspectionReport(
+        inspection_id="inspection_doc118_unverified",
+        project_id="project_doc118_review",
+        job_id="job_doc118_unverified",
+        candidate_id="candidate_doc118_unverified",
+        output_id="output_doc118_unverified",
+        mode="vision_model",
+        status="fail_retryable",
+        verification_state="unverified",
+        confidence=0.0,
+        detected_issues=[{"code": "visible_text_artifact", "retryable": True}],
+        retryable=True,
+        retry_patch={"artifact_repair": ["remove visible text"]},
+    )
+
+    package = merger.build_package(
+        job_id="job_doc118_unverified",
+        project_id="project_doc118_review",
+        resolutions=[],
+        inspections=[inspection],
+        max_attempts=1,
+    )
+
+    signal = package.real_review_signal_package
+    assert signal is not None
+    assert signal.retryable_candidate_ids == []
+    assert signal.retryable_output_ids == []
+    assert signal.commercial_readiness_status == "manual_review"
+    assert signal.candidate_signals[0].recommended_action == "review"
+    assert signal.candidate_signals[0].retry_patch == {}
+    assert package.auto_retry_decisions[0]["should_retry"] is False
+    assert package.auto_retry_decisions[0]["blocked_reason"] == "review_not_verified"
+
+    result = SimpleNamespace(
+        metadata={"post_generation_review_package": {"inspections": [inspection.model_dump(mode="json")]}}
+    )
+    delivery, output_ids, asset_ids = V3ProductApiService()._public_final_delivery_projection(result)  # noqa: SLF001
+    assert delivery == {
+        "final_delivery_status": "withheld_manual_confirmation",
+        "automatic_delivery_available": False,
+        "manual_confirmation_required": True,
+        "reviewed_output_count": 0,
+        "final_delivery_output_count": 0,
+        "delivery_gate_applies": True,
+    }
+    assert output_ids == set()
+    assert asset_ids == set()
 
 
 def test_doc66_product_api_prefers_real_review_signal_for_precise_retry() -> None:
