@@ -122,6 +122,7 @@ visual_asset_library
   people_assets
     people_asset_record
     identity_anchor_pack
+      face_identity_module        [first release]
     identity_anchor_pack_version
     anchor_view
   product_assets             [future; not implemented here]
@@ -151,8 +152,37 @@ for reference admission and execution.
 
 ## 4. People Assets Scope
 
-A People Asset represents a user-approved, reusable identity subject. It is
-not merely a file and it is not a generated image candidate. It contains:
+A People Asset represents a user-approved, reusable subject asset assembled
+from independently versioned identity modules. It is not merely a file and it
+is not a generated image candidate. The first release contains only the face
+identity module; the container is deliberately extensible for future modules.
+
+The first-release module boundary is:
+
+```text
+People Asset
+  -> Face Identity Module        [implemented first]
+  -> Body / silhouette Module    [future; not implemented here]
+  -> Hair / styling Module       [future; not implemented here]
+  -> Other identity dimensions  [future; not implemented here]
+```
+
+The Face Identity Module owns only:
+
+```text
+face geometry and feature relationships
+same-face identity evidence
+face-view coverage (front / three-quarter / profile)
+face-specific age direction evidence
+face review, activation, and provenance
+```
+
+It does not own body shape, body proportions, pose, hair, makeup, wardrobe,
+accessories, lighting, scene, camera, composition, or whole-image style. Those
+channels remain prompt-owned or governed by another explicitly selected
+reference/module under the existing V3 contracts.
+
+The People Asset container contains:
 
 ```text
 the immutable root reference provenance
@@ -163,8 +193,8 @@ active/superseded state
 source and consent provenance
 ```
 
-The first People Asset implementation creates an Identity Anchor Pack through
-an explicit preparation action:
+The first People Asset implementation creates the Face Identity Module inside
+an Identity Anchor Pack through an explicit preparation action:
 
 ```text
 uploaded person reference, for image-to-image
@@ -175,7 +205,7 @@ or protected user prompt, for text-to-image character creation
   -> supplementary three-quarter/profile candidates as evidence permits
   -> per-view review
   -> whole-pack cross-view identity review
-  -> activate one version only after the complete pack passes
+  -> activate the face module version only after the complete face pack passes
 ```
 
 The exact candidate counts for supplementary views remain a later module
@@ -183,7 +213,8 @@ design decision, but every supplementary view must use the same bounded
 candidate, review, and best-result contract. There is no unbounded generation
 loop.
 
-The standard-front and supplementary images are full GPT Image 2 outputs. The
+The standard-front and supplementary images are full GPT Image 2 outputs. They
+are face-evidence views, not a body or fashion asset. The
 module must not create a face card through local face swapping, coordinate
 warping, canvas overlays, deterministic facial reconstruction, or a private
 pixel-repair path.
@@ -237,8 +268,13 @@ because a People Asset is missing, stale, invalid, or below its review gate.
 When Professional Mode is active:
 
 ```text
-person identity, face geometry, and same-person continuity
-  come only from the selected People Asset and its approved anchor pack
+face identity, face geometry, and same-face continuity
+  come only from the selected People Asset's active Face Identity Module
+
+body shape, body proportion, hair, makeup, wardrobe, and other non-face
+identity channels
+  are not locked by the first-release module and remain prompt-owned or
+  explicitly governed by another approved module/reference
 
 age direction
   may be changed only by an explicit current prompt and remains subject to
@@ -337,6 +373,7 @@ current contracts:
 | Doc101 activation plan | Professional Mode must be active before the job plan freezes; no late capability injection or hidden fallback. |
 | Doc121 evidence continuity | Review receives the same admitted root/anchor evidence actually used by Provider materialization. |
 | Doc128 Human Realism | Preserve shared age, safety, realism, and review constraints without taking ownership of asset selection. |
+| Module boundary | The first release activates only Face Identity; future body/style modules require their own contracts and explicit activation. |
 | Doc91/92 Human Realism | Improve human rendering without acquiring reference-channel ownership. |
 | shared GPT Image 2 provider | Render anchor candidates and later Professional Mode images through the existing provider contract. |
 | shared vision review/retry/history | Review every candidate, keep append-only attempts, and activate only the reviewed winner/pack. |
@@ -385,6 +422,11 @@ final-result selection
 The Professional Mode adapter may assemble these existing contracts, but it
 must not redefine their meaning.
 
+Each future People Asset module must declare its owned channels, evidence
+inputs, review gate, provenance, activation state, and allowed interaction with
+other modules. Adding a future module must not expand Face Identity's channel
+ownership or change Standard Mode behavior.
+
 ## 10. Conceptual Data Contracts
 
 The eventual contracts should be additive and versioned. Names below are
@@ -396,15 +438,24 @@ class PeopleAsset:
     project_id: str                 # project-scoped; many assets are allowed
     subject_kind: str                 # human_person | fictional_character
     root_source_refs: list[dict]      # existing asset/output/reference IDs only
+    modules: dict[str, dict]           # face_identity first; future modules additive
     active_pack_version_id: str | None
     status: str                       # draft | active | superseded | blocked
+    provenance: dict
+
+class FaceIdentityModule:
+    module_id: str
+    people_asset_id: str
+    active_version_id: str | None
+    owned_channels: list[str]          # face geometry, feature relations, face age direction
+    status: str                         # draft | active | blocked | superseded
     provenance: dict
 
 class IdentityAnchorPackVersion:
     pack_version_id: str
     people_asset_id: str
     status: str                       # preparing | review | active | failed | superseded
-    anchor_views: list[dict]
+    anchor_views: list[dict]            # Face Identity views in first release
     root_truth_ids: list[str]
     review_summary: dict
     source_provenance: dict
@@ -442,8 +493,9 @@ The intended execution seam is:
 ```text
 Professional Mode selection
   -> resolve selected People Asset
+  -> resolve its active Face Identity Module (first release)
   -> activate the declared Professional Mode capability before plan freeze
-  -> inject approved root/anchor reference IDs into existing V3 capability input
+  -> inject approved face root/anchor reference IDs into existing V3 capability input
   -> run existing planning / provider / review / retry / delivery path
   -> preserve Professional Mode provenance and selected asset version
 ```
@@ -486,6 +538,10 @@ active, the job is blocked until the user selects another project People Asset
 or explicitly resubmits in Standard Mode. An explicit age direction change is
 allowed only as a prompt-owned transformation subject to shared review.
 
+Future modules are never inferred from a prompt or silently activated. A later
+body, hair, or other module must be explicitly selected, capability-negotiated,
+and reviewed under its own contract.
+
 ## 12. Future Video Compatibility
 
 The first implementation does not build a video generator, temporal tracker,
@@ -495,13 +551,16 @@ It only makes the People Asset contract reusable by a future Video module:
 
 ```text
 Video selects People Asset + active pack version
-Video chooses an approved anchor view for a shot
+Video chooses an approved Face Identity view for a shot
 Video retains root truth provenance
+Video may later select additional body/style modules when those modules have
+their own approved contracts
 Video adds its own temporal consistency and motion review later
 ```
 
-A still-image anchor pack is necessary identity input for future video but is
-not by itself evidence of temporal or frame-to-frame consistency.
+The first-release face pack is useful identity input for future video but is
+not by itself evidence of body continuity, temporal consistency, or
+frame-to-frame consistency.
 
 ## 13. Implementation Phases
 
@@ -518,6 +577,7 @@ add isolation contract tests before runtime work
 
 ```text
 add additive project-scoped People Asset records
+add a module registry with Face Identity as the only active first-release module
 add pack-version state and provenance
 reuse existing output/history storage
 add active/superseded/failed handling
@@ -531,7 +591,7 @@ three standard-front candidates
 existing identity/quality scoring and winner selection
 supplementary view generation using root + selected front anchor
 per-view and whole-pack review
-activate only a complete passing pack
+activate only a complete passing Face Identity pack after user confirmation
 ```
 
 ### Phase D — Professional Mode Consumers
@@ -566,7 +626,10 @@ Standard Mode's existing ProjectIdentityAnchor/SubjectIdentityCard paths remain
 available and never auto-promote into a People Asset.
 Professional Mode requires an active selected People Asset.
 Professional Mode never silently falls back to Standard Mode.
-Professional Mode uses only the selected asset for human identity.
+Professional Mode uses only the selected asset's active Face Identity Module
+for face identity in the first release.
+The first-release module does not lock body, hair, wardrobe, or whole-image style.
+Future modules cannot activate from prompt keywords or legacy metadata.
 Professional Mode may contain multiple project People Assets and binds one per job.
 The selected asset is activated before the frozen capability plan.
 An explicit age change preserves same-person geometry and is reviewed as a
@@ -600,11 +663,13 @@ The Professional Mode foundation is not ready to integrate until:
    uploaded references.
 9. A project can hold multiple People Assets, but each job binds one explicit
    selected asset and pack version.
-10. The active capability plan is frozen before Professional Mode contributions
+10. The first-release pack activates only Face Identity; non-face dimensions
+    remain unclaimed until a future module is explicitly approved.
+11. The active capability plan is frozen before Professional Mode contributions
     enter generation, review, or retry.
-11. Standard, E-Commerce, Photography, and future Video consumers can select
+12. Standard, E-Commerce, Photography, and future Video consumers can select
    the same asset contract without duplicating identity logic.
-12. No production or Provider Gate claim is made solely from pack creation.
+13. No production or Provider Gate claim is made solely from pack creation.
 ```
 
 ## 16. Non-Goals
@@ -637,7 +702,9 @@ Visual Asset Library is the Professional Mode mother boundary.
 
 People Assets are the first child module.
 
-Identity Anchor Packs are versioned, reviewed identity support assets.
+Identity Anchor Packs are versioned, reviewed support containers. The first
+release activates only a modular Face Identity component; body, hair, styling,
+and other dimensions remain future additive components.
 
 Existing V3 foundation modules remain the implementation machinery.
 
