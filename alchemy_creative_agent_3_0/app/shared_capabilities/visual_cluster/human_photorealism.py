@@ -716,6 +716,35 @@ class HumanPhotorealismLayer:
         safety_sensitive_person = _is_safety_sensitive_person(text) or _truthy(
             metadata.get("safety_sensitive_person")
         )
+        # Enforced V3 jobs arrive here only after the remote Brain has decided
+        # whether a style term applies to the whole image or merely to an
+        # object surface.  Do not run the legacy keyword classifier again:
+        # doing so made a cartoon graphic on a child's dress disable the
+        # shared real-person capability for an otherwise photographic image.
+        if _truthy(metadata.get("human_realism_execution_required")):
+            if _frozen_rendering_intent_is_whole_image_stylized(metadata):
+                return _activation_payload(
+                    applies=False,
+                    primary_reason="frozen_rendering_intent_conflict",
+                    disabled_reason="frozen_rendering_intent_conflict",
+                    disabled_by_style=True,
+                    subject_type=subject_type,
+                    evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
+                )
+            forced_kind = str(metadata.get("human_subject_kind") or "person")
+            rendering_profile = _universal_rendering_profile("", metadata=metadata)
+            return _activation_payload(
+                applies=True,
+                primary_reason="frozen_human_realism_execution",
+                reason_codes=["frozen_human_realism_execution"],
+                subject_type=subject_type,
+                human_subject_kind=forced_kind,
+                strictness=str(metadata.get("human_realism_strictness") or "commercial_strict"),
+                style_profile=str(metadata.get("human_realism_style_profile") or rendering_profile["profile_id"]),
+                universal_rendering_profile=rendering_profile,
+                evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
+                safety_sensitive_person=safety_sensitive_person,
+            )
         if _truthy(metadata.get("disable_human_photorealism")):
             return _activation_payload(
                 applies=False,
@@ -1003,6 +1032,18 @@ def _stylized_requested(text: str) -> bool:
                 return True
             index = text.find(term, index + len(term))
     return False
+
+
+def _frozen_rendering_intent_is_whole_image_stylized(metadata: dict[str, Any]) -> bool:
+    """Read only a Brain-frozen decision; never infer it from prompt tokens."""
+
+    intent = metadata.get("frozen_rendering_intent")
+    if not isinstance(intent, dict):
+        return False
+    return (
+        str(intent.get("stylization_scope") or "") == "whole_image"
+        and str(intent.get("rendering_mode") or "") in {"stylized", "mixed"}
+    )
 
 
 def _stylized_term_describes_object_detail(text: str, term: str, index: int) -> bool:

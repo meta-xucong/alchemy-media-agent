@@ -60,6 +60,13 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
             "scenario_id": "general_creative",
             "variation_mode": "delivery_suite",
             "effective_variation_mode": "delivery_suite",
+            "llm_brain": {
+                "visual_task_profile": {
+                    "subject_entities": [
+                        {"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}
+                    ]
+                }
+            },
         },
     )
 
@@ -119,6 +126,28 @@ def test_doc73_user_selected_reference_has_priority_over_auto_first_output(tmp_p
     assert len(second_metadata["reference_assets"]) == 1
     assert second_metadata["reference_assets"][0]["asset_id"] == "user_selected_identity_ref"
     assert second_metadata["reference_assets"][0]["file_path"] == str(selected_reference)
+
+
+def test_doc134_raw_person_or_cartoon_words_do_not_start_an_identity_chain_without_brain_evidence(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "Photograph the same young woman wearing a real blue dress with a cartoon print.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert provider.requests[0]["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+    assert provider.requests[1]["metadata"].get("auto_batch_identity_anchor_applied") is not True
 
 
 def test_doc73_product_profile_does_not_turn_a_no_reference_set_into_an_edit_chain(tmp_path) -> None:

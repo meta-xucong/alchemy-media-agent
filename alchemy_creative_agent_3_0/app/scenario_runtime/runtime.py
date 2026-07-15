@@ -9,7 +9,7 @@ from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
-from ..llm_brain import BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -343,7 +343,14 @@ class ScenarioRuntime:
             brain_result,
             specialized_plan,
         )
-        active_run = self._run_active_capabilities(request, resolution, plan, pre_activation_run)
+        active_run = self._run_active_capabilities(
+            request,
+            resolution,
+            plan,
+            pre_activation_run,
+            brain_result=brain_result,
+        )
+        self._validate_frozen_capability_execution(plan, active_run)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
         ledger = self._build_resolved_constraint_ledger(
             request,
@@ -351,6 +358,7 @@ class ScenarioRuntime:
             combined,
             normalized_intent,
             deliverable_plan,
+            brain_result=brain_result,
         )
         envelope = self._build_capability_execution_envelope(
             plan,
@@ -359,6 +367,16 @@ class ScenarioRuntime:
             deliverable_plan,
             ledger,
         )
+        brain_result = self._finalize_canonical_provider_prompts(
+            request,
+            resolution,
+            policy,
+            brain_result,
+            plan,
+            envelope,
+            ledger,
+        )
+        self._require_brain_signed_provider_prompts(request, policy, brain_result)
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
             brain_result=brain_result,
@@ -406,6 +424,15 @@ class ScenarioRuntime:
                 brain_result,
                 rejected_sections=rejected_sections,
             )
+        if isinstance(rejected_sections, list) and (
+            "canonical_provider_prompts" in rejected_sections
+            or "visual_task_profile.rendering_intent" in rejected_sections
+        ):
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_prompt_signoff_invalid",
+                brain_result,
+                rejected_sections=rejected_sections,
+            )
         expected = self._requested_image_count_for_brain(request)
         image_plan = brain_result.image_set_plan
         directions = [str(item).strip() for item in image_plan.shot_plan if str(item).strip()]
@@ -416,6 +443,177 @@ class ScenarioRuntime:
                 expected_image_count=expected,
                 actual_image_count=image_plan.image_count,
                 actual_direction_count=len(directions),
+            )
+        if not bool(brain_result.audit.get("remote_rendering_intent_received")):
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_rendering_semantics_missing",
+                brain_result,
+            )
+
+    def _finalize_canonical_provider_prompts(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        policy: TemplateCapabilityPolicy,
+        brain_result: BrainRunResult,
+        plan: CapabilityActivationPlan,
+        envelope: CapabilityExecutionEnvelope,
+        ledger: ResolvedConstraintLedger,
+    ) -> BrainRunResult:
+        """Obtain the only renderer-facing language after shared validation.
+
+        This deliberately makes a second *sign-off* call rather than a second
+        creative-planning call.  It consumes the already-frozen Brain-owned
+        directions plus resolved facts and capability obligations.  Existing
+        frozen jobs reuse their prior sign-off unless a bounded visual retry
+        carries new resolved review evidence.
+        """
+
+        if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
+            return brain_result
+        retry_active = bool(
+            request.metadata.get("visual_auto_retry_active")
+            or request.metadata.get("visual_retry_reason_codes")
+        )
+        existing = list(brain_result.canonical_provider_prompts or [])
+        expected = self._requested_image_count_for_brain(request)
+        if (
+            brain_result.audit.get("frozen_execution_reuse")
+            and not retry_active
+            and [item.output_index for item in existing] == list(range(1, expected + 1))
+            and bool(brain_result.audit.get("remote_canonical_provider_prompts_received"))
+        ):
+            return brain_result
+
+        signing_request = BrainRunRequest(
+            user_input=request.user_input,
+            stage="provider_prompt_finalize",
+            scenario_id=resolution.manifest.scenario_id,
+            template_id=self._template_id(request, resolution),
+            project_id=str(request.metadata.get("project_id") or "") or None,
+            requested_image_count=expected,
+            requested_image_size=ledger.provider_projection.get("requested_image_size"),
+            reasoning_depth="balanced",
+            metadata={
+                "canonical_prompt_context": self._canonical_prompt_context(
+                    request,
+                    plan,
+                    envelope,
+                    ledger,
+                    brain_result,
+                )
+            },
+            template_capability_policy=policy,
+        )
+        try:
+            prompts, audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(signing_request)
+        except Exception as exc:
+            # Do not expose an upstream body or turn it into local text.  The
+            # activation boundary records the public-safe reason code only.
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_prompt_signoff_unavailable",
+                brain_result,
+            ) from exc
+        return brain_result.model_copy(
+            update={
+                "canonical_provider_prompts": prompts,
+                "audit": {
+                    **dict(brain_result.audit or {}),
+                    **audit,
+                    "canonical_provider_prompt_stage": "provider_prompt_finalize",
+                    "canonical_provider_prompt_binding": {
+                        "activation_plan_id": plan.plan_id,
+                        "execution_envelope_id": envelope.envelope_id,
+                        "constraint_ledger_id": ledger.ledger_id,
+                    },
+                },
+            }
+        )
+
+    @staticmethod
+    def _canonical_prompt_context(
+        request: ScenarioRuntimeRequest,
+        plan: CapabilityActivationPlan,
+        envelope: CapabilityExecutionEnvelope,
+        ledger: ResolvedConstraintLedger,
+        brain_result: BrainRunResult,
+    ) -> dict[str, Any]:
+        """Project frozen facts and the Brain's own draft for final sign-off.
+
+        The draft directions are remote-Brain output, not local planner text.
+        Supplying them lets the sign-off stage validate and revise the same
+        semantic direction instead of reconstructing a second creative brief
+        from deterministic runtime metadata.
+        """
+
+        projection = dict(ledger.provider_projection or {})
+        references = []
+        for asset in request.uploaded_assets:
+            role = asset.role.value if hasattr(asset.role, "value") else asset.role
+            references.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "role": str(role or "reference"),
+                    "declared_provider_input": bool(asset.metadata.get("provider_input_required")),
+                }
+            )
+        return {
+            "protected_user_intent": projection.get("protected_user_intent"),
+            "rendering_semantics": projection.get("rendering_semantics"),
+            "requested_image_size": projection.get("requested_image_size"),
+            "visible_text_policy": projection.get("visible_text_policy"),
+            "deliverables": [
+                {
+                    "output_index": item.get("output_index"),
+                    "image_intent": item.get("image_intent"),
+                    "factual_acceptance": item.get("factual_acceptance", []),
+                }
+                for item in projection.get("deliverables", [])
+                if isinstance(item, dict)
+            ],
+            "brain_draft_directions": [
+                {"output_index": index, "direction": str(direction).strip()}
+                for index, direction in enumerate(brain_result.image_set_plan.shot_plan, start=1)
+                if str(direction).strip()
+            ],
+            "product_truth": projection.get("product_truth", {}),
+            "apparel_construction": projection.get("apparel_construction", {}),
+            "active_shared_capability_ids": list(plan.dependency_order),
+            "reference_bindings": references,
+            "retry_evidence": {
+                "active": bool(request.metadata.get("visual_auto_retry_active")),
+                "issue_codes": [
+                    str(item) for item in request.metadata.get("visual_retry_reason_codes", []) if str(item).strip()
+                ],
+            },
+            # These are opaque integrity bindings for the runtime, not
+            # creative vocabulary for the final prompt.
+            "frozen_binding": {
+                "envelope_id": envelope.envelope_id,
+                "ledger_id": ledger.ledger_id,
+                "execution_fingerprint": envelope.execution_fingerprint,
+            },
+        }
+
+    def _require_brain_signed_provider_prompts(
+        self,
+        request: ScenarioRuntimeRequest,
+        policy: TemplateCapabilityPolicy,
+        brain_result: BrainRunResult,
+    ) -> None:
+        if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
+            return
+        expected = self._requested_image_count_for_brain(request)
+        prompts = list(brain_result.canonical_provider_prompts or [])
+        if (
+            [item.output_index for item in prompts] != list(range(1, expected + 1))
+            or not bool(brain_result.audit.get("remote_canonical_provider_prompts_received"))
+        ):
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_prompt_signoff_invalid",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
             )
 
     @staticmethod
@@ -456,6 +654,11 @@ class ScenarioRuntime:
             outcome_class = "remote_contract_invalid"
         elif reason_code == "remote_creative_brain_output_count_mismatch":
             outcome_class = "remote_output_count_mismatch"
+        elif reason_code in {
+            "remote_creative_brain_prompt_signoff_invalid",
+            "remote_creative_brain_prompt_signoff_unavailable",
+        }:
+            outcome_class = "remote_prompt_signoff_unavailable"
         elif brain_result.skipped:
             outcome_class = "remote_brain_skipped"
         else:
@@ -956,6 +1159,8 @@ class ScenarioRuntime:
         resolution,
         plan: CapabilityActivationPlan,
         pre_activation_run: CapabilityRunResult | None,
+        *,
+        brain_result: BrainRunResult | None = None,
     ) -> CapabilityRunResult | None:
         executor_ids: list[str] = []
         for capability_id in plan.dependency_order:
@@ -986,12 +1191,47 @@ class ScenarioRuntime:
                     "capability_phase": "active",
                     "capability_activation_plan": plan.model_dump(mode="json"),
                     "capability_activation_plan_summary": plan.summary(),
+                    # The active executor must consume the semantic decision
+                    # already made by the remote Brain.  It is deliberately
+                    # not allowed to rediscover whole-image rendering style
+                    # from isolated terms such as a print on a garment.
+                    "visual_task_profile": (
+                        brain_result.visual_task_profile.model_dump(mode="json")
+                        if brain_result is not None and brain_result.visual_task_profile is not None
+                        else None
+                    ),
                 },
             ),
             module_ids=executor_ids,
             required_module_ids=[item for item in required_executor_ids if item],
         )
         return self._attach_composed_contribution(run, plan, request, resolution)
+
+    @staticmethod
+    def _validate_frozen_capability_execution(
+        plan: CapabilityActivationPlan,
+        active_run: CapabilityRunResult | None,
+    ) -> None:
+        """Reject a stale executor result that contradicts an active capability.
+
+        A frozen plan that requires Human Realism is not satisfied merely
+        because a legacy helper emitted an inactive guidance object.  This is
+        a semantic execution mismatch, not an invitation to append local
+        prompt repair text.
+        """
+
+        if "human_realism" not in plan.dependency_order:
+            return
+        if active_run is None:
+            raise CapabilityActivationError("human_realism_execution_missing")
+        cluster_result = next(
+            (item for item in active_run.results if item.module_id == VISUAL_CAPABILITY_CLUSTER_ID),
+            None,
+        )
+        cluster = dict(cluster_result.facts.get("visual_capability_cluster") or {}) if cluster_result else {}
+        guidance = cluster.get("human_photorealism_guidance")
+        if not isinstance(guidance, dict) or not bool(guidance.get("applies")):
+            raise CapabilityActivationError("human_realism_execution_mismatch")
 
     def _attach_composed_contribution(
         self,
@@ -1122,6 +1362,8 @@ class ScenarioRuntime:
         capability_run: CapabilityRunResult | None,
         normalized_intent: NormalizedV3JobIntent,
         template_deliverable_plan: TemplateDeliverablePlan,
+        *,
+        brain_result: BrainRunResult | None = None,
     ) -> ResolvedConstraintLedger:
         """Resolve runtime constraints once instead of appending prompt strings.
 
@@ -1179,6 +1421,25 @@ class ScenarioRuntime:
                 provenance=[{"source": "NormalizedV3JobIntent"}],
             ),
         ]
+        rendering_intent = (
+            brain_result.visual_task_profile.rendering_intent.model_dump(mode="json")
+            if brain_result is not None and brain_result.visual_task_profile is not None
+            else {}
+        )
+        if rendering_intent:
+            entries.append(
+                ResolvedConstraintEntry(
+                    constraint_id=stable_id("constraint", normalized_intent.intent_id, "rendering_semantics"),
+                    channel="rendering_semantics",
+                    owner=str(rendering_intent.get("decision_owner") or "evidence_fallback"),
+                    strength="hard",
+                    precedence=96,
+                    requested_value=rendering_intent,
+                    resolved_value=rendering_intent,
+                    resolution="accepted",
+                    provenance=[{"source": "BrainRunResult.visual_task_profile.rendering_intent"}],
+                )
+            )
         parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
         metadata_size = str(request.metadata.get("requested_image_size") or "").strip() or None
         parameter_size = str(parameters.get("requested_image_size") or "").strip() or None
@@ -1440,6 +1701,7 @@ class ScenarioRuntime:
             "requested_image_size": normalized_intent.effective_image_size,
             "text_policy": normalized_intent.text_policy,
             "visible_text_policy": normalized_intent.visible_text_policy,
+            "rendering_semantics": rendering_intent,
             "deliverables": resolved_deliverables,
             "product_truth": product_truth,
             "apparel_construction": apparel_construction.provider_projection(),

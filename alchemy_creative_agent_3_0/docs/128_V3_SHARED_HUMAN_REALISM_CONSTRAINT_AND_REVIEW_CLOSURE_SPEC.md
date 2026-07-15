@@ -22,7 +22,8 @@ truth contract:
 ```text
 user intent / permitted reference truth / remote Brain direction
   -> frozen CapabilityExecutionEnvelope + ResolvedConstraintLedger
-  -> GPT Image 2 whole-image materialization
+  -> remote Brain canonical Provider-prompt sign-off
+  -> GPT Image 2 whole-image materialization of that exact prompt
   -> real-pixel review + one bounded shared retry + append-only winner history
 ```
 
@@ -55,10 +56,11 @@ An active capability contributes at most these shared, owner-labelled concepts:
 | `reference_boundary` | improve rendering without widening reference-owned channels | Doc93 reference policy, hard boundary |
 | `young_person_safety` | age-appropriate, fully dressed, family-friendly ordinary context | Doc124, only when explicit evidence exists |
 
-The materializer receives the resolved ledger entry, not a casebook, role
-recipe, keyword-derived age label, raw reviewer code, or concatenated prompt
-stack. The contribution must remain concise and must preserve the requested
-mood, styling and creative direction.
+The materializer receives the Brain-signed canonical prompt plus frozen
+technical bindings, not a casebook, role recipe, keyword-derived age label,
+raw reviewer code, or concatenated prompt stack. The ledger is supplied to the
+Brain sign-off stage as a resolved semantic contract; it must remain concise
+and preserve the requested mood, styling and creative direction.
 
 ### 3. Review and retry
 

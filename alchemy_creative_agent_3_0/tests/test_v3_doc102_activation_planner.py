@@ -7,6 +7,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     CapabilityActivationIntent,
     CapabilityActivationPlanner,
     RequestedCapability,
+    RenderingIntent,
     VisualCapabilityRegistry,
     VisualSubjectEntity,
     VisualTaskProfile,
@@ -96,7 +97,15 @@ def test_requested_product_reference_profile_overrides_concept_default() -> None
 
 
 def test_explicitly_stylized_person_does_not_force_photorealism() -> None:
-    profile = _profile().model_copy(update={"visual_intent_tags": ["anime", "illustration"]})
+    profile = _profile().model_copy(
+        update={
+            "rendering_intent": RenderingIntent(
+                rendering_mode="stylized",
+                stylization_scope="whole_image",
+                decision_owner="remote_brain",
+            )
+        }
+    )
     plan = _planner().plan(
         task_profile=profile,
         intent=CapabilityActivationIntent(intent_id="intent", task_profile_id="profile", confidence=0.9),

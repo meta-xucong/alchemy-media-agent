@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -45,6 +45,25 @@ class PreservationTarget(V3BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+class RenderingIntent(V3BaseModel):
+    """Freeze the semantic scope of any requested stylization.
+
+    This is deliberately a tiny intent boundary, not a prompt-atom taxonomy.
+    A surface graphic may be cartoon-like while the requested complete image is
+    still a photograph.  Downstream capabilities must consume this frozen
+    decision instead of rediscovering rendering style from isolated keywords.
+    """
+
+    rendering_mode: Literal["photoreal", "stylized", "mixed", "unknown"] = "unknown"
+    stylization_scope: Literal["whole_image", "object_surface", "none", "ambiguous"] = "ambiguous"
+    decision_owner: Literal["remote_brain", "evidence_fallback", "legacy"] = "evidence_fallback"
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @property
+    def explicitly_stylized_whole_image(self) -> bool:
+        return self.rendering_mode in {"stylized", "mixed"} and self.stylization_scope == "whole_image"
+
+
 class VisualTaskProfile(V3BaseModel):
     profile_id: str
     project_id: str | None = None
@@ -52,6 +71,7 @@ class VisualTaskProfile(V3BaseModel):
     template_id: str
     scenario_id: str
     output_medium: str = "image"
+    rendering_intent: RenderingIntent = Field(default_factory=RenderingIntent)
     subject_entities: list[VisualSubjectEntity] = Field(default_factory=list)
     preservation_targets: list[PreservationTarget] = Field(default_factory=list)
     allowed_changes: list[str] = Field(default_factory=list)

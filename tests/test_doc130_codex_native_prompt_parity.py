@@ -81,6 +81,25 @@ def _canonical_runtime_result(*, count: int = 1, uploaded_assets: list[Any] | No
         "provider": "remote_test_brain",
         "model": "remote-test-model",
         "image_set_plan": {"image_count": count, "shot_plan": directions},
+        # Doc134 requires the *final* Provider text to be a remote-Brain
+        # sign-off, even when this test substitutes the networked runtime.
+        # The fixture deliberately gives every output exactly one approved
+        # canonical record so Local MCP exercises the same materializer as
+        # Web Mode instead of accidentally exercising legacy composition.
+        "canonical_provider_prompts": [
+            {
+                "output_index": index,
+                "prompt": (
+                    f"Remote Brain approved final Provider prompt {index}: "
+                    "a calm botanical still life with a cream ceramic vase, "
+                    "natural soft window light, realistic materials and a "
+                    "quiet balanced composition."
+                ),
+                "review_status": "approved",
+            }
+            for index in range(1, count + 1)
+        ],
+        "audit": {"remote_canonical_provider_prompts_received": True},
     }
     result.metadata["llm_brain"] = remote_brain
     for plan in result.planning_result.generation_plans:
@@ -252,6 +271,21 @@ def test_remote_brain_fallback_blocks_before_prompt_projection() -> None:
         NativeImageGenPlanRequest.from_mcp_arguments(_arguments())
     )
     assert result["code"] == "codex_native_imagegen_remote_brain_required"
+
+
+def test_missing_brain_signed_final_prompt_blocks_without_legacy_composition() -> None:
+    runtime_result = _canonical_runtime_result()
+    # The fixture shares the frozen Brain record between planning metadata and
+    # every generation plan, mirroring the Web Provider request boundary.
+    runtime_result.metadata["llm_brain"].pop("canonical_provider_prompts")
+    runtime_result.metadata["llm_brain"]["audit"] = {}
+
+    result = _planner_for(runtime_result).prepare_native_imagegen_plan(
+        NativeImageGenPlanRequest.from_mcp_arguments(_arguments())
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_canonical_prompt_unavailable"
 
 
 def test_count_mismatch_blocks_without_silent_truncation() -> None:

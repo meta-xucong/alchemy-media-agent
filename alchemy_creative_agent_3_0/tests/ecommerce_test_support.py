@@ -66,6 +66,24 @@ class EcommerceRemoteBrainTestProvider:
             "optimized_direction": "Use the remote Brain's product-specific image intent.",
             "visual_direction_addons": ["Use the remote Brain's product-specific image intent."],
         }
+        payload["visual_task_profile"] = {
+            "rendering_intent": {
+                "rendering_mode": "photoreal",
+                "stylization_scope": "none",
+                "decision_owner": "remote_brain",
+            }
+        }
+        payload["canonical_provider_prompts"] = [
+            {
+                "output_index": index,
+                "prompt": (
+                    f"Remote Brain approved complete product image {index}: preserve the supplied product facts, "
+                    "reference truth, and explicit user constraints in one coherent photographic image."
+                ),
+                "review_status": "approved",
+            }
+            for index in range(1, count + 1)
+        ]
         return payload
 
 

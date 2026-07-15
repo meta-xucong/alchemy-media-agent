@@ -83,7 +83,7 @@ def test_doc132_shared_fixture_keeps_exact_brain_count_and_project_aggregation(
     assert [item["slot_id"] for item in job["ecommerce"]["remote_brain_output_intents"]] == [
         f"ecommerce_output_{index}" for index in range(1, count + 1)
     ]
-    assert len(provider.requests) == 1
+    assert len(provider.requests) == 2
 
     brain_request = provider.requests[0]
     brain_metadata = brain_request["metadata"]
@@ -94,6 +94,7 @@ def test_doc132_shared_fixture_keeps_exact_brain_count_and_project_aggregation(
     serialized_brain_request = json.dumps(brain_request, ensure_ascii=False)
     for legacy_value in ("one_click_product_set", "marketplace_listing_set", "style_recreation_set"):
         assert legacy_value not in serialized_brain_request
+    assert provider.requests[1]["stage"] == "provider_prompt_finalize"
 
     generated = handlers.post_project_job_generate(
         project["project_id"],

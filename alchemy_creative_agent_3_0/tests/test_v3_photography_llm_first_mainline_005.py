@@ -96,7 +96,11 @@ def test_photography_blocks_when_remote_brain_is_unavailable_or_role_count_is_in
     assert "remote_creative_brain_image_set_plan_invalid" in " ".join(wrong_count.warnings)
     invalid = wrong_count.metadata["remote_creative_brain_outcome"]
     assert invalid["outcome_class"] == "remote_contract_invalid"
-    assert invalid["remote_contract_rejected_sections"] == ["image_set_plan"]
+    assert invalid["remote_contract_rejected_sections"] == [
+        "image_set_plan",
+        "visual_task_profile.rendering_intent",
+        "canonical_provider_prompts",
+    ]
 
 
 def test_photography_brain_receives_only_noncreative_contract_and_owns_each_direction(monkeypatch) -> None:
@@ -154,7 +158,8 @@ def test_photography_compact_remote_payload_is_valid_without_a_capability_catalo
     payload = json.loads(build_remote_payload(request))
 
     assert payload["return_schema"]["image_set_plan"]
-    assert "visual_task_profile" not in payload["return_schema"]
+    assert "visual_task_profile" in payload["return_schema"]
+    assert "canonical_provider_prompts" not in payload["return_schema"]
     assert payload["photography_creative_context"]["role_count"] == 3
 
 

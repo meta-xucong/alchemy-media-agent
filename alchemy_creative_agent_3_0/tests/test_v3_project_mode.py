@@ -480,8 +480,9 @@ def test_project_mode_forwards_frozen_apparel_ledger_to_the_provider_request(tmp
             return super().generate(request)
 
     provider = CapturingMockGenerationProvider()
+    brain_provider = EcommerceRemoteBrainTestProvider()
     runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()),
+        llm_brain_adapter=V3LLMBrainAdapter(provider=brain_provider),
         generation_router=GenerationRouter(provider=provider),
     )
     service = V3ProductApiService(
@@ -523,9 +524,12 @@ def test_project_mode_forwards_frozen_apparel_ledger_to_the_provider_request(tmp
     assert len(projection["apparel_construction"]["facts"]) == 6
 
     prompt = ProductionImageGenerationProvider(output_store=service.output_store)._generation_prompt(request, [])
-    assert "Garment construction truth:" in prompt
-    assert "A-line knee-length silhouette with a fitted bodice" in prompt
-    assert "small blue floral print stays registered" in prompt
+    signed = request.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"]
+    assert prompt == signed
+    assert "Garment construction truth:" not in prompt
+    finalizer_context = brain_provider.requests[-1]["metadata"]["canonical_prompt_context"]
+    assert finalizer_context["apparel_construction"]["applies"] is True
+    assert len(finalizer_context["apparel_construction"]["facts"]) == 6
 
 
 def test_project_mode_rejects_ecommerce_project_job_with_fake_uploaded_asset_id() -> None:

@@ -925,36 +925,13 @@ class CentralCreativeBrain:
                 metadata = recipe.get("metadata")
                 if isinstance(metadata, dict) and str(metadata.get("subject_type") or "").strip().lower() == "character":
                     return True
-        text = " ".join(
-            [
-                str(context.user_input or ""),
-                str(getattr(context.commercial_brief, "title", "") if context.commercial_brief else ""),
-                str(getattr(context.commercial_brief, "description", "") if context.commercial_brief else ""),
-                " ".join(getattr(context.commercial_brief, "visual_tone", []) if context.commercial_brief else []),
-                str(getattr(context.creative_plan, "visual_direction", "") if context.creative_plan else ""),
-            ]
-        ).lower()
-        human_terms = (
-            "portrait",
-            "human photo",
-            "real person",
-            "same young woman",
-            "same woman",
-            "woman",
-            "girl",
-            "beauty portrait",
-            "face",
-            "\u4eba\u50cf",
-            "\u771f\u4eba",
-            "\u5199\u771f",
-            "\u7f8e\u5973",
-            "\u5973\u751f",
-            "\u5973\u5b69",
-            "\u4eba\u7269",
-            "\u8138",
-        )
-        stylized_terms = ("anime", "manga", "cartoon", "illustration", "\u52a8\u6f2b", "\u6f2b\u753b", "\u63d2\u753b", "\u5361\u901a")
-        return any(term in text for term in human_terms) and not any(term in text for term in stylized_terms)
+        # Do not infer a human identity suite, or negate it because a word such
+        # as "cartoon" appears in the user request.  A cartoon print on a real
+        # garment is not an illustration request for the whole frame.  New V3
+        # jobs must supply the frozen Brain task profile above; older records
+        # without that evidence remain readable but do not gain an automatic
+        # generated-image identity chain from keyword matching.
+        return False
 
     def _llm_profile_subject_entity_types(self, context: PipelineContext) -> set[str]:
         """Return non-empty subject types from the frozen central-brain profile.

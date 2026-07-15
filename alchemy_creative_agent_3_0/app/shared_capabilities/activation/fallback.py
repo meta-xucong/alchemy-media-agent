@@ -10,6 +10,7 @@ from .contracts import (
     ActivationEvidence,
     CapabilityActivationIntent,
     PreservationTarget,
+    RenderingIntent,
     RequestedCapability,
     TemplateCapabilityPolicy,
     VisualSubjectEntity,
@@ -53,7 +54,21 @@ EXPLICIT_YOUNG_PERSON_PATTERNS = (
     re.compile(r"\b(?:[0-9]|1[0-7])\s*(?:-| )?year(?:s)?[- ]old\b"),
     re.compile(r"(?:\u5b66\u9f84\s*(?:\u513f\u7ae5|\u5b69\u5b50)|(?:\u513f\u7ae5|\u5b69\u5b50)\s*(?:\u7a7f\u7740|\u7ad9\u5728|\u5728|\u6b63\u5728))"),
 )
-STYLIZED_PERSON_SIGNALS = ("anime", "cartoon", "illustration", "3d character", "动漫", "漫画", "插画", "卡通", "三维角色")
+# The deterministic fallback is deliberately conservative.  These are not
+# creative recipes or broad style classifiers: they only recognize an explicit
+# request to render the *whole image* in a non-photographic medium, or an
+# explicit object-surface fact.  LLM-first jobs receive the authoritative
+# semantic decision from the remote Brain instead.
+_WHOLE_IMAGE_STYLIZATION_PATTERNS = (
+    re.compile(r"\b(?:create|render|make|draw)\s+(?:an?\s+)?(?:anime|manga|cartoon|illustration)\b"),
+    re.compile(r"\b(?:anime|manga|cartoon|illustration)\s+(?:style|portrait|character|scene|image|rendering)\b"),
+    re.compile(r"(?:以|用)(?:动漫|漫画|插画|卡通)(?:风格|形式)(?:创作|绘制|生成)?"),
+)
+_OBJECT_SURFACE_ARTWORK_PATTERNS = (
+    re.compile(r"\b(?:anime|manga|cartoon|illustration|illustrated)\b.{0,48}\b(?:print|graphic|pattern|motif|artwork|design|label|cover|surface)\b"),
+    re.compile(r"\b(?:print|graphic|pattern|motif|artwork|design|label|cover|surface)\b.{0,48}\b(?:anime|manga|cartoon|illustration|illustrated)\b"),
+    re.compile(r"(?:动漫|漫画|插画|卡通).{0,12}(?:图案|印花|图形|标签|封面|表面|设计)"),
+)
 HUMAN_SURFACE_SIGNALS = (
     "hand",
     "hands",
@@ -144,7 +159,18 @@ def build_task_profile_and_intent(
         and not bool(nonhuman_assets)
     )
     visible_human_text = person_text or human_surface_text
-    stylized_person = any(signal in text for signal in STYLIZED_PERSON_SIGNALS)
+    rendering_intent = _conservative_rendering_intent(text)
+    rendering_evidence = add_evidence(
+        "rendering_semantics",
+        "conservative_explicit_evidence",
+        {
+            "rendering_mode": rendering_intent.rendering_mode,
+            "stylization_scope": rendering_intent.stylization_scope,
+        },
+        0.9 if rendering_intent.stylization_scope != "ambiguous" else 0.45,
+    )
+    rendering_intent = rendering_intent.model_copy(update={"evidence_ids": [rendering_evidence]})
+    stylized_person = rendering_intent.explicitly_stylized_whole_image
     portrait_assets = [
         asset_id
         for role, ids in asset_roles.items()
@@ -251,6 +277,7 @@ def build_task_profile_and_intent(
         job_id=job_id,
         template_id=template_id,
         scenario_id=scenario_id,
+        rendering_intent=rendering_intent,
         subject_entities=entities,
         preservation_targets=preservation,
         allowed_changes=["composition", "camera", "lighting", "background"] if preservation else [],
@@ -284,6 +311,41 @@ def _has_human_surface_signal(text: str) -> bool:
         elif signal in text:
             return True
     return False
+
+
+def _conservative_rendering_intent(text: str) -> RenderingIntent:
+    """Return the fallback's narrow rendering-medium admission decision.
+
+    An incidental artwork term is ambiguous creative language, not authority
+    to suppress a shared real-person capability.  Only direct whole-image
+    wording can produce a stylized fallback decision; LLM-first paths replace
+    this with the remote Brain's frozen semantic result.
+    """
+
+    normalized = " ".join(str(text or "").casefold().split())
+    if any(pattern.search(normalized) for pattern in _OBJECT_SURFACE_ARTWORK_PATTERNS):
+        return RenderingIntent(
+            rendering_mode="unknown",
+            stylization_scope="object_surface",
+            decision_owner="evidence_fallback",
+        )
+    if any(pattern.search(normalized) for pattern in _WHOLE_IMAGE_STYLIZATION_PATTERNS):
+        return RenderingIntent(
+            rendering_mode="stylized",
+            stylization_scope="whole_image",
+            decision_owner="evidence_fallback",
+        )
+    if any(marker in normalized for marker in ("real-camera", "real camera", "realistic photo", "photograph", "photography", "真实照片", "摄影写实")):
+        return RenderingIntent(
+            rendering_mode="photoreal",
+            stylization_scope="none",
+            decision_owner="evidence_fallback",
+        )
+    return RenderingIntent(
+        rendering_mode="unknown",
+        stylization_scope="ambiguous",
+        decision_owner="evidence_fallback",
+    )
 
 
 def _explicitly_excludes_humans(text: str) -> bool:

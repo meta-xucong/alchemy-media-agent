@@ -1,8 +1,10 @@
 # Doc120 V3 Human Realism Rendering-Style and Object-Artwork Disambiguation
 
-Status: corrective shared-foundation authority discovered during the Doc118
-controlled General reference acceptance. It does not create a child, apparel,
-product, commerce, or General-template-specific prompt branch.
+Status: historical corrective specification. Its narrow illustration-word
+correction is superseded for new LLM-first work by Doc134's Brain-owned
+`rendering_intent` and canonical Provider-prompt sign-off. It remains useful
+only to interpret the original defect and older records. It does not create a
+child, apparel, product, commerce, or General-template-specific prompt branch.
 
 ## 0. Observed defect
 

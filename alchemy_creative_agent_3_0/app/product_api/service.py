@@ -2368,10 +2368,18 @@ class V3ProductApiService:
 
             retry_patch = dict(plan["retry_patch"])
             reason_codes = list(plan["reason_codes"])
-            identity_local_repair = self._identity_local_repair_metadata(
-                merged_result,
-                attempt_index=attempt_index,
-                reason_codes=reason_codes,
+            # A forward LLM-first run never turns a review code into a local
+            # repair prompt or a masked face-edit recipe.  The code is
+            # evidence for the next Brain sign-off only; it may decide how to
+            # repair the image while retaining the frozen truth channels.
+            identity_local_repair = (
+                {}
+                if self._uses_brain_signed_provider_prompts(merged_result)
+                else self._identity_local_repair_metadata(
+                    merged_result,
+                    attempt_index=attempt_index,
+                    reason_codes=reason_codes,
+                )
             )
             retry_metadata = {
                 **base_metadata,
@@ -2520,11 +2528,15 @@ class V3ProductApiService:
         issue_codes, retry_patch, _source = self._visual_retry_signal(result, {})
         issue_codes = self._dedupe_strings(issue_codes)
         attempt_index = max_attempts + 1
-        local_repair = self._identity_local_repair_metadata(
-            result,
-            attempt_index=attempt_index,
-            reason_codes=issue_codes,
-            post_retry_closeout=True,
+        local_repair = (
+            {}
+            if self._uses_brain_signed_provider_prompts(result)
+            else self._identity_local_repair_metadata(
+                result,
+                attempt_index=attempt_index,
+                reason_codes=issue_codes,
+                post_retry_closeout=True,
+            )
         )
         if not local_repair:
             return result, max_attempts
@@ -2855,11 +2867,18 @@ class V3ProductApiService:
                 ),
             }
 
-        if not retry_patch and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced":
+        brain_signed_retry = self._uses_brain_signed_provider_prompts(result)
+        if brain_signed_retry:
+            # The review service is allowed to classify what it observed.  It
+            # is not allowed to translate those observations into a pile of
+            # new words.  The remote Brain receives only these normalized
+            # evidence codes during its next canonical prompt sign-off.
+            retry_patch = {}
+        elif not retry_patch and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced":
             retry_patch = self._visual_retry_patch_from_issues(retryable_codes)
         if bool(metadata.get("force_empty_visual_retry_patch")):
             retry_patch = {}
-        if not self._visual_retry_patch_has_content(retry_patch):
+        if not brain_signed_retry and not self._visual_retry_patch_has_content(retry_patch):
             return {
                 "should_retry": False,
                 "record": self._visual_retry_execution_record(
@@ -2888,12 +2907,13 @@ class V3ProductApiService:
     ) -> tuple[list[str], dict[str, Any], str]:
         explicit_codes = self._metadata_issue_codes(request_metadata)
         if explicit_codes:
-            return self._activation_filtered_retry_signal(
+            codes, patch, source = self._activation_filtered_retry_signal(
                 result,
                 explicit_codes,
                 self._metadata_retry_patch(request_metadata),
                 "request_metadata",
             )
+            return (codes, {}, source) if self._uses_brain_signed_provider_prompts(result) else (codes, patch, source)
 
         enforced = str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() == "enforced"
         result_metadata = dict(result.metadata or {})
@@ -2908,12 +2928,13 @@ class V3ProductApiService:
                     allow_legacy_patch=False,
                 )
                 if signal_codes:
-                    return self._activation_filtered_retry_signal(
+                    codes, patch, source = self._activation_filtered_retry_signal(
                         result,
                         signal_codes,
                         signal_patch,
                         "real_review_signal_package",
                     )
+                    return (codes, {}, source) if self._uses_brain_signed_provider_prompts(result) else (codes, patch, source)
             return [], {}, "envelope_bound_review"
 
         text_deliveries: list[dict[str, Any]] = []
@@ -2978,7 +2999,13 @@ class V3ProductApiService:
         return dict(summary) if isinstance(summary, dict) else {}
 
     def _resolved_retry_metadata(self, result: PlanningResult, retry_patch: dict[str, Any]) -> dict[str, Any]:
-        """Carry an active-ledger retry patch back through the shared runtime."""
+        """Carry retry evidence through the shared runtime without local prose.
+
+        Historical compatibility paths may still preserve a local patch.  New
+        Brain-signed runs retain only auditable provenance; normalized review
+        codes already travel in ``visual_retry_reason_codes`` and are the only
+        retry input the canonical prompt finalizer may use.
+        """
 
         plan = self._activation_plan_from_result(result)
         if str(plan.get("activation_mode") or "").lower() != "enforced":
@@ -2987,6 +3014,16 @@ class V3ProductApiService:
         fingerprint = str(plan.get("fingerprint") or "").strip()
         if not plan_id or not fingerprint:
             return {}
+        if self._uses_brain_signed_provider_prompts(result):
+            return {
+                "resolved_retry_provenance": {
+                    "authority": "v3_product_api",
+                    "activation_plan_id": plan_id,
+                    "activation_plan_fingerprint": fingerprint,
+                    "retry_evidence_only": True,
+                    "prompt_owner": "remote_v3_llm_brain",
+                },
+            }
         return {
             "resolved_retry_patch": dict(retry_patch),
             "resolved_retry_provenance": {
@@ -2995,6 +3032,29 @@ class V3ProductApiService:
                 "activation_plan_fingerprint": fingerprint,
             },
         }
+
+    @staticmethod
+    def _uses_brain_signed_provider_prompts(result: PlanningResult) -> bool:
+        """Return true only for a result carrying the frozen LLM-first text.
+
+        This deliberately does not infer LLM ownership from a template name,
+        user wording, or a Boolean flag.  A retry may suppress local repair
+        prose only after the runtime has actually persisted an exact signed
+        prompt set for the rendered job.
+        """
+
+        sources = [getattr(result, "metadata", {}), getattr(getattr(result, "creative_job", None), "metadata", {})]
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            brain = source.get("llm_brain")
+            if not isinstance(brain, dict):
+                continue
+            prompts = brain.get("canonical_provider_prompts")
+            audit = brain.get("audit") if isinstance(brain.get("audit"), dict) else {}
+            if isinstance(prompts, list) and prompts and bool(audit.get("remote_canonical_provider_prompts_received")):
+                return True
+        return False
 
     def _constraint_ledger_from_result(self, result: PlanningResult) -> dict[str, Any]:
         creative_job = getattr(result, "creative_job", None)

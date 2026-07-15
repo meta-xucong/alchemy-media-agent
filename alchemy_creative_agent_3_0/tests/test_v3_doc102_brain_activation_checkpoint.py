@@ -75,6 +75,7 @@ def test_remote_brain_keeps_safe_activation_contract_when_structured_sections_ar
         "image_set_plan",
         "visual_task_profile",
         "capability_activation_intent",
+        "visual_task_profile.rendering_intent",
     ]
 
 

@@ -188,10 +188,12 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert "Adjustable warm light" in prompt.visual_prompt
     assert prompt.provider_notes["text_rendering_owner"] == "image_provider"
     assert "ecommerce_recipe" not in prompt.metadata
-    # One logical specialized job creates its remote direction once during
-    # planning. Generation must consume that pinned result rather than issue a
-    # second, independently fallible Brain request.
-    assert len(provider.requests) == 1
+    # One logical specialized job creates its remote direction and then one
+    # post-validation canonical Provider-prompt sign-off during planning.
+    # Generation consumes both pinned records rather than independently
+    # replanning or locally appending renderer wording.
+    assert len(provider.requests) == 2
+    assert provider.requests[-1]["stage"] == "provider_prompt_finalize"
 
     exported = service.export_job(created.job_id)
     assert exported.export_package is not None

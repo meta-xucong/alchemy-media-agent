@@ -17,7 +17,7 @@ from .context_digest import (
     selected_outputs_from_context,
     selected_references_from_context,
 )
-from .contracts import BrainRunRequest, BrainRunResult
+from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_skipped_result
 from .providers import BrainProviderError, BrainProviderUnavailable, V3LLMBrainProvider
 from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
@@ -83,6 +83,46 @@ class V3LLMBrainAdapter:
             }
             return fallback
 
+    def finalize_canonical_provider_prompts(
+        self,
+        request: BrainRunRequest,
+    ) -> tuple[list[BrainCanonicalProviderPrompt], dict[str, Any]]:
+        """Ask the remote Brain to sign final renderer text after validation.
+
+        This intentionally bypasses the ordinary fallback-result merger.  A
+        local fallback would be an unauthorized provider-prompt author, so an
+        unavailable or malformed finalizer is a failure for the caller to
+        block rather than a cue to reconstruct wording locally.
+        """
+
+        if not _enabled():
+            raise BrainProviderUnavailable("V3 LLM Brain is disabled by configuration.")
+        if not self._activation_scope_enabled(request):
+            raise BrainProviderUnavailable("No trusted capability policy is active for canonical prompt signing.")
+        if not self.provider.available(force=True):
+            raise BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
+        try:
+            data = self.provider.run(request)
+        except (BrainProviderError, BrainProviderUnavailable):
+            raise
+        except Exception as exc:  # pragma: no cover - defensive provider boundary
+            raise BrainProviderError("Remote Brain failed while signing the canonical provider prompt.") from exc
+        prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
+        expected_count = request.requested_image_count
+        if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
+            raise BrainProviderError("Remote Brain returned an invalid canonical provider-prompt contract.")
+        try:
+            prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
+        except ValidationError as exc:
+            raise BrainProviderError("Remote Brain returned an invalid canonical provider-prompt contract.") from exc
+        return (
+            prompts,
+            {
+                "remote_canonical_provider_prompts_received": True,
+                "canonical_provider_prompt_provider": self.provider.provider,
+                "canonical_provider_prompt_model": self.provider.model,
+            },
+        )
     def build_request(
         self,
         *,
@@ -229,6 +269,37 @@ class V3LLMBrainAdapter:
                 payload, accepted = _merge_validated_section(payload, key, candidate)
                 if not accepted:
                     rejected_sections.append(key)
+        # Rendering medium and its scope are semantic decisions. A local
+        # keyword hit (for example a cartoon print on a real garment) may
+        # never override them on an LLM-first path. Keep an early remote
+        # semantic decision auditable too, so a later real-image materialize
+        # can safely reuse a draft plan only when it already carries this
+        # explicit decision.
+        if _has_remote_rendering_intent(data.get("visual_task_profile")):
+            payload["audit"] = {
+                **dict(payload.get("audit") or {}),
+                "remote_rendering_intent_received": True,
+            }
+        elif requires_complete_image_set:
+            rejected_sections.append("visual_task_profile.rendering_intent")
+        # A normal planning response may include an early draft of renderer
+        # wording for human inspection, but only the later finalizer response
+        # is allowed to become a Provider instruction.
+        remote_prompts = data.get("canonical_provider_prompts")
+        if remote_prompts is not None:
+            if _matches_canonical_provider_prompt_cardinality(
+                remote_prompts,
+                expected_count=fallback.image_set_plan.image_count,
+            ):
+                payload, accepted = _merge_validated_section(
+                    payload,
+                    "canonical_provider_prompts",
+                    remote_prompts,
+                )
+                if not accepted:
+                    rejected_sections.append("canonical_provider_prompts")
+            else:
+                rejected_sections.append("canonical_provider_prompts")
         if isinstance(data.get("checkpoints"), list):
             candidate = _merge_checkpoints(payload.get("checkpoints", []), data["checkpoints"])
             payload, accepted = _merge_validated_section(payload, "checkpoints", candidate)
@@ -469,6 +540,41 @@ def _matches_image_set_cardinality(candidate: dict[str, Any], *, expected_count:
         return False
     directions = [str(item).strip() for item in candidate.get("shot_plan", []) if str(item).strip()]
     return image_count == expected_count and len(directions) == expected_count
+
+
+def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:
+    """Require exactly one approved, Brain-authored prompt per output."""
+
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    indexes: list[int] = []
+    for item in candidate:
+        if not isinstance(item, dict):
+            return False
+        try:
+            index = int(item.get("output_index"))
+        except (TypeError, ValueError):
+            return False
+        prompt = " ".join(str(item.get("prompt") or "").split())
+        if index < 1 or len(prompt) < 24 or str(item.get("review_status") or "approved") != "approved":
+            return False
+        indexes.append(index)
+    return indexes == list(range(1, expected_count + 1))
+
+
+def _has_remote_rendering_intent(candidate: Any) -> bool:
+    """Confirm that semantics came from the Brain rather than a fallback."""
+
+    if not isinstance(candidate, dict):
+        return False
+    intent = candidate.get("rendering_intent")
+    if not isinstance(intent, dict):
+        return False
+    return (
+        str(intent.get("rendering_mode") or "") in {"photoreal", "stylized", "mixed", "unknown"}
+        and str(intent.get("stylization_scope") or "") in {"whole_image", "object_surface", "none", "ambiguous"}
+        and str(intent.get("decision_owner") or "") == "remote_brain"
+    )
 
 
 def _merge_validated_section(

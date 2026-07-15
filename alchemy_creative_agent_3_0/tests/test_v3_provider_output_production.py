@@ -1136,6 +1136,17 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
             return True
 
         def run(self, request):  # noqa: ANN001
+            if request.stage == "provider_prompt_finalize":
+                return {
+                    "canonical_provider_prompts": [
+                        {
+                            "output_index": index,
+                            "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
+                            "review_status": "approved",
+                        }
+                        for index in range(1, request.requested_image_count + 1)
+                    ]
+                }
             return {
                 "image_set_plan": {
                     "set_goal": "one clean summer portrait social cover",
@@ -1147,6 +1158,13 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                 },
                 "prompt_guidance": {
                     "optimized_direction": "clean summer portrait with natural light",
+                },
+                "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                        "decision_owner": "remote_brain",
+                    }
                 },
             }
 
@@ -1216,6 +1234,17 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
             return True
 
         def run(self, request):  # noqa: ANN001
+            if request.stage == "provider_prompt_finalize":
+                return {
+                    "canonical_provider_prompts": [
+                        {
+                            "output_index": index,
+                            "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
+                            "review_status": "approved",
+                        }
+                        for index in range(1, request.requested_image_count + 1)
+                    ]
+                }
             return {
                 "image_set_plan": {
                     "set_goal": "one clean summer portrait social cover",
@@ -1227,6 +1256,13 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                 },
                 "prompt_guidance": {
                     "optimized_direction": "clean summer portrait with natural light",
+                },
+                "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                        "decision_owner": "remote_brain",
+                    }
                 },
             }
 

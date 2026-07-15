@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -66,6 +66,28 @@ class BrainPromptReview(V3BaseModel):
     checks: list[str] = Field(default_factory=list)
     fixes_applied: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class BrainCanonicalProviderPrompt(V3BaseModel):
+    """One Brain-signed, renderer-ready prompt for a frozen output.
+
+    This intentionally contains one complete natural-language instruction, not
+    a list of local prompt atoms.  The provider may bind it to the frozen
+    operation and reference inputs, but may not append creative, realism,
+    scene, or retry wording after the Brain has approved it.
+    """
+
+    output_index: int = Field(ge=1)
+    prompt: str
+    review_status: Literal["approved"] = "approved"
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_must_be_complete_text(cls, value: str) -> str:
+        cleaned = " ".join(str(value or "").split())
+        if len(cleaned) < 24:
+            raise ValueError("canonical provider prompt is required")
+        return cleaned
 
 
 class BrainUserVisibleSummary(V3BaseModel):
@@ -133,6 +155,7 @@ class BrainRunResult(V3BaseModel):
     audit: dict[str, Any] = Field(default_factory=dict)
     visual_task_profile: VisualTaskProfile | None = None
     capability_activation_intent: CapabilityActivationIntent | None = None
+    canonical_provider_prompts: list[BrainCanonicalProviderPrompt] = Field(default_factory=list)
 
     def safe_metadata(self) -> dict[str, Any]:
         task_profile = self.visual_task_profile.model_dump(mode="json") if self.visual_task_profile is not None else None
@@ -160,4 +183,7 @@ class BrainRunResult(V3BaseModel):
                 if self.capability_activation_intent is not None
                 else None
             ),
+            "canonical_provider_prompts": [
+                item.model_dump(mode="json") for item in self.canonical_provider_prompts
+            ],
         }

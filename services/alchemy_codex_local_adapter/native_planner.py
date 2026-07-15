@@ -9,6 +9,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
     build_provider_generation_request,
 )
+from app.providers.base import ProviderRuntimeError
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 from alchemy_creative_agent_3_0.app.photography_profiles import (
@@ -201,7 +202,7 @@ class CodexNativeImageGenPlanner:
             return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
         try:
             materializations = self._canonical_materializations(result.planning_result)
-        except ValueError:
+        except (ProviderRuntimeError, ValueError):
             return self._blocked(
                 "codex_native_imagegen_canonical_prompt_unavailable",
                 "V3 could not materialize one canonical Provider prompt for every requested output.",

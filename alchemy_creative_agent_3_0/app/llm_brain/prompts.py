@@ -15,6 +15,7 @@ Unselected candidates are history only. Keep specialized-template logic out unle
 For general_template/general_creative, use subject/scene/style/lighting language by default.
 Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-copy concepts unless the user explicitly asks for a product/ecommerce image.
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
+When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
@@ -52,13 +53,19 @@ def _compact_required_remote_creative_schema() -> dict:
     transport timeout.
     """
 
-    # The frozen template plan and shared evidence runtime already own
-    # capability gating.  The remote Brain must contribute precisely its
-    # irreplaceable work: one creative image direction per frozen output.  Do
-    # not make the model restate task-profile or capability bookkeeping; that
-    # made compatible providers produce a large, fragile JSON envelope without
-    # adding creative evidence.
+    # The frozen template plan and shared evidence runtime own admission and
+    # execution gates.  The remote Brain owns semantic interpretation and the
+    # final renderer-facing natural language.  Local runtime code may bind a
+    # returned prompt to its immutable output/reference operation, but may not
+    # append a second pile of prompt fragments after this answer.
     return {
+        "visual_task_profile": {
+            "rendering_intent": {
+                "rendering_mode": "photoreal|stylized|mixed|unknown",
+                "stylization_scope": "whole_image|object_surface|none|ambiguous",
+                "decision_owner": "remote_brain",
+            }
+        },
         "image_set_plan": {
             "set_goal": "string",
             "image_count": "integer exactly equal to requested_image_count",
@@ -286,6 +293,8 @@ def _requires_remote_creative_contract(request: BrainRunRequest) -> bool:
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
+    if request.stage == "provider_prompt_finalize":
+        return json.dumps(_canonical_provider_prompt_finalization_payload(request), ensure_ascii=False, sort_keys=True)
     payload = {
         "task": "prepare_pre_generation_image_reasoning",
         "stage": request.stage,
@@ -460,9 +469,41 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["return_schema"] = compact_schema
         payload["remote_response_contract"] = (
             "Return only this compact schema as strictly valid JSON. Every "
-            "image_set_plan field and prompt_guidance.optimized_direction is "
-            "required. Escape quotation marks inside JSON strings. Do not add "
-            "hidden reasoning, project-history summaries, UI copy, or any "
+            "image_set_plan field and visual_task_profile.rendering_intent "
+            "are required. Escape quotation marks inside JSON strings. Do not "
+            "add hidden reasoning, project-history summaries, UI copy, or any "
             "additional top-level sections."
         )
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) -> dict[str, object]:
+    """Make the Brain's post-validation sign-off a small, distinct contract."""
+
+    context = request.metadata.get("canonical_prompt_context")
+    context = dict(context) if isinstance(context, dict) else {}
+    return {
+        "task": "finalize_canonical_image_provider_prompts",
+        "stage": request.stage,
+        "user_input": request.user_input,
+        "scenario_id": request.scenario_id,
+        "template_id": request.template_id,
+        "requested_image_count": request.requested_image_count,
+        "requested_image_size": request.requested_image_size,
+        "frozen_render_context": context,
+        "return_schema": {
+            "canonical_provider_prompts": [
+                {
+                    "output_index": "integer from 1 through requested_image_count",
+                    "prompt": "one complete final natural-language image-rendering prompt for this exact output",
+                    "review_status": "approved",
+                }
+            ]
+        },
+        "remote_response_contract": (
+            "Return only this schema as strictly valid JSON. Reconcile the "
+            "frozen render context without adding a local recipe, internal "
+            "identifier, diagnostic, or review code. Return exactly one "
+            "approved complete canonical prompt per requested output."
+        ),
+    }

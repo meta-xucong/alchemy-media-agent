@@ -208,16 +208,7 @@ class CapabilityActivationPlanner:
         if not visible_people:
             return []
 
-        non_real_tags = {
-            "anime",
-            "animated",
-            "cartoon",
-            "illustration",
-            "non_photorealistic",
-            "stylized_person",
-        }
-        profile_tags = {str(tag).strip().casefold() for tag in task_profile.visual_intent_tags}
-        if profile_tags & non_real_tags:
+        if task_profile.rendering_intent.explicitly_stylized_whole_image:
             return []
 
         evidence = [

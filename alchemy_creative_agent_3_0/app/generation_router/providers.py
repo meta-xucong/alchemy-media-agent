@@ -104,6 +104,7 @@ class ProviderPromptMaterialization:
     protected_user_direction: str
     prompt_audit: dict[str, Any]
     input_fidelity: str | None
+    prompt_source: str = "legacy_local_materializer"
 
 
 def build_provider_generation_request(
@@ -1719,6 +1720,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
         )
         self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
         size = self._size_for_request(request)
+        canonical_prompt = self._brain_signed_provider_prompt(request)
+        if self._requires_brain_signed_provider_prompt(request) and not canonical_prompt:
+            # ScenarioRuntime normally rejects this earlier.  Keep the
+            # materializer as a second, non-bypassable boundary so a future
+            # caller cannot send a real image request through the old local
+            # prompt compiler by omitting the frozen Brain record.
+            raise ProviderRuntimeError(
+                "LLM-first real-image rendering requires an approved canonical Provider prompt from the remote Brain.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "remote_creative_brain_prompt_signoff_missing",
+                    "fallback": "blocked",
+                },
+            )
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         protected_user_direction = self._provider_user_direction(request)
         return ProviderPromptMaterialization(
@@ -1730,8 +1745,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             reference_assets=reference_assets,
             asset_plan=asset_plan,
             protected_user_direction=protected_user_direction,
-            prompt_audit=self._provider_prompt_audit(generation_prompt, protected_user_direction),
+            prompt_audit=self._provider_prompt_audit(
+                generation_prompt,
+                protected_user_direction,
+                prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
+            ),
             input_fidelity=self._input_fidelity_for_asset_plan(asset_plan),
+            prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
         )
 
     def _input_fidelity_for_asset_plan(self, asset_plan: dict[str, Any]) -> str | None:
@@ -2921,6 +2941,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         *,
         asset_plan: dict[str, Any] | None = None,
     ) -> str:
+        canonical_prompt = self._brain_signed_provider_prompt(request)
+        if canonical_prompt:
+            # The Brain's approved text is the complete provider instruction.
+            # Local code still binds references, canvas and transport options,
+            # but it must not append Human Realism, scene, recipe, retry, or
+            # any other natural-language fragments after this boundary.
+            return canonical_prompt
         prompt = request.prompt_compilation
         asset = request.asset_spec
         layout = request.layout_plan
@@ -3452,7 +3479,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except (ImportError, TypeError, ValueError):
             return 0
 
-    def _provider_prompt_audit(self, prompt: str, protected_user_direction: str) -> dict[str, Any]:
+    def _provider_prompt_audit(
+        self,
+        prompt: str,
+        protected_user_direction: str,
+        *,
+        prompt_source: str = "legacy_local_materializer",
+    ) -> dict[str, Any]:
         prompt = str(prompt or "")
         user_chars = len(str(protected_user_direction or ""))
         internal_chars = max(0, len(prompt) - user_chars)
@@ -3462,6 +3495,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "final_provider_prompt_chars": len(prompt),
             "internal_guidance_target_chars": 6000,
             "prompt_budget_warning": internal_chars > 6000,
+            "prompt_source": prompt_source,
             "protected_sections": [
                 *(["user_direction"] if protected_user_direction else []),
                 *(["identity_operation"] if "Primary operation:" in prompt else []),
@@ -3470,6 +3504,64 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ],
             "user_direction_lossless": bool(not protected_user_direction or protected_user_direction in prompt),
         }
+
+    def _brain_signed_provider_prompt(self, request: GenerationRequest) -> str:
+        """Return the one exact provider prompt signed by the remote Brain.
+
+        This is intentionally a narrow read of already-frozen metadata.  It
+        never concatenates a local fallback clause, strips a phrase, or turns
+        a missing record into a locally compiled substitute.  ScenarioRuntime
+        rejects LLM-first work before it reaches the provider when this record
+        is absent or has the wrong cardinality.
+        """
+
+        llm_brain = request.metadata.get("llm_brain")
+        if not isinstance(llm_brain, dict):
+            return ""
+        records = llm_brain.get("canonical_provider_prompts")
+        if not isinstance(records, list):
+            return ""
+        generation_metadata = (
+            request.generation_plan.metadata if isinstance(request.generation_plan.metadata, dict) else {}
+        )
+        raw_index = generation_metadata.get("output_index", request.metadata.get("output_index", 0))
+        try:
+            output_index = int(raw_index) + 1
+        except (TypeError, ValueError):
+            return ""
+        matches = [
+            item
+            for item in records
+            if isinstance(item, dict)
+            and item.get("output_index") == output_index
+            and str(item.get("review_status") or "") == "approved"
+        ]
+        if len(matches) != 1:
+            return ""
+        return " ".join(str(matches[0].get("prompt") or "").split())
+
+    @staticmethod
+    def _requires_brain_signed_provider_prompt(request: GenerationRequest) -> bool:
+        """Identify the forward real-image contract without guessing intent.
+
+        A persisted ``require_real_images``/``real_image_generation`` marker
+        or a normalized enforced V3 Job intent is an explicit runtime
+        assertion, not a keyword classifier.  The legacy materializer remains
+        readable for old/offline records, whereas an actual new real-image
+        operation fails closed if it lacks the Brain's approved text.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if bool(metadata.get("require_real_images") or metadata.get("real_image_generation")):
+            return True
+        normalized = metadata.get("normalized_v3_job_intent")
+        envelope = metadata.get("capability_execution_envelope")
+        plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        return bool(
+            isinstance(normalized, dict)
+            and isinstance(plan, dict)
+            and str(plan.get("activation_mode") or "").lower() == "enforced"
+        )
 
     def _provider_hard_constraints(
         self,

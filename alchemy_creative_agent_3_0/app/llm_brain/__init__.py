@@ -4,6 +4,7 @@ from .adapter import V3LLMBrainAdapter
 from .contracts import (
     BrainOutputEvidenceContract,
     BrainCheckpoint,
+    BrainCanonicalProviderPrompt,
     BrainImageSetPlan,
     BrainIntentSummary,
     BrainProjectMemoryDigest,
@@ -16,6 +17,7 @@ from .contracts import (
 
 __all__ = [
     "BrainCheckpoint",
+    "BrainCanonicalProviderPrompt",
     "BrainOutputEvidenceContract",
     "BrainImageSetPlan",
     "BrainIntentSummary",

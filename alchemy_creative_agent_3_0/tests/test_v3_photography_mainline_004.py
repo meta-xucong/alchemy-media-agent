@@ -240,10 +240,9 @@ def test_professional_set_t2i_executes_three_frozen_roles_without_generated_imag
         ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
         for request in provider.requests
     ]
-    assert "This image role: Session Hero" in rendered_prompts[0]
-    assert "This image role: Environmental Context" in rendered_prompts[1]
-    assert "This image role: Detail Or Moment" in rendered_prompts[2]
-    assert all("Remote Photography direction" in prompt for prompt in rendered_prompts)
+    assert all("Remote Brain approved complete photography image" in prompt for prompt in rendered_prompts)
+    assert all("This image role:" not in prompt for prompt in rendered_prompts)
+    assert all("Remote Photography direction" not in prompt for prompt in rendered_prompts)
     assert all("Suite director rules:" not in prompt for prompt in rendered_prompts)
     assert all("Cover hero" not in prompt for prompt in rendered_prompts)
     summary = generated["metadata"]["specialized_execution_summary"]

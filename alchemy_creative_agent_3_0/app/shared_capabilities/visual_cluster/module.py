@@ -1502,6 +1502,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     "metadata": dict(asset.metadata or {}),
                 }
             )
+        activation_plan = self._activation_plan(capability_input)
+        frozen_profile = capability_input.metadata.get("visual_task_profile")
+        frozen_profile = dict(frozen_profile) if isinstance(frozen_profile, dict) else {}
+        rendering_intent = frozen_profile.get("rendering_intent")
+        rendering_intent = dict(rendering_intent) if isinstance(rendering_intent, dict) else {}
+        active_capability_ids = {
+            str(item).strip()
+            for item in activation_plan.get("dependency_order", [])
+            if str(item).strip()
+        }
         return {
             **dict(capability_input.metadata or {}),
             "doc91_human_realism_plugin": True,
@@ -1510,6 +1520,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "template_policy": dict(template_policy or {}),
             "product_profile": dict(capability_input.product_profile or {}),
             "uploaded_asset_roles": uploaded_asset_roles,
+            # This is a frozen semantic/activation binding, not a local
+            # request to compose Human Realism words into a provider prompt.
+            "human_realism_execution_required": "human_realism" in active_capability_ids,
+            "frozen_rendering_intent": rendering_intent,
             "project_context_summary": {
                 "project_id": project_context.get("project_id"),
                 "template_id": project_context.get("template_id"),

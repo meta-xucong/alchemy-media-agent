@@ -47,6 +47,24 @@ class PhotographyRemoteBrainTestProvider:
             "optimized_direction": "Use each remote Photography image intent as the complete creative direction.",
             "visual_direction_addons": ["Use the remote Photography image intent."],
         }
+        payload["visual_task_profile"] = {
+            "rendering_intent": {
+                "rendering_mode": "photoreal",
+                "stylization_scope": "none",
+                "decision_owner": "remote_brain",
+            }
+        }
+        payload["canonical_provider_prompts"] = [
+            {
+                "output_index": index,
+                "prompt": (
+                    f"Remote Brain approved complete photography image {index}: create one coherent photographic "
+                    "rendering that respects the user's request and frozen reference truth."
+                ),
+                "review_status": "approved",
+            }
+            for index in range(1, count + 1)
+        ]
         return payload
 
 

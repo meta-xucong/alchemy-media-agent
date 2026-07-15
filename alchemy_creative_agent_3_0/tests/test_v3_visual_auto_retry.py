@@ -1,7 +1,10 @@
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    ecommerce_test_service,
+)
 
 
 def _service(tmp_path) -> V3ProductApiService:
@@ -192,19 +195,16 @@ def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path
 
 
 def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(tmp_path, monkeypatch) -> None:
-    service = _ecommerce_service(tmp_path)
+    brain_provider = EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(
+        brain_provider=brain_provider,
+        brand_profile_service=BrandProfileService(BrandProfileStore(tmp_path / "brand_memory")),
+    )
     monkeypatch.setattr(
         service,
         "_visual_retry_patch_from_issues",
         lambda _codes: (_ for _ in ()).throw(AssertionError("enforced retry must not use legacy issue mapper")),
     )
-
-
-def _internal_generation_result(service: V3ProductApiService, job_id: str):
-    record = service.job_store.get(job_id)
-    assert record is not None
-    assert record.generation_result is not None
-    return record.generation_result
     created = service.create_job(
         {
             "user_input": "Create a clean ecommerce product set for a drink can",
@@ -234,15 +234,26 @@ def _internal_generation_result(service: V3ProductApiService, job_id: str):
     )
 
     retry_summary = _internal_generation_result(service, created.job_id).metadata["visual_auto_retry"]
-    patch_text = " ".join(
-        str(item)
-        for item in retry_summary["records"][0]["retry_patch"].get("product_reinforcement", [])
-    )
+    finalizer_requests = [item for item in brain_provider.requests if item["stage"] == "provider_prompt_finalize"]
+    assert finalizer_requests
+    retry_context = finalizer_requests[-1]["metadata"]["canonical_prompt_context"]
 
     assert retry_summary["executed_count"] == 1
     assert "product_label_unreadable" in retry_summary["issue_codes"]
-    assert "label/logo" in patch_text
-    assert "FORGED REQUEST PATCH" not in patch_text
+    assert retry_summary["records"][0]["retry_patch"] == {}
+    assert retry_context["retry_evidence"] == {
+        "active": True,
+        "issue_codes": ["product_label_unreadable"],
+    }
+    assert "FORGED REQUEST PATCH" not in str(retry_context)
+    assert "prompt_additions" not in str(retry_context)
+
+
+def _internal_generation_result(service: V3ProductApiService, job_id: str):
+    record = service.job_store.get(job_id)
+    assert record is not None
+    assert record.generation_result is not None
+    return record.generation_result
 
 
 def test_visual_auto_retry_skips_empty_patch_without_provider_loop(tmp_path) -> None:
