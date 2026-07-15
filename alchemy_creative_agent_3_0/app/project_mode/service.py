@@ -2621,12 +2621,6 @@ class V3ProjectModeService:
         advanced_reference_controls: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if manifest.template_id == ECOMMERCE_TEMPLATE_ID:
-            preset_id = str(
-                request.metadata.get("selected_preset_id")
-                or request.metadata.get("preset_id")
-                or "one_click_product_set"
-            )
-            mode_id = str(request.metadata.get("selected_mode_id") or request.metadata.get("mode_id") or preset_id)
             profile = commerce_profile or request.commerce_profile_patch
             platform = profile.target_platform if profile else None
             market = profile.target_market if profile else None
@@ -2656,8 +2650,11 @@ class V3ProjectModeService:
                 parameters["approved_literal_copy"] = approved_literal_copy
             return {
                 "scenario_id": manifest.scenario_pack_id,
-                "mode_id": mode_id,
-                "preset_id": preset_id,
+                # New E-Commerce jobs are directed only by user facts plus
+                # the remote Brain.  Historical mode/preset identifiers are
+                # accepted by record readers but never re-emitted here.
+                "mode_id": None,
+                "preset_id": None,
                 "platform_profile": platform or "generic",
                 "parameters": parameters,
             }

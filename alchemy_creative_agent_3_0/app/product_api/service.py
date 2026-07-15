@@ -176,6 +176,15 @@ _ECOMMERCE_RETIRED_EXECUTION_FIELDS = frozenset(
         "mode_role_label",
         "specialized_scenario_plan",
         "specialized_execution_summary",
+        # Historic UI mode/preset values can be retained on an old record,
+        # but cannot become creative input for a new LLM-native E-Commerce
+        # request.
+        "mode",
+        "preset",
+        "mode_id",
+        "preset_id",
+        "selected_mode_id",
+        "selected_preset_id",
     }
 )
 
@@ -7188,6 +7197,11 @@ class V3ProductApiService:
             return selection
         return selection.model_copy(
             update={
+                # E-Commerce has no executable mode/preset in new forward
+                # paths.  Its historical identifiers remain readable on old
+                # records, but must not enter the Brain/runtime envelope.
+                "mode_id": None,
+                "preset_id": None,
                 "parameters": self._without_retired_ecommerce_execution_fields(dict(selection.parameters or {})),
             }
         )
@@ -7369,19 +7383,25 @@ class V3ProductApiService:
         rebuilt from product-level request data and contains evidence only.
         """
 
-        resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
+        source_selection = request.scenario_selection
+        source_parameters = dict(source_selection.parameters or {}) if source_selection is not None else {}
+        selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
+        resolution = self.scenario_runtime.scenario_registry.resolve(selection)
         if resolution.manifest.scenario_id != "ecommerce":
             return
-        selection = request.scenario_selection
         supplied_parameters = dict(selection.parameters) if selection is not None else {}
         parameters = self._without_retired_ecommerce_execution_fields(supplied_parameters)
-        parameters.setdefault("mode", resolution.selected_mode_id)
-        parameters.setdefault("preset", resolution.selected_preset_id)
         metadata = dict(request.metadata or {})
         ignored_fields = sorted(
             set(self._retired_ecommerce_execution_fields(metadata))
-            | set(self._retired_ecommerce_execution_fields(supplied_parameters))
+            | set(self._retired_ecommerce_execution_fields(source_parameters))
         )
+        if source_selection is not None:
+            if source_selection.mode_id:
+                ignored_fields.append("scenario_selection.mode_id")
+            if source_selection.preset_id:
+                ignored_fields.append("scenario_selection.preset_id")
+        ignored_fields = sorted(set(ignored_fields))
         if ignored_fields:
             metadata["ecommerce_legacy_execution_ignored"] = {
                 "source": "V3ProductApiService",
