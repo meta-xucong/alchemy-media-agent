@@ -1,6 +1,6 @@
 # 69 V3 Prompt Atom Realism And Reference Absorption Spec
 
-> Historical/compatibility notice (Docs93, 94, 111, and 113): prompt atoms and
+> Historical/compatibility notice (Docs93, 94, 111, 113, and 128): prompt atoms and
 > local stacked prompt construction are retired for new V3 production jobs.
 > Do not reuse these atom schemas, role overlays, or local retry wording as a
 > substitute for the remote Brain's complete natural-language image direction.

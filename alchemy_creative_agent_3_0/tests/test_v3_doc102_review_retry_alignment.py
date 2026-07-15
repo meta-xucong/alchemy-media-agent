@@ -49,7 +49,7 @@ def test_product_job_ignores_human_review_issue(monkeypatch) -> None:
     codes, patch, _ = service._activation_filtered_retry_signal(result, ["ai_face_render"], {"prompt_additions": ["face"]}, "test")
     assert codes == []
     assert patch == {}
-    assert result.metadata["capability_activation_audit"]["ignored_out_of_scope_issue_codes"] == ["ai_face_render"]
+    assert result.metadata["capability_activation_audit"]["ignored_out_of_scope_issue_codes"] == ["human_rendering_artifact"]
 
 
 def test_product_job_keeps_product_review_issue(monkeypatch) -> None:

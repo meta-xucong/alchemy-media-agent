@@ -65,7 +65,6 @@ from .contracts import (
 from .adaptive_reference import ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID, AdaptiveReferenceRetriever
 from .batch_identity_review import BatchIdentityDiversityReviewer
 from .commercial_quality import CommercialQualityClosureReviewer
-from .casebook_recipes import VISUAL_CASEBOOK_RECIPE_LIBRARY_ID
 from .doc66_closure import (
     MODE_QUALITY_PROFILE_MODULE_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
@@ -131,7 +130,6 @@ VISUAL_CLUSTER_CHILD_MODULE_IDS = {
     IDENTITY_DRIFT_GUARD_MODULE_ID,
     IDENTITY_REPAIR_STRATEGY_MODULE_ID,
     ADVANCED_REFERENCE_PRIORITY_CONTROLS_MODULE_ID,
-    VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
     STRONG_REFERENCE_CLOSURE_MODULE_ID,
     MODE_QUALITY_PROFILE_MODULE_ID,
 }

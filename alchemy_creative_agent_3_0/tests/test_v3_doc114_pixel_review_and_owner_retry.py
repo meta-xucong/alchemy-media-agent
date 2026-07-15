@@ -144,7 +144,7 @@ def test_pixel_review_accepts_only_frozen_apparel_contract_issue_codes(monkeypat
     assert codes == [
         "product_pattern_registration_drift",
         "delivery_evidence_dimension_mismatch",
-        "ai_face_render",
+        "human_rendering_artifact",
     ]
     assert "identity_drift" in report.evidence["ignored_out_of_scope_issue_codes"]
     assert report.retryable is True
@@ -204,6 +204,6 @@ def test_generic_human_realism_issues_route_back_to_their_active_owner(monkeypat
         "doc114_generic_owner_test",
     )
 
-    assert codes == ["flat_scene_lighting", "frozen_centered_pose"]
+    assert codes == ["human_scene_coherence"]
     assert patch["prompt_additions"]
     assert "ignored_out_of_scope_issue_codes" not in result.metadata.get("capability_activation_audit", {})

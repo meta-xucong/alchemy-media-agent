@@ -1,5 +1,10 @@
 # 71 V3 Human Attractive Realism Balance Spec
 
+> Historical/compatibility notice (Doc128): this is validation history, not a
+> forward Provider prompt or retry catalogue. New Human Realism work uses only
+> Doc128's shared resolved constraints and review dimensions; it must not
+> restore this document's named lighting, complexion, or beauty fragments.
+
 Doc94 correction note:
 
 ```text

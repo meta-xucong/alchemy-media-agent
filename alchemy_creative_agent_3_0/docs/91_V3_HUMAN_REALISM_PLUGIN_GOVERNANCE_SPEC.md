@@ -40,9 +40,10 @@ owns a template role, an age classifier, a vertical route, or a catalogue of
 prompt atoms. The remote Brain owns natural-language creative direction; the
 frozen local plan decides whether Human Realism is active.
 
-`e458d23` is an integration candidate that locks the real-visible-person
-activation invariant. It must be integrated and re-run on current main before
-being treated as deployed mainline behavior.
+The former `e458d23` candidate established the real-visible-person activation
+invariant and is now historical integration provenance. Doc128 is the forward
+implementation closure: it preserves that invariant while replacing casebook
+prompt atoms with concise shared constraints and review dimensions.
 ```
 
 ## 1. Purpose
@@ -59,8 +60,8 @@ stock-model face.
 ```
 
 This document exists because validation exposed a cross-template activation
-gap. The shared planner candidate `e458d23` addresses it, but the regression
-must remain explicit until that candidate is integrated:
+gap. The activation invariant is integrated; its regression remains explicit
+under Doc128:
 
 ```text
 Real people can be present while the requested subject is a product.
@@ -584,8 +585,9 @@ Future coding must follow this order:
 ```text
 1. Audit current rules in visual_cluster/human_photorealism.py,
    visual_cluster/module.py, portrait_identity.py, commercial_quality.py,
-   casebook_recipes.py, product_api/service.py, vision_inspector.py,
-   vision_provider.py, and related tests.
+   product_api/service.py, vision_inspector.py, vision_provider.py, and
+   related tests. `casebook_recipes.py` is compatibility-only history, not a
+   forward contribution source.
 
 2. Keep the existing HumanPhotorealismLayer as the implementation base.
    Rename only if it is a thin compatibility wrapper; do not duplicate it.

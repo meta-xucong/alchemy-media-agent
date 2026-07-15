@@ -1,6 +1,6 @@
 # 68 V3 Casebook-Guided Photographic Recipe Tuning Spec
 
-> Historical/compatibility notice (Docs94, 111, and 113): casebook recipes are
+> Historical/compatibility notice (Docs94, 111, 113, and 128): casebook recipes are
 > no longer a forward runtime mechanism. Do not recreate local recipe helpers,
 > camera/light/pose blocks, or case-derived prompt stacks from this document.
 > Preserve only neutral empirical observations as regression fixtures; remote

@@ -20,6 +20,7 @@ from .vision_provider import (
     review_feedback_contract,
 )
 from .identity_metric import create_default_identity_metric_provider
+from .human_photorealism import normalize_human_realism_issue_code
 from .reference_channel_policy import reference_channel_retry_patch
 
 
@@ -427,7 +428,14 @@ class VisionOutputInspector:
         provider_name: str,
         metadata: dict[str, Any],
     ) -> VisualInspectionReport:
-        issue_codes = _provider_issue_codes(payload)
+        # A historical provider payload may still carry a detailed Human
+        # Realism label. Normalize it before the frozen review contract filters
+        # scope, so legacy data remains legible but cannot revive old prompt
+        # atoms or a child-specific review path.
+        issue_codes = _dedupe(
+            normalize_human_realism_issue_code(code)
+            for code in _provider_issue_codes(payload)
+        )
         review_contract = active_review_contract(metadata)
         feedback_evidence, feedback_issue_codes = _feedback_review_evidence(
             payload,

@@ -1,5 +1,10 @@
 # 92 V3 Style-Aware Human Realism AI-Feel Suppression Spec
 
+> Historical/compatibility note (Doc128): style-aware observations remain
+> useful validation criteria, but new jobs use Doc128's concise resolved
+> constraints and review dimensions. This document cannot restore local
+> profile-specific prompt fragments or retry stacks.
+
 Doc94 correction note:
 
 ```text

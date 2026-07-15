@@ -1,5 +1,10 @@
 # 72 V3 East Asian Fair Complexion And Proportion Guard Spec
 
+> Historical/compatibility notice (Doc128): retain this document only as a
+> regression observation. It must not select a shared runtime branch, add a
+> demographic prompt fragment, or become a Provider/retry default for new V3
+> jobs.
+
 Doc94 supersession note:
 
 ```text

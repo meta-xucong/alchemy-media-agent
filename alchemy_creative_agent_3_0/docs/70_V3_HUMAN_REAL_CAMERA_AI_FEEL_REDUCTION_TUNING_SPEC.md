@@ -1,6 +1,6 @@
 # 70 V3 Human Real-Camera AI Feel Reduction Tuning Spec
 
-> Historical/compatibility notice (Docs91, 94, 113, and 117): this document is
+> Historical/compatibility notice (Docs91, 94, 113, 117, and 128): this document is
 > evidence for shared Human Realism, not a live prompt-tuning catalogue. New
 > work may use its observations only through generic quality dimensions and
 > pixel-observed defects; it must not restore named demographic/style recipes or

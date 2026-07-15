@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from ...creative_core.rules import stable_id
-from .casebook_recipes import VISUAL_CASEBOOK_RECIPE_LIBRARY_ID, strong_reference_casebook_rules
 from .contracts import (
     HumanPhotorealismGuidance,
     ModeQualityProfile,
@@ -43,7 +42,6 @@ class StrongReferenceClosureBuilder:
         lock_targets = _dedupe(continuation_plan.lock_targets if continuation_plan else [])
         active = bool(provider_ids or prompt_only_ids or anchors)
         reference_strength = "hard" if provider_ids else "prompt_only" if prompt_only_ids or anchors else "none"
-        casebook_rules = strong_reference_casebook_rules(subject_type)
         policy_active = bool(reference_policy_package and reference_policy_package.applies)
         identity_keep_rules = _dedupe(
             [
@@ -86,7 +84,6 @@ class StrongReferenceClosureBuilder:
                 *[rule for anchor in anchors for rule in anchor.allowed_variations],
                 *self._default_allowed_variations(subject_type),
                 "change scene depth or layout when the selected mode requires it",
-                *_string_list(casebook_rules.get("allowed_variations")),
             ]
         )[:10]
         forbidden_drift = _dedupe(
@@ -94,7 +91,6 @@ class StrongReferenceClosureBuilder:
                 *[rule for lock in identity_locks for rule in lock.forbidden_drift],
                 *[rule for anchor in anchors for rule in anchor.forbidden_drift],
                 *self._default_forbidden_drift(subject_type),
-                *_string_list(casebook_rules.get("forbidden_drift")),
             ]
         )[:12]
         negative_rules = _dedupe(
@@ -103,7 +99,6 @@ class StrongReferenceClosureBuilder:
                 *[rule for lock in identity_locks for rule in lock.negative_constraints],
                 *(human_photorealism.reference_do_not_inherit_rules if human_photorealism and human_photorealism.applies else []),
                 *(human_photorealism.negative_prompt_fragments if human_photorealism and human_photorealism.applies else []),
-                *_string_list(casebook_rules.get("forbidden_drift")),
             ]
         )[:18]
         provider_rules = self._provider_rules(
@@ -116,16 +111,6 @@ class StrongReferenceClosureBuilder:
             forbidden_drift=forbidden_drift,
             reference_policy_package=reference_policy_package,
         )
-        provider_rules = _dedupe(
-            [
-                *provider_rules,
-                *(
-                    []
-                    if policy_active and subject_type == "character"
-                    else _string_list(casebook_rules.get("provider_prompt_rules"))
-                ),
-            ]
-        )[:16]
         if policy_active:
             negative_rules = _dedupe(
                 [
@@ -156,8 +141,7 @@ class StrongReferenceClosureBuilder:
                 "identity_lock_count": len(identity_locks),
                 "lock_targets": lock_targets,
                 "human_photorealism_applies": bool(human_photorealism and human_photorealism.applies),
-                "doc68_casebook_recipe": True,
-                "casebook_recipe_library": VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
+                "doc128_casebook_runtime_retired": True,
                 "doc93_reference_channel_policy": policy_active,
                 "reference_policy_package_id": (
                     reference_policy_package.package_id if reference_policy_package else None

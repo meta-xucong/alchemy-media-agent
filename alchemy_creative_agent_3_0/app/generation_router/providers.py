@@ -20,7 +20,6 @@ from ..creative_core.prompt_language import (
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
-from ..shared_capabilities.visual_cluster.casebook_recipes import provider_casebook_prompt_lines
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 from app.providers.base import ProviderRuntimeError
 
@@ -3877,7 +3876,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     }
                 ]
                 lines.append("Strict visual avoid: " + "; ".join(_dedupe(priority_negative_rules)))
-        lines.extend(self._concise_module_prompt_line(line, max_items=3) for line in provider_casebook_prompt_lines(recipe))
         if keep:
             lines.append("Keep: " + "; ".join(keep[:3]))
         if avoid:

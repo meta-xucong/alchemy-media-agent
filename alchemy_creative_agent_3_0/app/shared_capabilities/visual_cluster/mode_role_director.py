@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from ...creative_core.rules import stable_id
-from .casebook_recipes import apply_role_recipe_casebook_overlay
 from .contracts import (
     ModeDifferentiationReview,
     ModeExecutionPolicy,
@@ -47,15 +46,9 @@ class ModeAwareRoleDirector:
             subject_type=normalized_subject,
             scenario_id=scenario_id,
         )[:count]
-        raw_recipes = [
-            apply_role_recipe_casebook_overlay(
-                recipe,
-                mode=normalized_mode,
-                subject_type=normalized_subject,
-                index=index,
-            )
-            for index, recipe in enumerate(raw_recipes, 1)
-        ]
+        # Doc128: the General mode director owns only neutral role structure.
+        # Historical casebook overlays remain readable in old records but must
+        # not add static camera/light/prompt atoms to a new job.
         recipes = [
             self._recipe_model(
                 project_id=project_id,

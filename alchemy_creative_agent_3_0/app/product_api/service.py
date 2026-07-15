@@ -40,6 +40,10 @@ from ..shared_capabilities.visual_cluster import (
     VisionOutputInspector,
     reference_channel_retry_patch,
 )
+from ..shared_capabilities.visual_cluster.human_photorealism import (
+    HUMAN_REALISM_REVIEW_DIMENSIONS,
+    normalize_human_realism_issue_code,
+)
 from ..schemas import (
     AssetType,
     BrandProfile,
@@ -2870,6 +2874,7 @@ class V3ProductApiService:
         # Enforced retries use only templates published by active capability
         # contracts in the frozen ledger.  Review/request metadata may name an
         # issue, but cannot inject a prompt patch or revive a legacy mapper.
+        filtered = self._dedupe_strings(filtered)
         resolved_patch = self._ledger_retry_patch(ledger, filtered)
         # Candidate/output targeting is review provenance, not prompt text.
         # Preserve it so append-only history explains which failed output the
@@ -2942,6 +2947,8 @@ class V3ProductApiService:
             return "nonhuman_subject_identity"
         if code == "delivery_evidence_dimension_mismatch":
             return "template_deliverable_owner"
+        if code in HUMAN_REALISM_REVIEW_DIMENSIONS:
+            return "human_realism"
         if code in {
             "flat_scene_lighting",
             "airbrushed_background_texture",
@@ -3026,7 +3033,7 @@ class V3ProductApiService:
             "ecommerce_suite_role_mismatch": "delivery_set_role_mismatch",
         }
         code = str(issue_code or "").strip()
-        return aliases.get(code, code)
+        return normalize_human_realism_issue_code(aliases.get(code, code))
 
     def _real_review_signal_package_from_cluster(self, cluster: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(cluster, dict):
@@ -3434,20 +3441,7 @@ class V3ProductApiService:
             elif HumanPhotorealismLayer.is_human_realism_issue_code(code):
                 if human_realism_layer is None:
                     human_realism_layer = HumanPhotorealismLayer()
-                human_patch = human_realism_layer.retry_patch_for_issue_codes(
-                    [code],
-                    child_model=code
-                    in {
-                        "doll_like_child_face",
-                        "adultified_child_model",
-                        "synthetic_child_skin",
-                        "pageant_polish_child_face",
-                        "frozen_child_smile",
-                        "unreal_child_eyes",
-                        "unreal_child_teeth",
-                        "child_face_ai_render",
-                    },
-                )
+                human_patch = human_realism_layer.retry_patch_for_issue_codes([code])
                 prompt_additions.extend(self._string_list(human_patch.get("prompt_additions")))
                 negative_additions.extend(self._string_list(human_patch.get("negative_additions")))
                 identity_reinforcement.extend(self._string_list(human_patch.get("identity_reinforcement")))

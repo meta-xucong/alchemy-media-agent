@@ -81,12 +81,11 @@ def test_doc67_human_photorealism_contract_gets_real_photo_detail_without_clone_
     cleanup = " ".join(guidance.reference_do_not_inherit_rules)
 
     assert guidance.applies is True
-    assert "tiny believable skin imperfections" in positive
-    assert "real lens perspective" in positive
-    assert "generic AI influencer face" in negative
-    assert "identical face angle across the whole set" in negative
-    assert "not by repeating the exact same still" in preserve
-    assert "AI badges" in cleanup
+    assert "physically credible real-camera photograph" in positive
+    assert "light, depth, contact" in positive
+    assert "synthetic beauty filtering" in negative
+    assert "identity-critical facial geometry" in preserve
+    assert "widen reference-owned channels" in cleanup
 
 
 def test_doc67_mode_quality_profiles_penalize_over_cloned_portrait_batches() -> None:

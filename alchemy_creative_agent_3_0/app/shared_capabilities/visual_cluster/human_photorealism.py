@@ -6,19 +6,90 @@ import re
 from typing import Any
 
 from ...creative_core.rules import stable_id
-from .casebook_recipes import (
-    VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
-    VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID,
-    VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID,
-    VISUAL_HUMAN_REAL_CAMERA_TUNING_ID,
-    human_photorealism_casebook,
-)
 from .contracts import AntiAIFaceReviewResult, HumanPhotorealismGuidance
 
 
 HUMAN_PHOTOREALISM_MODULE_ID = "human_photorealism_layer"
 ANTI_AI_FACE_REVIEW_MODULE_ID = "anti_ai_face_review"
 HUMAN_REALISM_PLUGIN_METADATA_KEY = "human_realism_plugin"
+
+# Doc128 deliberately keeps these dimensions broad.  They are shared review
+# semantics, not a prompt vocabulary, a demographic classifier, or template
+# art direction.  Older detailed codes are accepted only through the alias
+# normalizer below so existing history remains readable.
+HUMAN_REALISM_REVIEW_DIMENSIONS = (
+    "human_rendering_artifact",
+    "human_anatomy_or_proportion",
+    "human_age_or_identity_fidelity",
+    "human_skin_or_retouch",
+    "human_scene_coherence",
+)
+
+_LEGACY_HUMAN_AGE_ALIASES = {
+    "adultified_child_model",
+    "pageant_polish_child_face",
+    "frozen_child_smile",
+    "unreal_child_eyes",
+    "unreal_child_teeth",
+    "child_face_ai_render",
+    "age_inappropriate_rendering",
+}
+_LEGACY_HUMAN_SKIN_ALIASES = {
+    "synthetic_child_skin",
+    "plastic_skin",
+    "over_smoothed_skin",
+    "missing_skin_texture",
+    "over_retouching",
+    "poreless_beauty_surface",
+    "skin_blur_retouching",
+    "over_uniform_skin_tone",
+    "dull_complexion",
+    "muddy_skin_tone",
+    "unflattering_color_cast",
+    "suppressed_fair_complexion",
+    "forced_tan_or_bronze_cast",
+    "gray_brown_skin_cast",
+}
+_LEGACY_HUMAN_ANATOMY_ALIASES = {
+    "bad_hands_or_body",
+    "head_body_proportion_distortion",
+    "oversized_head",
+    "compressed_neck_shoulders",
+}
+_LEGACY_HUMAN_SCENE_ALIASES = {
+    "flat_scene_lighting",
+    "airbrushed_background_texture",
+    "synthetic_material_response",
+    "frozen_centered_pose",
+}
+
+
+def normalize_human_realism_issue_code(issue_code: str) -> str:
+    """Map historical fine-grained reviewer labels to Doc128 dimensions.
+
+    The mapping is intentionally one-way: it preserves old records without
+    allowing legacy labels to become a new Provider prompt or review contract.
+    """
+
+    normalized = str(issue_code or "").strip()
+    if normalized in HUMAN_REALISM_REVIEW_DIMENSIONS:
+        return normalized
+    if normalized in _LEGACY_HUMAN_AGE_ALIASES:
+        return "human_age_or_identity_fidelity"
+    if normalized in _LEGACY_HUMAN_SKIN_ALIASES:
+        return "human_skin_or_retouch"
+    if normalized in _LEGACY_HUMAN_ANATOMY_ALIASES:
+        return "human_anatomy_or_proportion"
+    if normalized in _LEGACY_HUMAN_SCENE_ALIASES:
+        return "human_scene_coherence"
+    # These labels are shared with Portrait Identity or suite-direction review.
+    # Do not steal their owner merely because old Human Realism lists happened
+    # to mention them.
+    if normalized in {"age_identity_drift", "same_expression_repetition", "same_head_angle_repetition", "same_pose_repetition"}:
+        return normalized
+    if normalized in _ANTI_AI_FACE_ISSUES:
+        return "human_rendering_artifact"
+    return normalized
 
 _HUMAN_TERMS = {
     "portrait",
@@ -401,7 +472,6 @@ class HumanPhotorealismLayer:
 
         realism_level = self._realism_level(user_input, metadata)
         human_subject_kind = str(activation.get("human_subject_kind") or "person")
-        style_profile = str(activation.get("style_profile") or "neutral_real_camera")
         rendering_profile = dict(activation.get("universal_rendering_profile") or {})
         if human_subject_kind == "hand_or_skin_detail":
             return self._hand_or_skin_guidance(
@@ -415,163 +485,32 @@ class HumanPhotorealismLayer:
                 rendering_profile=rendering_profile,
             )
         positives = [
-            "real camera photograph, not a rendered or AI-beauty face",
-            "natural human skin texture with subtle pores, fine detail, and small tonal variation",
-            "tiny believable skin imperfections, natural under-eye detail, and non-uniform cheek texture where appropriate",
-            "real lens perspective, natural depth of field, and photographed facial planes rather than a flat beauty-filter mask",
-            "slight natural facial asymmetry; relaxed facial muscles and believable micro-expression",
-            "realistic hairline, baby hairs, flyaway hair, and non-perfect hair strands",
-            "natural eye moisture and catchlights; avoid glassy or uncanny eyes",
-            "skin responds to light like real skin, with soft but not plastic highlights",
-            "subtle real-camera imperfections compatible with the requested camera treatment: fine grain when appropriate, slight edge softness, restrained halation, and non-mechanical framing",
-            "skin tone is not perfectly uniform; preserve under-eye texture, eyelid detail, neck/shoulder tonal variation, and tiny smile-line hints",
-            "attractive commercial portrait, but grounded in a real captured moment rather than a beauty-app or idol photocard finish",
-            "commercial polish means camera-ready human realism, not skin blur, face slimming, enlarged eyes, or liquified facial geometry",
-            "retain individual facial character: real eyelid folds, lip texture, natural jaw contour, and small non-identical cheek transitions",
-            "prefer quiet neutral expression or imperfect half-smile over a sweet template smile unless the user explicitly asks for a big smile",
-            "preserve the subject's natural complexion direction from the reference or explicit prompt; exposure and color grading must not accidentally gray, darken, bleach, tan, or flatten the skin",
-            "preserve the requested or referenced age band through age-consistent facial and body relationships without adultification, infantilization, or doll-like morphology",
-            "express an explicit age direction through age-consistent skin, facial proportions, body scale, and relaxed expression rather than high-gloss generic advertising beauty styling",
-            "preserve natural head-to-body proportion, balanced neck and shoulder line, and flattering upper-body crop in close portraits",
-            "keep harmonious natural facial features, awake eyes, relaxed facial muscles, and a flattering real-camera face angle without beauty-filter reshaping",
-            "treat pose and expression as a caught photographic moment, with natural gaze, mouth tension, shoulder balance, and small asymmetries instead of a centered front-facing presentation pose",
-            "keep person, garment or props, surfaces, and background in one physically coherent photographed space with matched light direction, local falloff, depth, contact shadow, and non-uniform texture",
+            "Render the visible person as a physically credible real-camera photograph; preserve explicit or reference-backed identity and age direction.",
+            "Keep anatomy, skin and material response, light, depth, contact, and the surrounding scene physically coherent.",
+            "Preserve the requested mood and prompt-owned styling without synthetic beauty filtering or generic rendered-person artifacts.",
         ]
-        positives.extend(_rendering_positive_fragments(rendering_profile))
-        if has_identity_reference:
-            positives.append(
-                "preserve the reference person's recognizable identity direction while making the face look more like a real photographed person"
-            )
-        positives.extend(self._mode_positive_fragments(variation_mode))
-        casebook = human_photorealism_casebook(
-            variation_mode=variation_mode,
-            realism_level=realism_level,
-            has_identity_reference=has_identity_reference,
-        )
-        positives.extend(_string_list(casebook.get("positive_prompt_fragments")))
-
         negatives = [
-            "plastic skin",
-            "over-smoothed skin",
-            "airbrushed face without texture",
-            "AI beauty filter",
-            "synthetic influencer face",
-            "doll-like face",
-            "porcelain mask skin",
-            "over-perfect facial symmetry",
-            "template smile",
-            "uncanny eyes",
-            "wax-like skin highlights",
-            "CGI face",
-            "beauty-filter face",
-            "generic AI influencer face",
-            "over-sharpened glossy eyes",
-            "identical face angle across the whole set",
-            "beauty-app face",
-            "over-polished collectible portrait-card finish",
-            "skin-blur retouching",
-            "flawless porcelain mask",
-            "over-uniform skin tone",
-            "over-sharp AI detail",
-            "perfect smile repeated across outputs",
-            "auto face-slimming",
-            "enlarged beauty-filter eyes",
-            "perfect V-shaped chin",
-            "culturally generic idol-style beauty retouch",
-            "liquified face proportions",
-            "algorithmically pretty generic face",
-            "too-clean stock-photo model face",
-            "uniform luminous skin",
-            "dewy plastic makeup skin",
-            "cosmetic-ad poreless glow",
-            "bright sun erasing all face texture",
-            "sweet template celebrity smile",
-            "perfect cute influencer smile",
-            "dull complexion",
-            "muddy skin tone",
-            "gray or green skin color cast",
-            "underexposed face",
-            "harsh facial shadow",
-            "tired expression",
-            "overly matte documentary look",
-            "unintended complexion darkening or lightening",
-            "unrequested tan, bronze, gray, yellow, or green facial cast",
-            "fake whitening mask",
-            "bleached beauty-filter skin",
-            "oversized head",
-            "enlarged face scale",
-            "short compressed neck",
-            "compressed shoulders",
-            "warped upper body",
-            "pinched torso",
-            "bad head-to-body ratio",
-            "awkward shoulder crop",
-            "unflattering face drift",
-            "flattened facial attractiveness",
-            "skin whitening filter",
-            "beauty-app glow",
-            "age-inappropriate facial morphology",
-            "adultification or infantilization",
-            "age-inappropriate beauty retouching",
-            "age-inappropriate high-gloss advertising beauty styling",
-            "flat evenly lit backdrop with no depth or contact shadow",
-            "airbrushed background or surface texture that looks rendered rather than photographed",
-            "synthetic uniform material response across skin, garment, props, and background",
-            "front-facing centered mannequin pose repeated across outputs",
+            "Do not introduce synthetic beauty filtering, anatomy distortion, or incoherent photographic rendering.",
         ]
-        negatives.extend(_rendering_negative_fragments(rendering_profile))
-        negatives.extend(_string_list(casebook.get("negative_prompt_fragments")))
-        preserve = [
-            "keep the same broad face shape, age direction, body type, and recognizable identity cues",
-            "allow expression, pose, head angle, camera angle, crop, and small hair styling changes so the set feels photographed",
-            "preserve identity through stable facial feature relationships, not by repeating the exact same still",
-        ]
-        preserve.extend(_string_list(casebook.get("reference_preserve_rules")))
+        preserve = (
+            [
+                "Preserve identity-critical facial geometry and explicit age direction; current prompt owns hair, wardrobe, lighting, scene, and style unless another frozen channel locks them.",
+            ]
+            if has_identity_reference
+            else []
+        )
         do_not_inherit = [
-            "do not inherit over-smoothed skin, doll-like expression, waxy highlights, or AI-beauty-face artifacts from the reference",
-            "do not copy the exact same expression, face angle, or gaze across the whole set",
-            "do not carry forward obvious AI badges, generated-image marks, watermarks, synthetic eye highlights, or plastic skin from a reference",
+            "Do not copy reference artifacts or widen reference-owned channels while improving human rendering.",
         ]
-        do_not_inherit.extend(_string_list(casebook.get("reference_do_not_inherit_rules")))
-        review_targets = [
-            "skin texture remains visible and natural",
-            "expression is specific and believable",
-            "face has natural asymmetry without identity drift",
-            "eyes and highlights do not feel synthetic",
-            "the set does not repeat the same AI-beauty face",
-            "the image looks like a real photographed campaign frame rather than a retouched render",
-            "real-camera imperfection is visible without making the image look low quality",
-            "face avoids beauty-app polish, idol photocard symmetry, and skin-blur retouching",
-            "commercial finish is camera-ready and human, not beautified facial geometry",
-            "face remains attractive and correctly exposed without losing real skin texture or the requested complexion direction",
-            "exposure and color grading preserve the reference or explicitly requested complexion rather than imposing a demographic default",
-            "facial and body morphology remain consistent with the requested or referenced age band",
-            "close crops keep natural head, neck, shoulder, and upper-body proportions",
-            "age appearance follows explicit prompt or reference evidence without generic advertising-beauty substitution",
-            "person, visible materials, props, and background share coherent light direction, depth, contact shadow, and photographed texture",
-            "multi-output people have distinct natural shutter moments rather than repeated centered front-facing poses",
-        ]
-        review_targets.extend(_rendering_review_targets(rendering_profile))
-        review_targets.extend(_string_list(casebook.get("review_targets")))
-        casebook_retry = casebook.get("retry_patch_templates") if isinstance(casebook.get("retry_patch_templates"), dict) else {}
+        review_targets = list(HUMAN_REALISM_REVIEW_DIMENSIONS)
         retry_patch_templates = {
-            "prompt_additions": _dedupe([*positives[:5], *_string_list(casebook_retry.get("prompt_additions"))]),
-            "negative_additions": _dedupe([*negatives, *_string_list(casebook_retry.get("negative_additions"))]),
-            "artifact_repair": [
-                "repair the face toward natural photographed skin texture, believable expression, realistic eyes, non-plastic highlights, and real lens depth",
-                "repair toward soft real-camera capture: fine grain, slight edge softness, natural skin tone variation, loose hair, fabric detail, and a candid non-template expression",
-                "repair away from face-slimming filters, enlarged beauty eyes, liquified jaw/chin, and generic AI-beauty identity while keeping the person attractive",
-                "repair prompt-defined facial lighting so its intended exposure key preserves skin pores, under-eye texture, lip detail, and natural neck/shoulder tonal variation instead of a poreless glow",
-                "repair template-smile portraits toward a quiet neutral expression or imperfect half-smile with natural mouth tension",
-                "repair exposure or color-cast drift while preserving the reference or explicitly requested complexion direction; avoid whitening masks, forced tanning, skin smoothing, or face replacement",
-                "repair age drift toward the requested or referenced age band with age-consistent face, eyes, cheeks, teeth, neck, shoulders, expression, and skin response",
-                "repair close portrait framing so the head-to-body ratio, neck, shoulders, and upper-body crop look natural and flattering",
-                "repair the photographed scene as one physical light environment: align local falloff, depth, contact shadows, and material response across person, visible surfaces, props, and background without changing the requested mood",
-                "repair repeated centered presentation posing toward a natural shutter moment with prompt-consistent variation in gaze, mouth tension, head angle, shoulders, and body orientation",
-                *_rendering_retry_fragments(rendering_profile),
-                *_string_list(casebook_retry.get("artifact_repair")),
+            "prompt_additions": [
+                "Repair photographic human naturalness and physical coherence without changing user-owned creative direction.",
             ],
-            "identity_reinforcement": _dedupe([*preserve, *_string_list(casebook_retry.get("identity_reinforcement"))]),
+            "negative_additions": [
+                "Do not introduce synthetic beauty rendering, anatomy distortion, or reference-channel drift.",
+            ],
+            "identity_reinforcement": preserve,
         }
         return HumanPhotorealismGuidance(
             guidance_id=guidance_id,
@@ -593,12 +532,11 @@ class HumanPhotorealismLayer:
                 "Avoids repeated AI-beauty faces",
             ],
             metadata={
-                "doc": "65",
+                "doc": "128",
                 "module_id": self.module_id,
                 "enable_reason": reason,
                 "doc91_human_realism_plugin": True,
-                "doc92_style_aware_ai_feel_suppression": True,
-                "doc94_universal_rendering_profile": True,
+                "doc128_shared_constraint_contract": True,
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "provider_safety_profile": {
                     "applies": bool(activation.get("safety_sensitive_person")),
@@ -610,14 +548,6 @@ class HumanPhotorealismLayer:
                 },
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": has_identity_reference,
-                "doc68_casebook_recipe": True,
-                "casebook_recipe_library": VISUAL_CASEBOOK_RECIPE_LIBRARY_ID,
-                "doc70_human_real_camera_tuning": True,
-                "doc71_human_attractive_realism_balance": True,
-                "doc72_east_asian_fair_complexion_guard": True,
-                "human_real_camera_tuning_library": VISUAL_HUMAN_REAL_CAMERA_TUNING_ID,
-                "human_attractive_realism_balance_library": VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID,
-                "human_east_asian_fair_complexion_guard_library": VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID,
             },
         )
 
@@ -633,43 +563,27 @@ class HumanPhotorealismLayer:
         activation: dict[str, Any],
         rendering_profile: dict[str, Any],
     ) -> HumanPhotorealismGuidance:
-        """Keep the shared human capability precise when the face is out of frame."""
+        """Keep the shared human capability precise for a hand/skin detail."""
         positives = [
-            "real camera close detail of an adult hand or forearm, never a rendered mannequin surface",
-            "natural hand skin texture with fine pores, subtle tonal variation, believable knuckle creases, and non-plastic highlights",
-            "anatomically believable hand with the correct finger count, natural joints, coherent fingernails, and realistic proportions",
-            "physically credible finger placement, contact pressure, and grip on the requested object",
-            "real lens perspective and natural depth of field around the hand, object, and contact points",
-            "keep any face out of frame when the prompt explicitly requests a hand-only crop",
+            "Render the requested visible hand or skin detail with credible anatomy, physical object contact, and real-camera material response.",
         ]
         negatives = [
-            "plastic skin",
-            "over-smoothed hand skin",
-            "extra fingers",
-            "missing fingers",
-            "fused fingers",
-            "duplicated digits",
-            "warped knuckles",
-            "malformed fingernails",
-            "impossible grip",
-            "floating hand",
-            "waxy skin highlights",
-            "mannequin hand",
+            "Do not introduce anatomy distortion, impossible contact, or synthetic surface rendering.",
         ]
         do_not_inherit = [
-            "do not inherit watermarks, AI badges, plastic-skin artifacts, or malformed hand anatomy from a reference",
+            "Do not copy reference artifacts or widen reference-owned channels while improving human rendering.",
         ]
         review_targets = [
-            "finger count, joints, nails, and hand proportions are anatomically believable",
-            "the hand makes physically credible contact with the object",
-            "visible skin retains natural texture and non-plastic highlight response",
-            "a hand-only request does not introduce an unrequested face",
+            "human_anatomy_or_proportion",
+            "human_skin_or_retouch",
+            "human_scene_coherence",
         ]
         retry_patch_templates = {
-            "prompt_additions": list(positives),
-            "negative_additions": list(negatives),
-            "artifact_repair": [
-                "repair the hand toward correct finger count, coherent joints and nails, natural skin texture, and a physically credible grip while keeping the requested face-out-of-frame crop",
+            "prompt_additions": [
+                "Repair photographic human naturalness and physical coherence without changing user-owned creative direction.",
+            ],
+            "negative_additions": [
+                "Do not introduce synthetic beauty rendering, anatomy distortion, or reference-channel drift.",
             ],
             "identity_reinforcement": [],
         }
@@ -692,17 +606,15 @@ class HumanPhotorealismLayer:
                 "Checks finger anatomy and physical object contact",
             ],
             metadata={
-                "doc": "65",
+                "doc": "128",
                 "module_id": self.module_id,
                 "enable_reason": "hand_or_skin_detail_detected",
                 "doc91_human_realism_plugin": True,
+                "doc128_shared_constraint_contract": True,
                 "human_detail_scope": "hand_or_skin_only",
-                "doc94_universal_rendering_profile": True,
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": False,
-                "doc68_casebook_recipe": False,
-                "doc70_human_real_camera_tuning": True,
             },
         )
 
@@ -715,7 +627,11 @@ class HumanPhotorealismLayer:
         issue_codes: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AntiAIFaceReviewResult:
-        issue_codes = [code for code in _dedupe(issue_codes or []) if code in _ANTI_AI_FACE_ISSUES]
+        issue_codes = _dedupe(
+            normalize_human_realism_issue_code(code)
+            for code in issue_codes or []
+            if self.is_human_realism_issue_code(code)
+        )
         review_id = stable_id("anti_ai_face_review", project_id, job_id, guidance.guidance_id, ",".join(issue_codes))
         if not guidance.applies:
             return AntiAIFaceReviewResult(
@@ -752,7 +668,8 @@ class HumanPhotorealismLayer:
 
     @classmethod
     def is_human_realism_issue_code(cls, issue_code: str) -> bool:
-        return str(issue_code or "").strip() in _ANTI_AI_FACE_ISSUES
+        normalized = str(issue_code or "").strip()
+        return normalized in _ANTI_AI_FACE_ISSUES or normalize_human_realism_issue_code(normalized) in HUMAN_REALISM_REVIEW_DIMENSIONS
 
     def retry_patch_for_issue_codes(
         self,
@@ -760,42 +677,24 @@ class HumanPhotorealismLayer:
         *,
         child_model: bool = False,
     ) -> dict[str, list[str]]:
-        filtered = [code for code in _dedupe(issue_codes) if code in _ANTI_AI_FACE_ISSUES]
-        if not filtered:
+        # ``child_model`` is read-only compatibility for older callers.  It
+        # must not select a child-specific retry path or contribute wording.
+        del child_model
+        normalized = _dedupe(
+            normalize_human_realism_issue_code(code)
+            for code in issue_codes
+            if self.is_human_realism_issue_code(code)
+        )
+        if not normalized:
             return {}
-        legacy_age_issue = child_model or any(
-            code.startswith(("child_", "doll_like_child", "adultified_child", "synthetic_child", "pageant_"))
-            for code in filtered
-        )
-        user_input = "real human photography with natural identity, age fidelity, and no synthetic beauty-face rendering"
-        guidance = self.build(
-            project_id=None,
-            job_id=None,
-            scenario_id="doc91_retry_repair",
-            template_id="shared_visual_cluster",
-            user_input=user_input,
-            subject_type="character",
-            variation_mode="delivery_suite",
-            has_identity_reference=True,
-            metadata={
-                "force_human_realism_plugin": True,
-                "human_subject_kind": "person",
-                "human_realism_strictness": "commercial_strict",
-                "age_fidelity": "follow_explicit_prompt" if legacy_age_issue else "preserve_reference",
-                "legacy_age_issue_alias": legacy_age_issue,
-            },
-        )
-        review = self.review(
-            guidance=guidance,
-            project_id=None,
-            job_id=None,
-            issue_codes=filtered,
-            metadata={"doc91_retry_patch_owner": self.module_id},
-        )
         return {
-            key: _string_list(value)
-            for key, value in review.retry_patch.items()
-            if isinstance(value, list) and _string_list(value)
+            "prompt_additions": [
+                "Repair photographic human naturalness and physical coherence without changing user-owned creative direction.",
+            ],
+            "negative_additions": [
+                "Do not introduce synthetic beauty rendering, anatomy distortion, or reference-channel drift.",
+            ],
+            "review_dimensions": normalized,
         }
 
     def _activation(
@@ -849,6 +748,15 @@ class HumanPhotorealismLayer:
                 disabled_by_style=True,
                 subject_type=subject_type,
                 evidence={"stylized_request": True},
+            )
+        if _people_explicitly_excluded(text):
+            return _activation_payload(
+                applies=False,
+                primary_reason="no_visible_person_evidence",
+                disabled_reason="no_visible_person_evidence",
+                disabled_by_style=False,
+                subject_type=subject_type,
+                evidence={"explicit_person_exclusion": True},
             )
 
         reason_codes: list[str] = []
@@ -976,6 +884,32 @@ def _contains_any(text: str, terms: set[str]) -> bool:
         elif candidate in normalized:
             return True
     return False
+
+
+def _people_explicitly_excluded(text: str) -> bool:
+    """Respect an explicit flat-lay/no-person request before activation.
+
+    This is evidence admission, not a classifier: it only recognises a direct
+    instruction that people are absent.  A garment's audience alone can never
+    create a Human Realism execution requirement.
+    """
+
+    normalized = str(text or "").lower()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "no people",
+            "no person",
+            "without people",
+            "without a person",
+            "without any person",
+            "no human",
+            "without humans",
+            "无人",
+            "没有人",
+            "不含人物",
+        )
+    )
 
 
 def _has_explicit_age_direction(text: str) -> bool:
@@ -1218,7 +1152,7 @@ def _activation_payload(
         human_subject_kind = "person"
     if applies and strictness == "off":
         strictness = "balanced"
-    review_codes = list(_ANTI_AI_FACE_ISSUES) if applies else []
+    review_codes = list(HUMAN_REALISM_REVIEW_DIMENSIONS) if applies else []
     return {
         "applies": applies,
         "primary_reason": primary_reason,
