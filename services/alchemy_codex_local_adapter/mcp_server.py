@@ -1,4 +1,4 @@
-"""Doc129 native ImageGen stdio MCP: admission only, with no image transport."""
+"""Doc130/131 native ImageGen stdio MCP: canonical prompt projection, no image transport."""
 
 from __future__ import annotations
 
@@ -14,25 +14,25 @@ from .facade import CodexNativeImageGenFacade
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "prepare_native_imagegen_plan",
-        "description": "Prepare Alchemy V3 constraint admission for one explicit Codex Native ImageGen request; Codex authors the whole-image direction and no image is created or imported.",
+        "description": "Prepare exact canonical V3 GPT Image 2 prompts and admitted reference paths for one explicit Codex Native ImageGen request; the MCP never creates, imports, or stores an image.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["user_input", "template_id", "requested_image_count", "requested_image_size", "reference_declarations"],
+            "required": ["user_input", "template_id", "requested_image_count", "requested_image_size", "reference_inputs"],
             "properties": {
                 "user_input": {"type": "string", "minLength": 1, "maxLength": 8000},
                 "template_id": {"type": "string"},
                 "requested_image_count": {"type": "integer", "minimum": 1, "maximum": 16},
                 "requested_image_size": {"type": ["string", "null"]},
-                "reference_declarations": {
+                "reference_inputs": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["channel", "attached_in_current_codex_conversation"],
+                        "required": ["channel", "file_path"],
                         "properties": {
                             "channel": {"type": "string"},
-                            "attached_in_current_codex_conversation": {"type": "boolean"},
+                            "file_path": {"type": "string"},
                         },
                     },
                 },
@@ -64,7 +64,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.4.0-doc129-n2"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.6.0-doc131-reference-parity"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -88,7 +88,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Doc129 native ImageGen constraint-admission stdio MCP bridge")
+    parser = argparse.ArgumentParser(description="Doc130/131 canonical-prompt stdio MCP bridge")
     parser.add_argument("--enable-native-imagegen", action="store_true")
     arguments = parser.parse_args()
     adapter = CodexNativeImageGenFacade(enabled=arguments.enable_native_imagegen)

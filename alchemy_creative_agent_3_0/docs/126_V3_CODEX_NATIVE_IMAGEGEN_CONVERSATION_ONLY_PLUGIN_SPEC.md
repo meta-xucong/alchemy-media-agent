@@ -1,6 +1,6 @@
 # Doc126: V3 Codex Native ImageGen Conversation-only Plugin
 
-Status: **superseded for active Local Mode behavior by Doc129.** This document
+Status: **superseded for active Local Mode behavior by Doc130.** This document
 remains an archived N1 isolation record only. Its original planning-only
 surface correctly proved that Codex-native generation needs no Platform API,
 browser/session access, or artifact handoff, but it incorrectly allowed a
@@ -18,7 +18,7 @@ superseded and must not be imported alongside the mainline Doc118 authority.
 **Phase N1 implemented as a developer-preview planning surface; not a Web
 Provider, not a V3 delivery path, and not a production gate.**
 
-Doc129 is the only approved active local-Codex direction:
+Doc130 is the only approved active local-Codex direction:
 
 ```text
 explicit user choice in Codex

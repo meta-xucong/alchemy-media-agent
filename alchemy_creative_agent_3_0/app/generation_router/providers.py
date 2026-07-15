@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import math
 from pathlib import Path
@@ -81,6 +82,96 @@ class GenerationRequest(BaseModel):
     condition_plan: ConditionPlan
     generation_plan: GenerationPlan
     metadata: dict = Field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProviderPromptMaterialization:
+    """The renderer-neutral portion of one GPT Image 2 request.
+
+    This is deliberately produced before provider selection or client
+    construction.  It is the only authority for the final prompt handed to a
+    renderer, whether that renderer is the Web Provider or an explicitly
+    enabled local Codex conversation bridge.
+    """
+
+    generation_prompt: str
+    prompt_sha256: str
+    size: str
+    quality: str
+    output_format: str
+    reference_assets: list[dict[str, Any]]
+    asset_plan: dict[str, Any]
+    protected_user_direction: str
+    prompt_audit: dict[str, Any]
+    input_fidelity: str | None
+
+
+def build_provider_generation_request(
+    *,
+    asset_spec: AssetSpec,
+    layout_plan: LayoutPlan,
+    prompt_compilation: PromptCompilationResult,
+    condition_plan: ConditionPlan,
+    generation_plan: GenerationPlan,
+    job_id: str | None = None,
+    refine_round: int = 0,
+) -> GenerationRequest:
+    """Build the frozen request shape consumed by the production provider.
+
+    The Central Brain and every non-rendering adapter use this same factory.
+    That prevents a planning surface from silently omitting frozen envelope or
+    ledger facts before it asks the canonical prompt materializer to work.
+    """
+
+    metadata = generation_plan.metadata if isinstance(generation_plan.metadata, dict) else {}
+    return GenerationRequest(
+        asset_spec=asset_spec,
+        layout_plan=layout_plan,
+        prompt_compilation=prompt_compilation,
+        condition_plan=condition_plan,
+        generation_plan=generation_plan,
+        metadata={
+            "refine_round": refine_round,
+            "mock_profile": metadata.get("mock_profile", "balanced"),
+            "job_id": job_id or metadata.get("job_id"),
+            "quality_mode": metadata.get("quality_mode", "standard"),
+            "uploaded_assets": metadata.get("uploaded_assets", []),
+            "reference_assets": metadata.get("reference_assets", []),
+            "shared_capabilities": metadata.get("shared_capabilities", {}),
+            "visual_cluster": metadata.get("visual_cluster", {}),
+            "llm_brain": metadata.get("llm_brain", {}),
+            "requested_image_count": metadata.get("requested_image_count"),
+            "requested_image_size": metadata.get("requested_image_size"),
+            "require_real_images": bool(metadata.get("require_real_images")),
+            "real_image_generation": bool(metadata.get("real_image_generation")),
+            "normalized_v3_job_intent": metadata.get("normalized_v3_job_intent"),
+            "template_deliverable_plan": metadata.get("template_deliverable_plan"),
+            "resolved_constraint_ledger": metadata.get("resolved_constraint_ledger"),
+            "capability_execution_envelope": metadata.get("capability_execution_envelope"),
+            "mode_execution_policy": metadata.get("mode_execution_policy", {}),
+            "role_specific_generation_plan": metadata.get("role_specific_generation_plan", {}),
+            "mode_role_recipe": metadata.get("mode_role_recipe", {}),
+            "mode_role_key": metadata.get("mode_role_key"),
+            "mode_role_label": metadata.get("mode_role_label"),
+            "project_id": metadata.get("project_id"),
+            "template_id": metadata.get("template_id"),
+            "scenario_id": metadata.get("scenario_id"),
+            "visual_auto_retry_active": metadata.get("visual_auto_retry_active", False),
+            "visual_auto_retry_attempt": metadata.get("visual_auto_retry_attempt"),
+            "retry_attempt": metadata.get("retry_attempt"),
+            "visual_retry_reason_codes": metadata.get("visual_retry_reason_codes", []),
+            "visual_retry_patch": metadata.get("visual_retry_patch", {}),
+            "auto_batch_identity_anchor_policy": metadata.get("auto_batch_identity_anchor_policy", {}),
+            "auto_batch_identity_anchor_applied": metadata.get("auto_batch_identity_anchor_applied", False),
+            "auto_batch_identity_anchor_source_output_id": metadata.get("auto_batch_identity_anchor_source_output_id"),
+            "auto_batch_identity_anchor_source_candidate_id": metadata.get("auto_batch_identity_anchor_source_candidate_id"),
+            "industry": metadata.get("industry"),
+            "user_input": metadata.get("user_input"),
+            "normalized_input": metadata.get("normalized_input"),
+            "veyra_user_id": metadata.get("veyra_user_id"),
+            "provider_strategy": generation_plan.provider_strategy.value,
+        },
+    )
 
 
 class GenerationResponse(BaseModel):
@@ -1560,18 +1651,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         image_request_cls = getattr(app_schemas, "ImageGenerationRequest")
         prompt_plan_cls = getattr(app_schemas, "Image" + "PromptPlan")
 
-        reference_assets = self._reference_assets(request)
-        asset_plan = self._asset_plan(request, reference_assets)
-        asset_plan["provider_reference_resolution_audit"] = dict(
-            request.metadata.get("provider_reference_resolution_audit") or {}
-        )
-        self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
-        provider_name = self._select_provider(reference_assets)
-        size = self._size_for_request(request)
-        generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
-        protected_user_direction = self._provider_user_direction(request)
-        prompt_audit = self._provider_prompt_audit(generation_prompt, protected_user_direction)
-        input_fidelity = self._input_fidelity_for_asset_plan(asset_plan)
+        materialization = self.materialize_final_prompt(request)
+        provider_name = self._select_provider(materialization.reference_assets)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
             scene=self._scene_for_request(request),
@@ -1581,24 +1662,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
             negative_constraints=self._negative_constraints(request),
             text={},
             count=1,
-            size=size,
-            quality=self._quality_for_request(request),
-            output_format="png",
+            size=materialization.size,
+            quality=materialization.quality,
+            output_format=materialization.output_format,
             variables={
-                "generation_prompt": generation_prompt,
-                "provider_prompt_chars": len(generation_prompt),
+                "generation_prompt": materialization.generation_prompt,
+                "provider_prompt_sha256": materialization.prompt_sha256,
+                "provider_prompt_chars": len(materialization.generation_prompt),
                 "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
-                "protected_user_direction_chars": len(protected_user_direction),
+                "protected_user_direction_chars": len(materialization.protected_user_direction),
                 "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
-                "provider_prompt_audit": prompt_audit,
-                "asset_plan": asset_plan,
+                "provider_prompt_audit": materialization.prompt_audit,
+                "asset_plan": materialization.asset_plan,
                 "v3_prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                 "v3_generation_plan_id": request.generation_plan.generation_plan_id,
                 "v3_provider_strategy": request.generation_plan.provider_strategy.value,
                 "requested_image_count": self._group_count_for_request(request),
-                "requested_image_size": size,
-                "input_fidelity": input_fidelity,
-                "input_fidelity_required": self._input_fidelity_is_required(asset_plan),
+                "requested_image_size": materialization.size,
+                "input_fidelity": materialization.input_fidelity,
+                "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
                 "identity_repair_canvas_path": request.metadata.get("identity_repair_canvas_path"),
                 "identity_repair_mask_path": request.metadata.get("identity_repair_mask_path"),
             },
@@ -1606,9 +1688,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return (
             image_request_cls(
                 prompt_plan=prompt_plan,
-                asset_ids=[item["asset_id"] for item in asset_plan.get("assets", [])],
-                asset_mode="advanced" if reference_assets else "basic",
-                asset_plan=asset_plan if reference_assets else None,
+                asset_ids=[item["asset_id"] for item in materialization.asset_plan.get("assets", [])],
+                asset_mode="advanced" if materialization.reference_assets else "basic",
+                asset_plan=materialization.asset_plan if materialization.reference_assets else None,
                 provider_preference=provider_name,
                 idempotency_key=stable_id(
                     "v3_image",
@@ -1619,7 +1701,37 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 trace_id=stable_id("trace", request.metadata.get("job_id"), request.generation_plan.asset_id),
             ),
             provider_name,
-            reference_assets,
+            materialization.reference_assets,
+        )
+
+    def materialize_final_prompt(self, request: GenerationRequest) -> ProviderPromptMaterialization:
+        """Build the canonical final renderer prompt without selecting or calling a Provider.
+
+        The Web route and Codex Native ImageGen use this exact boundary.  Any
+        failure here is a planning/materialization failure, never an excuse to
+        compose a second, locally improvised prompt.
+        """
+
+        reference_assets = self._reference_assets(request)
+        asset_plan = self._asset_plan(request, reference_assets)
+        asset_plan["provider_reference_resolution_audit"] = dict(
+            request.metadata.get("provider_reference_resolution_audit") or {}
+        )
+        self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
+        size = self._size_for_request(request)
+        generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
+        protected_user_direction = self._provider_user_direction(request)
+        return ProviderPromptMaterialization(
+            generation_prompt=generation_prompt,
+            prompt_sha256=hashlib.sha256(generation_prompt.encode("utf-8")).hexdigest(),
+            size=size,
+            quality=self._quality_for_request(request),
+            output_format="png",
+            reference_assets=reference_assets,
+            asset_plan=asset_plan,
+            protected_user_direction=protected_user_direction,
+            prompt_audit=self._provider_prompt_audit(generation_prompt, protected_user_direction),
+            input_fidelity=self._input_fidelity_for_asset_plan(asset_plan),
         )
 
     def _input_fidelity_for_asset_plan(self, asset_plan: dict[str, Any]) -> str | None:

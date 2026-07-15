@@ -2,6 +2,7 @@
 
 from .candidates import candidate_ids, has_hard_failure, rank_evaluated_candidates, select_best_candidate
 from .providers import (
+    build_provider_generation_request,
     GenerationProvider,
     GenerationRequest,
     GenerationResponse,
@@ -16,6 +17,7 @@ __all__ = [
     "GenerationProvider",
     "GenerationRequest",
     "GenerationResponse",
+    "build_provider_generation_request",
     "GenerationRouter",
     "MockGenerationProvider",
     "PlanningOnlyGenerationProvider",

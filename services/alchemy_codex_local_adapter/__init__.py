@@ -1,4 +1,4 @@
-"""Doc126 local planning bridge; it never renders, imports, or delivers pixels."""
+"""Doc130/131 local planning bridge; it never renders, imports, or delivers pixels."""
 
 from .contracts import (
     CONVERSATION_ONLY_DELIVERY_STATE,
@@ -9,7 +9,7 @@ from .contracts import (
     CodexNativeImageGenDisabledError,
     CodexNativeImageGenError,
     NativeImageGenPlanRequest,
-    NativeReferenceDeclaration,
+    NativeReferenceInput,
 )
 from .facade import CodexNativeImageGenFacade
 from .native_planner import CodexNativeImageGenPlanner, PlanningOnlyGenerationRouter
@@ -25,6 +25,6 @@ __all__ = [
     "CodexNativeImageGenFacade",
     "CodexNativeImageGenPlanner",
     "NativeImageGenPlanRequest",
-    "NativeReferenceDeclaration",
+    "NativeReferenceInput",
     "PlanningOnlyGenerationRouter",
 ]

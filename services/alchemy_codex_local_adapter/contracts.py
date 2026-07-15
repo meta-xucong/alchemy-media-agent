@@ -1,15 +1,18 @@
-"""Public-safe contracts for the Doc129 Codex Native ImageGen planner."""
+"""Public-safe contracts for the Doc130/131 canonical-prompt MCP planner."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import mimetypes
+from pathlib import Path
 import re
 from typing import Any
 
 
 NATIVE_EXECUTION_CHANNEL = "codex_native_imagegen"
-NATIVE_PLANNING_AUTHORITY = "alchemy_v3_constraint_admission"
-NATIVE_CREATIVE_DIRECTION_OWNER = "codex_conversation_llm"
+NATIVE_PLANNING_AUTHORITY = "alchemy_v3_canonical_provider_materialization"
+NATIVE_CREATIVE_DIRECTION_OWNER = "remote_v3_llm_brain"
 NATIVE_RENDERER = "codex_builtin_imagegen"
 CONVERSATION_ONLY_DELIVERY_STATE = "conversation_only_not_certified"
 
@@ -18,9 +21,9 @@ _ALLOWED_TOP_LEVEL_FIELDS = {
     "template_id",
     "requested_image_count",
     "requested_image_size",
-    "reference_declarations",
+    "reference_inputs",
 }
-_ALLOWED_REFERENCE_FIELDS = {"channel", "attached_in_current_codex_conversation"}
+_ALLOWED_REFERENCE_FIELDS = {"channel", "file_path"}
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
 _HARD_REFERENCE_CHANNELS = frozenset({"portrait_identity", "product_truth", "nonhuman_identity"})
@@ -69,11 +72,17 @@ def _reject_sensitive_structured_keys(value: Any) -> None:
 
 
 @dataclass(frozen=True)
-class NativeReferenceDeclaration:
-    """A declaration about a Codex-conversation attachment, never a file handle."""
+class NativeReferenceInput:
+    """An explicitly user-authorized local image handed to V3 unchanged.
+
+    The path is not a Codex artifact handle and is never sent to the remote
+    Brain.  It is the Local Mode equivalent of a Web upload's materialized
+    ``UploadedAssetInfo.file_path``.
+    """
 
     channel: str
-    attached_in_current_codex_conversation: bool
+    file_path: str
+    source_sha256: str
 
     @property
     def required(self) -> bool:
@@ -81,38 +90,64 @@ class NativeReferenceDeclaration:
 
         return self.channel in _HARD_REFERENCE_CHANNELS
 
+    @property
+    def asset_id(self) -> str:
+        return f"codex_local_reference_{self.source_sha256[:24]}"
+
     @classmethod
-    def from_value(cls, value: Any) -> "NativeReferenceDeclaration":
+    def from_value(cls, value: Any) -> "NativeReferenceInput":
         if not isinstance(value, dict) or set(value) - _ALLOWED_REFERENCE_FIELDS:
             raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declarations may contain only channel and attachment state.",
+                "codex_native_imagegen_reference_input_invalid",
+                "Reference inputs may contain only channel and a local file path.",
             )
         _reject_sensitive_structured_keys(value)
         channel = str(value.get("channel") or "").strip().lower()
         if not _IDENTIFIER.fullmatch(channel):
             raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declaration channel is invalid.",
+                "codex_native_imagegen_reference_input_invalid",
+                "Reference input channel is invalid.",
             )
-        attached = value.get("attached_in_current_codex_conversation")
-        if not isinstance(attached, bool):
+        raw_path = value.get("file_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
             raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declaration attachment state must be boolean.",
+                "codex_native_imagegen_reference_path_required",
+                "A reference image needs a readable local file path before V3 can admit it.",
             )
-        return cls(channel=channel, attached_in_current_codex_conversation=attached)
+        try:
+            path = Path(raw_path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_reference_path_unavailable",
+                "The declared reference image is not available as a readable local file.",
+            ) from None
+        if not path.is_file():
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_reference_path_unavailable",
+                "The declared reference image is not available as a readable local file.",
+            )
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+        except OSError:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_reference_path_unavailable",
+                "The declared reference image could not be read.",
+            ) from None
+        return cls(channel=channel, file_path=str(path), source_sha256=digest.hexdigest())
 
 
 @dataclass(frozen=True)
 class NativeImageGenPlanRequest:
-    """The entire public MCP input contract for Doc129 N2."""
+    """The entire public MCP input contract for Doc130 canonical prompt parity."""
 
     user_input: str
     template_id: str
     requested_image_count: int
     requested_image_size: str | None
-    reference_declarations: tuple[NativeReferenceDeclaration, ...]
+    reference_inputs: tuple[NativeReferenceInput, ...]
 
     @classmethod
     def from_mcp_arguments(cls, value: Any) -> "NativeImageGenPlanRequest":
@@ -156,40 +191,43 @@ class NativeImageGenPlanRequest:
             size = None
         if size is not None and (len(size) > 64 or not re.fullmatch(r"(?:auto|[1-9][0-9]{1,4}x[1-9][0-9]{1,4})", size.lower())):
             raise CodexNativeImageGenError("codex_native_imagegen_size_invalid", "Requested image size is invalid.")
-        declarations_value = value.get("reference_declarations")
-        if not isinstance(declarations_value, list):
+        references_value = value.get("reference_inputs")
+        if not isinstance(references_value, list):
             raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declarations must be a list.",
+                "codex_native_imagegen_reference_input_invalid",
+                "Reference inputs must be a list.",
             )
-        declarations = tuple(NativeReferenceDeclaration.from_value(item) for item in declarations_value)
-        if len({item.channel for item in declarations}) != len(declarations):
+        references = tuple(NativeReferenceInput.from_value(item) for item in references_value)
+        if len({item.channel for item in references}) != len(references):
             raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_declaration_invalid",
-                "Reference declaration channels must be unique.",
+                "codex_native_imagegen_reference_input_invalid",
+                "Reference input channels must be unique.",
             )
         return cls(
             user_input=user_input,
             template_id=template_id,
             requested_image_count=count,
             requested_image_size=size,
-            reference_declarations=declarations,
+            reference_inputs=references,
         )
 
 
-def public_reference_instructions(declarations: tuple[NativeReferenceDeclaration, ...]) -> list[str]:
-    """Tell Codex how to use conversation attachments without exposing paths."""
+def reference_role_for_channel(channel: str) -> str:
+    """Map only input provenance channels to existing V3 asset roles."""
 
-    if not declarations:
-        return ["No conversation reference was declared; do not invent or substitute a reference attachment."]
-    instructions: list[str] = []
-    for declaration in declarations:
-        if declaration.attached_in_current_codex_conversation:
-            instructions.append(
-                f"Use the exact current-conversation attachment declared for {declaration.channel} in the native image tool call; preserve that channel and do not substitute another image."
-            )
-        elif declaration.required:
-            instructions.append(f"The required {declaration.channel} reference is absent; do not create an image.")
-        else:
-            instructions.append(f"No {declaration.channel} attachment was declared; do not infer or substitute one.")
-    return instructions
+    return {
+        "portrait_identity": "face_reference",
+        "product_truth": "product_reference",
+        "nonhuman_identity": "nonhuman_identity_reference",
+        "style_reference": "style_reference",
+        "background_reference": "background_reference",
+        "composition_reference": "composition_reference",
+        "color_reference": "color_reference",
+        "negative_reference": "negative_reference",
+    }.get(channel, "unknown_reference")
+
+
+def reference_mime_type(file_path: str) -> str | None:
+    """File extension is only descriptive; V3 performs real image admission."""
+
+    return mimetypes.guess_type(file_path)[0]

@@ -1,9 +1,11 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Doc129 plugin gives an interactive Codex agent one local stdio
-MCP constraint-admission tool: `prepare_native_imagegen_plan`. It does not create images,
-open a listener, start a background worker, control Codex, call the configured
-Web Brain or image Provider, or change Web Mode.
+This isolated Doc130 plugin gives an interactive Codex agent one local stdio
+MCP canonical-prompt tool: `prepare_native_imagegen_plan`. It does not create
+images, open a listener, start a background worker, control Codex, call an
+image Provider, or change Web Mode. It does use the configured remote Central
+Brain because an exact final Provider prompt cannot be created from a local
+creative fallback.
 
 The flow is intentionally one-way:
 
@@ -22,20 +24,27 @@ The admission tool currently enables only `general_template`. E-Commerce and
 Photography are deliberately blocked until their independent LLM-first and
 reference contracts can be proved without weakening them.
 
-It accepts only user input, General, requested count/size, and declarations
-about attachments already visible in the current Codex conversation. It never
-receives a file path, local artifact, project or job ID, provider setting,
-capability envelope, or credential. `portrait_identity`, `product_truth`, and
-`nonhuman_identity` are always hard channels: callers cannot set a flag to
-downgrade them.
+It accepts only user input, General, requested count/size, and explicit
+`reference_inputs` (`channel` plus a user-authorized readable local
+`file_path`). That file is passed into the ordinary V3 uploaded-asset contract
+unchanged; V3 then returns the Web-admitted reference paths with the canonical
+prompt.  A Codex conversation attachment is usable only when the host exposes
+such a path. Otherwise the planner blocks safely: it never probes Codex
+sessions/caches, imports a private artifact, or substitutes another image.
+`portrait_identity`, `product_truth`, and `nonhuman_identity` remain hard
+channels inside V3; callers cannot downgrade them.
 
-For every successful output, Codex uses `creative_direction_brief` to author
-one natural-language whole-image direction in the conversation, then makes
-exactly one built-in image-generation call. Alchemy owns the protected user
-truth and guardrails; Codex owns this local creative direction. Do not turn
-the brief into a keyword list, and do not add a static role, suite, camera,
-crop, or other structured recipe. If admission is blocked or the built-in tool
-is unavailable, stop without a fallback.
+For every successful output, Codex passes the returned `imagegen_prompt`
+verbatim to exactly one built-in image-generation call. The MCP returns the
+same final Unicode prompt and rendering parameters that Web Mode's Provider
+would materialize for the same frozen V3 plan; its SHA-256 is the parity
+receipt. Codex must not add a role, suite, camera, crop, keyword stack, or any
+other text. If remote Brain planning, canonical materialization, admission, or
+the built-in tool is unavailable, stop without a fallback.
+
+Reference/image-to-image parity is described in Doc131. Codex must pass each
+returned `reference_image_paths` list unchanged with the returned
+`imagegen_prompt`. Text-to-image returns an empty list.
 
 ## Local repository setup
 
