@@ -1,9 +1,9 @@
 # E-Commerce Module Documentation Set
 
-Status: LLM-native pre-acceptance closure; real Provider Gate C/D is blocked
-pending authorized reference material and an enabled controlled visual-review
-deployment
-Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E19
+Status: Doc127 Phase 4 acceptance preparation; one historical controlled Gate C
+case is recorded, while current-release Gate C re-certification and Gate D
+remain pending
+Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E20
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -19,7 +19,7 @@ commerce-specific deliverables.
 
 1. `AGENTS.md` repository safety and layer-boundary rules.
 2. V3 foundation and capability authorities, especially Docs76, 91, 93, 94,
-   100-103, 111, 113, and 117.
+   100-103, 111, 113, 117, and 127.
 3. V3 template/project authorities, especially Docs41-43 and Doc105
    continuation. Docs57, 59, and 60 are historical compatibility material only.
 4. V3 Doc111 provider-native creative-direction correction.
@@ -27,8 +27,9 @@ commerce-specific deliverables.
 6. E17 LLM-native E-Commerce architecture correction.
 7. E18 LLM-native pre-acceptance closure and evidence record.
 8. E19 real Provider Gate C/D acceptance record.
-9. This E-Commerce module family.
-10. Implementation notes and examples.
+9. E20 Doc127 Phase 4 execution pack.
+10. This E-Commerce module family.
+11. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -57,13 +58,14 @@ a second provider runtime, a second project store, or a V1/V2 bridge.
 | Platform profiles | evidence only | retain versioned constraints; do not generate default slots or image recipes |
 | Category packs | evidence only | retain buyer questions; do not generate shot orders or category recipes |
 | UI workspace | partial/iterative | needs commerce-specific beginner flow |
-| Real-output acceptance | ongoing | required before production activation of new profiles |
+| Real-output acceptance | current-release pending | historical Gate C evidence exists; Doc127 requires a frozen-build rerun and Gate D before production activation |
 | In-image copy | provider-native migration | no new local font, HTML/SVG/canvas, or deterministic text-pixel path |
 
-Current upstream coordination authority: V3 Doc103. It permits this isolated
-module work, while reserving frozen capability-plan runtime closure, live
-provider acceptance, General browser continuation, and production template
-activation for the shared foundation integration gates.
+Doc127 is the active campaign/runbook authority. It preserves E17-E19 as the
+E-Commerce implementation and evidence authority, while reserving shared
+runtime changes, frozen capability-plan closure, live Provider acceptance,
+General browser continuation, and production template activation for the
+mainline controlled-release campaign.
 
 The historical E12-E16 handoffs on the documentation branch must not merge
 unchanged: their deterministic compositor, font, safe-area, and multi-plan
@@ -84,11 +86,13 @@ requires strict remote-Brain failure closure, exact output-count behavior,
 General/Photography isolation, queryable provenance, project-recovery wording,
 and an evidence record. It does not waive the real Provider Gate C/D.
 
-E19 records the real gate without turning its preparatory material into a
-claim of readiness. As of 2026-07-14 it records a controlled preflight block:
-the current process has no authorized watermark-free product reference and its
-shared visual inspection feature is not enabled. No desktop demonstration image
-may be treated as an acceptance fixture without an explicit rights record.
+E19 records one bounded historical controlled Gate C case and its earlier
+preflight. It does not certify the current release build, Gate D, multilingual
+text, the exact-count matrix, or production readiness. Doc127 requires a new
+current-build Gate C run, then the N=1/2/4/7 browser and human-review matrix.
+E20 supplies the non-sensitive operator manifest and checklist for that work.
+An old desktop example remains ineligible unless the material owner provides
+an explicit rights record for the current evaluation.
 
 ## Definition of preparation complete
 
@@ -104,5 +108,7 @@ Before implementation starts, the team must have accepted:
 8. E08 test and acceptance matrix.
 9. E17 LLM-native architecture correction.
 10. E18 pre-acceptance closure evidence record.
-11. E19 real Provider Gate C/D evidence record, with a passing real run only
-    when the documented external prerequisites exist.
+11. E19 real Provider Gate C/D evidence record, with a passing current-build
+    run only when the documented external prerequisites exist.
+12. E20's manifest and browser checklist, followed by the restricted evidence
+    package and human decision required by Doc127 Phase 4.
