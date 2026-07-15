@@ -32,6 +32,27 @@ Professional Mode
 It does not activate Professional Mode, certify an identity provider, or make
 any existing mode use a visual asset pack automatically.
 
+### 0.1 Compatibility And Precedence
+
+This document is a scoped overlay, not a replacement authority for the
+numbered V3 documents. The precedence rule is:
+
+```text
+Standard Mode
+  -> existing numbered V3 contracts remain unchanged
+
+Professional Mode, only after an explicit mode choice and selected People Asset
+  -> this document owns asset selection, pack lifecycle, and identity-source
+     eligibility
+  -> Doc93/95/96/97/100/101/121/128 continue to own reference channels,
+     evidence, provider materialization, activation freezing, review, retry,
+     and human-realism safety
+```
+
+The overlay may narrow or strengthen an existing shared contract for the
+selected People Asset, but it may not weaken, bypass, or globally rewrite it.
+No old document is edited, renumbered, or made obsolete by this specification.
+
 ## 1. Product Decision
 
 Alchemy V3 will have two independent creation modes:
@@ -84,10 +105,17 @@ requested output count and public request schema
 The Standard Mode branch must remain runnable if the entire Professional Mode
 package is absent, disabled, unavailable, or removed.
 
+Existing Standard Mode concepts such as `ProjectIdentityAnchor`,
+`SubjectIdentityCard`, `auto_batch_identity_anchor`, and the Doc97 subject
+continuity package remain valid for Standard Mode. They are job/project-scoped
+foundation continuity records, not People Assets. Standard Mode never creates,
+reads, activates, or upgrades a People Asset as a side effect.
+
 ## 3. Visual Asset Library Mother Boundary
 
-The library is a project/account-scoped asset system, not a new image
-generation template. Its initial conceptual layout is:
+The library is a project-scoped asset catalog, not a new image generation
+template. A project may contain multiple independent People Assets; selecting
+one is an explicit per-job choice. Its initial conceptual layout is:
 
 ```text
 visual_asset_library
@@ -114,6 +142,12 @@ app/visual_assets/
 No such future sibling is authorized by this document. The first implementation
 must remain limited to People Assets and must not add product, brand,
 marketplace, A+, or campaign-specific asset roles.
+
+The catalog is not a second reference registry. It stores lifecycle, consent,
+pack-version, and user-selection metadata plus references to existing
+Project/Reference/Output/History records. Existing Doc93 policy, Doc97
+retrieval, and shared provider/review storage remain the only source of truth
+for reference admission and execution.
 
 ## 4. People Assets Scope
 
@@ -154,6 +188,19 @@ module must not create a face card through local face swapping, coordinate
 warping, canvas overlays, deterministic facial reconstruction, or a private
 pixel-repair path.
 
+The view names are evidence contracts, not static image recipes. The existing
+Brain must write the natural-language direction for every candidate. The pack
+module may constrain the requested view, identity evidence, safety, and review
+target, but it must not hard-code a camera, lens, makeup, lighting, background,
+pose, or cosmetic prompt recipe.
+
+The default pack has one required `standard_front`, one required
+`three_quarter`, and one required `profile` view after the winning front is
+known. A second three-quarter/profile view may be generated when the source,
+identity evidence, or downstream use justifies it. Candidate counts remain
+bounded and configuration-driven. The user explicitly activates the complete
+passing pack; scoring alone never makes an unconfirmed pack active.
+
 ## 5. Root Truth And Anchor Authority
 
 People Assets have a strict authority hierarchy:
@@ -174,6 +221,13 @@ leakage. It may not silently replace an uploaded root portrait. Every later
 Professional Mode generation must preserve the root truth relationship in its
 provenance and final review.
 
+An explicit current prompt may request an age direction change while retaining
+the same People Asset. Age transformation is therefore a prompt-owned change
+that remains subject to Doc128 human-realism constraints, safety policy, and
+same-person review; it is not a reason to replace the asset or create a second
+identity source. A request for a different person identity must stop and ask
+the user to choose another People Asset or resubmit in Standard Mode.
+
 ## 6. Professional Mode Reference Contract
 
 Professional Mode requires the caller to select an active People Asset or to
@@ -183,8 +237,12 @@ because a People Asset is missing, stale, invalid, or below its review gate.
 When Professional Mode is active:
 
 ```text
-person identity, face geometry, age direction, and same-person continuity
+person identity, face geometry, and same-person continuity
   come only from the selected People Asset and its approved anchor pack
+
+age direction
+  may be changed only by an explicit current prompt and remains subject to
+  shared Human Realism, safety, and same-person review
 
 current prompt
   owns requested hair, makeup, clothing, pose, light, scene, camera, mood,
@@ -231,6 +289,10 @@ Professional Mode shows a People Asset selector. It must not expose internal
 identity metrics, prompt sections, provider capability names, or biometric
 terms in the beginner surface.
 
+The selector is project-scoped and may contain multiple People Assets. The
+selected asset and pack version are recorded per job; selecting one asset never
+changes or deactivates the other assets in the project.
+
 When the user explicitly selects Professional Mode but the selected People
 Asset has no active valid pack, the UI may offer:
 
@@ -239,6 +301,10 @@ Build this People Asset now
 Choose another People Asset
 Return to Standard Mode [explicit user action only]
 ```
+
+After all required views pass shared review, the user confirms `Activate this
+pack version`. A scored candidate or an unconfirmed pack remains preparation
+history and cannot enter Professional Mode provider inputs.
 
 Building a pack is a visible preparation stage. Its candidate images do not
 count toward the requested formal delivery count. On failure, the system stops
@@ -265,27 +331,36 @@ current contracts:
 | --- | --- |
 | Doc93 reference-channel policy | Keep identity channels separate from prompt-owned style/scene channels. |
 | Doc95 identity evidence | Build complementary feature-detail and head-geometry evidence; retain root truth. |
-| Doc96 high-fidelity identity | Request high input fidelity where applicable; use ephemeral metrics, fused review, bounded repair, and best-result selection. |
+| Doc96 high-fidelity identity | Request high input fidelity where applicable; use ephemeral metrics, fused review, bounded shared rerender, and best-result selection. No new local face/pixel repair is introduced. |
 | Doc97 subject continuity | Store generated anchors as reviewed support, retain uploaded root truth, route views adaptively, quarantine weak generated support. |
+| Doc100 sole renderer | All anchor candidates and Professional Mode images use the existing GPT Image 2 provider; no sidecar or second pixel renderer. |
+| Doc101 activation plan | Professional Mode must be active before the job plan freezes; no late capability injection or hidden fallback. |
+| Doc121 evidence continuity | Review receives the same admitted root/anchor evidence actually used by Provider materialization. |
+| Doc128 Human Realism | Preserve shared age, safety, realism, and review constraints without taking ownership of asset selection. |
 | Doc91/92 Human Realism | Improve human rendering without acquiring reference-channel ownership. |
 | shared GPT Image 2 provider | Render anchor candidates and later Professional Mode images through the existing provider contract. |
 | shared vision review/retry/history | Review every candidate, keep append-only attempts, and activate only the reviewed winner/pack. |
 
 No People Asset implementation may create a second Brain, provider, review
-system, retry system, asset store, or reference registry.
+system, retry system, image store, or reference registry. It may add a
+project-scoped catalog/index, but reference admission, evidence preparation,
+provider execution, review, retry, and final delivery remain shared.
 
 ## 9. Ownership And Isolation
 
 ### 9.1 Visual Asset Library owns
 
 ```text
-People Asset records
-root-source provenance
-anchor-pack versions
-view coverage
-pack activation and supersession
-user consent and asset selection state
+project-scoped People Asset catalog records
+root-source provenance pointers, not copied files
+anchor-pack version lifecycle
+view coverage and pack activation/supersession
+user consent and per-job asset selection state
 ```
+
+The library may contain multiple People Assets in one project. It does not
+decide which reference files are admitted to a Provider request, rewrite
+channel policy, or become final delivery.
 
 ### 9.2 Existing creation modules own
 
@@ -318,9 +393,9 @@ conceptual and are not yet public API commitments.
 ```python
 class PeopleAsset:
     people_asset_id: str
-    project_id: str | None
+    project_id: str                 # project-scoped; many assets are allowed
     subject_kind: str                 # human_person | fictional_character
-    root_sources: list[dict]
+    root_source_refs: list[dict]      # existing asset/output/reference IDs only
     active_pack_version_id: str | None
     status: str                       # draft | active | superseded | blocked
     provenance: dict
@@ -333,13 +408,14 @@ class IdentityAnchorPackVersion:
     root_truth_ids: list[str]
     review_summary: dict
     source_provenance: dict
+    user_activation_confirmed: bool
 
 class AnchorView:
     view_id: str
     view_role: str                    # standard_front | three_quarter | profile | ...
     output_id: str
     source_candidate_ids: list[str]
-    identity_scores: dict
+    identity_scores: dict              # safe summary; never raw biometric data
     view_coverage: dict
     active: bool
 ```
@@ -356,6 +432,7 @@ private prompt bodies in user-facing asset cards
 unreviewed candidate as active identity truth
 unbounded retry state
 mode-specific marketplace, A+, or photography role fields
+raw filesystem paths, provider-private prompts, or unredacted source payloads
 ```
 
 ## 11. Runtime Integration Boundary
@@ -365,10 +442,16 @@ The intended execution seam is:
 ```text
 Professional Mode selection
   -> resolve selected People Asset
-  -> inject approved anchor references into existing V3 capability input
+  -> activate the declared Professional Mode capability before plan freeze
+  -> inject approved root/anchor reference IDs into existing V3 capability input
   -> run existing planning / provider / review / retry / delivery path
   -> preserve Professional Mode provenance and selected asset version
 ```
+
+The uploaded root, when one exists, remains the immutable Doc95/Doc97 root
+guard. The active pack is the reviewed operational support. Provider
+materialization must use Doc93/95 evidence preparation rather than sending a
+synthetic white-background card as an unrestricted full-frame reference.
 
 The Standard Mode seam remains unchanged:
 
@@ -380,7 +463,9 @@ Standard Mode selection or absence of mode selection
 
 Mode identity must be carried as an internal execution boundary, not as
 E-Commerce slot fields, Photography role fields, General Template recipe
-fields, or new Brain prompt prose. The public request schema remains stable.
+fields, or new Brain prompt prose. A UI/session selection may carry the mode
+into the existing sanitized project-job context, but it must not become a
+variation mode, scenario role, marketplace field, or provider control.
 
 The Professional Mode bridge must fail closed for:
 
@@ -395,6 +480,11 @@ provider/review failure during pack creation
 
 There is no automatic Professional-to-Standard fallback. A user may
 explicitly switch modes and resubmit.
+
+If the user asks for a different person identity while Professional Mode is
+active, the job is blocked until the user selects another project People Asset
+or explicitly resubmits in Standard Mode. An explicit age direction change is
+allowed only as a prompt-owned transformation subject to shared review.
 
 ## 12. Future Video Compatibility
 
@@ -472,13 +562,20 @@ At minimum:
 ```text
 Standard Mode with no People Asset behaves exactly as before.
 Standard Mode cannot read Professional Mode asset metadata.
+Standard Mode's existing ProjectIdentityAnchor/SubjectIdentityCard paths remain
+available and never auto-promote into a People Asset.
 Professional Mode requires an active selected People Asset.
 Professional Mode never silently falls back to Standard Mode.
 Professional Mode uses only the selected asset for human identity.
+Professional Mode may contain multiple project People Assets and binds one per job.
+The selected asset is activated before the frozen capability plan.
+An explicit age change preserves same-person geometry and is reviewed as a
+prompt-owned transformation.
 An uploaded second person cannot enter as a full style reference.
 Style/scene references retain their allowed non-identity channels.
 Pack candidates remain append-only and only active winners enter routing.
 Root truth remains in every strict Professional Mode identity review.
+Provider inputs and Reviewer evidence use the same admitted root/anchor IDs.
 E-Commerce and Photography role semantics remain unchanged in both modes.
 General remains scenario-neutral in both modes.
 No public request or Brain schema gains asset-library internals.
@@ -501,9 +598,13 @@ The Professional Mode foundation is not ready to integrate until:
 7. Weak, failed, or superseded candidates cannot enter provider inputs.
 8. Professional Mode prevents unwanted human identity pixels from other
    uploaded references.
-9. Standard, E-Commerce, Photography, and future Video consumers can select
+9. A project can hold multiple People Assets, but each job binds one explicit
+   selected asset and pack version.
+10. The active capability plan is frozen before Professional Mode contributions
+    enter generation, review, or retry.
+11. Standard, E-Commerce, Photography, and future Video consumers can select
    the same asset contract without duplicating identity logic.
-10. No production or Provider Gate claim is made solely from pack creation.
+12. No production or Provider Gate claim is made solely from pack creation.
 ```
 
 ## 16. Non-Goals
@@ -511,12 +612,14 @@ The Professional Mode foundation is not ready to integrate until:
 This specification does not authorize:
 
 ```text
+rewriting, renumbering, or globally superseding existing V3 documents
 changing existing Standard Mode behavior
 changing General Template semantics
 changing E-Commerce or Photography deliverable contracts
 building an A+ module or marketplace asset package
 building a Video module
 adding a second image provider or sidecar
+adding a second reference registry, image store, or review/retry system
 local face swap, face compositing, font/OCR, or pixel overlay
 storing biometric embeddings
 automatic professional-mode activation
