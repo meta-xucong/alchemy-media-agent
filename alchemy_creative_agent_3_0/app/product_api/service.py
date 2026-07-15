@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+from time import sleep
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -650,7 +651,22 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         }
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        # A project-status poll can have the current JSON open for a very short
+        # interval on Windows. ``os.replace`` remains the atomic commit point,
+        # but Windows then reports WinError 5 instead of allowing the replace.
+        # Do not turn that transient reader race into a fake Provider or worker
+        # failure before an image request has even started. A bounded retry
+        # preserves the single-write contract; a persistent lock still raises
+        # so the caller can close the lifecycle explicitly.
+        replace_attempts = 5
+        for attempt in range(replace_attempts):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt + 1 >= replace_attempts:
+                    raise
+                sleep(0.025 * (attempt + 1))
 
     def _record_path(self, job_id: str) -> Path:
         return self.storage_root / f"{job_id}.json"

@@ -595,6 +595,36 @@ def test_persistent_job_store_refreshes_a_cached_lifecycle_after_background_term
     assert refreshed.metadata["generation_lifecycle_failure"]["failure_code"] == "background_generation_worker_error"
 
 
+def test_persistent_job_store_retries_a_transient_windows_replace_lock(monkeypatch) -> None:
+    """A poller's short-lived file handle must not abort a background Job."""
+
+    root = _test_store_root("persistent_product_job_store_replace_retry")
+    store = PersistentProductJobStore(root / "jobs")
+    service = V3ProductApiService(job_store=store)
+    created = service.create_job({"user_input": "Create one natural still-life photograph."})
+    record = store.get(created.job_id)
+    assert record is not None
+    record.warnings.append("persist after a simulated polling read")
+
+    original_replace = Path.replace
+    attempts = {"count": 0}
+
+    def transiently_locked_replace(self, target):
+        if self.name == f"{created.job_id}.json.tmp":
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise PermissionError(5, "access denied", str(target))
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", transiently_locked_replace)
+    store.save(record)
+
+    assert attempts["count"] == 3
+    restored = store.get(created.job_id)
+    assert restored is not None
+    assert restored.warnings[-1] == "persist after a simulated polling read"
+
+
 def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts() -> None:
     service, _, _ = _service("campaign")
     brand = service.create_brand(
