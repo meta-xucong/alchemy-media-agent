@@ -74,7 +74,7 @@ class _RecordingProductionProvider(GenerationProvider):
             raise error
         image = BytesIO()
         Image.new("RGB", (32, 32), color=(104, 146, 184)).save(image, format="PNG")
-        candidate_id = f"candidate_{role_key or len(self.requests)}"
+        candidate_id = f"candidate_{role_key or 'unscoped'}_{len(self.requests)}"
         stored = self.output_store.save_base64_output(
             job_id=str(request.metadata["job_id"]),
             candidate_id=candidate_id,
@@ -246,6 +246,49 @@ def test_professional_set_t2i_executes_three_frozen_roles_without_generated_imag
         "detail_or_moment",
     ]
     assert len([item for item in generated["asset_series"] if item["output_id"]]) == 3
+
+
+def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner(monkeypatch, tmp_path) -> None:
+    """A retry winner must certify the same frozen Photography role it replaces."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path)
+    project, root = _project_and_root(handlers, mode_id="single_hero")
+
+    generated = handlers.post_project_job_generate(
+        project["project_id"],
+        root["job_id"],
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "require_real_images": True,
+                "force_visual_retry_issue_codes": ["visible_text_artifact"],
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+
+    assert generated["status"] == "generated"
+    assert len(provider.requests) == 2
+    summary = generated["metadata"]["specialized_execution_summary"]
+    assert summary["status"] == "complete"
+    assert generated["metadata"]["review_certification"]["state"] == "certified"
+    public_role = summary["roles"][0]
+    assert public_role["role_key"] == "hero_photograph"
+    assert public_role["real_pixel_certified"] is True
+    assert public_role["review_mode"] == "hybrid"
+    assert public_role["review_status"] == "pass"
+    record = handlers.service.get_job_record(root["job_id"])
+    assert record is not None
+    durable_role = record.request.metadata["specialized_execution_summary"]["roles"][0]
+    assert durable_role["certification_state"] == "certified"
+    assert durable_role["candidate_id"] == "candidate_hero_photograph_2"
+    assert durable_role["candidate_id"] != "candidate_hero_photograph_1"
+    assert record.generation_result is not None
+    execution_role = record.generation_result.metadata["specialized_role_execution"]["roles"][0]
+    assert set(execution_role["previous_candidate_ids"]) == {"candidate_hero_photograph_1"}
+    assert generated["metadata"]["final_delivery"]["automatic_delivery_available"] is True
+    assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 1
 
 
 def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_single_delivery(monkeypatch, tmp_path) -> None:

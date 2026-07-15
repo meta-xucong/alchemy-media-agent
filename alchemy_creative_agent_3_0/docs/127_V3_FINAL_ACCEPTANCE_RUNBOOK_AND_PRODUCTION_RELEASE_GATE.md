@@ -150,6 +150,13 @@ subject, age, reference, or model to evade a policy. An unattributed 4xx stays
 that the reference input was rejected. A no-pixel request never enters visual
 review or retry.
 
+For a specialized frozen role, a successful shared retry must also rebind that
+role's current winner to the retry candidate before certification is projected.
+The superseded candidate stays in append-only history. A role may never show a
+withheld certification while a separate generic delivery surface reports the
+same retry output as ready; that is a runtime-truth defect, not a successful
+acceptance result.
+
 ## 5. Phase 0 — Freeze The Controlled Acceptance Environment
 
 Run this phase once before spending real provider budget. Stop immediately if

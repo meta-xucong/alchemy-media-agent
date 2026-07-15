@@ -3617,6 +3617,10 @@ class V3ProductApiService:
             retry_result,
             max_attempts=max_attempts,
         )
+        specialized_role_execution = self._merge_specialized_role_execution(
+            base_result,
+            retry_result,
+        )
         text_delivery = self._merge_text_pixel_delivery_chain(base_result, retry_result)
         text_delivery_metadata = self._text_pixel_delivery_metadata_updates(text_delivery)
         asset_pack = base_result.asset_pack.model_copy(
@@ -3636,6 +3640,20 @@ class V3ProductApiService:
                 },
             }
         )
+        result_metadata = {
+            **dict(base_result.metadata),
+            **dict(review_updates.get("result_metadata") or {}),
+            "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
+            **text_delivery_metadata,
+            "retry_generation_result_ids": self._dedupe_strings(
+                [
+                    *self._string_list(base_result.metadata.get("retry_generation_result_ids")),
+                    retry_result.planning_result_id,
+                ]
+            ),
+        }
+        if specialized_role_execution is not None:
+            result_metadata["specialized_role_execution"] = specialized_role_execution
         return base_result.model_copy(
             update={
                 "layout_plans": [*base_result.layout_plans, *retry_result.layout_plans],
@@ -3644,20 +3662,75 @@ class V3ProductApiService:
                 "generation_plans": [*base_result.generation_plans, *retry_result.generation_plans],
                 "evaluation_reports": [*base_result.evaluation_reports, *retry_result.evaluation_reports],
                 "asset_pack": asset_pack,
-                "metadata": {
-                    **dict(base_result.metadata),
-                    **dict(review_updates.get("result_metadata") or {}),
-                    "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
-                    **text_delivery_metadata,
-                    "retry_generation_result_ids": self._dedupe_strings(
-                        [
-                            *self._string_list(base_result.metadata.get("retry_generation_result_ids")),
-                            retry_result.planning_result_id,
-                        ]
-                    ),
-                },
+                "metadata": result_metadata,
             }
         )
+
+    def _merge_specialized_role_execution(
+        self,
+        base_result: PlanningResult,
+        retry_result: PlanningResult,
+    ) -> dict[str, Any] | None:
+        """Advance a frozen specialized role to its reviewed retry winner.
+
+        A visual retry appends new provider assets and review history, but the
+        public specialized-role contract must resolve its current candidate
+        against that retry output.  Leaving the first candidate in this map
+        makes a verified retry look uncertified and can split the delivery
+        truth between the generic final-delivery gate and the role gate.
+        """
+
+        base_execution = base_result.metadata.get("specialized_role_execution")
+        retry_execution = retry_result.metadata.get("specialized_role_execution")
+        if not isinstance(base_execution, dict):
+            return dict(retry_execution) if isinstance(retry_execution, dict) else None
+        if not isinstance(retry_execution, dict):
+            return dict(base_execution)
+
+        base_roles = [dict(item) for item in base_execution.get("roles", []) if isinstance(item, dict)]
+        retry_roles = [dict(item) for item in retry_execution.get("roles", []) if isinstance(item, dict)]
+        retry_by_role = {
+            str(item.get("role_key") or "").strip(): item
+            for item in retry_roles
+            if str(item.get("role_key") or "").strip()
+        }
+        merged_roles: list[dict[str, Any]] = []
+        seen_role_keys: set[str] = set()
+        for base_role in base_roles:
+            role_key = str(base_role.get("role_key") or "").strip()
+            retry_role = retry_by_role.get(role_key) if role_key else None
+            if retry_role is None:
+                merged_roles.append(base_role)
+                continue
+            seen_role_keys.add(role_key)
+            previous_candidate_ids = self._dedupe_strings(
+                [
+                    *self._string_list(base_role.get("previous_candidate_ids")),
+                    base_role.get("candidate_id"),
+                    *self._string_list(retry_role.get("previous_candidate_ids")),
+                ]
+            )
+            retry_candidate_id = str(retry_role.get("candidate_id") or "").strip()
+            previous_candidate_ids = [
+                candidate_id
+                for candidate_id in previous_candidate_ids
+                if candidate_id != retry_candidate_id
+            ]
+            merged_role = {**base_role, **retry_role}
+            if previous_candidate_ids:
+                merged_role["previous_candidate_ids"] = previous_candidate_ids
+            merged_roles.append(merged_role)
+        merged_roles.extend(
+            role
+            for role in retry_roles
+            if str(role.get("role_key") or "").strip() not in seen_role_keys
+        )
+        return {
+            **dict(base_execution),
+            **dict(retry_execution),
+            "roles": merged_roles,
+            "append_only_history_preserved": True,
+        }
 
     def _merge_text_pixel_delivery_chain(
         self,
