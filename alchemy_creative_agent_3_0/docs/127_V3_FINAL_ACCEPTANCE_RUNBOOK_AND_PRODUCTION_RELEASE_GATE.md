@@ -5,6 +5,12 @@ campaign. This document turns the existing architecture and module contracts
 into one ordered, reproducible acceptance program. It does not replace their
 implementation authority.
 
+> **Companion code-closure track.** Doc132 records the provider-independent
+> acceptance campaign introduced after repeated upstream outages. It can close
+> Alchemy-owned planning, prompt, reference, lifecycle, and browser behavior
+> without treating a Web Provider outage as an Alchemy defect. It never
+> replaces the real-pixel production-release conditions in this document.
+
 Current integration baseline when this guide was written:
 `origin/main@70e8aad8cac01df88dd4a498d8aaacc398c3720c`.
 
