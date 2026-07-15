@@ -1,4 +1,4 @@
-"""Start the repository-owned Doc118 MCP without relying on install-directory paths."""
+"""Start the repository-owned Doc126 MCP without relying on install-directory paths."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Doc118 local planning bridge; it never renders, imports, or delivers pixels."""
+"""Doc126 local planning bridge; it never renders, imports, or delivers pixels."""
 
 from .contracts import (
     CONVERSATION_ONLY_DELIVERY_STATE,

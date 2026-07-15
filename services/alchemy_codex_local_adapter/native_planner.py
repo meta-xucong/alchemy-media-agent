@@ -1,4 +1,4 @@
-"""Doc118 planning-only bridge from local stdio MCP to frozen V3 planning."""
+"""Doc126 planning-only bridge from local stdio MCP to frozen V3 planning."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
     def generate(self, *_: Any, **__: Any) -> Any:
-        raise RuntimeError("Doc118 planning-only facade must never call a generation provider")
+        raise RuntimeError("Doc126 planning-only facade must never call a generation provider")
 
 
 class NativePlanningNoRemoteBrainProvider:
@@ -37,7 +37,7 @@ class NativePlanningNoRemoteBrainProvider:
         return False
 
     def run(self, *_: Any, **__: Any) -> Any:
-        raise RuntimeError("Doc118 Local Mode must never call a remote Central Brain")
+        raise RuntimeError("Doc126 Local Mode must never call a remote Central Brain")
 
 
 class CodexNativeImageGenPlanner:

@@ -1,4 +1,4 @@
-"""Doc118 N1 regression tests for the conversation-only native ImageGen plan."""
+"""Doc126 N1 regression tests for the conversation-only native ImageGen plan."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def _call_tool(adapter: CodexNativeImageGenFacade, name: str, arguments: dict[st
 
 def _load_plugin_launcher() -> Any:
     path = ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py"
-    spec = importlib.util.spec_from_file_location("doc118_start_mcp", path)
+    spec = importlib.util.spec_from_file_location("doc126_start_mcp", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -100,7 +100,7 @@ def test_general_plan_has_exact_frozen_count_and_conversation_only_provenance(mo
 
     class _ProductionProviderMustNotBeConstructed:
         def __init__(self, *_: object, **__: object) -> None:
-            raise AssertionError("Doc118 planning must not construct a production image provider")
+            raise AssertionError("Doc126 planning must not construct a production image provider")
 
     monkeypatch.setattr(generation_router, "ProductionImageGenerationProvider", _ProductionProviderMustNotBeConstructed)
     result = CodexNativeImageGenFacade(enabled=True).prepare_native_imagegen_plan(
@@ -136,7 +136,7 @@ def test_native_planning_never_constructs_or_calls_the_web_remote_brain(monkeypa
 
     class _DefaultProviderMustNotBeConstructed:
         def __init__(self, *_: object, **__: object) -> None:
-            raise AssertionError("Doc118 must not construct Web Mode's default remote Brain provider")
+            raise AssertionError("Doc126 must not construct Web Mode's default remote Brain provider")
 
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")

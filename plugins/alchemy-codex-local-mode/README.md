@@ -1,6 +1,6 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Doc118 plugin gives an interactive Codex agent one local stdio
+This isolated Doc126 plugin gives an interactive Codex agent one local stdio
 MCP planning tool: `prepare_native_imagegen_plan`. It does not create images,
 open a listener, start a background worker, control Codex, call the configured
 Web Brain or image Provider, or change Web Mode.

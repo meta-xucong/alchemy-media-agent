@@ -1,4 +1,4 @@
-"""Doc118 native ImageGen stdio MCP: planning only, with no image transport."""
+"""Doc126 native ImageGen stdio MCP: planning only, with no image transport."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.3.1-doc118-n1"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.3.1-doc126-n1"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -88,7 +88,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Doc118 native ImageGen planning-only stdio MCP bridge")
+    parser = argparse.ArgumentParser(description="Doc126 native ImageGen planning-only stdio MCP bridge")
     parser.add_argument("--enable-native-imagegen", action="store_true")
     arguments = parser.parse_args()
     adapter = CodexNativeImageGenFacade(enabled=arguments.enable_native_imagegen)

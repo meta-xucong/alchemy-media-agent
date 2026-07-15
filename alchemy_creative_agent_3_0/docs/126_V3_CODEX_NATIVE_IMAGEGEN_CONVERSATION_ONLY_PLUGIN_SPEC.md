@@ -1,4 +1,10 @@
-# Doc118: V3 Codex Native ImageGen Conversation-only Plugin
+# Doc126: V3 Codex Native ImageGen Conversation-only Plugin
+
+Status: isolated planning-only technical verification. This specification was
+originally numbered Doc118 on its feature branch. The cumulative shared-runtime
+correction series now owns Docs118–124 on mainline, so this document is
+renumbered to Doc126 before integration. The old feature-branch Doc118 path is
+superseded and must not be imported alongside the mainline Doc118 authority.
 
 ## Status and authority
 

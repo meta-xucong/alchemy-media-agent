@@ -1,4 +1,4 @@
-"""Public-safe contracts for the Doc118 Codex Native ImageGen planner."""
+"""Public-safe contracts for the Doc126 Codex Native ImageGen planner."""
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class NativeReferenceDeclaration:
 
 @dataclass(frozen=True)
 class NativeImageGenPlanRequest:
-    """The entire public MCP input contract for Doc118 N1."""
+    """The entire public MCP input contract for Doc126 N1."""
 
     user_input: str
     template_id: str
