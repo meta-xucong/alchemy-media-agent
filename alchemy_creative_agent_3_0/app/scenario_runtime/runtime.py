@@ -2115,16 +2115,16 @@ class ScenarioRuntime:
         stage: str,
         template_capability_policy: TemplateCapabilityPolicy | None,
     ) -> BrainRunResult | None:
-        """Reuse the server-pinned specialized creative answer during execution.
+        """Reuse the server-pinned remote creative answer during execution.
 
         Planning is the only stage that may ask the remote Brain to create a
-        specialized direction.  Generation and bounded retry must consume the
-        same verified answer together with the frozen activation plan; a
-        second Brain call would make one logical job non-deterministic and can
-        block it after planning has already succeeded.
+        direction. Generation and bounded retry consume the same verified
+        answer with the frozen activation plan; another Brain call would make
+        one logical job non-deterministic and can block a shared retry before
+        it reaches the image Provider.
         """
 
-        if stage == "plan" or not (template_capability_policy and template_capability_policy.requires_remote_creative_brain):
+        if stage == "plan":
             return None
         frozen = request.metadata.get("frozen_remote_creative_brain")
         if frozen is None:

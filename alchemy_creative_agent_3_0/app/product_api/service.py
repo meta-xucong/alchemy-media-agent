@@ -2200,6 +2200,7 @@ class V3ProductApiService:
                 break
 
             if retry_runtime_result.generation_result is None:
+                retry_outcome = self._retry_no_result_outcome(retry_runtime_result)
                 records.append(
                     self._visual_retry_execution_record(
                         record=record,
@@ -2209,7 +2210,8 @@ class V3ProductApiService:
                         reason_codes=reason_codes,
                         retry_patch=retry_patch,
                         source="scenario_runtime",
-                        blocked_reason="retry_generation_returned_no_result",
+                        blocked_reason=retry_outcome["reason_code"],
+                        retry_outcome=retry_outcome,
                     )
                 )
                 break
@@ -4261,6 +4263,7 @@ class V3ProductApiService:
         retry_output_ids: list[str] | None = None,
         retry_candidate_ids: list[str] | None = None,
         blocked_reason: str | None = None,
+        retry_outcome: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         job_id = record.job_id if record is not None else "job_unavailable"
         project_id = None
@@ -4281,7 +4284,64 @@ class V3ProductApiService:
             "blocked_reason": blocked_reason,
             "source": source,
             "created_at": _utc_now_iso(),
-            "metadata": {"append_only": True, "doc": "53"},
+            "metadata": {
+                "append_only": True,
+                "doc": "53",
+                **({"retry_outcome": dict(retry_outcome)} if retry_outcome else {}),
+            },
+        }
+
+    @staticmethod
+    def _retry_no_result_outcome(runtime_result: Any) -> dict[str, Any]:
+        """Preserve a safe, pre-provider reason when a retry has no result.
+
+        A Scenario Runtime result with no generation payload is an explicit
+        runtime terminal state, not evidence that a Provider image request was
+        made.  Keep only its stable state and already-safe activation/Brain
+        projection; raw prompts, exception text, endpoints, and credentials
+        must remain out of the retry history.
+        """
+
+        raw_status = getattr(runtime_result, "status", None)
+        runtime_status = str(getattr(raw_status, "value", raw_status) or "unknown").strip().lower()
+        metadata = dict(getattr(runtime_result, "metadata", {}) or {})
+        remote_outcome = metadata.get("remote_creative_brain_outcome")
+        safe_remote_outcome = (
+            {
+                key: remote_outcome.get(key)
+                for key in (
+                    "schema_version",
+                    "state",
+                    "reason_code",
+                    "outcome_class",
+                    "llm_used",
+                    "fallback_used",
+                    "remote_provider_available",
+                    "remote_error_class",
+                    "remote_http_status_code",
+                )
+                if key in remote_outcome
+            }
+            if isinstance(remote_outcome, dict)
+            else {}
+        )
+        capability_run = getattr(runtime_result, "capability_run", None)
+        capability_status = str(getattr(getattr(capability_run, "status", None), "value", "") or "").lower()
+        if safe_remote_outcome:
+            reason_code = "retry_remote_brain_blocked"
+        elif metadata.get("capability_activation_error"):
+            reason_code = "retry_capability_activation_blocked"
+        elif capability_status == "failed":
+            reason_code = "retry_capability_execution_failed"
+        elif runtime_status == "blocked":
+            reason_code = "retry_generation_blocked_before_provider"
+        else:
+            reason_code = "retry_generation_returned_no_result"
+        return {
+            "reason_code": reason_code,
+            "runtime_status": runtime_status,
+            "provider_request_started": False,
+            "remote_brain_outcome": safe_remote_outcome,
         }
 
     def _visual_auto_retry_summary(self, records: list[dict[str, Any]], max_attempts: int) -> dict[str, Any]:
@@ -6767,7 +6827,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         runtime_result: Any,
     ) -> None:
-        """Persist a specialized remote creative answer with its frozen plan.
+        """Persist a verified remote creative answer with its frozen plan.
 
         This is a server-owned execution binding, not browser-supplied
         metadata.  ScenarioRuntime validates the exact plan/template/scenario
@@ -6776,8 +6836,6 @@ class V3ProductApiService:
 
         resolution = getattr(runtime_result, "scenario_resolution", None)
         scenario_id = str(getattr(getattr(resolution, "manifest", None), "scenario_id", "") or "")
-        if scenario_id not in {"ecommerce", "photography"}:
-            return
         runtime_metadata = dict(getattr(runtime_result, "metadata", {}) or {})
         plan = runtime_metadata.get("capability_activation_plan")
         brain_result = runtime_metadata.get("llm_brain")

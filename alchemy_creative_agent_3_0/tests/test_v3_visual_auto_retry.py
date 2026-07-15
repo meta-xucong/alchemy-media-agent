@@ -26,6 +26,46 @@ def _create_general_job(service: V3ProductApiService):
     )
 
 
+def test_visual_retry_no_result_keeps_safe_pre_provider_provenance(tmp_path) -> None:
+    service = _service(tmp_path)
+    runtime_result = type(
+        "BlockedRuntimeResult",
+        (),
+        {
+            "status": type("Status", (), {"value": "blocked"})(),
+            "capability_run": None,
+            "metadata": {
+                "capability_activation_error": "CapabilityActivationError",
+                "remote_creative_brain_outcome": {
+                    "schema_version": "v3_remote_creative_brain_outcome_v1",
+                    "state": "blocked",
+                    "reason_code": "remote_brain_unavailable",
+                    "outcome_class": "remote_provider_error",
+                    "llm_used": False,
+                    "fallback_used": True,
+                    "raw_error": "must not leak",
+                },
+            },
+        },
+    )()
+
+    outcome = service._retry_no_result_outcome(runtime_result)  # noqa: SLF001
+
+    assert outcome == {
+        "reason_code": "retry_remote_brain_blocked",
+        "runtime_status": "blocked",
+        "provider_request_started": False,
+        "remote_brain_outcome": {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_brain_unavailable",
+            "outcome_class": "remote_provider_error",
+            "llm_used": False,
+            "fallback_used": True,
+        },
+    }
+
+
 def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_path) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
