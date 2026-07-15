@@ -184,7 +184,7 @@ def test_public_review_projection_hides_retry_prompt_and_upstream_failure_detail
     public_retry = V3ProductApiService._public_visual_auto_retry_summary(raw_retry)
     public_review = V3ProductApiService._public_post_generation_review(raw_review)
 
-    assert public_retry["manual_confirmation_required"] is True
+    assert public_retry["manual_confirmation_required"] is False
     assert public_retry["records"] == [
         {"attempt_index": 1, "status": "failed", "reason_codes": ["plastic_skin"]}
     ]
@@ -202,6 +202,12 @@ def test_public_review_projection_hides_retry_prompt_and_upstream_failure_detail
     ]
     assert "file_path" not in inspection
     assert "retry_patch" not in inspection
+
+    retained_delivery_retry = V3ProductApiService._public_visual_auto_retry_summary(
+        raw_retry,
+        manual_confirmation_required=True,
+    )
+    assert retained_delivery_retry["manual_confirmation_required"] is True
 
 
 def test_public_job_status_redacts_nested_retry_execution_data_but_keeps_durable_audit() -> None:

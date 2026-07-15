@@ -4765,9 +4765,13 @@ class V3ProductApiService:
             }
             for item in records
         ]
-        manual_confirmation_required = manual_confirmation_required or any(
-            item["status"] in {"failed", "blocked"} for item in public_records
-        )
+        # A transport/runtime failure of the bounded retry does not make an
+        # otherwise withheld candidate user-actionable.  The final-delivery
+        # gate is the only authority for manual confirmation; it is passed in
+        # by ``_status_from_record`` after it has evaluated reviewed outputs.
+        # Keep the retry record visible for workflow transparency without
+        # advertising a confirmation path that cannot deliver an image.
+        manual_confirmation_required = bool(manual_confirmation_required)
         return {
             "enabled": bool(summary.get("enabled")),
             "executed_count": max(0, int(summary.get("executed_count") or 0)),
