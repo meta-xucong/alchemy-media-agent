@@ -1,5 +1,6 @@
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
@@ -112,6 +113,57 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
     )
     assert generated.metadata["visual_auto_retry"]["append_only"] is True
     assert "retry_patch" not in generated.metadata["visual_auto_retry"]["records"][0]
+
+
+def test_visual_auto_retry_does_not_merge_a_retry_that_has_no_materialized_pixels(tmp_path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    original_generate = service.scenario_runtime.generate_job
+    invocation_count = 0
+
+    # Exercise the production-only no-pixel guard while keeping this unit test
+    # offline.  The outer service sees a real-provider strategy; the injected
+    # runtime returns the normal deterministic fixture instead of networking.
+    monkeypatch.setattr(service, "_provider_strategy_for_generate", lambda *_args, **_kwargs: ProviderStrategy.DEFAULT_IMAGE_PROVIDER)
+
+    def generate_with_empty_retry(*args, **kwargs):  # noqa: ANN002,ANN003
+        nonlocal invocation_count
+        invocation_count += 1
+        kwargs["provider_strategy"] = ProviderStrategy.MOCK_GENERATION
+        runtime_result = original_generate(*args, **kwargs)
+        if invocation_count != 2:
+            return runtime_result
+        assert runtime_result.generation_result is not None
+        empty_pack = runtime_result.generation_result.asset_pack.model_copy(update={"assets": []})
+        empty_result = runtime_result.generation_result.model_copy(update={"asset_pack": empty_pack})
+        return runtime_result.model_copy(update={"generation_result": empty_result})
+
+    monkeypatch.setattr(service.scenario_runtime, "generate_job", generate_with_empty_retry)
+
+    service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "force_visual_retry_issue_codes": ["visible_text_artifact"],
+                "max_visual_retry_attempts": 1,
+            },
+        },
+    )
+
+    internal_result = _internal_generation_result(service, created.job_id)
+    retry_summary = internal_result.metadata["visual_auto_retry"]
+
+    assert invocation_count == 2
+    assert retry_summary["executed_count"] == 0
+    assert retry_summary["records"][0]["status"] == "blocked"
+    assert retry_summary["records"][0]["blocked_reason"] == "retry_generation_returned_without_pixels"
+    assert retry_summary["records"][0]["retry_output_ids"] == []
+    assert not any(
+        asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
+        for asset in internal_result.asset_pack.assets
+    )
+    assert not internal_result.metadata.get("retry_generation_result_ids")
 
 
 def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path) -> None:

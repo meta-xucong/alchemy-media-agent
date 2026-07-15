@@ -2273,6 +2273,32 @@ class V3ProductApiService:
                 generate_request,
             )
             reviewed_retry_result = self._apply_text_pixel_delivery(record, reviewed_retry_result)
+            # A runtime result object is not itself evidence of a retry image.
+            # The shared review stage is the point where a normal provider
+            # result becomes a materialized output record.  If it still has
+            # no pixels afterwards, do not record the retry as executed or
+            # let it replace the reviewed source candidate in the append-only
+            # chain.  This preserves a safe failure record without replaying
+            # the logical Job.
+            if (
+                provider_strategy != ProviderStrategy.MOCK_GENERATION
+                and not self._reviewed_result_output_ids(reviewed_retry_result)
+            ):
+                retry_outcome = self._retry_result_without_pixels_outcome(retry_runtime_result)
+                records.append(
+                    self._visual_retry_execution_record(
+                        record=record,
+                        status="blocked",
+                        attempt_index=attempt_index,
+                        max_attempts=max_attempts,
+                        reason_codes=reason_codes,
+                        retry_patch=retry_patch,
+                        source="scenario_runtime",
+                        blocked_reason=retry_outcome["reason_code"],
+                        retry_outcome=retry_outcome,
+                    )
+                )
+                break
             retry_result = self._mark_retry_generation_result(
                 reviewed_retry_result,
                 attempt_index=attempt_index,
@@ -4458,6 +4484,45 @@ class V3ProductApiService:
             "remote_brain_outcome": safe_remote_outcome,
         }
 
+    @staticmethod
+    def _retry_result_without_pixels_outcome(runtime_result: Any) -> dict[str, Any]:
+        """Return a safe terminal fact for a retry result with no output pixels.
+
+        This is distinct from ``_retry_no_result_outcome``: planning and the
+        shared runtime completed, but their result did not materialize a
+        deliverable output.  Keep only normalized failure facts so public
+        status can explain the withheld delivery without exposing a provider
+        response, endpoint, prompt, or credential.
+        """
+
+        raw_status = getattr(runtime_result, "status", None)
+        runtime_status = str(getattr(raw_status, "value", raw_status) or "unknown").strip().lower()
+        result = getattr(runtime_result, "generation_result", None)
+        metadata = dict(getattr(result, "metadata", {}) or {})
+        summary = metadata.get("provider_failure_retry")
+        safe_provider_failure = (
+            {
+                key: summary.get(key)
+                for key in (
+                    "executed_count",
+                    "fresh_upstream_requests",
+                    "final_status",
+                    "final_classification",
+                    "final_failure_code",
+                )
+                if key in summary
+            }
+            if isinstance(summary, dict)
+            else {}
+        )
+        failure_code = str(safe_provider_failure.get("final_failure_code") or "").strip()
+        return {
+            "reason_code": "retry_provider_failed_without_pixels" if failure_code else "retry_generation_returned_without_pixels",
+            "runtime_status": runtime_status,
+            "provider_request_started": bool(safe_provider_failure.get("fresh_upstream_requests")),
+            "provider_failure": safe_provider_failure,
+        }
+
     def _visual_auto_retry_summary(self, records: list[dict[str, Any]], max_attempts: int) -> dict[str, Any]:
         executed = [record for record in records if record.get("status") == "executed"]
         issue_codes = self._dedupe_strings(code for record in records for code in record.get("reason_codes", []))
@@ -4479,6 +4544,24 @@ class V3ProductApiService:
             if output_id:
                 values.append(str(output_id))
         return self._dedupe_strings(values)
+
+    def _reviewed_result_output_ids(self, result: PlanningResult) -> list[str]:
+        """Return only output IDs that made it through post-generation review.
+
+        A planning result can legitimately omit an output ID from its asset
+        pack until the shared output resolver materializes it.  The canonical
+        source of truth immediately after review is therefore the inspection
+        package, rather than the pre-review asset metadata.
+        """
+
+        package = result.metadata.get("post_generation_review_package")
+        if not isinstance(package, dict):
+            return []
+        return self._dedupe_strings(
+            inspection.get("output_id")
+            for inspection in package.get("inspections", [])
+            if isinstance(inspection, dict) and inspection.get("output_id")
+        )
 
     def _visual_result_candidate_ids(self, result: PlanningResult) -> list[str]:
         values: list[str] = []
