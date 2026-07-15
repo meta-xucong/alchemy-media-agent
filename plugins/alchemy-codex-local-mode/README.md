@@ -33,6 +33,10 @@ such a path. Otherwise the planner blocks safely: it never probes Codex
 sessions/caches, imports a private artifact, or substitutes another image.
 `portrait_identity`, `product_truth`, and `nonhuman_identity` remain hard
 channels inside V3; callers cannot downgrade them.
+One channel may contain multiple user-authorized source files, such as a
+product's front and back views. The MCP preserves those files in the declared
+order and gives V3's ordinary admission/materialization path each original
+path; it does not collapse them into a local recipe or substitute a crop.
 
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the

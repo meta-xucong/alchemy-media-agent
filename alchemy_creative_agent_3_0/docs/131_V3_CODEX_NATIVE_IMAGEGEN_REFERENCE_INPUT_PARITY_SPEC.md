@@ -35,6 +35,13 @@ role for the declared channel, and requires that source as Provider input.  It
 does not send the file path to the remote Brain; the LLM-first compact Brain
 payload receives only safe asset evidence.
 
+`channel` describes evidence ownership, not a one-image slot. Multiple
+user-approved files may therefore share `product_truth` (for example, a
+product's front and back) or another declared channel. Their supplied order,
+paths, and hashes are preserved through ordinary V3 admission. Local Mode must
+not drop, relabel, merge, crop, or replace same-channel evidence to make the
+request fit a private schema.
+
 For each output, the response contains:
 
 - `imagegen_prompt` and `provider_prompt_sha256` from Doc130;

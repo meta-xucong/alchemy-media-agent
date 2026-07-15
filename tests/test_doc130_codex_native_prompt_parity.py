@@ -257,10 +257,10 @@ def test_count_mismatch_blocks_without_silent_truncation() -> None:
     assert result["code"] == "codex_native_imagegen_count_mismatch"
 
 
-def _write_png(path: Path) -> Path:
+def _write_png(path: Path, *, color: tuple[int, int, int] = (31, 99, 181)) -> Path:
     from PIL import Image
 
-    Image.new("RGB", (24, 18), color=(31, 99, 181)).save(path, format="PNG")
+    Image.new("RGB", (24, 18), color=color).save(path, format="PNG")
     return path
 
 
@@ -306,6 +306,41 @@ def test_reference_path_reuses_web_uploaded_asset_admission_and_prompt(tmp_path:
         "admitted_reference_count": 1,
         "source_sha256": [hashlib.sha256(source.read_bytes()).hexdigest()],
     }
+
+
+def test_multiple_same_channel_references_preserve_web_asset_order_and_prompt_parity(tmp_path: Path) -> None:
+    front = _write_png(tmp_path / "product-front.png")
+    back = _write_png(tmp_path / "product-back.png", color=(181, 99, 31))
+    captured: dict[str, Any] = {}
+
+    class _CapturingRuntime:
+        def plan_job(self, payload: dict[str, Any]) -> SimpleNamespace:
+            captured.update(payload)
+            return _canonical_runtime_result(uploaded_assets=list(payload["uploaded_assets"]))
+
+    request = NativeImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(front)},
+                {"channel": "product_truth", "file_path": str(back)},
+            ]
+        )
+    )
+    result = CodexNativeImageGenPlanner(runtime_factory=_CapturingRuntime).prepare_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert [item.file_path for item in captured["uploaded_assets"]] == [str(front.resolve()), str(back.resolve())]
+    assert [item.role.value for item in captured["uploaded_assets"]] == ["product_reference", "product_reference"]
+    assert result["outputs"][0]["reference_input_contract"] == {
+        "operation": "image_edit",
+        "declared_reference_count": 2,
+        "admitted_reference_count": 2,
+        "source_sha256": [
+            hashlib.sha256(front.read_bytes()).hexdigest(),
+            hashlib.sha256(back.read_bytes()).hexdigest(),
+        ],
+    }
+    assert result["outputs"][0]["reference_image_paths"] == [str(front.resolve()), str(back.resolve())]
 
 
 def test_reference_path_is_not_sent_to_remote_brain_compact_payload(tmp_path: Path) -> None:

@@ -197,12 +197,13 @@ class NativeImageGenPlanRequest:
                 "codex_native_imagegen_reference_input_invalid",
                 "Reference inputs must be a list.",
             )
+        # A channel describes source ownership, not a one-image slot.  A
+        # product's front, back, detail, or alternate angle can all be
+        # product truth and must reach the normal V3 asset admission path in
+        # the exact user-supplied order.  Web Mode accepts that evidence as
+        # separate UploadedAssetInfo records; Local Mode must not discard it
+        # merely because the evidence has one shared semantic owner.
         references = tuple(NativeReferenceInput.from_value(item) for item in references_value)
-        if len({item.channel for item in references}) != len(references):
-            raise CodexNativeImageGenError(
-                "codex_native_imagegen_reference_input_invalid",
-                "Reference input channels must be unique.",
-            )
         return cls(
             user_input=user_input,
             template_id=template_id,
