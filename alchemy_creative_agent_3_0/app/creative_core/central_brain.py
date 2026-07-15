@@ -19,7 +19,7 @@ from ..agents import (
 )
 from ..brand_memory.profile_service import BrandProfileService
 from ..evaluation import MockScoringProvider, RuleBasedPlanningScorer, RuleBasedRefinementProvider
-from ..generation_router import GenerationRequest, GenerationRouter, select_best_candidate
+from ..generation_router import GenerationRequest, GenerationRouter, safe_runtime_execution_budget, select_best_candidate
 from ..schemas import CandidateResult, EvaluationReport, PlanningResult, ProviderStrategy, Recommendation, ReferenceAsset
 from ..vertical_agents import VerticalAgentRegistry
 
@@ -866,7 +866,7 @@ class CentralCreativeBrain:
             outer_request_count = 0
         outcome = str(reference.get("operation_outcome") or "").strip().lower()
         state = "blocked" if outcome in {"failed", "empty_provider_output"} else "unknown"
-        return {
+        projection = {
             "state": state,
             "classification": classification,
             "failure_code": failure_code,
@@ -874,6 +874,10 @@ class CentralCreativeBrain:
             "reference_count": reference_count,
             "outer_request_count": outer_request_count,
         }
+        runtime_budget = safe_runtime_execution_budget(summary.get("execution_audit"))
+        if runtime_budget:
+            projection["runtime_budget"] = runtime_budget
+        return projection
 
     def _is_human_identity_suite_context(self, context: PipelineContext) -> bool:
         if str(context.metadata.get("scenario_id") or "").strip().lower() == "ecommerce":

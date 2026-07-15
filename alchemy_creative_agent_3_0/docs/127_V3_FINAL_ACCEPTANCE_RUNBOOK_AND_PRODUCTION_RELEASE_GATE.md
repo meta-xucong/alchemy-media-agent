@@ -207,9 +207,13 @@ This phase proves the governed path before vertical acceptance begins.
 When a specialized template executes independent frozen roles, the same
 no-pixel outcome must also be visible per role as a safe operational tuple:
 operation (`image_generate` or `image_edit`), reference count, outer-request
-count, classified failure code, and `blocked` state. Do not expose raw Provider
-messages, endpoint details, credentials, or candidate identifiers. A generic
-role exception alone is not enough evidence for acceptance diagnosis.
+count, classified failure code, `blocked` state, and the sanitized runtime
+budget (`gateway_managed_failover`, configured gateway budget, outer timeout,
+and outer-attempt cap when known). This evidence distinguishes a gateway-owned
+terminal timeout from a false local lifecycle claim without exposing raw
+Provider messages, endpoint details, credentials, prompts, account/line
+identifiers, or candidate identifiers. A generic role exception alone is not
+enough evidence for acceptance diagnosis.
 
 The in-process Project worker is not restart-resumable. On a singleton V3
 runtime restart, a persisted `generating` or `finalizing` Job whose recorded

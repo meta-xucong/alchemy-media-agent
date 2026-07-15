@@ -657,6 +657,49 @@ def test_v3_product_api_does_not_accept_low_level_generation_controls() -> None:
     assert "node graph" not in payload
 
 
+def test_public_provider_failure_keeps_runtime_budget_without_transport_details() -> None:
+    projected = V3ProductApiService._public_provider_failure_retry(  # noqa: SLF001
+        {
+            "executed_count": 0,
+            "max_attempts": 1,
+            "fresh_upstream_requests": 1,
+            "final_status": "failed",
+            "final_classification": "retryable_provider_failure",
+            "final_failure_code": "provider_timeout",
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "status": "failed",
+                    "classification": "retryable_provider_failure",
+                    "failure_code": "provider_timeout",
+                    "retryable": True,
+                    "message": "private provider body",
+                    "runtime_transport": {"endpoint": "https://private.invalid"},
+                }
+            ],
+            "execution_audit": {
+                "gateway_managed_failover": True,
+                "gateway_managed_failover_timeout_seconds": 600.0,
+                "outer_timeout_seconds": 605.0,
+                "outer_max_attempts": 1,
+                "provider_prompt_chars": 4000,
+                "provider_account_id": "private-account",
+            },
+        }
+    )
+
+    assert projected["runtime_budget"] == {
+        "gateway_managed_failover": True,
+        "gateway_budget_seconds": 600.0,
+        "outer_timeout_seconds": 605.0,
+        "outer_max_attempts": 1,
+    }
+    assert "private provider body" not in str(projected)
+    assert "private.invalid" not in str(projected)
+    assert "private-account" not in str(projected)
+    assert "provider_prompt_chars" not in str(projected)
+
+
 def test_minimal_ui_contract_uses_semantic_controls_and_v3_routes() -> None:
     service, _, _ = _service("ui")
     status = service.create_job({"user_input": "帮我做一个活动宣传图，适合小红书。"})

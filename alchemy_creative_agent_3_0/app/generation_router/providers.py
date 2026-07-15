@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 from pathlib import Path
 import re
 import threading
@@ -22,6 +23,46 @@ from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 from app.providers.base import ProviderRuntimeError
+
+
+def safe_runtime_execution_budget(execution_audit: Any) -> dict[str, Any]:
+    """Project only deadline ownership facts that are safe for Job clients.
+
+    The full Provider failure record is intentionally internal: it can contain
+    messages, upstream transport details, and other material that does not
+    belong on a Project or browser surface.  Acceptance still needs to know
+    whether one gateway-owned outer operation was allowed to use its configured
+    budget, so keep this deliberately small, bounded read model reusable by
+    generic and specialized execution paths.
+    """
+
+    audit = execution_audit if isinstance(execution_audit, dict) else {}
+    if not audit:
+        return {}
+
+    projected: dict[str, Any] = {}
+    if isinstance(audit.get("gateway_managed_failover"), bool):
+        projected["gateway_managed_failover"] = audit["gateway_managed_failover"]
+
+    for source_keys, public_key, maximum in (
+        (("gateway_managed_failover_timeout_seconds", "gateway_budget_seconds"), "gateway_budget_seconds", 7200.0),
+        (("outer_timeout_seconds",), "outer_timeout_seconds", 7200.0),
+    ):
+        raw_value = next((audit.get(key) for key in source_keys if audit.get(key) is not None), None)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and 0.0 < value <= maximum:
+            projected[public_key] = value
+
+    try:
+        attempts = int(audit.get("outer_max_attempts"))
+    except (TypeError, ValueError):
+        attempts = 0
+    if 1 <= attempts <= 10:
+        projected["outer_max_attempts"] = attempts
+    return projected
 
 
 class ReferenceInputAdmissionError(ProviderRuntimeError, ValueError):

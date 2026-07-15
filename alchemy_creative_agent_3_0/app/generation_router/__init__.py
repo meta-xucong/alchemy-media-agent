@@ -8,6 +8,7 @@ from .providers import (
     MockGenerationProvider,
     PlanningOnlyGenerationProvider,
     ProductionImageGenerationProvider,
+    safe_runtime_execution_budget,
 )
 from .router import GenerationRouter
 
@@ -19,6 +20,7 @@ __all__ = [
     "MockGenerationProvider",
     "PlanningOnlyGenerationProvider",
     "ProductionImageGenerationProvider",
+    "safe_runtime_execution_budget",
     "candidate_ids",
     "has_hard_failure",
     "rank_evaluated_candidates",

@@ -20,7 +20,7 @@ from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
-from ..generation_router import GenerationRouter, ProductionImageGenerationProvider
+from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..photography_profiles import (
     PhotographerProfileBinding,
@@ -5177,7 +5177,7 @@ class V3ProductApiService:
         """Expose retry counts and classified outcomes without raw provider data."""
 
         attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
-        return {
+        projected = {
             "executed_count": max(0, int(summary.get("executed_count") or 0)),
             "max_attempts": max(0, int(summary.get("max_attempts") or 0)),
             "fresh_upstream_requests": max(0, int(summary.get("fresh_upstream_requests") or 0)),
@@ -5195,6 +5195,10 @@ class V3ProductApiService:
                 for item in attempts
             ],
         }
+        runtime_budget = safe_runtime_execution_budget(summary.get("execution_audit"))
+        if runtime_budget:
+            projected["runtime_budget"] = runtime_budget
+        return projected
 
     def _public_provider_execution_status(self, record: ProductJobRecord) -> dict[str, Any] | None:
         """Derive a safe Provider/Reference execution read model for Job UI.
@@ -5346,7 +5350,7 @@ class V3ProductApiService:
             outer_request_count = 0
         if not any((state, classification, failure_code, operation, reference_count, outer_request_count)):
             return {}
-        return {
+        projected = {
             "state": state,
             "classification": classification,
             "failure_code": failure_code,
@@ -5354,6 +5358,10 @@ class V3ProductApiService:
             "reference_count": reference_count,
             "outer_request_count": outer_request_count,
         }
+        runtime_budget = safe_runtime_execution_budget(raw.get("runtime_budget"))
+        if runtime_budget:
+            projected["runtime_budget"] = runtime_budget
+        return projected
 
     @staticmethod
     def _review_certification_from_specialized_execution(execution: dict[str, Any]) -> dict[str, Any] | None:

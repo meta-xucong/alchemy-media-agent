@@ -70,6 +70,14 @@ class _RecordingProductionProvider(GenerationProvider):
                     "outer_request_count": 1,
                     "failure_code": "image_generation_invalid_request_unattributed",
                 },
+                "execution_audit": {
+                    "gateway_managed_failover": True,
+                    "gateway_managed_failover_timeout_seconds": 600.0,
+                    "outer_timeout_seconds": 605.0,
+                    "outer_max_attempts": 1,
+                    "provider_prompt_chars": 9999,
+                    "private_provider_endpoint": "https://private.invalid/v1/images/generations",
+                },
             }
             raise error
         image = BytesIO()
@@ -320,10 +328,18 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
         "operation": "image_generate",
         "reference_count": 0,
         "outer_request_count": 1,
+        "runtime_budget": {
+            "gateway_managed_failover": True,
+            "gateway_budget_seconds": 600.0,
+            "outer_timeout_seconds": 605.0,
+            "outer_max_attempts": 1,
+        },
     }
     successful_role = next(item for item in summary["roles"] if item["role_key"] == "session_hero")
     assert "provider_failure" not in successful_role
     assert "private_provider_message" not in str(summary)
+    assert "private_provider_endpoint" not in str(summary)
+    assert "provider_prompt_chars" not in str(summary)
 
     timeline = handlers.get_project_timeline(project["project_id"])["items"]
     root_items = [item for item in timeline if item.get("job_id") == root["job_id"]]
