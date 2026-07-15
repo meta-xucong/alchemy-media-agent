@@ -2002,6 +2002,23 @@ def test_v3_photography_generation_count_is_fixed_by_delivery_mode() -> None:
     assert "els.v3CountInput.disabled = fixedCount !== null;" in current
 
 
+def test_v3_terminal_failure_never_uses_successful_image_ready_copy() -> None:
+    """A no-pixel terminal run must not look like a ready image in the workspace."""
+
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    renderer_start = source.index("function renderV3OutcomeItems(entries)")
+    renderer_end = source.index("\nfunction v3ProgressElapsedLabel()", renderer_start)
+    renderer = source[renderer_start:renderer_end]
+
+    failed_branch = renderer.index("els.v3SummaryFootnote.textContent = failed")
+    success_copy = renderer.index("图片已准备好，下一步可以挑选满意方向。")
+    no_delivery_copy = renderer.index("本次没有交付图片，项目记录已保留；不会自动重复提交。")
+
+    assert failed_branch < no_delivery_copy < success_copy
+
+
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(

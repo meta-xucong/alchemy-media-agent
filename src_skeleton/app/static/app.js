@@ -6074,7 +6074,11 @@ function renderV3OutcomeItems(entries) {
       (v3State.currentJob ? "V3 正在把项目需求整理成可执行的画面方向。" : "写一句需求后，V3 会把它整理成清晰的画面方向。");
   }
   if (els.v3SummaryFootnote) {
-    els.v3SummaryFootnote.textContent = percent >= 100 ? "图片已准备好，下一步可以挑选满意方向。" : "如果网络短暂断开，页面会继续核对后台结果。";
+    els.v3SummaryFootnote.textContent = failed
+      ? "本次没有交付图片，项目记录已保留；不会自动重复提交。"
+      : percent >= 100
+        ? "图片已准备好，下一步可以挑选满意方向。"
+        : "如果网络短暂断开，页面会继续核对后台结果。";
   }
   els.v3CapabilityList.innerHTML = "";
   items.forEach((item, index) => {
