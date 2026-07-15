@@ -1,4 +1,4 @@
-"""Public-safe contracts for the Doc126 Codex Native ImageGen planner."""
+"""Public-safe contracts for the Doc129 Codex Native ImageGen planner."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Any
 
 
 NATIVE_EXECUTION_CHANNEL = "codex_native_imagegen"
-NATIVE_CREATIVE_DIRECTION_OWNER = "alchemy_v3_planning_only"
+NATIVE_PLANNING_AUTHORITY = "alchemy_v3_constraint_admission"
+NATIVE_CREATIVE_DIRECTION_OWNER = "codex_conversation_llm"
 NATIVE_RENDERER = "codex_builtin_imagegen"
 CONVERSATION_ONLY_DELIVERY_STATE = "conversation_only_not_certified"
 
@@ -105,7 +106,7 @@ class NativeReferenceDeclaration:
 
 @dataclass(frozen=True)
 class NativeImageGenPlanRequest:
-    """The entire public MCP input contract for Doc126 N1."""
+    """The entire public MCP input contract for Doc129 N2."""
 
     user_input: str
     template_id: str
@@ -180,7 +181,7 @@ def public_reference_instructions(declarations: tuple[NativeReferenceDeclaration
     """Tell Codex how to use conversation attachments without exposing paths."""
 
     if not declarations:
-        return ["No conversation reference was declared; use the returned whole-image direction without inventing a reference attachment."]
+        return ["No conversation reference was declared; do not invent or substitute a reference attachment."]
     instructions: list[str] = []
     for declaration in declarations:
         if declaration.attached_in_current_codex_conversation:

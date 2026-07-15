@@ -1,4 +1,4 @@
-"""Public-safe, prompt-plan-only provenance for Doc126."""
+"""Public-safe, constraint-admission provenance for Doc129."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from .contracts import (
     CONVERSATION_ONLY_DELIVERY_STATE,
     NATIVE_CREATIVE_DIRECTION_OWNER,
     NATIVE_EXECUTION_CHANNEL,
+    NATIVE_PLANNING_AUTHORITY,
     NATIVE_RENDERER,
 )
 
@@ -19,17 +20,18 @@ def native_plan_provenance(
     output_count: int,
     activation_plan_id: str,
     constraint_ledger_id: str,
-    fallback_used: bool,
+    admission_fallback_observed: bool,
 ) -> dict[str, Any]:
     """Return identifiers only; no prompt, path, image, or conversation state."""
 
     return {
-        "planner": NATIVE_CREATIVE_DIRECTION_OWNER,
+        "planner": NATIVE_PLANNING_AUTHORITY,
         "creative_direction_owner": NATIVE_CREATIVE_DIRECTION_OWNER,
         "execution_channel": NATIVE_EXECUTION_CHANNEL,
         "renderer": NATIVE_RENDERER,
         "delivery_state": CONVERSATION_ONLY_DELIVERY_STATE,
-        "fallback_used": bool(fallback_used),
+        "admission_fallback_observed": bool(admission_fallback_observed),
+        "legacy_creative_output_projected": False,
         "template_id": template_id,
         "scenario_id": scenario_id,
         "requested_output_count": output_count,

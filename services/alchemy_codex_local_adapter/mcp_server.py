@@ -1,4 +1,4 @@
-"""Doc126 native ImageGen stdio MCP: planning only, with no image transport."""
+"""Doc129 native ImageGen stdio MCP: admission only, with no image transport."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .facade import CodexNativeImageGenFacade
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "prepare_native_imagegen_plan",
-        "description": "Prepare an Alchemy V3 prompt plan for one explicit Codex Native ImageGen request; no image is created or imported.",
+        "description": "Prepare Alchemy V3 constraint admission for one explicit Codex Native ImageGen request; Codex authors the whole-image direction and no image is created or imported.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -64,7 +64,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.3.1-doc126-n1"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.4.0-doc129-n2"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -88,7 +88,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Doc126 native ImageGen planning-only stdio MCP bridge")
+    parser = argparse.ArgumentParser(description="Doc129 native ImageGen constraint-admission stdio MCP bridge")
     parser.add_argument("--enable-native-imagegen", action="store_true")
     arguments = parser.parse_args()
     adapter = CodexNativeImageGenFacade(enabled=arguments.enable_native_imagegen)

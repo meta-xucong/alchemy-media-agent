@@ -1,4 +1,4 @@
-"""Doc126 N1 regression tests for the conversation-only native ImageGen plan."""
+"""Doc126/129 regression tests for conversation-only native ImageGen admission."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _arguments(**overrides: Any) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _isolated_general_brain(monkeypatch: pytest.MonkeyPatch) -> None:
-    """General planning may use its existing non-remote planning fallback only."""
+    """Local Mode may observe fallback admission but never project its creative output."""
 
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
@@ -88,7 +88,7 @@ def test_plugin_launcher_starts_the_stdio_server_with_both_v3_source_roots() -> 
 
     assert completed.returncode == 0, completed.stderr
     responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.3.1-doc126-n1"
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.0-doc129-n2"
     assert [tool["name"] for tool in responses[1]["result"]["tools"]] == ["prepare_native_imagegen_plan"]
 
 
@@ -139,27 +139,40 @@ def test_general_plan_has_exact_frozen_count_and_conversation_only_provenance(mo
     assert result["execution_channel"] == "codex_native_imagegen"
     assert result["requested_output_count"] == 2
     assert len(result["outputs"]) == 2
-    assert len({item["role_lineage"] for item in result["outputs"]}) == 2
-    assert all(item["role_lineage"].startswith("template_deliverable_") for item in result["outputs"])
-    assert all(item["imagegen_prompt"] and item["hard_constraints"] for item in result["outputs"])
+    assert len({item["output_binding_id"] for item in result["outputs"]}) == 2
+    assert all(item["output_binding_id"].startswith("codex_native_output_") for item in result["outputs"])
+    assert all(item["creative_direction_brief"]["protected_user_intent"] for item in result["outputs"])
+    assert all(item["creative_direction_brief"]["constraints_to_preserve"] for item in result["outputs"])
     assert result["provenance"] == {
         **result["provenance"],
-        "planner": "alchemy_v3_planning_only",
-        "creative_direction_owner": "alchemy_v3_planning_only",
+        "planner": "alchemy_v3_constraint_admission",
+        "creative_direction_owner": "codex_conversation_llm",
         "execution_channel": "codex_native_imagegen",
         "renderer": "codex_builtin_imagegen",
         "delivery_state": "conversation_only_not_certified",
+        "legacy_creative_output_projected": False,
     }
     serialized = json.dumps(result, ensure_ascii=False)
-    assert "candidate" not in serialized.lower()
-    assert "artifact" not in serialized.lower()
-    assert "final_delivery" not in serialized.lower()
+    for forbidden in (
+        "imagegen_prompt",
+        "hero image",
+        "main visual",
+        "shot family",
+        "camera distance",
+        "crop/layout",
+        "role-specific",
+        "suite_direction",
+        "candidate",
+        "artifact",
+        "final_delivery",
+    ):
+        assert forbidden not in serialized.lower()
     assert "ecommerce_creative_context" not in serialized
     assert "copy_render_plan" not in serialized
     assert "photography" not in serialized.lower()
 
 
-def test_native_planning_never_constructs_or_calls_the_web_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_admission_never_constructs_or_calls_the_web_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
     import alchemy_creative_agent_3_0.app.llm_brain.adapter as brain_adapter
 
     class _DefaultProviderMustNotBeConstructed:
@@ -175,7 +188,8 @@ def test_native_planning_never_constructs_or_calls_the_web_remote_brain(monkeypa
     )
 
     assert result["status"] == "planned_for_codex_native_imagegen"
-    assert result["provenance"]["fallback_used"] is True
+    assert result["provenance"]["admission_fallback_observed"] is True
+    assert result["provenance"]["legacy_creative_output_projected"] is False
 
 
 def test_native_plan_does_not_create_files_or_a_delivery_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,17 +254,18 @@ def test_invalid_template_and_specialized_template_gates_fail_closed() -> None:
     assert ecommerce["code"] == photography["code"] == "codex_native_imagegen_template_not_enabled"
 
 
-def test_general_role_count_mismatch_blocks_instead_of_silently_truncating() -> None:
-    prompt = SimpleNamespace(visual_prompt="One whole-image native prompt.", hard_constraints=["Preserve declared truth."], text_policy="provider_native_text_forbidden")
-    planned_result = SimpleNamespace(prompt_compilations=[prompt])
+def test_general_count_mismatch_blocks_instead_of_silently_truncating() -> None:
     runtime_result = SimpleNamespace(
         status=ScenarioRuntimeStatus.PLANNED,
-        planning_result=planned_result,
+        planning_result=SimpleNamespace(prompt_compilations=[]),
         metadata={
-            "template_deliverable_plan": {"deliverables": [{"role": "first"}]},
             "resolved_constraint_ledger": {"ledger_id": "ledger_n1"},
-            "capability_execution_envelope": {"envelope_id": "envelope_n1"},
-            "normalized_v3_job_intent": {"effective_image_count": 2},
+            "capability_execution_envelope": {
+                "envelope_id": "envelope_n1",
+                "activation_mode": "enforced",
+                "activation_plan": {"active_capabilities": []},
+            },
+            "normalized_v3_job_intent": {"effective_image_count": 1},
         },
     )
     runtime = SimpleNamespace(plan_job=lambda _: runtime_result)
@@ -261,7 +276,52 @@ def test_general_role_count_mismatch_blocks_instead_of_silently_truncating() -> 
         )
     )
     assert result["status"] == "blocked"
-    assert result["code"] == "codex_native_imagegen_role_count_mismatch"
+    assert result["code"] == "codex_native_imagegen_count_mismatch"
+
+
+def test_native_admission_discards_legacy_runtime_prompt_and_role_payload() -> None:
+    legacy_prompt = SimpleNamespace(
+        visual_prompt="Hero image. Main visual. Shot family: hero image. Camera distance: medium.",
+        hard_constraints=["Role-specific output direction."],
+        text_policy="provider_native_no_forced_text",
+    )
+    runtime_result = SimpleNamespace(
+        status=ScenarioRuntimeStatus.PLANNED,
+        planning_result=SimpleNamespace(prompt_compilations=[legacy_prompt]),
+        metadata={
+            "llm_brain": {"fallback_used": True},
+            "template_deliverable_plan": {"deliverables": [{"role": "hero"}]},
+            "resolved_constraint_ledger": {"ledger_id": "ledger_n2"},
+            "capability_execution_envelope": {
+                "envelope_id": "envelope_n2",
+                "activation_mode": "enforced",
+                "activation_plan": {
+                    "active_capabilities": [
+                        {"capability_id": "human_realism"},
+                        {"capability_id": "suite_direction"},
+                    ]
+                },
+            },
+            "normalized_v3_job_intent": {
+                "effective_image_count": 1,
+                "protected_user_intent": "Create a relaxed family portrait in a park.",
+                "effective_image_size": "1024x1536",
+                "text_policy": "provider_native_no_forced_text",
+            },
+        },
+    )
+    runtime = SimpleNamespace(plan_job=lambda _: runtime_result)
+    result = CodexNativeImageGenPlanner(runtime_factory=lambda: runtime).prepare_native_imagegen_plan(
+        NativeImageGenPlanRequest.from_mcp_arguments(_arguments(requested_image_count=1))
+    )
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    brief = result["outputs"][0]["creative_direction_brief"]
+    assert brief["active_quality_capabilities"] == ["human_realism"]
+    assert "natural and consistent" in " ".join(brief["constraints_to_preserve"])
+    serialized = json.dumps(result, ensure_ascii=False).lower()
+    for forbidden in ("hero image", "main visual", "shot family", "camera distance", "role-specific", "suite_direction", "imagegen_prompt"):
+        assert forbidden not in serialized
 
 
 def test_public_contract_rejects_private_paths_jobs_provider_metadata_and_structured_secrets() -> None:
@@ -379,3 +439,11 @@ def test_plugin_launcher_uses_an_explicit_non_secret_repository_root_and_cache_s
     assert server["args"] == ["scripts/start_mcp.py", "--enable-native-imagegen"]
     assert server["cwd"] == "."
     assert server["env_vars"] == ["ALCHEMY_CODEX_LOCAL_REPO_ROOT"]
+
+
+def test_plugin_skill_requires_codex_authored_natural_direction_without_legacy_prompt_projection() -> None:
+    skill = (ROOT / "plugins" / "alchemy-codex-local-mode" / "skills" / "alchemy-local-run" / "SKILL.md").read_text(encoding="utf-8")
+    assert "creative_direction_brief" in skill
+    assert "author exactly" in skill
+    assert "imagegen_prompt" not in skill
+    assert "static role" in skill

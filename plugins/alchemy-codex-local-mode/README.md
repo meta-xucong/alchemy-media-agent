@@ -1,7 +1,7 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Doc126 plugin gives an interactive Codex agent one local stdio
-MCP planning tool: `prepare_native_imagegen_plan`. It does not create images,
+This isolated Doc129 plugin gives an interactive Codex agent one local stdio
+MCP constraint-admission tool: `prepare_native_imagegen_plan`. It does not create images,
 open a listener, start a background worker, control Codex, call the configured
 Web Brain or image Provider, or change Web Mode.
 
@@ -18,7 +18,7 @@ continuation surface.
 
 ## Input boundary
 
-The planning tool currently enables only `general_template`. E-Commerce and
+The admission tool currently enables only `general_template`. E-Commerce and
 Photography are deliberately blocked until their independent LLM-first and
 reference contracts can be proved without weakening them.
 
@@ -29,11 +29,13 @@ capability envelope, or credential. `portrait_identity`, `product_truth`, and
 `nonhuman_identity` are always hard channels: callers cannot set a flag to
 downgrade them.
 
-For every successful output, Codex uses the returned whole-image prompt in
-exactly one built-in image-generation call. Preserve the returned constraints
-as guardrails, but do not turn them into a keyword list or add a structured
-prompt recipe. If planning is blocked or the built-in tool is unavailable,
-stop without a fallback.
+For every successful output, Codex uses `creative_direction_brief` to author
+one natural-language whole-image direction in the conversation, then makes
+exactly one built-in image-generation call. Alchemy owns the protected user
+truth and guardrails; Codex owns this local creative direction. Do not turn
+the brief into a keyword list, and do not add a static role, suite, camera,
+crop, or other structured recipe. If admission is blocked or the built-in tool
+is unavailable, stop without a fallback.
 
 ## Local repository setup
 
