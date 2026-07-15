@@ -442,6 +442,46 @@ def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_4
     assert exc_info.value.provider_failure_retry["final_failure_code"] == "provider_policy_blocked"
 
 
+def test_gateway_nested_content_policy_signal_stops_v3_outer_retry(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    old_failover = settings.openai_image_gateway_managed_failover
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    settings.openai_image_gateway_managed_failover = False
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        calls.append(provider_name)
+        raise ProviderRuntimeError(
+            "OpenAI image edit request failed.",
+            provider="openai_gpt_image",
+            detail={
+                "error_type": "invalid_request_error",
+                "status_code": 400,
+                "message": "Smart Router fallback line returned 400 content_policy_violation",
+            },
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(_generation_request(_reference_image(tmp_path / "reference.png")))
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+        settings.openai_image_gateway_managed_failover = old_failover
+
+    summary = exc_info.value.provider_failure_retry
+    assert calls == ["openai_gpt_image"]
+    assert summary["final_failure_code"] == "provider_policy_blocked"
+    assert summary["final_classification"] == "non_retryable_provider_failure"
+    assert summary["reference_input_execution"]["failure_code"] == "provider_policy_blocked"
+
+
 def test_production_provider_retries_wrapped_provider_timeout_with_fresh_request(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
@@ -802,6 +842,54 @@ def test_production_provider_includes_human_photorealism_guidance(tmp_path, monk
     assert "same exact AI face repeated" in observed_negatives[-1]
     assert response.provider_metadata["strong_reference_closure_package"]["active"] is True
     assert response.provider_metadata["mode_quality_profile"]["mode"] == "selection_candidates"
+
+
+def test_doc124_safety_sensitive_person_profile_normalizes_framework_prompt_and_retry_terms() -> None:
+    request = _human_generation_request()
+    request.metadata.update(
+        {
+            "user_input": "Create one fully clothed school-age child in an ordinary daytime garden wearing the supplied blue dress.",
+            "require_real_images": True,
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "image_set_plan": {"shot_plan": ["one ordinary daytime garden photograph"]},
+            },
+            "visual_retry_patch": {
+                "prompt_additions": ["repair bad_hands_or_body and ai_face_render"],
+                "negative_additions": ["plastic skin", "bad_hands_or_body"],
+                "artifact_repair": ["repair face texture and hand anatomy"],
+            },
+        }
+    )
+    request.prompt_compilation.negative_prompt = "watermark"
+    cluster = request.metadata["visual_cluster"]
+    cluster["strong_reference_closure_package"] = {}
+    human_guidance = cluster["human_photorealism_guidance"]
+    human_guidance["metadata"] = {
+        "human_realism_plugin": {"safety_sensitive_person": True},
+        "provider_safety_profile": {
+            "applies": True,
+            "contract": "safety_sensitive_person_v1",
+            "internal_anatomy_or_quality_terms_suppressed": True,
+            "reference_scope": "resolved_channels_only",
+        },
+    }
+
+    provider = ProductionImageGenerationProvider()
+    final_prompt = provider._generation_prompt(request, [])  # noqa: SLF001
+    negative_constraints = provider._negative_constraints(request)  # noqa: SLF001
+
+    assert "Safety-sensitive person contract" in final_prompt
+    assert "fully dressed, age-appropriate, family-friendly" in final_prompt
+    assert "Keep the established age-appropriate, fully dressed, family-friendly" in final_prompt
+    assert "bad_hands_or_body" not in final_prompt
+    assert "ai_face_render" not in final_prompt
+    assert "visible skin texture" not in final_prompt
+    assert "believable hands" not in final_prompt
+    assert "plastic skin" not in negative_constraints
+    assert "bad_hands_or_body" not in negative_constraints
+    assert "watermark" in negative_constraints
 
 
 def test_production_provider_materializes_framework_without_losing_user_direction() -> None:

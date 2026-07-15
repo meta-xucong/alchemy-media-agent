@@ -249,6 +249,7 @@ def test_doc114_generic_human_realism_recognizes_numeric_age_and_photographic_sc
     )
 
     plugin = guidance.metadata["human_realism_plugin"]
+    provider_safety = guidance.metadata["provider_safety_profile"]
     positive_text = " ".join(guidance.positive_prompt_fragments).lower()
     negative_text = " ".join(guidance.negative_prompt_fragments).lower()
     review_text = " ".join(guidance.review_targets).lower()
@@ -256,6 +257,13 @@ def test_doc114_generic_human_realism_recognizes_numeric_age_and_photographic_sc
     assert plugin["universal_rendering_profile"]["age_fidelity"] == "follow_explicit_prompt"
     assert "explicit_age_fidelity_signal" in plugin["reason_codes"]
     assert plugin["universal_rendering_profile"]["scene_photographic_coherence"] == "preserve_physical_light_depth_contact"
+    assert plugin["safety_sensitive_person"] is True
+    assert provider_safety == {
+        "applies": True,
+        "contract": "safety_sensitive_person_v1",
+        "internal_anatomy_or_quality_terms_suppressed": True,
+        "reference_scope": "resolved_channels_only",
+    }
     assert "caught photographic moment" in positive_text
     assert "physically coherent photographed space" in positive_text
     assert "35mm or ccd-inspired" not in positive_text

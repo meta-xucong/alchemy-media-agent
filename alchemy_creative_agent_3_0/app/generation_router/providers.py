@@ -316,6 +316,58 @@ class GenerationProvider:
         guidance = cluster.get("human_photorealism_guidance") if isinstance(cluster, dict) else None
         return dict(guidance) if isinstance(guidance, dict) and guidance.get("applies") else {}
 
+    def _safety_sensitive_person_profile(
+        self,
+        request: GenerationRequest,
+        *,
+        human_guidance: dict[str, Any] | None = None,
+    ) -> bool:
+        """Return the shared Human Realism safety profile, never a template rule.
+
+        The profile is activated by explicit Human Realism evidence.  It
+        limits only framework-owned materializer text, so it cannot rewrite a
+        user's request or silently recast the subject to bypass a Provider
+        policy decision.
+        """
+
+        guidance = human_guidance if isinstance(human_guidance, dict) else self._human_photorealism_guidance(request)
+        metadata = guidance.get("metadata") if isinstance(guidance.get("metadata"), dict) else {}
+        profile = metadata.get("provider_safety_profile") if isinstance(metadata.get("provider_safety_profile"), dict) else {}
+        plugin = metadata.get("human_realism_plugin") if isinstance(metadata.get("human_realism_plugin"), dict) else {}
+        return bool(profile.get("applies") or plugin.get("safety_sensitive_person"))
+
+    @staticmethod
+    def _safety_sensitive_framework_fragments(values: list[str]) -> list[str]:
+        """Drop framework anatomy/beauty micro-detail language for this profile.
+
+        User-authored intent is carried separately and remains lossless.  This
+        filter applies only to reusable Human Realism/retry compiler text.
+        """
+
+        detail_markers = (
+            "skin",
+            "pore",
+            "face",
+            "facial",
+            "eye",
+            "eyelid",
+            "lip",
+            "mouth",
+            "jaw",
+            "chin",
+            "neck",
+            "shoulder",
+            "hand",
+            "finger",
+            "body",
+            "anatom",
+            "beauty",
+            "makeup",
+            "adultif",
+            "infantiliz",
+        )
+        return [value for value in values if not any(marker in value.lower() for marker in detail_markers)]
+
     def _strong_reference_closure_package(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request) and not self._active_capability(request, "portrait_identity"):
             return {}
@@ -2700,6 +2752,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             product_language_allowed=allow_product_language,
         )
         human_guidance = self._human_photorealism_guidance(request)
+        safety_sensitive_person = self._safety_sensitive_person_profile(
+            request,
+            human_guidance=human_guidance,
+        )
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
         reference_channel_contract = self._reference_channel_prompt_guidance(request)
         portrait_identity_contract = self._portrait_bone_structure_prompt_guidance(request)
@@ -2727,9 +2783,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]
         composed = self._composed_visual_contribution(request) if self._activation_enforced(request) else {}
         composed_prompt = [] if remote_general_contract else self._string_list(composed.get("prompt_additions"))
+        if safety_sensitive_person:
+            composed_prompt = self._safety_sensitive_framework_fragments(composed_prompt)
         parts = [
             (
-                "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
+                "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft."
+                if safety_sensitive_person and human_photo_context and not allow_product_language
+                else "Create a camera-real, directly usable creative image asset for a human photo, with publishable craft but no beauty-filter retouch."
                 if human_photo_context and not allow_product_language
                 else
                 "Create a polished, directly usable commercial product image asset."
@@ -2795,6 +2855,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             do_not_inherit = self._string_list(human_guidance.get("reference_do_not_inherit_rules"))
             lines = (
                 [
+                    "Safety-sensitive person contract: keep the person fully dressed, age-appropriate, family-friendly, and in an ordinary everyday setting.",
+                    "Use ordinary activity and full-frame or medium-distance framing; do not introduce intimate framing or change the requested age direction.",
+                    "Use natural camera realism through relaxed expression, coherent lighting, clothing materials, and environment; do not add framework micro-detail guidance.",
+                    "Human Realism improves rendering quality only and does not override the remote Brain's prompt-owned wardrobe, scene, lighting, camera, or styling decisions.",
+                ]
+                if safety_sensitive_person
+                else
+                [
                     "Real-person fidelity: preserve the requested age direction, natural proportions, visible skin texture, and believable hands; never beauty-filter, adultify, or reshape the person.",
                     "Human Realism improves rendering quality only and does not override the remote Brain's prompt-owned wardrobe, scene, lighting, camera, or styling decisions.",
                 ]
@@ -2807,6 +2875,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "Batch naturalness: vary expression, gaze, pose, and angle; do not use the same expression as every output.",
                 ]
             )
+            if safety_sensitive_person:
+                positive = self._safety_sensitive_framework_fragments(positive)
+                do_not_inherit = self._safety_sensitive_framework_fragments(do_not_inherit)
             if positive:
                 lines.append("Photoreal human rendering: " + "; ".join(positive[:4]))
             if do_not_inherit and reference_assets:
@@ -2911,6 +2982,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _identity_local_repair_prompt(self, request: GenerationRequest) -> str:
         if not bool(request.metadata.get("identity_local_repair_active")):
+            return ""
+        if self._safety_sensitive_person_profile(request):
+            # A face-local micro-repair is an optional shared quality path.
+            # It must not turn a safety-sensitive person request into an
+            # anatomy/identity-detail edit.  The ordinary Provider policy and
+            # final review gates remain authoritative.
             return ""
         return (
             "Identity-local repair operation: image 1 is the current generated canvas and its transparent mask is the only repair region. "
@@ -3082,12 +3159,21 @@ class ProductionImageGenerationProvider(GenerationProvider):
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
         guidance = llm_brain.get("prompt_guidance") if isinstance(llm_brain.get("prompt_guidance"), dict) else {}
         brain_negative = self._string_list(guidance.get("negative_prompt_addons"))[:8]
-        human_negative = self._string_list(self._human_photorealism_guidance(request).get("negative_prompt_fragments"))[:8]
+        human_guidance = self._human_photorealism_guidance(request)
+        human_negative = self._string_list(human_guidance.get("negative_prompt_fragments"))[:8]
         compiled_negative = [
             part.strip()
             for part in str(request.prompt_compilation.negative_prompt or "").replace("，", ",").split(",")
             if part.strip()
         ]
+        safety_sensitive_person = self._safety_sensitive_person_profile(
+            request,
+            human_guidance=human_guidance,
+        )
+        if safety_sensitive_person:
+            brain_negative = self._safety_sensitive_framework_fragments(brain_negative)
+            human_negative = []
+            compiled_negative = self._safety_sensitive_framework_fragments(compiled_negative)
         approved_literals = self._provider_native_text_literals(request)
         framework_negative: list[str] = []
         priority_markers = (
@@ -3827,6 +3913,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _negative_constraints(self, request: GenerationRequest) -> list[str]:
         allow_product_language = self._product_language_allowed(request, [])
         approved_literals = self._provider_native_text_literals(request)
+        human_guidance = self._human_photorealism_guidance(request)
+        safety_sensitive_person = self._safety_sensitive_person_profile(
+            request,
+            human_guidance=human_guidance,
+        )
         values = [
             "new visible text",
             "invented captions",
@@ -3862,22 +3953,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if request.prompt_compilation.negative_prompt:
             values.extend(part.strip() for part in request.prompt_compilation.negative_prompt.split(",") if part.strip())
         retry_patch = self._retry_patch(request)
-        values.extend(self._string_list(retry_patch.get("negative_additions")))
-        values.extend(self._string_list(retry_patch.get("negative_prompt_additions")))
-        values.extend(self._string_list(retry_patch.get("object_removal_instruction")))
-        values.extend(self._string_list(retry_patch.get("artifact_repair")))
+        if not safety_sensitive_person:
+            values.extend(self._string_list(retry_patch.get("negative_additions")))
+            values.extend(self._string_list(retry_patch.get("negative_prompt_additions")))
+            values.extend(self._string_list(retry_patch.get("object_removal_instruction")))
+            values.extend(self._string_list(retry_patch.get("artifact_repair")))
         role_recipe = self._mode_role_recipe(request)
         values.extend(self._string_list(role_recipe.get("negative_pressure")))
         values.extend(self._string_list(role_recipe.get("must_not_rules")))
         role_plan = self._role_specific_generation_plan(request)
         values.extend(self._string_list(role_plan.get("negative_additions")))
-        human_guidance = self._human_photorealism_guidance(request)
-        values.extend(self._string_list(human_guidance.get("negative_prompt_fragments")))
+        if not safety_sensitive_person:
+            values.extend(self._string_list(human_guidance.get("negative_prompt_fragments")))
         closure = self._strong_reference_closure_package(request)
-        values.extend(self._string_list(closure.get("negative_prompt_rules")))
+        if not safety_sensitive_person:
+            values.extend(self._string_list(closure.get("negative_prompt_rules")))
         mode_quality = self._mode_quality_profile(request)
         values.extend(self._string_list(mode_quality.get("negative_guidance")))
-        if self._activation_enforced(request):
+        if self._activation_enforced(request) and not safety_sensitive_person:
             values.extend(
                 self._string_list(self._composed_visual_contribution(request).get("negative_additions"))
             )
@@ -3891,6 +3984,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _retry_prompt_guidance(self, request: GenerationRequest) -> list[str]:
         retry_patch = self._retry_patch(request)
+        if retry_patch and self._safety_sensitive_person_profile(request):
+            # Retain a meaningful repair direction without serializing
+            # vision issue codes or anatomy/beauty micro-detail wording.
+            return [
+                "Keep the established age-appropriate, fully dressed, family-friendly everyday context and supplied reference channels. "
+                "Improve only overall photographic naturalness, clothing-material clarity, and scene coherence; do not add intimate framing or change the requested age direction."
+            ]
         guidance: list[str] = []
         prompt_additions = self._string_list(retry_patch.get("prompt_additions"))
         if prompt_additions:
