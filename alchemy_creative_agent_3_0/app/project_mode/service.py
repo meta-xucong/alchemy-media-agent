@@ -2717,10 +2717,51 @@ class V3ProjectModeService:
             requested_size = _infer_general_requested_image_size(request.user_input)
         if requested_size:
             parameters["requested_image_size"] = requested_size
+        # General starts in the scenario pack's neutral freeform state.  A
+        # Project Mode request may explicitly choose one of General's simple
+        # presentation modes, but it must never silently turn every new
+        # project into a campaign-poster job.  That old default caused
+        # ordinary single-image work to inherit an unrelated promotional
+        # framing at the very first project boundary.
+        general_modes = {
+            "freeform",
+            "campaign_poster",
+            "social_cover",
+            "brand_visual",
+            "product_style_hero",
+        }
+        general_presets = {
+            "blank",
+            "campaign_poster",
+            "social_cover",
+            "brand_key_visual",
+            "product_style_hero",
+        }
+        mode_id = str(
+            request.metadata.get("selected_mode_id")
+            or request.metadata.get("mode_id")
+            or "freeform"
+        ).strip()
+        if mode_id not in general_modes:
+            mode_id = "freeform"
+        default_presets = {
+            "freeform": "blank",
+            "campaign_poster": "campaign_poster",
+            "social_cover": "social_cover",
+            "brand_visual": "brand_key_visual",
+            "product_style_hero": "product_style_hero",
+        }
+        preset_id = str(
+            request.metadata.get("selected_preset_id")
+            or request.metadata.get("preset_id")
+            or default_presets[mode_id]
+        ).strip()
+        if preset_id not in general_presets:
+            preset_id = default_presets[mode_id]
         return {
             "scenario_id": manifest.scenario_pack_id,
-            "mode_id": "campaign_poster",
-            "preset_id": "campaign_poster",
+            "mode_id": mode_id,
+            "preset_id": preset_id,
             "parameters": parameters,
         }
 

@@ -249,6 +249,8 @@ def test_project_mode_creates_general_project_and_job_without_rewriting_product_
     assert project["primary_template_id"] == "general_template"
     assert job["status"] == "planned"
     assert job["scenario"]["scenario_id"] == "general_creative"
+    assert job["scenario"]["selected_mode_id"] == "freeform"
+    assert job["scenario"]["selected_preset_id"] == "blank"
     assert job["metadata"]["project_id"] == project["project_id"]
     assert job["metadata"]["template_id"] == "general_template"
 
