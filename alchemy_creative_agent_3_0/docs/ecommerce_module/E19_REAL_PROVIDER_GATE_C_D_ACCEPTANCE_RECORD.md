@@ -205,3 +205,26 @@ neither may be replayed. Further real E-Commerce Gate C work is blocked until
 mainline/upstream supplies a diagnosable corrective change and explicitly
 authorizes a new isolated attempt. Gate D and the E-Commerce production gate
 remain blocked.
+
+## 2026-07-15 Runtime failure-evidence observability precondition
+
+After the recorded runs, mainline added a safe, payload-free runtime-budget
+projection in `origin/main@153c6b9`. The controlled 8017 service was refreshed
+to that code with production gates unchanged. For a future generic Provider
+failure, the public job evidence may now include only:
+
+- `gateway_managed_failover`;
+- `gateway_budget_seconds`;
+- `outer_timeout_seconds`; and
+- `outer_max_attempts`.
+
+This is observability for the existing gateway-owned operation, not a new
+E-Commerce execution path. It does not reveal an error body, endpoint,
+account/line information, prompt, reference bytes, or candidate data; it does
+not change reference admission, retry ownership, count semantics, or the
+classification of either exhausted job above. In particular, it supplies no
+safe attribution for `image_edit_invalid_request_unattributed` and does not
+authorize replay, a new job, or Gate C/D credit. A new Gate C attempt remains
+blocked pending a payload-free, diagnosable image-edit transaction cause and
+explicit owner authorization for new controlled material and one fresh outer
+request.
