@@ -33,9 +33,11 @@ There are two deliberately separate decisions:
 No team may call code closure a production pass, or call a Provider outage an
 Alchemy code failure without a reproducible local/runtime defect.
 
-## 2. Local MCP Is The General Visual Oracle
+## 2. Local MCP Is The Canonical Planning Oracle
 
-Doc130/131 Local MCP is the code-closure visual oracle for `general_template`:
+Doc130/131 Local MCP is the code-closure visual oracle for `general_template`.
+Doc133 extends that same canonical materialization boundary to explicit frozen
+E-Commerce and Photography plans:
 
 ```text
 same shared Scenario Runtime + remote Central Brain + frozen envelope
@@ -71,6 +73,7 @@ python -m compileall -q alchemy_creative_agent_3_0/app alchemy_creative_agent_3_
 node --check src_skeleton/app/static/app.js
 git diff --check
 python -m pytest tests/test_doc130_codex_native_prompt_parity.py -q
+python -m pytest tests/test_doc133_codex_native_specialized_relay.py -q
 ```
 
 The final command proves canonical Local MCP parity; it does not substitute
@@ -176,7 +179,8 @@ mainline: Doc132 + M1-M5 + common regression + integration
     |-- E-Commerce: Section 5 fixture/UI package
     `-- Photography: Section 6 fixture/UI package
 
-MCP专用: General-only visual checks on the exact shared prompt/reference path
+MCP 专用: exact shared prompt/reference checks for General and explicit
+          frozen specialized plans only
 ```
 
 Every worker uses a dedicated worktree and branch. The mainline integrator is
@@ -188,10 +192,10 @@ and the full V3 suite, then pushes a small verified integration commit.
 ## 9. Completion Rules
 
 **Alchemy code closure is complete** when M1-M5, Sections 5 and 6, shared
-regression, and the relevant Local MCP General T2I/reference evidence are
-green on one clean main commit. At that point, remaining Provider 4xx/5xx,
-timeouts, routing and real-pixel review availability are `upstream_hold`, not
-reasons to continue altering Alchemy.
+regression, and the relevant Local MCP General and frozen-specialist
+prompt/reference evidence are green on one clean main commit. At that point,
+remaining Provider 4xx/5xx, timeouts, routing and real-pixel review
+availability are `upstream_hold`, not reasons to continue altering Alchemy.
 
 **Production release remains governed by Doc127.** Its Web Provider and
 real-pixel review gates may be resumed only when the upstream owner reports a

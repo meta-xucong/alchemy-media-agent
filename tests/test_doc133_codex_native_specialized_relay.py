@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import json
@@ -21,6 +22,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     build_provider_generation_request,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from alchemy_creative_agent_3_0.tests.photography_test_support import PhotographyRemoteBrainTestProvider
@@ -92,6 +94,12 @@ def _provider_materializations(runtime_result) -> list[Any]:
     ]
 
 
+def _forbid_project_side_effect(*_args: Any, **_kwargs: Any) -> None:
+    """Make any accidental Local-MCP Project Mode mutation fail loudly."""
+
+    raise AssertionError("Codex Native ImageGen relay must not create or mutate Project Mode state")
+
+
 @pytest.mark.parametrize("count", [1, 2, 4, 7])
 def test_ecommerce_specialized_relay_projects_exact_brain_count_and_canonical_provider_contract(
     tmp_path: Path,
@@ -107,6 +115,11 @@ def test_ecommerce_specialized_relay_projects_exact_brain_count_and_canonical_pr
         raise AssertionError("Local MCP must not select an upstream image provider")
 
     monkeypatch.setattr(ProductionImageGenerationProvider, "_select_provider", must_not_select_provider)
+    monkeypatch.setattr(V3ProjectModeService, "create_project", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "create_project_job", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "generate_project_job", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "create_ecommerce_slot_continuation", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "create_photography_role_continuation", _forbid_project_side_effect)
     result = planner.prepare_frozen_specialized_native_imagegen_plan(
         NativeSpecializedImageGenPlanRequest.from_mcp_arguments(
             _arguments(
@@ -277,3 +290,71 @@ def test_specialized_mcp_tool_is_explicit_and_general_contract_remains_compatibl
     payload = json.loads(response["result"]["content"][0]["text"])
     assert payload["status"] == "blocked"  # unavailable remote Brain, before any image path
     assert payload["delivery_state"] == "no_image_created"
+
+
+def test_specialized_relay_source_has_no_project_or_delivery_persistence_write_surface() -> None:
+    """The conversation-only relay must never gain an indirect write path.
+
+    This source-level guard complements the behavioral Project Mode tripwires
+    in the E-Commerce parity test.  It permits normal in-memory planning and
+    canonical materialization, but forbids importing or calling any project,
+    candidate, review, retry, or delivery persistence surface.
+    """
+
+    repository_root = Path(__file__).resolve().parents[1]
+    adapter_sources = [
+        repository_root / "services" / "alchemy_codex_local_adapter" / filename
+        for filename in ("contracts.py", "facade.py", "mcp_server.py", "native_planner.py", "provenance.py")
+    ]
+    forbidden_modules = {
+        "alchemy_creative_agent_3_0.app.product_api",
+        "alchemy_creative_agent_3_0.app.project_mode",
+        "alchemy_creative_agent_3_0.app.project_store",
+        "alchemy_creative_agent_3_0.app.review",
+        "alchemy_creative_agent_3_0.app.retry",
+    }
+    forbidden_constructors = {
+        "V3ProductApiService",
+        "ProjectModeService",
+        "ProjectStore",
+        "CandidateStore",
+        "ReviewStore",
+        "RetryStore",
+        "DeliveryStore",
+    }
+    forbidden_write_calls = {
+        "create_project",
+        "update_project",
+        "save_project",
+        "create_job",
+        "update_job",
+        "save_job",
+        "create_candidate",
+        "store_candidate",
+        "record_review",
+        "record_retry",
+        "record_delivery",
+        "write_text",
+        "write_bytes",
+    }
+
+    for source_path in adapter_sources:
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        imported_modules = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        assert not (imported_modules & forbidden_modules), source_path
+
+        call_names = {
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+        }
+        assert not (call_names & forbidden_constructors), source_path
+        assert not (call_names & forbidden_write_calls), source_path
