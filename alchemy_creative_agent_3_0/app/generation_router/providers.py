@@ -597,6 +597,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
     # module-owned guidance into a concise provider transport contract.
     provider_prompt_target_chars = 15000
     max_provider_prompt_chars: int | None = None
+    # V3's sole final-pixel renderer currently accepts at most five image
+    # inputs.  Keep the limit beside the V3 admission boundary rather than
+    # silently slicing a caller's reference evidence and discovering the
+    # mismatch only after a provider request is assembled.
+    max_provider_reference_images = 5
 
     def __init__(self, output_store: Any | None = None) -> None:
         if output_store is None:
@@ -1390,7 +1395,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             request,
             reference_assets=raw_assets,
             operation=operation,
-            admission_outcome="ineligible" if failure_code == "reference_input_unsupported" else "admitted",
+            admission_outcome=(
+                "ineligible"
+                if failure_code in {"reference_input_unsupported", "reference_input_capability_mismatch"}
+                else "admitted"
+            ),
         )
         reference_execution = {
             **reference_execution,
@@ -1817,7 +1826,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "required_reference_count": len(required_unresolved),
                 },
             )
-        return assets[:6]
+        if len(assets) > self.max_provider_reference_images:
+            # Reference count is a technical admission fact, not creative
+            # evidence that V3 may trim.  A required or optional image input
+            # must either fit the declared GPT Image 2 contract or stop before
+            # any gateway request; otherwise an omitted source could silently
+            # change the user-authorized reference truth.
+            resolution_audit["capacity_exceeded"] = {
+                "reference_count": len(assets),
+                "maximum_reference_images": self.max_provider_reference_images,
+            }
+            request.metadata["provider_reference_resolution_audit"] = resolution_audit
+            raise ReferenceInputAdmissionError(
+                "The configured image route cannot accept all declared reference images; no reference may be silently omitted.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_capability_mismatch",
+                    "reference_count": len(assets),
+                    "maximum_reference_images": self.max_provider_reference_images,
+                },
+            )
+        return assets
 
     @staticmethod
     def _reference_technical_admission(file_path: Path) -> tuple[bool, str]:

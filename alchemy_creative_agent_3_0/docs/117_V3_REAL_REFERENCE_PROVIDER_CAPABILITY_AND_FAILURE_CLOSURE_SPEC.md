@@ -179,6 +179,18 @@ The first real image-edit request is the only valid semantic eligibility test
 for the configured upstream. Local checks can establish file/transport
 admission; they cannot claim that an upstream will accept the image content.
 
+### R5. Reference capacity is an admission boundary, never a truncation rule
+
+The configured GPT Image 2 transport accepts at most five reference images for
+one materialization operation. This is a technical capability contract, not a
+creative ranking hint. If the resolved source-truth package contains more
+references than the transport can accept, V3 must stop locally as
+`reference_input_capability_mismatch`, record zero outer requests, and ask for
+a compatible declared evidence set in a subsequent user-authorized operation.
+It must not discard the sixth (or any later) reference, synthesize a prompt-only
+substitute, or choose a source by a hidden recipe. This rule is shared across
+General, E-Commerce, and Photography.
+
 ### R4. A reference rejection is not a failed visual review
 
 When the upstream rejects a reference input before generating pixels, there is
@@ -269,7 +281,7 @@ Required invariants:
    image input or the Job is blocked. It cannot silently become prompt-only.
 2. Local admission validates only safe technical facts: successful decode,
    decoded-media signature rather than declared MIME alone, dimensions, byte
-   limits, derivative integrity, reference count, and configured transport
+   limits, derivative integrity, reference count/capacity, and configured transport
    capability. It never asserts content-policy eligibility.
 3. A stable upstream 4xx maps to `reference_input_rejected` only when
    structured/redacted evidence actually attributes it to the reference input.

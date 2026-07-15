@@ -415,6 +415,58 @@ def test_generic_provider_400_stays_unattributed_by_operation(tmp_path, monkeypa
     assert summary["reference_input_execution"]["outer_request_count"] == 1
 
 
+def test_reference_capacity_mismatch_blocks_before_gateway_without_silent_truncation(tmp_path, monkeypatch) -> None:
+    """Doc117: declared reference truth must fit transport capacity as-is."""
+
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        calls.append(provider_name)
+        raise AssertionError("capacity mismatch must stop before a gateway request")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    request = _generation_request()
+    references = []
+    for index in range(6):
+        path = tmp_path / f"reference_{index}.png"
+        path.write_bytes(base64.b64decode(_png_base64(width=96 + index, height=72 + index)))
+        references.append(
+            {
+                "asset_id": f"reference_{index}",
+                "role": "product_reference",
+                "filename": path.name,
+                "mime_type": "image/png",
+                "file_path": str(path),
+                "provider_input_required": True,
+            }
+        )
+    request.metadata["uploaded_assets"] = references
+
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    settings.openai_api_key = "test-key"
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(request)
+    finally:
+        settings.openai_api_key = old_key
+
+    assert calls == []
+    summary = exc_info.value.provider_failure_retry
+    audit = summary["reference_input_execution"]
+    assert summary["fresh_upstream_requests"] == 0
+    assert summary["final_failure_code"] == "reference_input_capability_mismatch"
+    assert audit["admission_outcome"] == "ineligible"
+    assert audit["reference_count"] == 6
+    assert audit["outer_request_count"] == 0
+    assert request.metadata["provider_reference_resolution_audit"]["capacity_exceeded"] == {
+        "reference_count": 6,
+        "maximum_reference_images": 5,
+    }
+
+
 def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_400(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
