@@ -1965,6 +1965,23 @@ def test_project_output_board_discloses_safe_shared_review_state() -> None:
     assert "需要人工确认" in source
 
 
+def test_v3_template_catalog_rerenders_after_initial_loading_settles() -> None:
+    """A refreshed V3 home must replace the catalog loading placeholder."""
+
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    shell_start = source.index("async function initV3Shell")
+    shell_end = source.index("\nfunction handleV3ScenarioClick", shell_start)
+    shell = source[shell_start:shell_end]
+
+    settled = shell.index("v3State.loading = false;")
+    rerender = shell.index("renderV3HomeTemplateChooser();", settled)
+    page_ready = shell.index("setV3PageLoading(false);", settled)
+
+    assert settled < rerender < page_ready
+
+
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(

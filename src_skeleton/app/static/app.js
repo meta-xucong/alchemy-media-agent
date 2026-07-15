@@ -1610,6 +1610,10 @@ async function initV3Shell({ force = false } = {}) {
     }
   } finally {
     v3State.loading = false;
+    // The initial catalog render deliberately shows a loading placeholder.
+    // Re-render after the request settles so a refresh cannot leave the
+    // available template catalog permanently hidden behind that placeholder.
+    renderV3HomeTemplateChooser();
     await waitForV3HomePreviewImages();
     setV3PageLoading(false);
     renderV3ScenarioState();
