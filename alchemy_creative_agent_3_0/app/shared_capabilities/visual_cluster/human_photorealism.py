@@ -119,6 +119,21 @@ _NEGATION_TERMS = {
     "不是",
 }
 
+# These patterns describe a rendered-looking word as a physical object's
+# content or placement, rather than as the requested rendering medium for the
+# complete image.  They deliberately name only generic surface semantics: the
+# same distinction applies to packaging, a book cover, a garment, a sign, or
+# another reference-bound object.
+_ILLUSTRATION_OBJECT_DETAIL_PATTERNS = (
+    re.compile(
+        r"\b(?:illustration|illustrated)\s+(?:placement|print|pattern|motif|graphic|detail|element|artwork|design)\b"
+    ),
+    re.compile(
+        r"\b(?:front|back|side|surface|cover|label|package|product)\s+(?:illustration|illustrated)\b"
+    ),
+    re.compile(r"(?:插画|插图|漫画)(?:位置|摆放|图案|印花|元素|细节|设计)"),
+)
+
 _PRODUCT_WITH_HUMAN_TERMS = {
     "apparel",
     "clothing",
@@ -1010,10 +1025,29 @@ def _stylized_requested(text: str) -> bool:
         index = text.find(term)
         while index >= 0:
             prefix = text[max(0, index - 28) : index]
+            if _stylized_term_describes_object_detail(text, term, index):
+                index = text.find(term, index + len(term))
+                continue
             if not any(negation in prefix for negation in _NEGATION_TERMS):
                 return True
             index = text.find(term, index + len(term))
     return False
+
+
+def _stylized_term_describes_object_detail(text: str, term: str, index: int) -> bool:
+    """Keep an object's artwork fact from changing the whole-image style.
+
+    A word such as ``illustration`` is a style signal only when it directs the
+    rendering of the image or subject.  In a reference-truth request it can
+    also describe a product's visible print, motif, or placement.  Treating
+    the latter as a style instruction would silently suppress shared Human
+    Realism for an otherwise real-person photograph.
+    """
+
+    if term not in {"illustration", "illustrated", "插画", "插图", "漫画"}:
+        return False
+    window = text[max(0, index - 48) : index + len(term) + 72]
+    return any(pattern.search(window) for pattern in _ILLUSTRATION_OBJECT_DETAIL_PATTERNS)
 
 
 def _universal_rendering_profile(text: str, *, metadata: dict[str, Any]) -> dict[str, Any]:
