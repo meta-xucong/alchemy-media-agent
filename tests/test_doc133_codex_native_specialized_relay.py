@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import json
@@ -277,3 +278,71 @@ def test_specialized_mcp_tool_is_explicit_and_general_contract_remains_compatibl
     payload = json.loads(response["result"]["content"][0]["text"])
     assert payload["status"] == "blocked"  # unavailable remote Brain, before any image path
     assert payload["delivery_state"] == "no_image_created"
+
+
+def test_specialized_relay_source_has_no_project_or_delivery_persistence_write_surface() -> None:
+    """The conversation-only relay must never gain an indirect write path.
+
+    This source-level guard complements the behavioral no-Provider tests above.
+    It intentionally permits normal in-memory planning (`ScenarioRuntime.plan_job`)
+    and canonical materialization, but forbids importing or calling the Project,
+    Product API, result-history, review, retry, or delivery persistence surfaces.
+    """
+
+    repository_root = Path(__file__).resolve().parents[1]
+    adapter_sources = [
+        repository_root / "services" / "alchemy_codex_local_adapter" / filename
+        for filename in ("contracts.py", "facade.py", "mcp_server.py", "native_planner.py", "provenance.py")
+    ]
+    forbidden_modules = {
+        "alchemy_creative_agent_3_0.app.product_api",
+        "alchemy_creative_agent_3_0.app.project_mode",
+        "alchemy_creative_agent_3_0.app.project_store",
+        "alchemy_creative_agent_3_0.app.review",
+        "alchemy_creative_agent_3_0.app.retry",
+    }
+    forbidden_constructors = {
+        "V3ProductApiService",
+        "ProjectModeService",
+        "ProjectStore",
+        "CandidateStore",
+        "ReviewStore",
+        "RetryStore",
+        "DeliveryStore",
+    }
+    forbidden_write_calls = {
+        "create_project",
+        "update_project",
+        "save_project",
+        "create_job",
+        "update_job",
+        "save_job",
+        "create_candidate",
+        "store_candidate",
+        "record_review",
+        "record_retry",
+        "record_delivery",
+        "write_text",
+        "write_bytes",
+    }
+
+    for source_path in adapter_sources:
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        imported_modules = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        assert not (imported_modules & forbidden_modules), source_path
+
+        call_names = {
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+        }
+        assert not (call_names & forbidden_constructors), source_path
+        assert not (call_names & forbidden_write_calls), source_path

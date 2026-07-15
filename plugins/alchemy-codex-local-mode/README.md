@@ -30,13 +30,17 @@ Photography accepts only an existing structural mode and a General Photography
 binding; named profiles fail closed because Local MCP cannot manufacture the
 Project/API immutable confirmation.
 
-It accepts only user input, General, requested count/size, and explicit
-`reference_inputs` (`channel` plus a user-authorized readable local
-`file_path`). That file is passed into the ordinary V3 uploaded-asset contract
-unchanged; V3 then returns the Web-admitted reference paths with the canonical
-prompt.  A Codex conversation attachment is usable only when the host exposes
-such a path. Otherwise the planner blocks safely: it never probes Codex
-sessions/caches, imports a private artifact, or substitutes another image.
+The General tool accepts user input, an explicit `general_template`, requested
+count/size, and explicit `reference_inputs` (`channel` plus a user-authorized
+readable local `file_path`). The specialized relay accepts those shared inputs
+only together with an explicit specialist template: E-Commerce provides its
+platform evidence, while Photography provides its existing structural mode and
+profile binding. Both entries pass each source file into the ordinary V3
+uploaded-asset contract unchanged; V3 then returns the Web-admitted reference
+paths with the canonical prompt. A Codex conversation attachment is usable
+only when the host exposes such a path. Otherwise the planner blocks safely:
+it never probes Codex sessions/caches, imports a private artifact, or
+substitutes another image.
 `portrait_identity`, `product_truth`, and `nonhuman_identity` remain hard
 channels inside V3; callers cannot downgrade them.
 One channel may contain multiple distinct user-authorized source files, such
