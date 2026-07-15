@@ -68,10 +68,12 @@ C/D, project continuation, or production readiness.
 
 ## Historical N1 limits
 
-1. **General only.** `ecommerce_template` and `photographer_template` return
+1. **Historical General only.** `ecommerce_template` and `photographer_template` return
    `codex_native_imagegen_template_not_enabled`. They must not fall back to
    General because their remote-Brain, role-count, profile, and reference
-   contracts need a separate future design review.
+   contracts needed a separate design review. Doc133 is that later,
+   fail-closed specialist-relay authority; this historical N1 record remains
+   unchanged otherwise.
 2. **Conversation references are declarative.** The MCP never sees a path or
    image byte. It tells Codex to use the exact attached image in its native
    tool call. `portrait_identity`, `product_truth`, and `nonhuman_identity`
@@ -141,8 +143,9 @@ not a credential, and must not contain a token or an API key.
 No future phase may claim image certification merely because Codex displayed an
 image. A supported platform artifact handoff would require a new document and
 separate review before any import, shared review/retry, project history, or
-delivery work begins. E-Commerce and Photography native support are likewise
-deferred until their stricter contracts can remain fail-closed.
+delivery work begins. Doc133 later adds only a conversation-only frozen-plan
+relay for E-Commerce and Photography; artifact handoff, review/retry, project
+history, delivery, and production claims remain deferred.
 
 Doc76, Docs93–96, Doc109, Doc113, Doc115, Doc116, and mainline Doc117 retain
 their existing authority. When this document conflicts with a Web production

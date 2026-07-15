@@ -82,8 +82,15 @@ def configure_import_paths(root: Path) -> None:
 
     for candidate in (root, root / "alchemy_creative_agent_3_0", root / "src_skeleton"):
         value = str(candidate)
-        if value not in sys.path:
-            sys.path.insert(0, value)
+        # An inherited PYTHONPATH can already contain src_skeleton.  Merely
+        # skipping that existing entry would leave alchemy_creative_agent_3_0
+        # ahead of it, making the historical absolute ``app.providers``
+        # compatibility import resolve to the wrong package.  Normalize the
+        # exact source order every time without reading any provider config:
+        # src_skeleton, V3 package root, repository root.
+        while value in sys.path:
+            sys.path.remove(value)
+        sys.path.insert(0, value)
 
 
 def main() -> int:

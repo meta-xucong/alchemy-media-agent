@@ -23,6 +23,12 @@ _ALLOWED_TOP_LEVEL_FIELDS = {
     "requested_image_size",
     "reference_inputs",
 }
+_SPECIALIZED_ALLOWED_TOP_LEVEL_FIELDS = {
+    *_ALLOWED_TOP_LEVEL_FIELDS,
+    "platform_profile",
+    "photography_mode",
+    "photographer_profile_id",
+}
 _ALLOWED_REFERENCE_FIELDS = {"channel", "file_path"}
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
@@ -211,6 +217,115 @@ class NativeImageGenPlanRequest:
             requested_image_size=size,
             reference_inputs=references,
         )
+
+
+@dataclass(frozen=True)
+class NativeSpecializedImageGenPlanRequest:
+    """Public, conversation-only admission for one frozen specialist plan.
+
+    This deliberately is not an extension of the General tool.  E-Commerce
+    requires an explicit platform-evidence selector, while Photography needs
+    an explicit structural delivery mode and an immutable profile decision.
+    The adapter may only pin the existing General Photography default; named
+    profiles remain a Project/API-owned binding and therefore fail closed
+    here instead of being imitated by a local selector.
+    """
+
+    user_input: str
+    template_id: str
+    requested_image_count: int
+    requested_image_size: str | None
+    reference_inputs: tuple[NativeReferenceInput, ...]
+    platform_profile: str | None
+    photography_mode: str | None
+    photographer_profile_id: str | None
+
+    @classmethod
+    def from_mcp_arguments(cls, value: Any) -> "NativeSpecializedImageGenPlanRequest":
+        if not isinstance(value, dict) or set(value) - _SPECIALIZED_ALLOWED_TOP_LEVEL_FIELDS:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_invalid_input",
+                "Only the documented frozen specialized-plan fields are accepted.",
+            )
+        if missing := (_SPECIALIZED_ALLOWED_TOP_LEVEL_FIELDS - set(value)):
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_invalid_input",
+                f"Missing required planning fields: {', '.join(sorted(missing))}.",
+            )
+
+        # Reuse the stable General request parser for every shared field.  It
+        # also keeps sensitive-field rejection and reference hashing exactly
+        # identical between the two public MCP tools.
+        common = NativeImageGenPlanRequest.from_mcp_arguments(
+            {key: value[key] for key in _ALLOWED_TOP_LEVEL_FIELDS}
+        )
+
+        def optional_identifier(field: str) -> str | None:
+            raw = value.get(field)
+            if raw is None:
+                return None
+            if not isinstance(raw, str):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_specialized_input_invalid",
+                    f"{field} must be a string or null.",
+                )
+            cleaned = raw.strip()
+            if not cleaned or not _IDENTIFIER.fullmatch(cleaned):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_specialized_input_invalid",
+                    f"{field} is invalid.",
+                )
+            return cleaned
+
+        request = cls(
+            user_input=common.user_input,
+            template_id=common.template_id,
+            requested_image_count=common.requested_image_count,
+            requested_image_size=common.requested_image_size,
+            reference_inputs=common.reference_inputs,
+            platform_profile=optional_identifier("platform_profile"),
+            photography_mode=optional_identifier("photography_mode"),
+            photographer_profile_id=optional_identifier("photographer_profile_id"),
+        )
+        if request.template_id == "ecommerce_template":
+            if request.platform_profile is None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_platform_profile_required",
+                    "E-Commerce Local Mode requires an explicit platform profile as factual evidence.",
+                )
+            if request.photography_mode is not None or request.photographer_profile_id is not None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_specialized_input_invalid",
+                    "Photography controls are not accepted for E-Commerce Local Mode.",
+                )
+        elif request.template_id == "photographer_template":
+            if request.platform_profile is not None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_specialized_input_invalid",
+                    "Platform controls are not accepted for Photography Local Mode.",
+                )
+            if request.photography_mode not in {"single_hero", "reference_reshoot", "professional_set"}:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_photography_mode_required",
+                    "Photography Local Mode requires single_hero, reference_reshoot, or professional_set.",
+                )
+            expected_count = 3 if request.photography_mode == "professional_set" else 1
+            if request.requested_image_count != expected_count:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_count_mismatch",
+                    "The requested Photography output count does not match its frozen structural delivery mode.",
+                )
+            if request.photographer_profile_id not in {None, "general_photography"}:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_named_profile_project_binding_required",
+                    "A named Photography profile requires the existing Project/API immutable binding and is unavailable in Local Mode.",
+                )
+        else:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_template_invalid",
+                "Frozen specialized Local Mode supports only E-Commerce or Photography templates.",
+            )
+        return request
 
 
 def reference_role_for_channel(channel: str) -> str:

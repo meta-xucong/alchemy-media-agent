@@ -83,8 +83,9 @@ and visual-quality evaluation while the Web gateway is unavailable.
 
 It does not prove Aiself/Web Provider availability, wire-level upstream
 compatibility, Provider response parsing, shared review/retry, stored final
-delivery, or any production gate.  E-Commerce and Photography remain blocked;
-they do not silently downgrade to General.
+delivery, or any production gate. Doc133 permits an explicit frozen-plan
+specialist relay under the same reference-input rule. It does not permit either
+template to downgrade to General.
 
 ## Required regression evidence
 

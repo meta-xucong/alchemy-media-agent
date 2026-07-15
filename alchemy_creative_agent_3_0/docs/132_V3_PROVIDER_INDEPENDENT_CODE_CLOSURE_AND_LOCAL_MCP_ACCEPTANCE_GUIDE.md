@@ -54,10 +54,11 @@ It is valid only when the result records all of the following:
 - one native ImageGen call per planned output, labelled
   `conversation_only_not_certified`.
 
-Local MCP must remain opt-in, General-only, and conversation-only. It creates
-no candidate, retry, review, artifact import, project delivery, Web fallback,
-or production evidence. E-Commerce and Photography must remain blocked in
-this interface rather than silently becoming General jobs.
+Local MCP must remain opt-in and conversation-only. It creates no candidate,
+retry, review, artifact import, project delivery, Web fallback, or production
+evidence. Doc133 supersedes the former General-only restriction with a
+separate frozen-specialist-plan relay; E-Commerce and Photography still must
+never silently become General jobs.
 
 ## 3. Shared Code-Closure Baseline
 
@@ -114,9 +115,9 @@ gateway, create a private rendering path, or revive static roles.
 5. Fixture-test refresh/reopen, child continuation history, wrong-count Brain
    block, and held/blocked delivery truth without calling an upstream.
 
-The owner may use Local MCP only for a General comparison of the shared
-materializer. It must not use it to render an E-Commerce job or claim Gate C
-or Gate D.
+Doc133 permits the owner to use only its explicit frozen-plan relay for
+provider-independent prompt/reference and conversation-image evidence. It
+still cannot claim Gate C or Gate D.
 
 ## 6. Photography Owner Work Package
 
@@ -143,10 +144,9 @@ projection; it must not add a Photography Provider/reviewer/retry path.
 5. Prove `metadata_only`/manual confirmation cannot be projected as a P10
    success or automatic delivery.
 
-Local MCP remains unavailable to Photography by design. If a future request
-needs a local visual renderer for a frozen Photography plan, it requires a new
-mainline contract that relays the *already frozen* template plan unchanged;
-it may not replan or downgrade through General.
+Doc133 is the required mainline contract for a local visual renderer of a
+frozen Photography plan. It relays the existing plan unchanged; it may not
+replan or downgrade through General, and it cannot claim P10.
 
 ## 7. Evidence and Verdict Rules
 

@@ -1,7 +1,8 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Doc130 plugin gives an interactive Codex agent one local stdio
-MCP canonical-prompt tool: `prepare_native_imagegen_plan`. It does not create
+This isolated Docs130/131/133 plugin gives an interactive Codex agent two local
+stdio MCP canonical-prompt tools: `prepare_native_imagegen_plan` and
+`prepare_frozen_specialized_native_imagegen_plan`. It does not create
 images, open a listener, start a background worker, control Codex, call an
 image Provider, or change Web Mode. It does use the configured remote Central
 Brain because an exact final Provider prompt cannot be created from a local
@@ -20,9 +21,14 @@ continuation surface.
 
 ## Input boundary
 
-The admission tool currently enables only `general_template`. E-Commerce and
-Photography are deliberately blocked until their independent LLM-first and
-reference contracts can be proved without weakening them.
+`prepare_native_imagegen_plan` remains General-only. The separate
+`prepare_frozen_specialized_native_imagegen_plan` accepts only explicit
+`ecommerce_template` or `photographer_template` requests and relays their
+normal required remote-Brain plan to the same materializer; it never downgrades
+them to General. E-Commerce needs explicit factual platform evidence.
+Photography accepts only an existing structural mode and a General Photography
+binding; named profiles fail closed because Local MCP cannot manufacture the
+Project/API immutable confirmation.
 
 It accepts only user input, General, requested count/size, and explicit
 `reference_inputs` (`channel` plus a user-authorized readable local

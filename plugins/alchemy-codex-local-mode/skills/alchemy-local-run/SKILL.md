@@ -9,12 +9,15 @@ Use this skill only after the user explicitly selects Alchemy Local Mode / Codex
 Native ImageGen Mode.  Never use it because a Web Mode, Central Brain, gateway,
 or Provider request failed.
 
-1. Call `prepare_native_imagegen_plan` exactly once with only the user's input,
-   explicit template, requested count/size, and `reference_inputs`.  For each
-   image-to-image input, provide its user-authorized readable local `file_path`
-   and channel. A conversation upload is equivalent only when its host supplies
-   that local path; otherwise stop with the planner's public-safe block rather
-   than probing a Codex cache/session or substituting an image.
+1. For `general_template`, call `prepare_native_imagegen_plan` exactly once.
+   For explicit `ecommerce_template` or `photographer_template`, call
+   `prepare_frozen_specialized_native_imagegen_plan` exactly once instead. The
+   specialist tool requires its documented factual/platform or structural
+   profile/mode fields; never call the General tool to downgrade a specialist.
+   For each image-to-image input, provide its user-authorized readable local
+   `file_path` and channel. A conversation upload is equivalent only when its
+   host supplies that local path; otherwise stop with the planner's public-safe
+   block rather than probing a Codex cache/session or substituting an image.
 2. If the plan is blocked, show the public-safe reason and stop.  Do not switch
    to another template, a web renderer, a provider, or a local workaround.
 3. For every returned output, make exactly one Codex built-in image-generation
@@ -22,7 +25,9 @@ or Provider request failed.
    `reference_image_paths`. Do not append, remove, summarize, translate,
    normalize, replace, re-order, or add any text or reference image. Do not add
    a static role, suite, shot family, camera distance, angle, crop rule, or
-   local recipe. The accompanying `provider_prompt_sha256` is a parity receipt:
+   local recipe. For E-Commerce, an opaque internal output binding is not a
+   user-visible role and must not be expanded into a suite/slot/recipe. The
+   accompanying `provider_prompt_sha256` is a parity receipt:
    it identifies the same UTF-8 final prompt that V3 Web Provider materializes
    for GPT Image 2 from the same frozen plan.
 4. If the built-in image tool is unavailable, stop with
