@@ -197,6 +197,13 @@ This phase proves the governed path before vertical acceptance begins.
 | No-pixel/provider-failure truth | Use a safe controlled fault injection or an observed real terminal failure; do not manufacture a policy violation. Prove structured classification, zero final candidate, no review/retry/delivery, and correct state after refresh. |
 | Review withholding | Exercise `metadata_only` or manual-confirmation using a deterministic test seam, not a fake production pass. Prove it is visible and cannot be counted as certified delivery. |
 
+When a specialized template executes independent frozen roles, the same
+no-pixel outcome must also be visible per role as a safe operational tuple:
+operation (`image_generate` or `image_edit`), reference count, outer-request
+count, classified failure code, and `blocked` state. Do not expose raw Provider
+messages, endpoint details, credentials, or candidate identifiers. A generic
+role exception alone is not enough evidence for acceptance diagnosis.
+
 The provider smoke is not allowed to become a separate retry router. One
 logical output becomes one gateway-managed outer materialization operation;
 the gateway alone can choose an internal healthy upstream. SDK/client retries

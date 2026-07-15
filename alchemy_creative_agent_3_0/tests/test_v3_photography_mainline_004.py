@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from app.providers.base import ProviderRuntimeError
+
 from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationProvider,
     GenerationRequest,
@@ -50,7 +52,26 @@ class _RecordingProductionProvider(GenerationProvider):
         role = dict(request.metadata.get("mode_role_recipe") or {})
         role_key = str(role.get("role_key") or "")
         if role_key == self.fail_role:
-            raise RuntimeError(f"simulated provider failure for {role_key}")
+            error = ProviderRuntimeError(
+                f"simulated provider failure for {role_key}",
+                provider=self.provider_name,
+                detail={"private_provider_message": "must never reach a Project response"},
+            )
+            error.provider_failure_retry = {
+                "final_status": "failed",
+                "final_classification": "non_retryable_provider_failure",
+                "final_failure_code": "image_generation_invalid_request_unattributed",
+                "fresh_upstream_requests": 1,
+                "reference_asset_count": 0,
+                "reference_input_execution": {
+                    "operation": "image_generate",
+                    "reference_count": 0,
+                    "operation_outcome": "failed",
+                    "outer_request_count": 1,
+                    "failure_code": "image_generation_invalid_request_unattributed",
+                },
+            }
+            raise error
         image = BytesIO()
         Image.new("RGB", (32, 32), color=(104, 146, 184)).save(image, format="PNG")
         candidate_id = f"candidate_{role_key or len(self.requests)}"
@@ -248,6 +269,16 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
     assert summary["status"] == "incomplete"
     assert summary["missing_role_keys"] == ["environmental_context"]
     assert summary["final_delivery_withheld"] is True
+    failed_role = next(item for item in summary["roles"] if item["role_key"] == "environmental_context")
+    assert failed_role["provider_failure"] == {
+        "state": "blocked",
+        "classification": "non_retryable_provider_failure",
+        "failure_code": "image_generation_invalid_request_unattributed",
+        "operation": "image_generate",
+        "reference_count": 0,
+        "outer_request_count": 1,
+    }
+    assert "private_provider_message" not in str(summary)
 
     timeline = handlers.get_project_timeline(project["project_id"])["items"]
     root_items = [item for item in timeline if item.get("job_id") == root["job_id"]]
@@ -258,6 +289,15 @@ def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_sin
         for item in root_items
     )
     assert handlers.get_project_outputs(project_id=project["project_id"])["items"] == []
+
+
+def test_frontend_uses_safe_specialized_provider_failure_when_a_role_has_no_delivery() -> None:
+    script = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function v3SpecializedProviderFailure(job)" in script
+    assert "|| specializedFailure.failure_code" in script
 
 
 def test_metadata_only_photography_project_withholds_pixels_and_records_safe_review_state(monkeypatch) -> None:

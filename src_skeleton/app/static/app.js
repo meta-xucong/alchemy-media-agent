@@ -5527,6 +5527,13 @@ function v3JobProviderRetryActive(job) {
   return Boolean(summary && Number(summary.executed_count || 0) > 0 && !["succeeded", "failed"].includes(finalStatus));
 }
 
+function v3SpecializedProviderFailure(job) {
+  const roles = job?.metadata?.specialized_execution_summary?.roles;
+  if (!Array.isArray(roles)) return {};
+  const failure = roles.find((role) => role?.provider_failure?.failure_code)?.provider_failure;
+  return failure && typeof failure === "object" ? failure : {};
+}
+
 function v3EcommerceFailureMessage(job) {
   const scenarioId = String(job?.scenario?.scenario_id || "").trim().toLowerCase();
   const status = String(job?.status || "").trim().toLowerCase();
@@ -5556,7 +5563,12 @@ function v3ProviderFailureUserMessage(job) {
   if (ecommerceFailure) return ecommerceFailure;
   const providerExecution = job?.metadata?.provider_execution;
   const operations = Array.isArray(providerExecution?.operations) ? providerExecution.operations : [];
-  const failureCode = String(operations.find((operation) => !operation?.automatic_delivery_available)?.safe_reason_code || "");
+  const specializedFailure = v3SpecializedProviderFailure(job);
+  const failureCode = String(
+    operations.find((operation) => !operation?.automatic_delivery_available)?.safe_reason_code
+    || specializedFailure.failure_code
+    || ""
+  );
   if (failureCode === "reference_input_unsupported") {
     return "提供的参考图片无法被当前生图链路读取。本次没有生成图片，也没有用文字替代参考图；请更换有效的原图后再试。";
   }

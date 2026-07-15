@@ -331,6 +331,7 @@ class CentralCreativeBrain:
                         status="failed",
                         error_type=type(exc).__name__,
                         error_message=str(exc),
+                        provider_failure=self._safe_provider_failure_projection(exc),
                     )
                 )
                 pack_warnings.append(
@@ -787,14 +788,91 @@ class CentralCreativeBrain:
         candidate_id: str | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
+        provider_failure: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        record = {
             "role_key": str(role_recipe.get("role_key") or getattr(asset, "asset_id", "")),
             "asset_id": getattr(asset, "asset_id", None),
             "status": status,
             "candidate_id": candidate_id,
             "error_type": error_type,
             "error_message": error_message[:500] if error_message else None,
+        }
+        if provider_failure:
+            record["provider_failure"] = dict(provider_failure)
+        return record
+
+    @staticmethod
+    def _safe_provider_failure_projection(exc: BaseException) -> dict[str, Any]:
+        """Carry a safe shared-provider outcome through specialized roles.
+
+        A specialized template may ask the shared executor to materialize
+        several roles. When one operation fails, retaining only its exception
+        class hides the existing provider/retry provenance from Project Mode.
+        This projection keeps only user-safe operational facts; provider
+        messages, URLs, raw responses and candidate IDs remain internal.
+        """
+
+        summary = getattr(exc, "provider_failure_retry", None)
+        detail = getattr(exc, "detail", None)
+        if not isinstance(summary, dict) and isinstance(detail, dict):
+            candidate = detail.get("provider_failure_retry")
+            summary = candidate if isinstance(candidate, dict) else None
+        if not isinstance(summary, dict):
+            return {}
+
+        reference = summary.get("reference_input_execution")
+        reference = reference if isinstance(reference, dict) else {}
+        operation = str(reference.get("operation") or "").strip().lower()
+        if operation not in {"image_generate", "image_edit"}:
+            operation = None
+        failure_code = str(
+            summary.get("final_failure_code") or reference.get("failure_code") or ""
+        ).strip().lower()
+        if not failure_code or not failure_code.replace("_", "").isalnum():
+            failure_code = None
+        classification = str(summary.get("final_classification") or "").strip().lower()
+        if classification not in {
+            "non_retryable_provider_failure",
+            "retryable_provider_failure",
+            "unknown_retryable_failure",
+            "empty_provider_output",
+        }:
+            classification = None
+        try:
+            reference_count = max(
+                0,
+                min(
+                    6,
+                    int(
+                        reference.get("reference_count")
+                        or summary.get("reference_asset_count")
+                        or 0
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            reference_count = 0
+        try:
+            outer_request_count = max(
+                0,
+                int(
+                    reference.get("outer_request_count")
+                    or summary.get("fresh_upstream_requests")
+                    or 0
+                ),
+            )
+        except (TypeError, ValueError):
+            outer_request_count = 0
+        outcome = str(reference.get("operation_outcome") or "").strip().lower()
+        state = "blocked" if outcome in {"failed", "empty_provider_output"} else "unknown"
+        return {
+            "state": state,
+            "classification": classification,
+            "failure_code": failure_code,
+            "operation": operation,
+            "reference_count": reference_count,
+            "outer_request_count": outer_request_count,
         }
 
     def _is_human_identity_suite_context(self, context: PipelineContext) -> bool:

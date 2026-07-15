@@ -1347,6 +1347,7 @@ class V3ProductApiService:
                     "candidate_id": item.get("candidate_id"),
                     "error_type": item.get("error_type"),
                     "error_message": item.get("error_message"),
+                    "provider_failure": self._public_specialized_provider_failure(item.get("provider_failure")),
                     "review_mode": review_mode or None,
                     "review_status": review_status or None,
                     "verification_state": verification_state or None,
@@ -5204,6 +5205,9 @@ class V3ProductApiService:
                 {
                     "role_key": item.get("role_key"),
                     "status": item.get("status"),
+                    "provider_failure": V3ProductApiService._public_specialized_provider_failure(
+                        item.get("provider_failure")
+                    ),
                     "review_mode": item.get("review_mode"),
                     "review_status": item.get("review_status"),
                     "verification_state": item.get("verification_state"),
@@ -5214,6 +5218,47 @@ class V3ProductApiService:
             ],
             "final_delivery_withheld": bool(execution.get("final_delivery_withheld")),
             "append_only_history_preserved": bool(execution.get("append_only_history_preserved")),
+        }
+
+    @staticmethod
+    def _public_specialized_provider_failure(value: Any) -> dict[str, Any]:
+        """Expose only shared safe failure provenance for a frozen role."""
+
+        raw = value if isinstance(value, dict) else {}
+        state = str(raw.get("state") or "").strip().lower()
+        classification = str(raw.get("classification") or "").strip().lower()
+        failure_code = str(raw.get("failure_code") or "").strip().lower()
+        operation = str(raw.get("operation") or "").strip().lower()
+        if state not in {"blocked", "unknown"}:
+            state = None
+        if classification not in {
+            "non_retryable_provider_failure",
+            "retryable_provider_failure",
+            "unknown_retryable_failure",
+            "empty_provider_output",
+        }:
+            classification = None
+        if not failure_code or not failure_code.replace("_", "").isalnum():
+            failure_code = None
+        if operation not in {"image_generate", "image_edit"}:
+            operation = None
+        try:
+            reference_count = max(0, min(6, int(raw.get("reference_count") or 0)))
+        except (TypeError, ValueError):
+            reference_count = 0
+        try:
+            outer_request_count = max(0, int(raw.get("outer_request_count") or 0))
+        except (TypeError, ValueError):
+            outer_request_count = 0
+        if not any((state, classification, failure_code, operation, reference_count, outer_request_count)):
+            return {}
+        return {
+            "state": state,
+            "classification": classification,
+            "failure_code": failure_code,
+            "operation": operation,
+            "reference_count": reference_count,
+            "outer_request_count": outer_request_count,
         }
 
     @staticmethod
