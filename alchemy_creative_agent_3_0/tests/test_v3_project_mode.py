@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from pathlib import Path
 
 from alchemy_creative_agent_3_0.app.project_mode import (
     PersistentProjectStore,
@@ -1814,6 +1815,125 @@ def test_project_outputs_compact_mode_omits_heavy_prompt_metadata(tmp_path) -> N
     assert "final_provider_prompt" not in compact_item["metadata"]
     assert "compiled_visual_direction" not in compact_item["metadata"]
     assert compact_item["metadata"]["compact"] is True
+
+
+def test_project_outputs_project_safe_certified_review_projection(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a verified project output"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create one verified image"})
+    record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_verified",
+        asset_id="asset_verified",
+    )
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    reviewed_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "inspections": [
+                        {
+                            "output_id": record.output_id,
+                            "mode": "hybrid",
+                            "status": "pass",
+                            "verification_state": "verified",
+                        }
+                    ]
+                },
+                "final_delivery": {
+                    "final_delivery_status": "ready",
+                    "automatic_delivery_available": True,
+                    "manual_confirmation_required": False,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: reviewed_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
+    )
+
+    full = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=False)["items"]
+    compact = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"]
+
+    assert len(full) == len(compact) == 1
+    for item in [full[0], compact[0]]:
+        assert item["review_mode"] == "hybrid"
+        assert item["review_status"] == "pass"
+        assert item["verification_state"] == "verified"
+        assert item["certification_state"] == "certified"
+        assert item["public_delivery_state"] == "ready"
+        assert item["metadata"]["certification_state"] == "certified"
+        assert "_final_delivery_recorded" not in item
+        assert "_final_delivery_recorded" not in item["metadata"]
+    assert "final_provider_prompt" not in compact[0]["metadata"]
+
+
+def test_project_outputs_hide_modern_withheld_review_candidate(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Do not deliver an unconfirmed result"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create one image"})
+    record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_withheld",
+        asset_id="asset_withheld",
+    )
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    withheld_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "inspections": [
+                        {
+                            "output_id": record.output_id,
+                            "mode": "hybrid",
+                            "status": "manual_review",
+                            "verification_state": "verified",
+                        }
+                    ]
+                },
+                "final_delivery": {
+                    "final_delivery_status": "withheld_manual_confirmation",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": True,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: withheld_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
+    )
+
+    visible = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"]
+    stored = handlers.service.output_store.list_by_job(job["job_id"])
+
+    assert visible == []
+    assert [item.output_id for item in stored] == [record.output_id]
+
+
+def test_project_output_board_discloses_safe_shared_review_state() -> None:
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function v3ProjectOutputReviewNotice(item)" in source
+    assert "const reviewNotice = v3ProjectOutputReviewNotice(item);" in source
+    assert "真实像素审查已认证" in source
+    assert "需要人工确认" in source
 
 
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:

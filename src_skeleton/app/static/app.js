@@ -3212,6 +3212,17 @@ function v3ProjectOutputReason(item) {
   return text;
 }
 
+function v3ProjectOutputReviewNotice(item) {
+  const metadata = item?.metadata || {};
+  const certification = String(item?.certification_state || metadata.certification_state || "").trim();
+  const mode = String(item?.review_mode || metadata.review_mode || "").trim();
+  const suffix = mode ? `（${mode}）` : "";
+  if (certification === "certified") return `真实像素审查已认证${suffix}`;
+  if (certification === "manual_confirmation_required") return `需要人工确认${suffix}`;
+  if (certification === "blocked") return `真实像素审查未自动认证${suffix}`;
+  return "";
+}
+
 function v3TimelineHasType(type) {
   return Array.isArray(v3State.projectTimeline) && v3State.projectTimeline.some((item) => item?.item_type === type);
 }
@@ -3260,6 +3271,7 @@ function renderV3ProjectOutputBoard() {
     const isSelected = v3IsOutputItemSelected(item, project);
     const title = isSelected ? `已确认方向 ${index + 1}` : `项目图片 ${index + 1}`;
     const reason = v3ProjectOutputReason(item);
+    const reviewNotice = v3ProjectOutputReviewNotice(item);
     const downloadUrl = v3OutputDownloadUrl(item) || v3OutputFullImageUrl(item) || v3OutputPreviewImageUrl(item) || "";
     const card = document.createElement("article");
     card.className = `v3-project-output-tile${isSelected ? " selected" : ""}`;
@@ -3271,6 +3283,7 @@ function renderV3ProjectOutputBoard() {
       </div>
       <div class="v3-result-meta">
         <span>${isSelected ? "后续会参考" : "可继续使用"}</span>
+        ${reviewNotice ? `<span>${escapeHtml(reviewNotice)}</span>` : ""}
         ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
       </div>
       <div class="v3-output-actions">

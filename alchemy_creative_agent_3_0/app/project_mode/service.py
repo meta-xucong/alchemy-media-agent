@@ -4877,7 +4877,11 @@ class V3ProjectModeService:
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for job_id in reversed(project.job_ids):
-            if not self._project_job_delivery_is_settled(job_id):
+            try:
+                job_status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            if not self._job_delivery_is_settled(job_status):
                 continue
             try:
                 records = output_store.list_by_job(job_id)
@@ -4893,7 +4897,14 @@ class V3ProjectModeService:
                 seen.add(identity)
                 state = self._output_state_for_record(state_map, record)
                 delivery_entry = delivery.get(identity, {})
+                review_projection = self._public_output_review_projection(job_status, record)
                 if not include_hidden and str(delivery_entry.get("delivery_state") or "final_delivery") != "final_delivery":
+                    continue
+                # Modern shared review applies a canonical final-delivery gate
+                # on the Job. A materialized PNG is not an ordinary Project
+                # delivery when that gate withholds it for review. Legacy
+                # output-only jobs remain readable.
+                if not include_hidden and not self._review_projection_allows_project_delivery(review_projection):
                     continue
                 if (
                     not include_hidden
@@ -4911,6 +4922,7 @@ class V3ProjectModeService:
                         state,
                         compact=compact,
                         delivery=delivery_entry,
+                        review_projection=review_projection,
                     )
                 )
                 if len(items) >= max(1, int(limit or 60)):
@@ -4921,6 +4933,12 @@ class V3ProjectModeService:
         """Known in-flight jobs must not leak process outputs onto project boards."""
 
         job_status = self.product_service.get_job(job_id)
+        return self._job_delivery_is_settled(job_status)
+
+    @staticmethod
+    def _job_delivery_is_settled(job_status: ProductJobStatus) -> bool:
+        """Keep one terminal-state rule for normal and recovered Project outputs."""
+
         if job_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
             return False
         execution = dict(job_status.metadata or {}).get("specialized_execution_summary")
@@ -4928,6 +4946,76 @@ class V3ProjectModeService:
         # history while still withholding them from the ordinary project
         # result panel until every frozen role has a final winner.
         return not (isinstance(execution, dict) and bool(execution.get("final_delivery_withheld")))
+
+    @staticmethod
+    def _public_output_review_projection(job_status: ProductJobStatus, record: Any) -> dict[str, Any]:
+        """Project safe, per-output projection of the canonical shared review.
+
+        Output records deliberately keep renderer provenance and media pointers,
+        while the Product Job owns review and final-delivery truth.  Project
+        recovery therefore reads the already-public Job projection and matches
+        it to the materialized output.  This is not a second reviewer and never
+        exposes provider errors, prompts, paths, or internal evidence.
+        """
+
+        metadata = dict(job_status.metadata or {})
+        review = metadata.get("post_generation_review")
+        review = dict(review) if isinstance(review, dict) else {}
+        output_id = str(getattr(record, "output_id", "") or "").strip()
+        inspection: dict[str, Any] = {}
+        for item in review.get("inspections", []):
+            if not isinstance(item, dict):
+                continue
+            if output_id and str(item.get("output_id") or "").strip() == output_id:
+                inspection = dict(item)
+                break
+
+        review_mode = str(inspection.get("mode") or "").strip().lower() or None
+        review_status = str(inspection.get("status") or "").strip().lower() or None
+        verification_state = str(inspection.get("verification_state") or "").strip().lower() or None
+        final_delivery = metadata.get("final_delivery")
+        final_delivery = dict(final_delivery) if isinstance(final_delivery, dict) else {}
+        public_delivery_state = str(final_delivery.get("final_delivery_status") or "not_evaluated").strip().lower()
+        certified = (
+            review_mode in {"vision_model", "hybrid"}
+            and verification_state == "verified"
+            and review_status in {"pass", "warning"}
+            and public_delivery_state == "ready"
+        )
+        if certified:
+            certification_state = "certified"
+        elif review_status == "manual_review" or public_delivery_state == "withheld_manual_confirmation":
+            certification_state = "manual_confirmation_required"
+        elif review_mode or public_delivery_state not in {"", "not_evaluated"}:
+            certification_state = "blocked"
+        else:
+            certification_state = "not_evaluated"
+        return {
+            "review_mode": review_mode,
+            "review_status": review_status,
+            "verification_state": verification_state,
+            "certification_state": certification_state,
+            "public_delivery_state": public_delivery_state,
+            # Internal control used only while aggregating the ordinary
+            # Project board. `_output_item_from_record` strips it so the
+            # public result remains limited to the safe review projection.
+            # A baseline ``not_evaluated`` placeholder is not an applied gate.
+            "_final_delivery_recorded": bool(final_delivery.get("delivery_gate_applies")),
+        }
+
+    @staticmethod
+    def _review_projection_allows_project_delivery(review_projection: dict[str, Any]) -> bool:
+        """Keep withheld modern outputs out of ordinary Project delivery.
+
+        Older jobs can have append-only output records without an applied
+        final-delivery gate, so they stay readable for compatibility. Once a
+        canonical gate applies, only its explicit ``ready`` state may appear
+        on the normal Project result surface.
+        """
+
+        if not bool(review_projection.get("_final_delivery_recorded")):
+            return True
+        return str(review_projection.get("public_delivery_state") or "").strip().lower() == "ready"
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
         return OutputRef(
@@ -4961,10 +5049,16 @@ class V3ProjectModeService:
         *,
         compact: bool = False,
         delivery: dict[str, Any] | None = None,
+        review_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         record_metadata = dict(record.metadata or {})
         state_value = (state.value if hasattr(state, "value") else str(state)) if state else "available"
         delivery_metadata = dict(delivery or {})
+        public_review = {
+            key: value
+            for key, value in dict(review_projection or {}).items()
+            if not str(key).startswith("_")
+        }
         delivery_state = str(delivery_metadata.get("delivery_state") or "final_delivery")
         item = {
             "output_ref_id": stable_id("project_output", project.project_id, record.job_id, record.output_id),
@@ -4984,6 +5078,7 @@ class V3ProjectModeService:
             "selection_state": state_value,
             "selected": state == ProjectOutputSelectionStateValue.SELECTED,
             "delivery_state": delivery_state,
+            **public_review,
             "metadata": {
                 "width": record.width,
                 "height": record.height,
@@ -4997,6 +5092,7 @@ class V3ProjectModeService:
                 "style_notes": record_metadata.get("style_notes") or [],
                 "layout_notes": record_metadata.get("layout_notes") or [],
                 **delivery_metadata,
+                **public_review,
             },
         }
         if compact:
@@ -5010,6 +5106,7 @@ class V3ProjectModeService:
                 "requested_image_size": record_metadata.get("requested_image_size"),
                 "compact": True,
                 **delivery_metadata,
+                **public_review,
             }
         return item
 
