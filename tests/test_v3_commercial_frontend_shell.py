@@ -851,6 +851,37 @@ def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypat
     assert background_calls == [(project_id, job_id, {"quality_mode": "standard"})]
 
 
+def test_v3_project_generate_rejects_invalid_payload_before_background_claim(tmp_path, monkeypatch) -> None:
+    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    v3_route_handlers.service.job_store = InMemoryProductJobStore()
+    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    client = TestClient(app)
+
+    project = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one neutral test image"},
+    ).json()["project"]
+    job = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one neutral test image"},
+    ).json()
+
+    def unexpected_background_start(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("invalid public payload must not claim a background worker")
+
+    monkeypatch.setattr(app_main, "_start_v3_project_generation_background", unexpected_background_start)
+    rejected = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs/{job['job_id']}/generate",
+        json={"require_real_images": True},
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"]["code"] == "invalid_v3_request"
+    current = client.get(f"/api/v3/creative-agent/jobs/{job['job_id']}").json()
+    assert current["status"] == "planned"
+    assert "generation_lifecycle_failure" not in current["metadata"]
+
+
 def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(monkeypatch) -> None:
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", True)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)

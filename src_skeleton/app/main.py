@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
-from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
@@ -535,7 +535,21 @@ def _should_run_v3_project_generation_background(payload: dict) -> bool:
 
 def _v3_generation_payload_without_transport_controls(payload: dict) -> dict:
     controls = {"async_background", "sync_wait", "force_sync"}
-    return {key: value for key, value in dict(payload or {}).items() if key not in controls}
+    product_payload = {key: value for key, value in dict(payload or {}).items() if key not in controls}
+    try:
+        # Validate before a background worker claims the job.  Otherwise an
+        # invalid public payload can be discovered only after the lifecycle is
+        # marked ``generating`` and wrongly terminalize a job that never made
+        # a provider request.
+        # Preserve the public request's sparse shape: the service supplies
+        # defaults, while the background worker should not receive a synthetic
+        # empty metadata object merely because the route validated it.
+        return GenerateJobRequest.model_validate(product_payload).model_dump(mode="json", exclude_unset=True)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_v3_request", "message": str(exc)},
+        ) from exc
 
 
 @app.get("/api/v3/creative-agent/scenarios")
