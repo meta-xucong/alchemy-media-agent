@@ -41,9 +41,25 @@ def resolve_repository_root(*, environ: dict[str, str] | None = None, cwd: Path 
     )
 
 
+def configure_import_paths(root: Path) -> None:
+    """Expose both repository packages required by the V3 source layout.
+
+    ``services`` is rooted at the repository, while established V3 modules
+    retain absolute imports rooted at both ``alchemy_creative_agent_3_0`` and
+    the compatibility-only ``src_skeleton`` package root. The plugin only
+    needs these source paths to start its planning-only MCP; it does not load
+    a Web Provider, secret, or runtime image route.
+    """
+
+    for candidate in (root, root / "alchemy_creative_agent_3_0", root / "src_skeleton"):
+        value = str(candidate)
+        if value not in sys.path:
+            sys.path.insert(0, value)
+
+
 def main() -> int:
     root = resolve_repository_root()
-    sys.path.insert(0, str(root))
+    configure_import_paths(root)
     runpy.run_module("services.alchemy_codex_local_adapter.mcp_server", run_name="__main__")
     return 0
 

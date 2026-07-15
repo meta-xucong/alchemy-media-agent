@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -62,6 +65,31 @@ def _load_plugin_launcher() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_plugin_launcher_starts_the_stdio_server_with_both_v3_source_roots() -> None:
+    launcher = ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py"
+    requests = "\n".join(
+        [
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+        ]
+    ) + "\n"
+    completed = subprocess.run(
+        [sys.executable, str(launcher), "--enable-native-imagegen"],
+        cwd=ROOT,
+        env={**os.environ, "ALCHEMY_CODEX_LOCAL_REPO_ROOT": str(ROOT)},
+        input=requests,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.3.1-doc126-n1"
+    assert [tool["name"] for tool in responses[1]["result"]["tools"]] == ["prepare_native_imagegen_plan"]
 
 
 def test_disabled_mode_has_no_web_runtime_import_or_provider_behavior() -> None:
