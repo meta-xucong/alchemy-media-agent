@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 from PIL import Image
 
+from alchemy_creative_agent_3_0.app.creative_core import CentralCreativeBrain
 from alchemy_creative_agent_3_0.app.creative_core.pipeline import run_creative_planning
 from alchemy_creative_agent_3_0.app.creative_core.prompt_language import product_language_allowed
-from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationRequest,
+    GenerationRouter,
+    MockGenerationProvider,
+    ProductionImageGenerationProvider,
+)
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
@@ -80,6 +86,17 @@ def _provider_prompt_for_planning_result(result) -> str:  # noqa: ANN001
     )
     provider = ProductionImageGenerationProvider()
     return provider._generation_prompt(request, [])  # noqa: SLF001
+
+
+class _CapturingMockGenerationProvider(MockGenerationProvider):
+    """Capture the actual materialized request, not only the frozen plan."""
+
+    def __init__(self) -> None:
+        self.requests: list[GenerationRequest] = []
+
+    def generate(self, request: GenerationRequest):  # noqa: ANN001
+        self.requests.append(request.model_copy(deep=True))
+        return super().generate(request)
 
 
 def test_general_template_final_prompt_stays_subject_focused_not_product_ad() -> None:
@@ -631,3 +648,50 @@ def test_general_template_strips_no_product_phrasing_from_positive_direction() -
     assert "\u65e0\u5546\u54c1" not in final_provider_prompt
     assert "\u65e0\u5305\u88c5" not in final_provider_prompt
     assert "unrequested retail-style props" in final_provider_prompt
+
+
+def test_real_general_materialization_carries_frozen_llm_first_contract_to_provider() -> None:
+    """A later generate call must not lose the plan-time real-image decision.
+
+    Project Mode freezes ``require_real_images`` while planning.  Its public
+    generation endpoint deliberately accepts only execution controls, so the
+    concrete provider request has to carry this immutable decision forward.
+    Otherwise the provider quietly reintroduces General's legacy suite and
+    role guidance after a valid remote-Brain plan has already been accepted.
+    """
+
+    provider = _CapturingMockGenerationProvider()
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+    remote_direction = (
+        "A candid, natural-light portrait of a fully dressed person reading by a quiet window, "
+        "with authentic skin texture, relaxed posture, and an unforced domestic atmosphere."
+    )
+
+    brain.run_generation_loop(
+        "Create one quiet, natural-looking portrait of a person reading by a window.",
+        optional_template_id="general_template",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "requested_image_count": 1,
+            "requested_image_size": "1024x1536",
+            "require_real_images": True,
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "image_set_plan": {"image_count": 1, "shot_plan": [remote_direction]},
+                "prompt_guidance": {},
+            },
+        },
+    )
+
+    assert len(provider.requests) == 1
+    materialized_request = provider.requests[0]
+    assert materialized_request.metadata["require_real_images"] is True
+    provider_prompt = ProductionImageGenerationProvider()._generation_prompt(materialized_request, [])  # noqa: SLF001
+    assert "Remote Central Brain image direction:" in provider_prompt
+    assert remote_direction in provider_prompt
+    assert "Role-specific generation contract:" not in provider_prompt
+    assert "Mode quality contract:" not in provider_prompt
+    assert "cover_hero" not in provider_prompt

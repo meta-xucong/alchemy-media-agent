@@ -1080,6 +1080,12 @@ class CentralCreativeBrain:
                     "llm_brain": generation_plan.metadata.get("llm_brain", {}),
                     "requested_image_count": generation_plan.metadata.get("requested_image_count"),
                     "requested_image_size": generation_plan.metadata.get("requested_image_size"),
+                    # The planning record freezes real-image/LLM-first
+                    # status.  Carry it into the actual Provider request;
+                    # Project Mode's later generate payload intentionally
+                    # does not repeat this immutable decision.
+                    "require_real_images": bool(generation_plan.metadata.get("require_real_images")),
+                    "real_image_generation": bool(generation_plan.metadata.get("real_image_generation")),
                     "normalized_v3_job_intent": generation_plan.metadata.get("normalized_v3_job_intent"),
                     "template_deliverable_plan": generation_plan.metadata.get("template_deliverable_plan"),
                     "resolved_constraint_ledger": generation_plan.metadata.get("resolved_constraint_ledger"),
