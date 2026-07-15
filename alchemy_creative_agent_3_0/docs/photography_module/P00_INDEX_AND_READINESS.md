@@ -122,6 +122,7 @@ contract wins and Photography work pauses for an explicit design decision.
 | P11 | LLM-first creative direction and real-pixel quality correction | Landed at `fc3f5c2` / `db70c44`; real-provider certification pending |
 | PX Mainline 005 | LLM-first Photography and real-pixel quality gate request | Historical request; fulfilled by `fc3f5c2` / `db70c44` |
 | PX Mainline 006 / Doc116 | Review-certification projection and delivery withholding | Landed at `db70c44`; real P10 evidence remains pending |
+| P12 | Doc127 P10 restricted-evidence manifest and browser checklist | Prepared; execution waits for a confirmed current controlled deployment |
 
 Future documents must remain in this directory and use the `Pxx_` number
 family. Do not continue the root V3 document number sequence for Photography.
