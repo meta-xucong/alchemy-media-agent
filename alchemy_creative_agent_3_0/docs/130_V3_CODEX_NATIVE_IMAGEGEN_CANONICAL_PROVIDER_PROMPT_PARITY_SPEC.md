@@ -54,11 +54,16 @@ not conversation-only substitutes.
 
 ## Scope and reference boundary
 
-The first exact-parity surface is text-to-image only. A declared reference
-blocks rather than pretending that a Codex conversation attachment is the same
-as the Web Provider's normalized, provenance-bound reference payload. A future
-reference-capable Local Mode requires a supported attachment handoff and a new
-contract proving both prompt parity and reference-byte/provenance parity.
+Text-to-image is covered directly here.  Reference/image-to-image admission is
+specified by Doc131.  It accepts only an explicit readable local file path:
+the same source file is passed to V3 as ordinary `UploadedAssetInfo` evidence,
+then V3's existing admission and canonical materialization return the exact
+admitted reference paths that Codex must supply with the verbatim prompt.
+
+A conversation attachment is equivalent only when the host exposes it as that
+readable local file path.  Local Mode must block when it cannot obtain one; it
+must not read undocumented Codex caches/sessions, substitute another image, or
+claim a visible attachment was processed by V3.
 
 ## What this can and cannot accept
 
@@ -83,8 +88,8 @@ Tests must prove:
 - the returned `imagegen_prompt` is byte-for-byte equal to the Provider's
   `generation_prompt` and their SHA-256 values match;
 - Local Mode never selects or calls an upstream image Provider;
-- remote Brain fallback, envelope failure, incomplete output count, and every
-  declared reference block fail-closed;
+- remote Brain fallback, envelope failure, incomplete output count, and a
+  missing/unreadable/unadmitted reference block fail-closed;
 - the MCP exposes only `prepare_native_imagegen_plan`, creates no artifact,
   candidate, review, retry, delivery, or Web fallback; and
 - the plugin Skill instructs Codex to call ImageGen exactly once per output

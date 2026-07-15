@@ -19,6 +19,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
     build_provider_generation_request,
 )
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import _compact_specialized_assets
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from services.alchemy_codex_local_adapter.contracts import CodexNativeImageGenError, NativeImageGenPlanRequest
 from services.alchemy_codex_local_adapter.facade import CodexNativeImageGenFacade
@@ -35,7 +36,7 @@ def _arguments(**overrides: Any) -> dict[str, Any]:
         "template_id": "general_template",
         "requested_image_count": 1,
         "requested_image_size": "1024x1024",
-        "reference_declarations": [],
+        "reference_inputs": [],
     }
     value.update(overrides)
     return value
@@ -48,7 +49,7 @@ def _isolated_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
 
 
-def _canonical_runtime_result(*, count: int = 1) -> SimpleNamespace:
+def _canonical_runtime_result(*, count: int = 1, uploaded_assets: list[Any] | None = None) -> SimpleNamespace:
     """Create an otherwise real V3 planned result with a frozen remote answer.
 
     Network is deliberately not involved in unit tests. The Local Mode planner
@@ -63,6 +64,7 @@ def _canonical_runtime_result(*, count: int = 1) -> SimpleNamespace:
                 "scenario_id": "general_creative",
                 "parameters": {"requested_image_count": count},
             },
+            "uploaded_assets": uploaded_assets or [],
             "metadata": {
                 "template_id": "general_template",
                 "requested_image_count": count,
@@ -144,7 +146,7 @@ def test_plugin_launcher_exposes_only_canonical_prompt_tool() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.5.0-doc130-canonical-prompt"
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.6.0-doc131-reference-parity"
     assert [tool["name"] for tool in responses[1]["result"]["tools"]] == ["prepare_native_imagegen_plan"]
 
 
@@ -156,7 +158,7 @@ def test_mcp_schema_exposes_no_provider_or_artifact_controls() -> None:
         "template_id",
         "requested_image_count",
         "requested_image_size",
-        "reference_declarations",
+        "reference_inputs",
     }
     result = _call_tool(CodexNativeImageGenFacade(enabled=True), "render_platform_candidate", _arguments())
     assert result["isError"] is True
@@ -255,22 +257,85 @@ def test_count_mismatch_blocks_without_silent_truncation() -> None:
     assert result["code"] == "codex_native_imagegen_count_mismatch"
 
 
-def test_declared_references_block_until_attachment_parity_exists() -> None:
-    result = CodexNativeImageGenPlanner(runtime_factory=lambda: (_ for _ in ()).throw(AssertionError("runtime must not start"))).prepare_native_imagegen_plan(
-        NativeImageGenPlanRequest.from_mcp_arguments(
-            _arguments(reference_declarations=[{"channel": "product_truth", "attached_in_current_codex_conversation": True}])
-        )
-    )
-    assert result["code"] == "codex_native_imagegen_reference_prompt_parity_unavailable"
+def _write_png(path: Path) -> Path:
+    from PIL import Image
+
+    Image.new("RGB", (24, 18), color=(31, 99, 181)).save(path, format="PNG")
+    return path
 
 
-def test_missing_hard_reference_blocks_before_runtime() -> None:
-    result = CodexNativeImageGenPlanner(runtime_factory=lambda: (_ for _ in ()).throw(AssertionError("runtime must not start"))).prepare_native_imagegen_plan(
+def test_reference_path_reuses_web_uploaded_asset_admission_and_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _write_png(tmp_path / "blue-reference.png")
+    captured: dict[str, Any] = {}
+
+    class _CapturingRuntime:
+        def plan_job(self, payload: dict[str, Any]) -> SimpleNamespace:
+            captured.update(payload)
+            runtime_result = _canonical_runtime_result(uploaded_assets=list(payload["uploaded_assets"]))
+            captured["runtime_result"] = runtime_result
+            return runtime_result
+
+    result = CodexNativeImageGenPlanner(runtime_factory=_CapturingRuntime).prepare_native_imagegen_plan(
         NativeImageGenPlanRequest.from_mcp_arguments(
-            _arguments(reference_declarations=[{"channel": "portrait_identity", "attached_in_current_codex_conversation": False}])
+            _arguments(reference_inputs=[{"channel": "product_truth", "file_path": str(source)}])
         )
     )
-    assert result["code"] == "codex_native_imagegen_required_reference_missing"
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert captured["uploaded_assets"][0].file_path == str(source.resolve())
+    assert captured["uploaded_assets"][0].metadata["provider_input_required"] is True
+
+    plan = captured["runtime_result"].planning_result
+    asset = plan.series_plan.assets[0]
+    request = build_provider_generation_request(
+        asset_spec=asset,
+        layout_plan=plan.layout_plans[0],
+        prompt_compilation=plan.prompt_compilations[0],
+        condition_plan=plan.condition_plans[0],
+        generation_plan=plan.generation_plans[0],
+        job_id=plan.creative_job.job_id,
+    )
+    provider = ProductionImageGenerationProvider(output_store=object())
+    expected = provider.materialize_final_prompt(request)
+    output = result["outputs"][0]
+    assert output["imagegen_prompt"] == expected.generation_prompt
+    assert output["provider_prompt_sha256"] == expected.prompt_sha256
+    assert output["reference_image_paths"] == [item["file_path"] for item in expected.reference_assets]
+    assert output["reference_input_contract"] == {
+        "operation": "image_edit",
+        "declared_reference_count": 1,
+        "admitted_reference_count": 1,
+        "source_sha256": [hashlib.sha256(source.read_bytes()).hexdigest()],
+    }
+
+
+def test_reference_path_is_not_sent_to_remote_brain_compact_payload(tmp_path: Path) -> None:
+    source = _write_png(tmp_path / "brain-private.png")
+    request = NativeImageGenPlanRequest.from_mcp_arguments(
+        _arguments(reference_inputs=[{"channel": "portrait_identity", "file_path": str(source)}])
+    )
+    asset = CodexNativeImageGenPlanner._uploaded_assets(request)[0].model_dump(mode="json")
+    compact = _compact_specialized_assets([asset])
+    assert str(source.resolve()) not in json.dumps(compact)
+    assert compact[0]["asset_id"] == asset["asset_id"]
+    assert compact[0]["role"] == "face_reference"
+
+
+def test_missing_or_corrupt_reference_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(CodexNativeImageGenError) as failure:
+        NativeImageGenPlanRequest.from_mcp_arguments(
+            _arguments(reference_inputs=[{"channel": "product_truth", "file_path": str(tmp_path / "missing.png")}])
+        )
+    assert failure.value.code == "codex_native_imagegen_reference_path_unavailable"
+
+    corrupt = tmp_path / "corrupt.png"
+    corrupt.write_bytes(b"not an image")
+    corrupt_request = NativeImageGenPlanRequest.from_mcp_arguments(
+        _arguments(reference_inputs=[{"channel": "product_truth", "file_path": str(corrupt)}])
+    )
+    result = _planner_for(
+        _canonical_runtime_result(uploaded_assets=CodexNativeImageGenPlanner._uploaded_assets(corrupt_request))
+    ).prepare_native_imagegen_plan(corrupt_request)
+    assert result["code"] == "codex_native_imagegen_canonical_prompt_unavailable"
 
 
 def test_general_only_template_gate_is_preserved() -> None:
@@ -296,8 +361,8 @@ def test_public_contract_rejects_private_paths_provider_metadata_and_secrets() -
         {"job_id": "job_130"},
         {"provider_metadata": {"provider": "not-accepted"}},
         {"base_url": "https://not-accepted.invalid"},
-        {"reference_declarations": [{"channel": "product_truth", "attached_in_current_codex_conversation": True, "path": "C:/private.png"}]},
-        {"reference_declarations": [{"channel": "product_truth", "attached_in_current_codex_conversation": True, "api_key": "must-not-leak"}]},
+        {"reference_inputs": [{"channel": "product_truth", "file_path": "C:/private.png", "path": "C:/private.png"}]},
+        {"reference_inputs": [{"channel": "product_truth", "file_path": "C:/private.png", "api_key": "must-not-leak"}]},
     ):
         with pytest.raises(CodexNativeImageGenError) as failure:
             NativeImageGenPlanRequest.from_mcp_arguments(_arguments(**extra))

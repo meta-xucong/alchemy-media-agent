@@ -24,12 +24,15 @@ The admission tool currently enables only `general_template`. E-Commerce and
 Photography are deliberately blocked until their independent LLM-first and
 reference contracts can be proved without weakening them.
 
-It accepts only user input, General, requested count/size, and declarations
-about attachments already visible in the current Codex conversation. It never
-receives a file path, local artifact, project or job ID, provider setting,
-capability envelope, or credential. `portrait_identity`, `product_truth`, and
-`nonhuman_identity` are always hard channels: callers cannot set a flag to
-downgrade them.
+It accepts only user input, General, requested count/size, and explicit
+`reference_inputs` (`channel` plus a user-authorized readable local
+`file_path`). That file is passed into the ordinary V3 uploaded-asset contract
+unchanged; V3 then returns the Web-admitted reference paths with the canonical
+prompt.  A Codex conversation attachment is usable only when the host exposes
+such a path. Otherwise the planner blocks safely: it never probes Codex
+sessions/caches, imports a private artifact, or substitutes another image.
+`portrait_identity`, `product_truth`, and `nonhuman_identity` remain hard
+channels inside V3; callers cannot downgrade them.
 
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the
@@ -39,8 +42,9 @@ receipt. Codex must not add a role, suite, camera, crop, keyword stack, or any
 other text. If remote Brain planning, canonical materialization, admission, or
 the built-in tool is unavailable, stop without a fallback.
 
-This first parity surface is text-to-image only. Any declared reference blocks
-until a future supported attachment handoff can prove reference parity.
+Reference/image-to-image parity is described in Doc131. Codex must pass each
+returned `reference_image_paths` list unchanged with the returned
+`imagegen_prompt`. Text-to-image returns an empty list.
 
 ## Local repository setup
 

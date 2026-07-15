@@ -1,6 +1,6 @@
 {
   "name": "alchemy-codex-local-mode",
-  "version": "0.5.0+codex.20260715141815",
+  "version": "0.5.0+codex.20260715143535",
   "description": "Exact V3 Provider Prompt parity for conversation-only Codex images",
   "author": {
     "name": "Local developer"

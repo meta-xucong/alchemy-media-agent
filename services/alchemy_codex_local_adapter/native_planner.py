@@ -1,4 +1,4 @@
-"""Doc130 canonical-provider-prompt bridge from local stdio MCP to Codex ImageGen."""
+"""Doc130/131 canonical-provider-prompt bridge from local stdio MCP to Codex ImageGen."""
 
 from __future__ import annotations
 
@@ -10,11 +10,13 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     build_provider_generation_request,
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 
 from .contracts import (
     NATIVE_EXECUTION_CHANNEL,
     NativeImageGenPlanRequest,
-    public_reference_instructions,
+    reference_mime_type,
+    reference_role_for_channel,
 )
 from .provenance import native_plan_provenance
 
@@ -52,19 +54,8 @@ class CodexNativeImageGenPlanner:
         scenario_id = _TEMPLATE_SCENARIOS.get(request.template_id)
         if scenario_id is None:
             return self._blocked("codex_native_imagegen_template_invalid", "The selected template is unavailable for Codex Native ImageGen Mode.")
-        missing = [item.channel for item in request.reference_declarations if item.required and not item.attached_in_current_codex_conversation]
-        if missing:
-            return self._blocked(
-                "codex_native_imagegen_required_reference_missing",
-                "A required reference is not attached in the current Codex conversation.",
-            )
-        if request.reference_declarations:
-            return self._blocked(
-                "codex_native_imagegen_reference_prompt_parity_unavailable",
-                "Codex Native ImageGen prompt parity currently supports text-only requests; it cannot prove the same provider-normalized reference input without a supported attachment handoff.",
-            )
-
         runtime = self._runtime_factory()
+        uploaded_assets = self._uploaded_assets(request)
         result = runtime.plan_job(
             {
                 "user_input": request.user_input,
@@ -81,14 +72,11 @@ class CodexNativeImageGenPlanner:
                     # remote Central Brain contract as the Web Provider path.
                     "require_real_images": True,
                     "real_image_generation": True,
-                    "codex_native_reference_declarations": [
-                        {
-                            "channel": item.channel,
-                            "attached_in_current_codex_conversation": item.attached_in_current_codex_conversation,
-                        }
-                        for item in request.reference_declarations
-                    ],
                 },
+                # The source files are passed through the same V3 upload
+                # contract as Web Mode.  The remote Brain compact payload
+                # receives only safe asset evidence, never the local paths.
+                "uploaded_assets": uploaded_assets,
             }
         )
         if result.status != ScenarioRuntimeStatus.PLANNED or result.planning_result is None:
@@ -110,7 +98,6 @@ class CodexNativeImageGenPlanner:
                 "Codex Native ImageGen requires a valid non-fallback remote Central Brain result.",
             )
 
-        instructions = public_reference_instructions(request.reference_declarations)
         outputs: list[dict[str, Any]] = []
         envelope_id = str(envelope.get("envelope_id") or "").strip()
         if not envelope_id:
@@ -125,6 +112,7 @@ class CodexNativeImageGenPlanner:
         if len(materializations) != request.requested_image_count:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
         for index, materialization in enumerate(materializations, start=1):
+            reference_paths = [str(item["file_path"]) for item in materialization.reference_assets if item.get("file_path")]
             outputs.append(
                 {
                     "output_index": index,
@@ -139,7 +127,17 @@ class CodexNativeImageGenPlanner:
                         "quality": materialization.quality,
                         "output_format": materialization.output_format,
                     },
-                    "reference_instructions": list(instructions),
+                    # These are the same admitted source files that the Web
+                    # Provider receives before its shared transport preflight.
+                    # Codex must pass them without substitution alongside the
+                    # exact prompt above; an empty list means text-to-image.
+                    "reference_image_paths": reference_paths,
+                    "reference_input_contract": {
+                        "operation": "image_edit" if reference_paths else "image_generate",
+                        "declared_reference_count": len(request.reference_inputs),
+                        "admitted_reference_count": len(reference_paths),
+                        "source_sha256": [item.source_sha256 for item in request.reference_inputs],
+                    },
                 }
             )
 
@@ -157,6 +155,32 @@ class CodexNativeImageGenPlanner:
                 admission_fallback_observed=False,
             ),
         }
+
+    @staticmethod
+    def _uploaded_assets(request: NativeImageGenPlanRequest) -> list[UploadedAssetInfo]:
+        """Translate explicit local files into the ordinary V3 upload shape.
+
+        No copy, upload store, or alternate reference resolver is created
+        here.  V3's normal admission/materialization path owns every
+        subsequent decision, including a fail-closed rejection.
+        """
+
+        return [
+            UploadedAssetInfo(
+                asset_id=item.asset_id,
+                role=AssetRole(reference_role_for_channel(item.channel)),
+                file_path=item.file_path,
+                filename=item.file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+                mime_type=reference_mime_type(item.file_path),
+                metadata={
+                    "provider_input_required": True,
+                    "source_integrity_id": item.source_sha256,
+                    "codex_native_reference_channel": item.channel,
+                    "v3_owned_upload": True,
+                },
+            )
+            for item in request.reference_inputs
+        ]
 
     @staticmethod
     def _canonical_materializations(planning_result: Any) -> list[Any]:
