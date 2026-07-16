@@ -1,8 +1,8 @@
 # Doc142 - V3 Shared Human Natural Presence and Pixel Feedback Closure
 
-Status: **active shared-foundation implementation authority.** M0-M3 are
-implemented and regression-verified; M4 real-pixel acceptance remains pending
-the controlled acceptance environment.
+Status: **active shared-foundation baseline; M0-M4 are implemented and
+recorded.** Doc143 refines the next forward Human Realism contract after M4
+exposed remaining generic-personhood and painterly-material weaknesses.
 
 This is the bounded quality phase after Doc141. It improves the existing shared
 Human Realism capability without replacing V3 architecture, adding a template,
@@ -59,7 +59,7 @@ recipe.
 ### 2.1 Authority resolution
 
 Doc136 records the v1 typed-contract baseline and its historical implementation
-evidence. Doc138 is the current forward v2 Human Realism semantic-contract
+evidence. Doc138 records the former forward v2 Human Realism semantic-contract
 authority: it retains the v1 boundary and adds only the generic
 natural-presence and aesthetic-boundary decisions. Doc137 preflight remains
 mandatory. Doc139 remains the one independent re-signing pass. Doc142 extends

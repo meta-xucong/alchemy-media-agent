@@ -41,7 +41,7 @@ def test_doc138_natural_presence_is_typed_without_local_renderer_prose() -> None
     guidance = _guidance()
     contract = guidance["semantic_contract"]
 
-    assert contract["contract_version"] == "v3_human_realism_semantic_v2"
+    assert contract["contract_version"] == "v3_human_realism_semantic_v3"
     assert contract["natural_presence_priority"] == "individual_human_presence"
     assert contract["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     serialized = json.dumps(contract, ensure_ascii=False)

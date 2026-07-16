@@ -13,6 +13,15 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             return self.contribution(context)
         plugin_metadata = as_dict(as_dict(guidance.get("metadata")).get("human_realism_plugin"))
         hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
+        semantic_contract = as_dict(guidance.get("semantic_contract"))
+        human_authenticity_contract = {
+            key: semantic_contract.get(key)
+            for key in (
+                "contract_version",
+                "personhood_requirement",
+                "photographic_material_requirement",
+            )
+        }
         return self.contribution(
             context,
             # The active capability preserves review ownership and evidence,
@@ -23,6 +32,11 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             review={
                 "issue_codes": list(HUMAN_REALISM_REVIEW_DIMENSIONS),
                 "score_dimensions": ["human_realism"],
+                # This is a frozen review obligation, never provider prompt
+                # prose.  It is copied from the active shared semantic
+                # contract so stale mutable metadata cannot opt a job in.
+                "human_authenticity_contract": human_authenticity_contract,
+                "human_naturalness_verdict_required": True,
             },
             retry={
                 "issue_codes": list(HUMAN_REALISM_REVIEW_DIMENSIONS),

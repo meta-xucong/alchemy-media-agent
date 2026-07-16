@@ -1,5 +1,10 @@
 # 91 V3 Human Realism Plugin Governance Spec
 
+> **Doc143 forward-path note:** fresh enforced Human Realism jobs use the
+> v3 semantic contract and frozen pixel-authenticity attestation defined by
+> Doc143. Historical detailed child/skin wording in this document remains
+> read-only compatibility context and must not become a renderer word list.
+
 > **Doc135 forward-path note:** this shared plugin may freeze whether Human
 > Realism is required and what pixel evidence to review. It may not append
 > local realism words after the remote Brain's final canonical sign-off.

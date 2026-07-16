@@ -1,5 +1,10 @@
 # 92 V3 Style-Aware Human Realism AI-Feel Suppression Spec
 
+> **Doc143 forward-path note:** fresh enforced Human Realism jobs use the
+> shared v3 semantic contract and pixel-authenticity attestation in Doc143.
+> This document's historical observations are validation context only; they
+> cannot restore local face/skin phrase stacks or named demographic paths.
+
 > Historical/compatibility note (Doc128): style-aware observations remain
 > useful validation criteria, but new jobs use Doc128's concise resolved
 > constraints and review dimensions. This document cannot restore local

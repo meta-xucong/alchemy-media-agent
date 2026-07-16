@@ -868,6 +868,7 @@ def test_doc118_verified_warning_remains_eligible_for_final_delivery(tmp_path) -
             "status": "warning",
             "confidence": 0.93,
             "issue_codes": [],
+            "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
         }
     )
     service = _service(
@@ -898,6 +899,7 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
             "status": "fail_retryable",
             "confidence": 0.88,
             "issue_codes": ["visible_text_artifact"],
+            "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
             "summary": ["V3 发现图片里有多余文字"],
         }
     )
@@ -974,12 +976,14 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
                 "status": "fail_retryable",
                 "confidence": 0.91,
                 "issue_codes": ["visible_text_artifact"],
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
                 "summary": ["V3 found extra text in the first output."],
             },
             {
                 "status": "pass",
                 "confidence": 0.93,
                 "issue_codes": [],
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
                 "summary": ["The retry output passed the visual review."],
             },
         ]
@@ -1028,6 +1032,7 @@ def test_doc95_worse_retry_does_not_replace_stronger_initial_attempt(tmp_path) -
                 "status": "fail_retryable",
                 "confidence": 0.94,
                 "issue_codes": ["visible_text_artifact"],
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
                 "scores": {
                     "same_person_readability": 0.96,
                     "prompt_owned_channel_obedience": 0.95,
@@ -1039,6 +1044,7 @@ def test_doc95_worse_retry_does_not_replace_stronger_initial_attempt(tmp_path) -
                 "status": "fail_retryable",
                 "confidence": 0.92,
                 "issue_codes": ["visible_text_artifact"],
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
                 "scores": {
                     "same_person_readability": 0.55,
                     "prompt_owned_channel_obedience": 0.72,

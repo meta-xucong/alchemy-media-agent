@@ -99,6 +99,7 @@ class PhotographyVisionTestProvider:
             "status": "pass",
             "confidence": 0.96,
             "issue_codes": [],
+            "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
             "scores": {"artifact_safety": 0.96, "composition": 0.94, "commercial_finish": 0.95, "overall": 0.95},
         }
 

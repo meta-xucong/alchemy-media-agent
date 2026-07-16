@@ -62,10 +62,15 @@ class _ContractVisionProvider:
         return True
 
     def inspect(self, resolution, *, metadata=None) -> dict:
+        human_issue = "ai_face_render" in self.issue_codes
         return {
             "status": "fail_retryable",
             "confidence": 0.92,
             "issue_codes": list(self.issue_codes),
+            "human_naturalness_verdict": {
+                "status": "retry_recommended" if human_issue else "pass",
+                "issue_codes": ["human_rendering_artifact"] if human_issue else [],
+            },
             "scores": {
                 "product_fidelity": 0.42,
                 "apparel_construction_fidelity": 0.36,

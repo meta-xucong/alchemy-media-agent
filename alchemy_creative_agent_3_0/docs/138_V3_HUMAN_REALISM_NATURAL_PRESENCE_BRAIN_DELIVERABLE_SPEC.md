@@ -1,6 +1,6 @@
 # Doc138 - V3 Human Realism Natural-Presence Brain Deliverable
 
-Status: **active shared-foundation implementation authority.**
+Status: **active foundation background; semantic v2 payload superseded for fresh enforced jobs by Doc143.**
 
 This document extends Docs 91-96, 124, 128, 134-137. It records the
 controlled blue-dress Local MCP comparison after Doc137 and closes the gap
@@ -59,7 +59,7 @@ This rule applies equally to adults, children, people wearing products,
 portraits and ordinary lifestyle scenes. An explicit young-person signal is
 still only the existing safety boundary; it does not create a visual route.
 
-## 3. Human Realism semantic contract v2
+## 3. Historical Human Realism semantic contract v2
 
 For a real visible person, the frozen Human Realism contract contains two
 additional non-creative decisions:
@@ -144,7 +144,7 @@ or a deterministic numerical metric.
 
 ## 8. Verification
 
-1. An active enforced Human Realism plan must freeze contract v2 and pass it
+1. The historical enforced Human Realism plan froze contract v2 and passed it
    only to the remote finalizer.
 2. The finalizer payload must name the natural-presence priority without
    exposing prompt fragments or reviewer code.

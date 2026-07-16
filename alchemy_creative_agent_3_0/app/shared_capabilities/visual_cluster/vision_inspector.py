@@ -20,7 +20,7 @@ from .vision_provider import (
     review_feedback_contract,
 )
 from .identity_metric import create_default_identity_metric_provider
-from .human_photorealism import normalize_human_realism_issue_code
+from .human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS, normalize_human_realism_issue_code
 from .reference_channel_policy import reference_channel_retry_patch
 
 
@@ -248,6 +248,9 @@ RETRYABLE_ISSUE_CODES = {
     "low_commercial_finish",
     "identity_metric_below_commercial_target",
     "identity_metric_low",
+    # Doc143 uses the same generic Human Realism dimensions in a frozen pixel
+    # attestation.  They remain capability evidence, never local retry prose.
+    *HUMAN_REALISM_REVIEW_DIMENSIONS,
 }
 
 FINAL_ISSUE_CODES = {
@@ -266,6 +269,7 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "hard_semantic_contract_unverified",
     "reference_evidence_unavailable",
     "feedback_or_similarity_not_verifiable",
+    "human_naturalness_unverified",
 }
 
 
@@ -447,6 +451,12 @@ class VisionOutputInspector:
             allowed = set(review_contract.get("issue_codes") or [])
             ignored_out_of_scope_issue_codes = [code for code in issue_codes if code not in allowed]
             issue_codes = [code for code in issue_codes if code in allowed]
+        human_attestation, human_attestation_issue_codes = _human_naturalness_attestation(
+            payload,
+            review_contract,
+            observed_issue_codes=issue_codes,
+        )
+        issue_codes = _dedupe([*issue_codes, *human_attestation_issue_codes])
         confidence = _safe_float(payload.get("confidence"), default=0.5)
         score_card = _provider_score_card(payload.get("scores"), str(payload.get("status") or ""))
         if review_contract.get("enforced"):
@@ -526,6 +536,7 @@ class VisionOutputInspector:
                 "review_capability_sources": review_contract.get("review_capability_sources", []),
                 "ignored_out_of_scope_issue_codes": ignored_out_of_scope_issue_codes,
                 "feedback_review": feedback_evidence,
+                "human_naturalness_attestation": human_attestation,
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},
@@ -1724,6 +1735,46 @@ def _provider_issue_codes(payload: dict[str, Any]) -> list[str]:
     if isinstance(raw, list) and raw and isinstance(raw[0], dict):
         return _dedupe([str(item.get("code") or "").strip() for item in raw])
     return _dedupe(_string_list(raw))
+
+
+def _human_naturalness_attestation(
+    payload: dict[str, Any],
+    review_contract: dict[str, Any],
+    *,
+    observed_issue_codes: list[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate Doc143's minimal pixel attestation without inventing prose.
+
+    A missing or malformed attestation is a certification failure, not a
+    content judgement.  A retry recommendation may only use the five frozen
+    generic Human Realism dimensions, which preserves shared retry ownership
+    and prevents historical fine-grained keyword catalogues from returning.
+    """
+
+    if not review_contract.get("human_naturalness_verdict_required"):
+        return {"required": False, "status": "not_required", "issue_codes": []}, []
+    raw = payload.get("human_naturalness_verdict")
+    if not isinstance(raw, dict):
+        return {"required": True, "status": "missing", "issue_codes": []}, ["human_naturalness_unverified"]
+    status = str(raw.get("status") or "").strip().lower()
+    raw_codes = _dedupe(normalize_human_realism_issue_code(code) for code in _provider_issue_codes(raw))
+    allowed = set(HUMAN_REALISM_REVIEW_DIMENSIONS)
+    if status not in {"pass", "retry_recommended", "not_verifiable"} or any(code not in allowed for code in raw_codes):
+        return {"required": True, "status": "invalid", "issue_codes": raw_codes}, ["human_naturalness_unverified"]
+    if status == "pass":
+        conflicting = [code for code in observed_issue_codes if code in allowed]
+        if raw_codes or conflicting:
+            return {
+                "required": True,
+                "status": "inconsistent",
+                "issue_codes": _dedupe([*raw_codes, *conflicting]),
+            }, ["human_naturalness_unverified"]
+        return {"required": True, "status": "pass", "issue_codes": []}, []
+    if status == "retry_recommended":
+        if not raw_codes:
+            return {"required": True, "status": "invalid", "issue_codes": []}, ["human_naturalness_unverified"]
+        return {"required": True, "status": status, "issue_codes": raw_codes}, raw_codes
+    return {"required": True, "status": "not_verifiable", "issue_codes": raw_codes}, ["human_naturalness_unverified"]
 
 
 def _status_from_issues(issue_codes: list[str], provider_status: str) -> str:
