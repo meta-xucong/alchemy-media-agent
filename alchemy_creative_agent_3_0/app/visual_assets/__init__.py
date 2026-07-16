@@ -15,6 +15,7 @@ from .anchor_pack import (
     AnchorReviewDecision,
 )
 from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
+from .runtime_bridge import CanonicalProviderPromptReceipt, ProfessionalModeRuntimeBridge
 from .contracts import (
     AnchorView,
     FaceIdentityModule,
@@ -43,6 +44,8 @@ __all__ = [
     "InMemoryVisualAssetCatalog",
     "PersistentVisualAssetCatalog",
     "PeopleAssetRevision",
+    "CanonicalProviderPromptReceipt",
+    "ProfessionalModeRuntimeBridge",
     "bind_professional_mode",
     "select_reference_views",
 ]
