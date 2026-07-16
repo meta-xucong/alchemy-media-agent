@@ -73,7 +73,22 @@ def _generation_request(reference_path: Path | None = None) -> GenerationRequest
             candidate_count=1,
             max_refine_rounds=0,
         ),
-        metadata={"job_id": "job_v3_prod", "uploaded_assets": uploaded_assets, "quality_mode": "standard"},
+        metadata={
+            "job_id": "job_v3_prod",
+            "uploaded_assets": uploaded_assets,
+            "quality_mode": "standard",
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "premium ecommerce product hero image on a clean bright background",
+                        "review_status": "approved",
+                    }
+                ],
+            },
+        },
     )
 
 
@@ -144,8 +159,35 @@ def _human_generation_request() -> GenerationRequest:
             "user_input": "Create an East Asian summer realistic portrait photo",
             "visual_cluster": visual_cluster,
             "shared_capabilities": {"visual_cluster": visual_cluster},
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "East Asian summer portrait photo with clean cool daylight",
+                        "review_status": "approved",
+                    }
+                ],
+            },
         },
     )
+
+
+def _set_remote_canonical_prompt(request: GenerationRequest, prompt: str) -> None:
+    """Test only: model the immutable renderer text returned by Central Brain."""
+
+    brain = dict(request.metadata.get("llm_brain") or {})
+    brain.update(
+        {
+            "llm_used": True,
+            "fallback_used": False,
+            "canonical_provider_prompts": [
+                {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+            ],
+        }
+    )
+    request.metadata["llm_brain"] = brain
 
 
 def test_uploaded_portrait_reference_gets_identity_priority_over_prompt(tmp_path) -> None:
@@ -163,6 +205,10 @@ def test_uploaded_portrait_reference_gets_identity_priority_over_prompt(tmp_path
     request.prompt_compilation.visual_prompt = (
         "Create a summer portrait in a different outfit and evening fountain scene with fresh beauty mood"
     )
+    _set_remote_canonical_prompt(
+        request,
+        "A same-person summer portrait in a different outfit by an evening fountain; preserve only the admitted identity truth.",
+    )
 
     provider = ProductionImageGenerationProvider()
     reference_assets = provider._reference_assets(request)  # noqa: SLF001
@@ -176,9 +222,9 @@ def test_uploaded_portrait_reference_gets_identity_priority_over_prompt(tmp_path
     )
     assert "same-person portrait identity reference" in constraints or "exact portrait identity truth" in constraints
     assert any(item.get("derivative_kind") == "portrait_identity_crop" for item in asset_plan["assets"])
-    assert "Uploaded portrait reference priority" in prompt
-    assert "higher priority for identity" in prompt
-    assert "must not replace facial feature relationships" in prompt
+    assert prompt == (
+        "A same-person summer portrait in a different outfit by an evening fountain; preserve only the admitted identity truth."
+    )
 
 
 def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) -> None:
@@ -233,7 +279,10 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert candidate.metadata["download_url"].startswith("/api/v3/creative-agent/outputs/")
     assert candidate.metadata["compiled_visual_direction"] == "premium ecommerce product hero image on a clean bright background"
     assert "premium ecommerce product hero image on a clean bright background" in candidate.metadata["final_provider_prompt"]
-    assert "Strong reference rules" in candidate.metadata["final_provider_prompt"]
+    # This persistence fixture deliberately has no normalized real-image job
+    # envelope. It must not freeze a historical local phrase as a current
+    # Provider contract; signed V3 jobs are separately covered by Doc134/135.
+    assert "Strong reference rules" not in candidate.metadata["final_provider_prompt"]
     assert candidate.metadata["final_provider_prompt_chars"] == len(candidate.metadata["final_provider_prompt"])
     assert candidate.metadata["provider_prompt_target_chars"] == 15000
     assert candidate.metadata["provider_prompt_materialization"] == "v3_semantic_budget_user_direction_lossless"
@@ -246,6 +295,36 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert records[0].metadata["final_provider_prompt"] == candidate.metadata["final_provider_prompt"]
     assert records[0].metadata["final_provider_prompt_chars"] == candidate.metadata["final_provider_prompt_chars"]
     assert records[0].metadata["style_notes"] == ["premium", "clean"]
+
+
+def test_production_provider_blocks_unsigned_request_before_upstream(tmp_path, monkeypatch) -> None:
+    """No executable Provider route may revive the local prompt materializer."""
+
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    calls: list[str] = []
+
+    async def must_not_run(*_args, **_kwargs):  # noqa: ANN001
+        calls.append("unexpected")
+        raise AssertionError("an unsigned request must fail before upstream generation")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", must_not_run)
+    try:
+        request = _generation_request()
+        request.metadata.pop("llm_brain", None)
+        with pytest.raises(ProviderRuntimeError, match="approved canonical Provider prompt") as failure:
+            ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs")).generate(request)
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    assert calls == []
+    assert failure.value.provider_failure_retry["fresh_upstream_requests"] == 0
+    assert failure.value.provider_failure_retry["final_failure_code"] == "remote_creative_brain_prompt_signoff_missing"
 
 
 def test_production_provider_empty_result_is_auditable_single_request_failure(tmp_path, monkeypatch) -> None:
@@ -797,7 +876,7 @@ def test_production_provider_respects_requested_size_without_multiplying_group_c
     assert len(records) == 3
     assert response.provider_metadata["requested_image_count"] == 3
     assert response.provider_metadata["requested_image_size"] == "1536x1024"
-    assert "aspect ratio: 3:2" in response.candidates[0].metadata["final_provider_prompt"]
+    assert response.candidates[0].metadata["final_provider_prompt"] == "premium ecommerce product hero image on a clean bright background"
 
 
 def test_production_provider_consumes_visual_retry_patch_and_uniques_candidate_id(tmp_path, monkeypatch) -> None:
@@ -838,17 +917,19 @@ def test_production_provider_consumes_visual_retry_patch_and_uniques_candidate_i
                 },
             }
         )
+        _set_remote_canonical_prompt(
+            retry_request,
+            "Remote Brain approved a new complete product image after the reported visual review evidence.",
+        )
         retry = provider.generate(retry_request)
     finally:
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
 
     assert original.candidates[0].candidate_id != retry.candidates[0].candidate_id
-    assert "Retry repair guidance" in observed_prompts[-1]
-    assert "make the result cleaner and more polished" in observed_prompts[-1]
-    assert "remove visible text and watermark risk" in observed_prompts[-1]
-    assert "visible text" in observed_negatives[-1]
-    assert "watermark" in observed_negatives[-1]
+    assert observed_prompts[-1] == "Remote Brain approved a new complete product image after the reported visual review evidence."
+    assert "make the result cleaner and more polished" not in observed_prompts[-1]
+    assert "remove visible text and watermark risk" not in observed_prompts[-1]
     assert retry.candidates[0].metadata["visual_auto_retry_attempt"] == 1
 
 
@@ -883,15 +964,9 @@ def test_production_provider_includes_human_photorealism_guidance(tmp_path, monk
         settings.default_image_provider = old_provider
 
     assert response.candidates
-    assert "Human realism contract" in observed_prompts[-1]
-    assert "Selected reference closure" in observed_prompts[-1]
-    assert "Mode quality contract" in observed_prompts[-1]
-    assert "natural human skin texture" in observed_prompts[-1]
-    assert "slight natural facial asymmetry" in observed_prompts[-1]
-    assert "identity truth" in observed_prompts[-1]
-    assert "plastic skin" in observed_negatives[-1]
-    assert "over-smoothed skin" in observed_negatives[-1]
-    assert "same exact AI face repeated" in observed_negatives[-1]
+    assert observed_prompts[-1] == "East Asian summer portrait photo with clean cool daylight"
+    assert "Human realism contract" not in observed_prompts[-1]
+    assert "natural human skin texture" not in observed_prompts[-1]
     assert response.provider_metadata["strong_reference_closure_package"]["active"] is True
     assert response.provider_metadata["mode_quality_profile"]["mode"] == "selection_candidates"
 
@@ -915,6 +990,10 @@ def test_doc124_safety_sensitive_person_profile_normalizes_framework_prompt_and_
         }
     )
     request.prompt_compilation.negative_prompt = "watermark"
+    _set_remote_canonical_prompt(
+        request,
+        "A fully dressed, age-appropriate, family-friendly ordinary daytime garden photograph of the requested young person wearing the supplied garment.",
+    )
     cluster = request.metadata["visual_cluster"]
     cluster["strong_reference_closure_package"] = {}
     human_guidance = cluster["human_photorealism_guidance"]
@@ -932,9 +1011,9 @@ def test_doc124_safety_sensitive_person_profile_normalizes_framework_prompt_and_
     final_prompt = provider._generation_prompt(request, [])  # noqa: SLF001
     negative_constraints = provider._negative_constraints(request)  # noqa: SLF001
 
-    assert "Safety-sensitive person contract" in final_prompt
-    assert "fully dressed, age-appropriate, family-friendly" in final_prompt
-    assert "Keep the established age-appropriate, fully dressed, family-friendly" in final_prompt
+    assert final_prompt == (
+        "A fully dressed, age-appropriate, family-friendly ordinary daytime garden photograph of the requested young person wearing the supplied garment."
+    )
     assert "bad_hands_or_body" not in final_prompt
     assert "ai_face_render" not in final_prompt
     assert "visible skin texture" not in final_prompt
@@ -960,16 +1039,11 @@ def test_production_provider_materializes_framework_without_losing_user_directio
         ]
     )
     request.prompt_compilation.negative_prompt = "distorted face, watermark, text, " * 80
+    _set_remote_canonical_prompt(request, user_direction)
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert len(final_prompt) <= ProductionImageGenerationProvider.provider_prompt_target_chars
-    assert user_direction in final_prompt
-    assert "Visual direction:" in final_prompt
-    assert "Human realism contract" in final_prompt
-    assert "Identity continuity" in final_prompt
-    assert "Avoid:" in final_prompt
-    assert "watermark" in final_prompt
+    assert final_prompt == user_direction
 
 
 def test_provider_prompt_removes_framework_duplicates_without_truncating_user_direction() -> None:
@@ -983,16 +1057,11 @@ def test_provider_prompt_removes_framework_duplicates_without_truncating_user_di
         "A unique user constraint: keep the red forehead ornament visible.",
         "Avoid: beauty-app face",
     ]
+    _set_remote_canonical_prompt(request, user_direction)
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert user_direction in final_prompt
-    assert "A unique user constraint: keep the red forehead ornament visible." in final_prompt
-    assert "Use the V3-owned generation strategy" not in final_prompt
-    assert "Hard constraints: Avoid:" not in final_prompt
-    assert "Mode quality contract" in final_prompt
-    assert "Review priorities:" not in final_prompt
-    assert "Pass conditions:" not in final_prompt
+    assert final_prompt == user_direction
 
 
 def test_production_provider_can_apply_explicit_emergency_prompt_cap() -> None:
@@ -1006,15 +1075,10 @@ def test_production_provider_can_apply_explicit_emergency_prompt_cap() -> None:
     request.prompt_compilation.negative_prompt = "distorted face, watermark, text, " * 80
     provider = ProductionImageGenerationProvider()
     provider.max_provider_prompt_chars = 3200
+    _set_remote_canonical_prompt(request, request.prompt_compilation.visual_prompt)
 
-    final_prompt = provider._generation_prompt(request, [])  # noqa: SLF001
-
-    assert len(final_prompt) <= 3200
-    assert "Visual direction:" in final_prompt
-    assert "Human realism contract" in final_prompt
-    assert "Identity continuity" in final_prompt
-    assert "Avoid:" in final_prompt
-    assert "watermark" in final_prompt
+    with pytest.raises(ProviderRuntimeError, match="exceeds the configured transport limit"):
+        provider.materialize_final_prompt(request)
 
 
 def test_production_provider_honors_transport_prompt_cap(monkeypatch) -> None:
@@ -1031,12 +1095,11 @@ def test_production_provider_honors_transport_prompt_cap(monkeypatch) -> None:
     )
     request.prompt_compilation.negative_prompt = "watermark, distorted product, clutter, " * 60
     monkeypatch.setattr(settings, "openai_image_transport_max_prompt_chars", 1800)
+    _set_remote_canonical_prompt(request, user_direction)
 
     final_prompt = ProductionImageGenerationProvider()._generation_prompt(request, [])  # noqa: SLF001
 
-    assert len(final_prompt) <= 1800
-    assert user_direction in final_prompt
-    assert "watermark" in final_prompt
+    assert final_prompt == user_direction
 
 
 def test_v3_output_store_creates_preview_thumbnail_and_download(tmp_path) -> None:

@@ -2223,9 +2223,64 @@ class ScenarioRuntime:
         )
 
     def _coerce_request(self, request: ScenarioRuntimeRequest | dict[str, Any]) -> ScenarioRuntimeRequest:
-        if isinstance(request, ScenarioRuntimeRequest):
+        runtime_request = request if isinstance(request, ScenarioRuntimeRequest) else ScenarioRuntimeRequest.model_validate(request)
+        return self._with_uploaded_reference_snapshot(runtime_request)
+
+    @staticmethod
+    def _with_uploaded_reference_snapshot(request: ScenarioRuntimeRequest) -> ScenarioRuntimeRequest:
+        """Project declared upload truth into the frozen reference context.
+
+        A browser Project normally already persists this context. Stateless
+        callers (including the conversation-only Local MCP relay) still carry
+        the same declared ``uploaded_assets`` contract. Leaving that evidence
+        outside the snapshot would make the reference-channel policy appear
+        active without a source binding, allowing a full source frame to
+        bypass the frozen channel policy at materialization.
+
+        This is intentionally an ingress-only, non-creative projection. It
+        copies the caller-declared role and technical file identity without
+        inferring a subject, scene, style, or prompt wording. Existing Project
+        context is retained and duplicate sources are collapsed by their
+        stable asset/file identity.
+        """
+
+        uploaded_assets = list(request.uploaded_assets or [])
+        if not uploaded_assets:
             return request
-        return ScenarioRuntimeRequest.model_validate(request)
+
+        metadata = dict(request.metadata or {})
+        existing_context = metadata.get("project_context_snapshot")
+        project_context = dict(existing_context) if isinstance(existing_context, dict) else {}
+        existing_references = project_context.get("uploaded_reference_assets")
+        merged_references = [dict(item) for item in existing_references if isinstance(item, dict)] if isinstance(existing_references, list) else []
+        seen = {
+            (
+                str(item.get("asset_id") or item.get("asset_ref_id") or "").strip(),
+                str(item.get("file_path") or "").strip(),
+            )
+            for item in merged_references
+        }
+        for asset in uploaded_assets:
+            role = asset.role.value if hasattr(asset.role, "value") else asset.role
+            projected = {
+                "asset_id": asset.asset_id,
+                "role": str(role or "unknown_reference"),
+                "source_type": "uploaded",
+                "file_path": asset.file_path,
+                "uri": asset.uri,
+                "filename": asset.filename,
+                "mime_type": asset.mime_type,
+                "metadata": dict(asset.metadata or {}),
+            }
+            key = (str(projected["asset_id"] or "").strip(), str(projected["file_path"] or "").strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_references.append(projected)
+
+        project_context["uploaded_reference_assets"] = merged_references
+        metadata["project_context_snapshot"] = project_context
+        return request.model_copy(update={"metadata": metadata})
 
     def _job_scope(self, request: ScenarioRuntimeRequest, resolution: ScenarioPackResolution) -> str:
         metadata = dict(request.metadata or {})

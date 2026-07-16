@@ -2,6 +2,8 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -17,6 +19,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
 from alchemy_creative_agent_3_0.app.shared_capabilities import CapabilityInput, SharedCapabilityRegistry
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import ModeAwareRoleDirector
 from app.schemas import ImageGenerationResult
+from app.providers.base import ProviderRuntimeError
 
 
 def _png_base64(width: int = 96, height: int = 72) -> str:
@@ -290,7 +293,8 @@ def test_production_provider_prompt_consumes_doc59_role_contract(tmp_path, monke
     }
     try:
         provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
-        response = provider.generate(
+        with pytest.raises(ProviderRuntimeError, match="approved canonical Provider prompt"):
+            provider.generate(
             GenerationRequest(
                 asset_spec=asset,
                 prompt_compilation=prompt,
@@ -312,14 +316,12 @@ def test_production_provider_prompt_consumes_doc59_role_contract(tmp_path, monke
                     "role_specific_generation_plan": {"mode": "delivery_suite", "role_recipes": [recipe]},
                 },
             )
-        )
+            )
     finally:
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
 
-    assert "Role-specific generation contract" in observed_prompt
-    assert "side or three-quarter" in observed_prompt
-    assert response.candidates[0].metadata["mode_role_recipe"]["role_key"] == "side_or_three_quarter_angle"
+    assert observed_prompt == ""
 
 
 def test_production_provider_prompt_consumes_doc62_portrait_role_lanes(tmp_path, monkeypatch) -> None:
@@ -373,7 +375,8 @@ def test_production_provider_prompt_consumes_doc62_portrait_role_lanes(tmp_path,
     )
     try:
         provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
-        provider.generate(
+        with pytest.raises(ProviderRuntimeError, match="approved canonical Provider prompt"):
+            provider.generate(
             GenerationRequest(
                 asset_spec=asset,
                 prompt_compilation=prompt,
@@ -397,13 +400,9 @@ def test_production_provider_prompt_consumes_doc62_portrait_role_lanes(tmp_path,
                     "scenario_id": "general_creative",
                 },
             )
-        )
+            )
     finally:
         settings.openai_api_key = old_key
         settings.default_image_provider = old_provider
 
-    assert "Role expression lane:" in observed_prompt
-    assert "Role gaze lane: away from camera or toward the scene" in observed_prompt
-    assert "Role pose lane: visible body turn" in observed_prompt
-    assert "Clone avoidance: do not make another front-facing duplicate" in observed_prompt
-    assert "Keep: same recognizable person direction" in observed_prompt
+    assert observed_prompt == ""

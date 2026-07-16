@@ -193,12 +193,13 @@ def test_photography_specialized_relay_preserves_only_existing_lineage_roles_and
     assert "ecommerce_creative_context" not in brain.requests[0].metadata
     assert capturing.payloads[0]["metadata"]["photographer_profile_binding"]["profile_id"] == "general_photography"
     assert capturing.payloads[0]["metadata"]["photographer_profile_binding"]["binding_mode"] == "general"
-    assert all(output["reference_image_paths"] == [str(reference.resolve())] for output in result["outputs"])
 
     expected = _provider_materializations(capturing.last_result)
     for output, materialization in zip(result["outputs"], expected, strict=True):
         assert output["imagegen_prompt"] == materialization.generation_prompt
         assert output["provider_prompt_sha256"] == materialization.prompt_sha256
+        assert output["reference_image_paths"] == [item["file_path"] for item in materialization.reference_assets]
+        assert output["reference_input_contract"]["admitted_reference_count"] == len(materialization.reference_assets)
         assert set(output) - {
             "output_index", "output_binding_id", "imagegen_prompt", "provider_prompt_sha256", "rendering_contract",
             "reference_image_paths", "reference_input_contract", "photography_lineage_role",

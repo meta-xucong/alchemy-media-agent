@@ -259,6 +259,11 @@ def test_doc135_forward_boundaries_precede_legacy_local_assemblers() -> None:
     assert provider_source.index("canonical_prompt = self._brain_signed_provider_prompt") < provider_source.index(
         "prompt = request.prompt_compilation"
     )
+
+    generate_source = inspect.getsource(ProductionImageGenerationProvider.generate)
+    assert generate_source.index('prompt_source != "remote_brain_canonical"') < generate_source.index(
+        "self._run_app_provider_with_timeout_retry"
+    )
     assert provider_source.index("return canonical_prompt") < provider_source.index(
         "visual_direction ="
     )

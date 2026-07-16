@@ -763,6 +763,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
         # is not a second Job lifecycle or a reference-specific retry path.
         try:
             app_request, provider_name, reference_assets = self._build_app_request(request)
+            prompt_variables = getattr(getattr(app_request, "prompt_plan", None), "variables", None)
+            prompt_source = prompt_variables.get("provider_prompt_source") if isinstance(prompt_variables, dict) else None
+            if prompt_source != "remote_brain_canonical":
+                raise ProviderRuntimeError(
+                    "Real image generation requires one approved canonical Provider prompt from the remote Brain.",
+                    provider=self.provider_name,
+                    detail={
+                        "failure_code": "remote_creative_brain_prompt_signoff_missing",
+                        "fallback": "blocked",
+                    },
+                )
         except Exception as exc:
             summary = self._preflight_provider_failure_summary(request, exc)
             self._last_provider_failure_retry_summary = summary
@@ -835,8 +846,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
             # reason for V3 to replay a gateway-managed call. Preserve a safe
             # response summary so the job record distinguishes this from a
             # local lifecycle error or a visual-review rejection.
-            from app.providers.base import ProviderRuntimeError
-
             raw_summary = getattr(result, "raw_response_summary", {})
             safe_summary = {
                 str(key): value
@@ -1324,6 +1333,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _classify_provider_failure(self, exc: BaseException) -> str:
         code = str(getattr(exc, "code", "") or "").lower()
         detail = getattr(exc, "detail", None)
+        declared_failure_code = ""
+        if isinstance(detail, dict):
+            declared_failure_code = str(detail.get("failure_code") or "").strip().lower()
+        # These are local contract failures raised before an upstream request
+        # exists.  They must never consume the visual-retry budget or be
+        # reported as a transient Provider outage.
+        if declared_failure_code in {
+            "remote_creative_brain_prompt_signoff_missing",
+            "canonical_provider_prompt_exceeds_transport_limit",
+        }:
+            return "non_retryable_provider_failure"
         detail_text = ""
         if isinstance(detail, dict):
             detail_text = " ".join(str(value) for value in detail.values() if value is not None).lower()
@@ -1404,6 +1424,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         detail = getattr(exc, "detail", None)
         detail = dict(detail) if isinstance(detail, dict) else {}
+        local_contract_failure = str(detail.get("failure_code") or "").strip()
+        if local_contract_failure in {
+            "remote_creative_brain_prompt_signoff_missing",
+            "canonical_provider_prompt_exceeds_transport_limit",
+        }:
+            return local_contract_failure
         declared = str(detail.get("reference_input_failure_code") or "").strip()
         if declared in {
             "reference_input_unsupported",
@@ -1500,6 +1526,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "provider_timeout": "The image provider timed out before image pixels were returned.",
             "provider_unavailable": "The image provider was unavailable before image pixels were returned.",
             "empty_provider_output": "The image provider returned no image pixels.",
+            "remote_creative_brain_prompt_signoff_missing": "The creative plan did not contain an approved Provider prompt, so no image request was sent.",
+            "canonical_provider_prompt_exceeds_transport_limit": "The approved Provider prompt exceeds the configured transport limit, so no image request was sent.",
         }
         return messages.get(failure_code, "The image provider did not return image pixels.")
 
@@ -1673,6 +1701,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
                 "protected_user_direction_chars": len(materialization.protected_user_direction),
                 "provider_prompt_materialization": "v3_semantic_budget_user_direction_lossless",
+                "provider_prompt_source": materialization.prompt_source,
                 "provider_prompt_audit": materialization.prompt_audit,
                 "asset_plan": materialization.asset_plan,
                 "v3_prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
@@ -1713,8 +1742,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         compose a second, locally improvised prompt.
         """
 
-        reference_assets = self._reference_assets(request)
-        asset_plan = self._asset_plan(request, reference_assets)
+        admitted_reference_assets = self._reference_assets(request)
+        asset_plan = self._asset_plan(request, admitted_reference_assets)
+        # ``asset_plan`` is the single provider-input authority.  The Web
+        # adapter reads its ``storage_path`` entries, so this materializer and
+        # the Codex relay must project those same resolved files rather than
+        # accidentally handing a renderer the earlier, full-frame admission
+        # list.  This is transport parity, not a second reference policy.
+        reference_assets = self._materialized_provider_reference_assets(asset_plan)
         asset_plan["provider_reference_resolution_audit"] = dict(
             request.metadata.get("provider_reference_resolution_audit") or {}
         )
@@ -1722,10 +1757,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         size = self._size_for_request(request)
         canonical_prompt = self._brain_signed_provider_prompt(request)
         if self._requires_brain_signed_provider_prompt(request) and not canonical_prompt:
-            # ScenarioRuntime normally rejects this earlier.  Keep the
-            # materializer as a second, non-bypassable boundary so a future
-            # caller cannot send a real image request through the old local
-            # prompt compiler by omitting the frozen Brain record.
+            # ScenarioRuntime normally rejects this earlier. Keep the
+            # materializer as a second, non-bypassable boundary for every
+            # normalized real-image contract; actual Provider execution has
+            # an additional unconditional check in ``generate`` below.
             raise ProviderRuntimeError(
                 "LLM-first real-image rendering requires an approved canonical Provider prompt from the remote Brain.",
                 provider=self.provider_name,
@@ -1735,6 +1770,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 },
             )
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
+        if canonical_prompt:
+            self._assert_canonical_prompt_fits_transport(generation_prompt)
         protected_user_direction = self._provider_user_direction(request)
         return ProviderPromptMaterialization(
             generation_prompt=generation_prompt,
@@ -2359,6 +2396,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             reference_sanitization = self._full_frame_reference_sanitization(
                 asset,
                 derivatives=derivatives,
+                truth_layers=truth_layers,
+                reference_policy=reference_policy,
             )
             if not reference_sanitization.get("applies") and self._should_include_original_reference(
                 truth_layers=truth_layers,
@@ -2565,6 +2604,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         asset: dict[str, Any],
         *,
         derivatives: list[dict[str, Any]],
+        truth_layers: list[str],
+        reference_policy: dict[str, Any],
     ) -> dict[str, Any]:
         """Apply an explicit, auditable source-artifact policy to provider input.
 
@@ -2583,13 +2624,87 @@ class ProductionImageGenerationProvider(GenerationProvider):
             for item in derivatives
             if item.get("derivative_kind") and not bool(item.get("fallback_to_original"))
         ]
-        if not requested or not usable_derivatives:
-            return {"applies": False}
+        if requested and usable_derivatives:
+            reason_codes = self._string_list(policy.get("reason_codes"))
+            return {
+                "applies": True,
+                "reason_codes": reason_codes or ["source_artifact_excluded_from_truth"],
+            }
+
+        # A product/appearance reference normally owns product facts only.
+        # If no source-frame visual channel is explicitly assigned, passing
+        # the full upload alongside its focused truth derivative lets a
+        # renderer copy background, light or composition that the frozen
+        # request assigns to the Brain.  Withhold only that extra full frame;
+        # the user upload remains append-only project evidence and the
+        # derivative keeps the product truth.  This does not author a prompt
+        # or classify a product category.
+        focused_product_truth = any(
+            item.get("derivative_kind") in {"product_truth_crop", "appearance_truth_crop"}
+            and not bool(item.get("fallback_to_original"))
+            for item in derivatives
+        )
+        product_or_appearance_truth = bool(
+            {"product_identity_truth", "structured_appearance_truth"} & set(truth_layers)
+        )
+        source_frame_channels = (
+            "lighting_color",
+            "scene_background",
+            "camera_composition",
+            "mood_art_direction",
+            "style_finish",
+        )
+        source_frame_is_assigned = any(
+            str(reference_policy.get(channel) or "") in {"hard", "medium", "soft"}
+            for channel in source_frame_channels
+        )
+        if focused_product_truth and product_or_appearance_truth and reference_policy and not source_frame_is_assigned:
+            return {
+                "applies": True,
+                "reason_codes": ["reference_channel_policy_excludes_full_frame_context"],
+            }
         reason_codes = self._string_list(policy.get("reason_codes"))
-        return {
-            "applies": True,
-            "reason_codes": reason_codes or ["source_artifact_excluded_from_truth"],
-        }
+        return {"applies": False, "reason_codes": reason_codes}
+
+    @staticmethod
+    def _materialized_provider_reference_assets(asset_plan: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project exactly the asset-plan files that a Web image adapter reads.
+
+        The pre-plan admission list deliberately retains source provenance.
+        It is not, however, the image list that reaches `/images/edits`: the
+        provider adapter resolves ``storage_path`` from the frozen asset plan.
+        Keeping this projection here prevents a Local MCP relay or execution
+        audit from silently restoring a withheld original frame.
+        """
+
+        resolved: list[dict[str, Any]] = []
+        for item in asset_plan.get("assets", []) if isinstance(asset_plan, dict) else []:
+            if item.get("provider_input_mode") != "reference_image":
+                continue
+            storage_path = item.get("storage_path")
+            if not storage_path:
+                continue
+            try:
+                file_path = Path(str(storage_path)).resolve()
+            except (OSError, TypeError, ValueError):
+                continue
+            if not file_path.is_file():
+                continue
+            resolved.append(
+                {
+                    "asset_id": item.get("asset_id"),
+                    "source_asset_id": item.get("source_asset_id") or item.get("asset_id"),
+                    "file_path": str(file_path),
+                    "role": item.get("role"),
+                    "source_type": item.get("source_type"),
+                    "mime_type": item.get("mime_type"),
+                    "reference_truth_layer": item.get("reference_truth_layer"),
+                    "truth_layers": item.get("truth_layers") or [],
+                    "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                    "derivative_kind": item.get("derivative_kind"),
+                }
+            )
+        return resolved
 
     def _reference_truth_package(
         self,
@@ -3479,6 +3594,23 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except (ImportError, TypeError, ValueError):
             return 0
 
+    def _assert_canonical_prompt_fits_transport(self, prompt: str) -> None:
+        """Fail closed instead of compacting a Brain-signed renderer prompt."""
+
+        limit = self._transport_prompt_char_cap() or self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        if len(prompt) <= limit:
+            return
+        raise ProviderRuntimeError(
+            "The approved canonical Provider prompt exceeds the configured transport limit.",
+            provider=self.provider_name,
+            detail={
+                "failure_code": "canonical_provider_prompt_exceeds_transport_limit",
+                "fallback": "blocked",
+                "prompt_chars": len(prompt),
+                "transport_limit_chars": limit,
+            },
+        )
+
     def _provider_prompt_audit(
         self,
         prompt: str,
@@ -3542,13 +3674,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     @staticmethod
     def _requires_brain_signed_provider_prompt(request: GenerationRequest) -> bool:
-        """Identify the forward real-image contract without guessing intent.
+        """Identify a normalized real-image contract without guessing intent.
 
-        A persisted ``require_real_images``/``real_image_generation`` marker
-        or a normalized enforced V3 Job intent is an explicit runtime
-        assertion, not a keyword classifier.  The legacy materializer remains
-        readable for old/offline records, whereas an actual new real-image
-        operation fails closed if it lacks the Brain's approved text.
+        Legacy read-only diagnostics may still inspect archived prompt
+        compilation records, but new real-image contracts are marked by the
+        immutable runtime flags or an enforced normalized intent and must fail
+        before local materialization can supply executable wording.
         """
 
         metadata = request.metadata if isinstance(request.metadata, dict) else {}

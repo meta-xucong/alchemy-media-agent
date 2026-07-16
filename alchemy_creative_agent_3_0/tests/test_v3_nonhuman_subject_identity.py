@@ -142,9 +142,12 @@ def test_runtime_freezes_nonhuman_plan_and_composes_native_reference_requirement
     assert "nonhuman_subject_identity" in plan["dependency_order"]
     assert "portrait_identity" not in plan["dependency_order"]
     assert "nonhuman_subject_identity" in composed["active_capability_ids"]
-    assert composed["provider_input_requirements"] == [
-        {"requirement": "native_nonhuman_identity_reference", "input_fidelity": "high", "on_unsupported": "block"}
-    ]
+    requirements = composed["provider_input_requirements"]
+    assert {"requirement": "native_nonhuman_identity_reference", "input_fidelity": "high", "on_unsupported": "block"} in requirements
+    # The shared Reference Channel Policy is now also bound for a stateless
+    # upload. It governs source-channel inheritance without weakening the
+    # existing native high-fidelity nonhuman requirement.
+    assert any(item.get("type") == "resolved_reference_policy" for item in requirements)
 
 
 def test_provider_materializes_native_truth_without_source_style_inheritance(tmp_path, monkeypatch) -> None:

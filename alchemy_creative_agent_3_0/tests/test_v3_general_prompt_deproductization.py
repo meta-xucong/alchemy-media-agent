@@ -516,6 +516,17 @@ def test_production_provider_persists_visual_cluster_metadata(tmp_path) -> None:
             "scenario_id": "general_creative",
             "user_input": "fresh summer portrait",
             "shared_capabilities": {"visual_cluster": visual_cluster},
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "A fresh summer portrait in clean daylight.",
+                        "review_status": "approved",
+                    }
+                ],
+            },
         },
     )
     provider = FakeProductionProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))

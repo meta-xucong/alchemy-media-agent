@@ -652,6 +652,17 @@ def test_provider_reads_project_reference_assets_for_continuation(tmp_path, monk
         ),
         metadata={
             "job_id": "job_v3_brain_provider",
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "A clean bright social cover continuing the admitted reference direction.",
+                        "review_status": "approved",
+                    }
+                ],
+            },
             "reference_assets": [
                 {
                     "asset_id": "v3_output_selected",

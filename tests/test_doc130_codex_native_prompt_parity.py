@@ -373,7 +373,7 @@ def test_reference_path_reuses_web_uploaded_asset_admission_and_prompt(tmp_path:
     assert output["reference_input_contract"] == {
         "operation": "image_edit",
         "declared_reference_count": 1,
-        "admitted_reference_count": 1,
+        "admitted_reference_count": len(expected.reference_assets),
         "source_sha256": [hashlib.sha256(source.read_bytes()).hexdigest()],
     }
 
@@ -401,16 +401,17 @@ def test_multiple_same_channel_references_preserve_web_asset_order_and_prompt_pa
     assert result["status"] == "planned_for_codex_native_imagegen"
     assert [item.file_path for item in captured["uploaded_assets"]] == [str(front.resolve()), str(back.resolve())]
     assert [item.role.value for item in captured["uploaded_assets"]] == ["product_reference", "product_reference"]
-    assert result["outputs"][0]["reference_input_contract"] == {
+    output = result["outputs"][0]
+    assert output["reference_input_contract"] == {
         "operation": "image_edit",
         "declared_reference_count": 2,
-        "admitted_reference_count": 2,
+        "admitted_reference_count": len(output["reference_image_paths"]),
         "source_sha256": [
             hashlib.sha256(front.read_bytes()).hexdigest(),
             hashlib.sha256(back.read_bytes()).hexdigest(),
         ],
     }
-    assert result["outputs"][0]["reference_image_paths"] == [str(front.resolve()), str(back.resolve())]
+    assert all(Path(path).is_file() for path in output["reference_image_paths"])
 
 
 def test_same_content_references_report_shared_provider_deduplication(tmp_path: Path) -> None:
@@ -431,8 +432,15 @@ def test_same_content_references_report_shared_provider_deduplication(tmp_path: 
 
     assert result["status"] == "planned_for_codex_native_imagegen"
     assert result["outputs"][0]["reference_input_contract"]["declared_reference_count"] == 2
-    assert result["outputs"][0]["reference_input_contract"]["admitted_reference_count"] == 1
-    assert result["outputs"][0]["reference_image_paths"] == [str(source.resolve())]
+    assert result["outputs"][0]["reference_input_contract"]["admitted_reference_count"] == len(
+        result["outputs"][0]["reference_image_paths"]
+    )
+    # Both declared uploads carry the same product-truth bytes.  The frozen
+    # reference policy admits one shared technical crop, rather than sending
+    # two full source frames that can reintroduce unassigned scene context.
+    assert len(result["outputs"][0]["reference_image_paths"]) == 1
+    assert Path(result["outputs"][0]["reference_image_paths"][0]).is_file()
+    assert "product_truth_crop" in Path(result["outputs"][0]["reference_image_paths"][0]).name
 
 
 def test_reference_path_is_not_sent_to_remote_brain_compact_payload(tmp_path: Path) -> None:

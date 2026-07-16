@@ -5,8 +5,10 @@ from pathlib import Path
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -21,6 +23,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     VisionOutputInspector,
 )
 from app.schemas import ImageGenerationResult
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _png_base64(width: int = 96, height: int = 128, color: tuple[int, int, int] = (190, 160, 140)) -> str:
@@ -135,6 +138,17 @@ def _product_request(reference_path: Path) -> GenerationRequest:
             "job_id": "job_doc85_product",
             "template_id": "ecommerce_template",
             "scenario_id": "ecommerce",
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "premium ecommerce product hero image with the same uploaded product",
+                        "review_status": "approved",
+                    }
+                ],
+            },
             "uploaded_assets": [
                 {
                     "asset_id": "uploaded_product_truth",
@@ -240,18 +254,105 @@ def test_doc85_provider_asset_plan_dedupes_duplicate_product_source_inputs(tmp_p
     duplicate = dict(source)
     duplicate["lock_targets"] = ["product_identity"]
 
+    request.metadata["visual_cluster"] = {
+        "resolved_reference_policy_package": {
+            "applies": True,
+            "policies": [
+                {
+                    "source_asset_id": "uploaded_product_truth",
+                    "source_role": "product_identity_reference",
+                    "product_identity": "hard",
+                    "lighting_color": "prompt_owned",
+                    "scene_background": "prompt_owned",
+                    "camera_composition": "prompt_owned",
+                    "mood_art_direction": "prompt_owned",
+                    "style_finish": "prompt_owned",
+                }
+            ],
+        }
+    }
     asset_plan = provider._asset_plan(request, [source, duplicate])  # noqa: SLF001
     input_plan = asset_plan["provider_input_plan"]
 
-    assert input_plan["reference_image_asset_ids"] == [
-        "uploaded_product_truth::product_truth_crop",
-        "uploaded_product_truth",
-    ]
+    assert input_plan["reference_image_asset_ids"] == ["uploaded_product_truth::product_truth_crop"]
     assert input_plan["original_reference_asset_ids"] == ["uploaded_product_truth"]
-    assert input_plan["reference_image_count"] == 2
-    assert input_plan["reference_truth_package"]["provider_reference_image_count"] == 2
+    assert input_plan["reference_image_count"] == 1
+    assert input_plan["suppressed_full_frame_reference_asset_ids"] == ["uploaded_product_truth"]
+    assert input_plan["reference_sanitization"][0]["reason_codes"] == [
+        "reference_channel_policy_excludes_full_frame_context"
+    ]
+    assert input_plan["reference_truth_package"]["provider_reference_image_count"] == 1
     assert input_plan["reference_truth_package"]["source_order"] == ["uploaded_product_truth"]
     assert input_plan["reference_truth_package"]["truth_source_ids"] == ["uploaded_product_truth"]
+
+
+def test_doc135_stateless_uploaded_product_truth_is_frozen_into_reference_policy_context(tmp_path) -> None:
+    """A direct/MCP request must resolve the same product channel policy as Project Mode."""
+
+    reference = _image(tmp_path / "stateless-product-reference.png", width=140, height=100)
+    brain = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one natural whole image of the supplied product in a fresh outdoor setting.",
+            "scenario_selection": {"scenario_id": "ecommerce", "parameters": {"requested_image_count": 1}},
+            "uploaded_assets": [
+                {
+                    "asset_id": "stateless_product_truth",
+                    "role": "product_reference",
+                    "file_path": str(reference),
+                    "filename": reference.name,
+                    "mime_type": "image/png",
+                }
+            ],
+            "metadata": {"template_id": "ecommerce_template", "requested_image_count": 1},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.PLANNED
+    assert result.planning_result is not None
+    package = result.planning_result.metadata["shared_capabilities"]["visual_cluster"]["resolved_reference_policy_package"]
+    assert package["applies"] is True
+    assert package["policies"][0]["source_asset_id"] == "stateless_product_truth"
+    assert package["policies"][0]["source_role"] == "product_identity_reference"
+    assert package["policies"][0]["product_identity"] == "hard"
+    assert package["policies"][0]["scene_background"] == "prompt_owned"
+    assert brain.requests
+
+
+def test_doc135_materialization_uses_the_same_focused_reference_as_web_provider(tmp_path) -> None:
+    reference = _image(tmp_path / "product_reference.png", width=140, height=100)
+    request = _product_request(reference)
+    request.metadata["visual_cluster"] = {
+        "resolved_reference_policy_package": {
+            "applies": True,
+            "policies": [
+                {
+                    "source_asset_id": "uploaded_product_truth",
+                    "source_role": "product_identity_reference",
+                    "product_identity": "hard",
+                    "lighting_color": "prompt_owned",
+                    "scene_background": "prompt_owned",
+                    "camera_composition": "prompt_owned",
+                    "mood_art_direction": "prompt_owned",
+                    "style_finish": "prompt_owned",
+                }
+            ],
+        }
+    }
+    provider = ProductionImageGenerationProvider(output_store=object())
+
+    materialization = provider.materialize_final_prompt(request)
+
+    assert [item["asset_id"] for item in materialization.reference_assets] == [
+        "uploaded_product_truth::product_truth_crop"
+    ]
+    assert materialization.reference_assets[0]["provider_reference_derivative"] is True
+    assert materialization.reference_assets[0]["file_path"] != str(reference.resolve())
+    assert materialization.asset_plan["provider_input_plan"]["reference_image_asset_ids"] == [
+        "uploaded_product_truth::product_truth_crop"
+    ]
 
 
 def test_doc104_known_source_artifact_uses_truth_derivative_without_full_frame(tmp_path) -> None:

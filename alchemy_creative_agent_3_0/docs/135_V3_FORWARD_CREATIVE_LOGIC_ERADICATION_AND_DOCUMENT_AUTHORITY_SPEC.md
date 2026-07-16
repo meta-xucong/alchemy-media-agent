@@ -76,10 +76,29 @@ model. The Brain owns that conversion and validates the completed wording.
 | `CentralCreativeBrain` | Uses a neutral compatibility pack for a Brain-signed enforced execution; a specialized Scenario Pack remains only as a frozen structural contract. | Letting a keyword-selected legacy vertical pack rewrite a Brain-owned brief, layout, prompt shadow or renderer direction. |
 | `ScenarioRuntime` | Freezes intent/envelope/ledger, passes the Brain’s own direction plus facts and review evidence to `provider_prompt_finalize`. | Rebuilding a creative brief from capability fragments, static roles or retry prose. |
 | `PromptCompilerAgent` | Produces only a non-creative compatibility shadow when a canonical Brain prompt exists. | Generating a second visual prompt, negatives or hard-constraint word stack for a signed Job. |
-| `ProductionImageGenerationProvider` | Relays the signed canonical text; verifies it is present for normalized enforced work. | Appending Human Realism, reference, role, retry or recipe text after sign-off. |
+| `ProductionImageGenerationProvider` | Relays the signed canonical text; every normalized real-image materialization and every actual Provider operation fails closed when that sign-off is absent. | Appending Human Realism, reference, role, retry or recipe text after sign-off. |
 | `V3ProductApiService` retry | Forwards normalized issue codes and bounded retry provenance to the next Brain sign-off. | Translating issue codes or ledger templates into local repair language. |
 | Human Realism | Executes frozen, Brain-owned rendering semantics and contributes evidence/review obligations. | Inferring whole-image stylization from a raw word or emitting a second Provider prompt. |
 | Codex Native MCP | Projects the same canonical string, reference paths and hash as the Web Provider; it creates no Web candidate/delivery. | Replanning, paraphrasing, prompt authoring, Provider fallback or persistence. |
+
+Reference-file admission is equally non-creative.  The frozen Reference
+Channel Policy, not an adapter-specific fallback, decides whether a source
+frame contributes product facts only or also contributes scene/light/camera
+context. Every ingress must first project its caller-declared uploaded assets
+into the frozen reference snapshot, so Project Mode, direct API and Codex
+relay resolve the same source binding. A product/appearance truth input whose source-frame context is not
+explicitly assigned must project the same focused provider derivative to Web
+and Codex Native execution; the original upload stays in history but is not
+silently reintroduced as a renderer input.  This protects Brain-owned scene
+direction without describing a visual treatment locally.
+
+An actual Provider operation has no unsigned escape hatch: its final prompt
+must carry the remote Brain's approved canonical provenance. Older local
+materialization code may remain readable only for historical diagnostics and
+unit fixtures, but it cannot select a Provider, start an upstream request, or
+produce a candidate. Normalized real-image materialization also blocks before
+returning an unsigned prompt. A signed prompt that exceeds a declared
+transport limit is blocked rather than locally compacted or rewritten.
 
 ## 5. Compatibility quarantine
 
