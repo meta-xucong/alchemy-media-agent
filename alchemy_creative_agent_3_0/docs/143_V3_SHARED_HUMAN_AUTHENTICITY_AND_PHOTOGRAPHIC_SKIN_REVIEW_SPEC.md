@@ -232,3 +232,9 @@ decision, and no candidate or delivery was created.
 The next qualifying pixel comparison remains the unchanged blue-dress plan
 when the renderer accepts it, plus the ordinary-adult materiality comparison.
 Neither may be replaced with a child-specific or prompt-keyword workaround.
+
+> **Fresh-contract note (Doc148):** the shared pixel-review route remains the
+> authority. Fresh jobs now use v5, which adds an explicit, Brain-owned
+> complexion/scene-balance obligation to the existing broad
+> `human_skin_or_retouch` evidence dimension. No detailed skin labels become
+> a new forward prompt vocabulary.

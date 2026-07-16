@@ -143,3 +143,8 @@ Final full-suite evidence:
   returned exit code zero).
 - Repository root suite: `185 passed`, with two existing FastAPI deprecation
   warnings and no failures.
+
+> **Fresh-contract note (Doc148):** this document's semantic-signoff design
+> remains authoritative, but a newly created enforced Human Realism contract
+> now uses v5 and includes the shared complexion/scene-balance obligation
+> defined in Doc148. Historical v3/v4 records remain readable only.

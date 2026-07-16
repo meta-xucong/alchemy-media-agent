@@ -676,6 +676,7 @@ class ScenarioRuntime:
             "aesthetic_boundary",
             "expression_ownership_requirement",
             "personhood_requirement",
+            "complexion_rendering_requirement",
             "photographic_material_requirement",
             "creative_direction_owner",
             "provider_prompt_owner",
@@ -690,7 +691,7 @@ class ScenarioRuntime:
         ):
             raise CapabilityActivationError("human_realism_semantic_contract_missing")
         if (
-            contract.get("contract_version") != "v3_human_realism_semantic_v4"
+            contract.get("contract_version") != "v3_human_realism_semantic_v5"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
@@ -703,6 +704,8 @@ class ScenarioRuntime:
             not in {"situation_owned_unless_explicit_user_direction", "not_applicable"}
             or contract.get("personhood_requirement")
             not in {"individual_noninterchangeable_presence", "not_applicable"}
+            or contract.get("complexion_rendering_requirement")
+            != "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
             or contract.get("photographic_material_requirement") != "camera_observed_human_materiality"
             or contract.get("creative_direction_owner") != "remote_v3_llm_brain"
             or contract.get("provider_prompt_owner") != "remote_v3_llm_brain"

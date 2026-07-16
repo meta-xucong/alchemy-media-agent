@@ -94,9 +94,12 @@ def _resolution(tmp_path: Path) -> GeneratedOutputResolution:
 def test_doc143_fresh_human_contract_has_only_generic_authenticity_obligations() -> None:
     contract = _guidance()["semantic_contract"]
 
-    assert contract["contract_version"] == "v3_human_realism_semantic_v4"
+    assert contract["contract_version"] == "v3_human_realism_semantic_v5"
     assert contract["personhood_requirement"] == "individual_noninterchangeable_presence"
     assert contract["expression_ownership_requirement"] == "situation_owned_unless_explicit_user_direction"
+    assert contract["complexion_rendering_requirement"] == (
+        "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
+    )
     assert contract["photographic_material_requirement"] == "camera_observed_human_materiality"
     assert "child" not in str(contract).lower()
     assert "prompt_additions" not in str(contract).lower()
@@ -109,9 +112,10 @@ def test_doc143_enforced_reviewer_receives_frozen_authenticity_contract_not_lega
 
     assert contract["human_naturalness_verdict_required"] is True
     assert contract["human_authenticity_contract"] == {
-        "contract_version": "v3_human_realism_semantic_v4",
+        "contract_version": "v3_human_realism_semantic_v5",
         "personhood_requirement": "individual_noninterchangeable_presence",
         "expression_ownership_requirement": "situation_owned_unless_explicit_user_direction",
+        "complexion_rendering_requirement": "preserve_reference_or_user_owned_complexion_with_scene_balanced_color",
         "photographic_material_requirement": "camera_observed_human_materiality",
     }
     assert "human_naturalness_verdict" in prompt

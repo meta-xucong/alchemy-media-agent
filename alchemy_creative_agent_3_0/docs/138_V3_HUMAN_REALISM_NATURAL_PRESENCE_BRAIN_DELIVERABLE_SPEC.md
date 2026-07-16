@@ -158,3 +158,8 @@ or a deterministic numerical metric.
    product-only/no-person regressions must remain correctly isolated.
 5. Full V3, Local MCP parity and static checks must pass before a fresh
    blue-dress comparison.
+
+> **Fresh-contract note (Doc148):** natural-presence and Brain-deliverable
+> ownership remain unchanged. New enforced jobs now carry Human Realism v5's
+> orthogonal complexion/scene-balance obligation; this document's historical
+> v3/v4 references must not be used to recertify old records.

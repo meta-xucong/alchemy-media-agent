@@ -150,3 +150,8 @@ syntax repair, a creative re-plan, or a renderer retry. The subsequent
 controlled run completed the unchanged Doc144 path; its acceptance evidence is
 recorded in Doc146. The remote route can still fail closed if the initial and
 recovery answers are both unusable.
+
+> **Fresh-contract note (Doc148):** Doc144's individual-person approval
+> calibration remains in force. Fresh enforced contracts now use v5 to add a
+> separate reference/user-owned complexion and scene-balance requirement; it
+> does not create an age, apparel, or culture-specific rule.

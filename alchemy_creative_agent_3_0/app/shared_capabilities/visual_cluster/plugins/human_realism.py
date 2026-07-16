@@ -23,6 +23,7 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
                 "contract_version",
                 "personhood_requirement",
                 "expression_ownership_requirement",
+                "complexion_rendering_requirement",
                 "photographic_material_requirement",
             )
         }

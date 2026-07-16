@@ -17,12 +17,13 @@ _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
     "contract_version",
     "personhood_requirement",
     "expression_ownership_requirement",
+    "complexion_rendering_requirement",
     "photographic_material_requirement",
 }
 
 
 def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids: list[str]) -> dict[str, Any]:
-    """Return only the v4 Human Realism review contract frozen in the ledger.
+    """Return only the v5 Human Realism review contract frozen in the ledger.
 
     This deliberately refuses mutable cluster metadata and historical v2
     records.  A fresh enforced job gets this contract through the active
@@ -39,10 +40,12 @@ def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids:
         if not isinstance(candidate, dict) or set(candidate) != _HUMAN_AUTHENTICITY_CONTRACT_KEYS:
             continue
         if (
-            candidate.get("contract_version") == "v3_human_realism_semantic_v4"
+            candidate.get("contract_version") == "v3_human_realism_semantic_v5"
             and candidate.get("personhood_requirement") == "individual_noninterchangeable_presence"
             and candidate.get("expression_ownership_requirement")
             == "situation_owned_unless_explicit_user_direction"
+            and candidate.get("complexion_rendering_requirement")
+            == "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
             and candidate.get("photographic_material_requirement")
             == "camera_observed_human_materiality"
             and contract.get("human_naturalness_verdict_required") is True
@@ -386,7 +389,7 @@ def _enforced_inspection_prompt(
         )
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
-            "Human authenticity attestation: assess the frozen personhood, situation-owned expression, and photographic material obligations from pixels. "
+            "Human authenticity attestation: assess the frozen personhood, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
             "Return only the required structured verdict and allowed generic issue codes; do not write renderer instructions, "
             "demographic classifications, facial-feature recipes, or new creative direction."
         )

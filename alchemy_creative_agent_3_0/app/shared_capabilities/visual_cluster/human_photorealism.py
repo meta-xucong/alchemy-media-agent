@@ -659,11 +659,11 @@ class HumanPhotorealismLayer:
 
         is_detail = human_subject_kind == "hand_or_skin_detail"
         return {
-            # v3 adds two whole-image perceptual obligations.  They are
+            # v5 adds whole-image perceptual obligations.  They are
             # deliberately semantic rather than a renderer word list: the
             # remote Brain owns the complete prompt and the shared reviewer
             # later verifies the same frozen intent from pixels.
-            "contract_version": "v3_human_realism_semantic_v4",
+            "contract_version": "v3_human_realism_semantic_v5",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
@@ -686,6 +686,12 @@ class HumanPhotorealismLayer:
             ),
             "personhood_requirement": (
                 "not_applicable" if is_detail else "individual_noninterchangeable_presence"
+            ),
+            # Complexion is preserved as person/reference truth and resolved
+            # in the authored scene as one photographic judgement.  This is
+            # not a palette, demographic or local prompt instruction.
+            "complexion_rendering_requirement": (
+                "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
             ),
             "photographic_material_requirement": "camera_observed_human_materiality",
             "creative_direction_owner": "remote_v3_llm_brain",

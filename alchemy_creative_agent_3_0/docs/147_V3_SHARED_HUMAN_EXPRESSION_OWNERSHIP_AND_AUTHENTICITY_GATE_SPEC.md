@@ -197,3 +197,8 @@ canonical relay coverage (`124 passed`), complete V3 regression (`788 passed`;
 two pre-existing FastAPI deprecation warnings), and Local MCP canonical
 prompt/reference relay (`33 passed`). Static compile, browser syntax and diff
 checks passed.
+
+> **Fresh-contract note (Doc148):** Doc147's expression-ownership rule is
+> unchanged. New enforced Human Realism records advance from v4 to v5 only to
+> freeze the orthogonal shared complexion/scene-balance obligation. v4 remains
+> readable for history and is never silently recertified as v5.
