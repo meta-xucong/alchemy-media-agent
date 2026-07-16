@@ -1,6 +1,6 @@
 # Doc153 — V3 Shared Expression Authenticity Hard Gate
 
-Status: implemented in the shared Brain and visual-review path; controlled pixel recheck pending.
+Status: implemented and accepted after the controlled Local MCP pixel comparison recorded in Doc154.
 
 ## 1. Problem
 
