@@ -135,6 +135,7 @@ class AnchorPackPreparationService:
     """Run the bounded front-winner and supplementary-view workflow."""
 
     FRONT_CANDIDATE_COUNT = 3
+    SUPPLEMENTARY_CANDIDATE_COUNT = 3
     SUPPLEMENTARY_ROLES = ("three_quarter", "profile")
 
     def __init__(
@@ -178,47 +179,42 @@ class AnchorPackPreparationService:
                 failure_codes=["no_passing_front_candidate"],
             )
 
-        winner, winner_review = max(
-            passing_fronts,
-            key=lambda item: (
-                *item[1].identity_scores.selection_key(),
-                item[0].candidate_id,
-            ),
-        )
+        winner, winner_review = self._select_winner(passing_fronts)
         views = [self._view(winner, winner_review)]
-        supplementary_failed = False
+        selected_evidence_ids = [request.root_source_provenance.source_asset_id, winner.output_id]
         for role in self.SUPPLEMENTARY_ROLES:
-            generation_request = self._generation_request(
-                request=request,
-                pack_version_id=pack_version_id,
-                view_role=role,
-                candidate_index=1,
-                reference_evidence_ids=[
-                    request.root_source_provenance.source_asset_id,
-                    winner.output_id,
-                ],
-            )
-            candidate, review = self._generate_and_review(generation_request)
-            attempts.append(
-                AnchorCandidateAttempt(
-                    stage="supplementary", request=generation_request, candidate=candidate, review=review
+            passing_supplementary: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
+            for candidate_index in range(1, self.SUPPLEMENTARY_CANDIDATE_COUNT + 1):
+                generation_request = self._generation_request(
+                    request=request,
+                    pack_version_id=pack_version_id,
+                    view_role=role,
+                    candidate_index=candidate_index,
+                    reference_evidence_ids=list(selected_evidence_ids),
                 )
-            )
-            if review.status != "pass":
-                supplementary_failed = True
-            else:
-                views.append(self._view(candidate, review))
+                candidate, review = self._generate_and_review(generation_request)
+                attempts.append(
+                    AnchorCandidateAttempt(
+                        stage="supplementary", request=generation_request, candidate=candidate, review=review
+                    )
+                )
+                if review.status == "pass":
+                    passing_supplementary.append((candidate, review))
 
-        if supplementary_failed:
-            pack = self._pack(request, pack_version_id, views, "failed")
-            self._persist(pack, "fail")
-            return AnchorPackPreparationResult(
-                status="blocked",
-                pack=pack,
-                attempts=attempts,
-                winner_candidate_id=winner.candidate_id,
-                failure_codes=["required_supplementary_view_failed"],
-            )
+            if not passing_supplementary:
+                pack = self._pack(request, pack_version_id, views, "failed")
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    winner_candidate_id=winner.candidate_id,
+                    failure_codes=["required_supplementary_view_failed"],
+                )
+
+            supplementary_winner, supplementary_review = self._select_winner(passing_supplementary)
+            views.append(self._view(supplementary_winner, supplementary_review))
+            selected_evidence_ids.append(supplementary_winner.output_id)
 
         pack = self._pack(request, pack_version_id, views, "review")
         self._persist(pack, "review")
@@ -277,6 +273,17 @@ class AnchorPackPreparationService:
             raise ValueError("generator returned a candidate that does not match the frozen view request")
         review = self.reviewer.review(candidate)
         return candidate, review
+
+    @staticmethod
+    def _select_winner(
+        passing_candidates: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+    ) -> tuple[AnchorCandidateResult, AnchorReviewDecision]:
+        """Select one winner without allowing polish or pose to outrank likeness."""
+
+        return max(
+            passing_candidates,
+            key=lambda item: (*item[1].identity_scores.selection_key(), item[0].candidate_id),
+        )
 
     @staticmethod
     def _view(candidate: AnchorCandidateResult, review: AnchorReviewDecision) -> AnchorView:

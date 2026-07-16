@@ -233,8 +233,10 @@ or protected user prompt, for text-to-image character creation
   -> three neutral standard-front candidates
   -> likeness-first identity review
   -> best passing front anchor
-  -> supplementary three-quarter/profile candidates as evidence permits
-  -> per-view review
+  -> three three-quarter candidates using root + winning front
+  -> likeness-first three-quarter winner
+  -> three profile candidates using root + winning front + winning three-quarter
+  -> likeness-first profile winner
   -> whole-pack cross-view identity review
   -> activate the face module version only after the complete face pack passes
 ```
@@ -291,10 +293,12 @@ another candidate is more conventionally beautiful. Scoring is still only
 preparation evidence; the complete pack requires per-view review, cross-view
 identity review, root-truth continuity, and explicit user activation.
 
-The exact candidate counts for supplementary views remain a later module
-design decision, but every supplementary view must use the same bounded
-candidate, review, and best-result contract. There is no unbounded generation
-loop.
+Each required supplementary role has exactly three bounded candidates. The
+workflow is intentionally serial: the three-quarter stage starts only after a
+front winner exists, and the profile stage starts only after a three-quarter
+winner exists. Every stage uses the same likeness-first review and winner
+contract; a stage with no passing candidate blocks the pack and prevents later
+stages from running. There is no unbounded generation loop.
 
 The standard-front and supplementary images are full GPT Image 2 outputs. They
 are face-evidence views, not a body or fashion asset. The
@@ -312,11 +316,13 @@ not emit local prompt additions, negative lists, retry prose, or a fallback
 creative direction when Brain output is incomplete.
 
 The default pack has one required `standard_front`, one required
-`three_quarter`, and one required `profile` view after the winning front is
-known. A second three-quarter/profile view may be generated when the source,
-identity evidence, or downstream use justifies it. Candidate counts remain
-bounded and configuration-driven. The user explicitly activates the complete
-passing pack; scoring alone never makes an unconfirmed pack active.
+`three_quarter`, and one required `profile` view. Each required view is chosen
+from three candidates. The three-quarter candidate request references the root
+portrait and selected front output; the profile candidate request references
+the root portrait, selected front output, and selected three-quarter output.
+Candidate counts are fixed and bounded for this module rather than left to a
+caller-controlled loop. The user explicitly activates the complete passing
+pack; scoring alone never makes an unconfirmed pack active.
 
 ## 5. Root Truth And Anchor Authority
 
@@ -726,7 +732,11 @@ explicit root-source intake
 three standard-front candidates
 Remote Brain semantic task profile and capability activation intent
 likeness-first identity scoring and winner selection
-supplementary view generation using root + selected front anchor
+three three-quarter candidates using root + selected front anchor
+likeness-first three-quarter winner selection
+three profile candidates using root + selected front + selected three-quarter
+anchor
+likeness-first profile winner selection
 per-view and whole-pack review
 complete canonical Provider prompt and hash for every candidate
 Human Realism semantic preflight/re-signing when active

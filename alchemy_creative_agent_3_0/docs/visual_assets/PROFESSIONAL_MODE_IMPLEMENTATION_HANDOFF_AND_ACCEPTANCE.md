@@ -99,7 +99,10 @@ The preparation flow is a bounded sequence:
 root source or protected text-only character direction
   -> three GPT Image 2 standard-front candidates
   -> likeness-first identity review and best-result selection
-  -> supplementary three-quarter/profile candidates from root + winning front
+  -> three three-quarter candidates from root + winning front
+  -> likeness-first three-quarter winner
+  -> three profile candidates from root + winning front + winning three-quarter
+  -> likeness-first profile winner
   -> per-view review and cross-view identity review
   -> user confirms activation of the complete passing Face Identity pack
 ```
@@ -252,7 +255,12 @@ an over-perfect/generic AI face receives an explicit penalty and cannot win
 solely on visual quality; modest head tilt remains a low-priority signal
 the reviewer records human-realism, distinctive-feature, anti-overperfection,
 visual-quality, and low-weight pose evidence alongside the primary likeness
-only the winning front seeds supplementary views
+three three-quarter candidates are generated only after a front winner and use
+the root portrait plus that winner as admitted evidence
+three profile candidates are generated only after a three-quarter winner and
+use the root portrait plus both selected supplementary anchors as evidence
+each supplementary role selects one likeness-first winner independently
+a failed three-quarter stage blocks profile generation and pack activation
 Face Identity pack requires per-view and cross-view pass plus user activation
 warning/failed/superseded/unconfirmed views cannot route to Provider
 root provenance and consent remain auditable without raw paths or secrets

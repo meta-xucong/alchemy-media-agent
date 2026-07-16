@@ -105,7 +105,7 @@ class FakeReviewer:
         )
 
 
-def test_m2_generates_three_front_candidates_then_two_supplementary_views() -> None:
+def test_m2_generates_three_candidates_per_view_in_serial_identity_order() -> None:
     generator = FakeGenerator()
     reviewer = FakeReviewer()
     result = AnchorPackPreparationService(generator=generator, reviewer=reviewer).prepare(_request())
@@ -117,11 +117,20 @@ def test_m2_generates_three_front_candidates_then_two_supplementary_views() -> N
         "standard_front",
         "standard_front",
         "three_quarter",
+        "three_quarter",
+        "three_quarter",
+        "profile",
+        "profile",
         "profile",
     ]
-    assert len(result.attempts) == 5
+    assert len(result.attempts) == 9
     assert result.pack is not None
     assert {view.view_role for view in result.pack.anchor_views} == {"standard_front", "three_quarter", "profile"}
+    assert [view.output_id for view in result.pack.anchor_views] == [
+        "output_standard_front_3",
+        "output_three_quarter_3",
+        "output_profile_3",
+    ]
 
 
 def test_m2_supplementary_requests_reference_the_winning_front() -> None:
@@ -131,6 +140,10 @@ def test_m2_supplementary_requests_reference_the_winning_front() -> None:
 
     supplementary = generator.requests[3:]
     assert all("output_standard_front_3" in request.reference_evidence_ids for request in supplementary)
+    three_quarter = supplementary[:3]
+    profile = supplementary[3:]
+    assert all("output_three_quarter_3" not in request.reference_evidence_ids for request in three_quarter)
+    assert all("output_three_quarter_3" in request.reference_evidence_ids for request in profile)
     assert all(not hasattr(request, "prompt") for request in generator.requests)
 
 
@@ -153,8 +166,20 @@ def test_m2_supplementary_failure_blocks_activation() -> None:
 
     assert result.status == "blocked"
     assert result.failure_codes == ["required_supplementary_view_failed"]
+    assert len(generator.requests) == 9
     with pytest.raises(ValueError, match="complete reviewed"):
         AnchorPackPreparationService(generator=generator, reviewer=reviewer).activate(result.pack, confirmed=True)
+
+
+def test_m2_failed_three_quarter_stage_does_not_generate_profile_candidates() -> None:
+    generator = FakeGenerator()
+    reviewer = FakeReviewer(failing_roles={"three_quarter"})
+    result = AnchorPackPreparationService(generator=generator, reviewer=reviewer).prepare(_request())
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["required_supplementary_view_failed"]
+    assert len(generator.requests) == 6
+    assert all(request.view_role != "profile" for request in generator.requests)
 
 
 def test_m2_activation_requires_explicit_user_confirmation() -> None:
