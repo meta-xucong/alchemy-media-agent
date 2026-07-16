@@ -231,18 +231,74 @@ an Identity Anchor Pack through an explicit preparation action:
 uploaded person reference, for image-to-image
 or protected user prompt, for text-to-image character creation
   -> three neutral standard-front candidates
-  -> existing identity/quality review
+  -> likeness-first identity review
   -> best passing front anchor
-  -> supplementary three-quarter/profile candidates as evidence permits
-  -> per-view review
+  -> three three-quarter candidates using root + winning front
+  -> likeness-first three-quarter winner
+  -> three profile candidates using root + winning front + winning three-quarter
+  -> likeness-first profile winner
   -> whole-pack cross-view identity review
   -> activate the face module version only after the complete face pack passes
 ```
 
-The exact candidate counts for supplementary views remain a later module
-design decision, but every supplementary view must use the same bounded
-candidate, review, and best-result contract. There is no unbounded generation
-loop.
+### Likeness-first candidate scoring
+
+The first principle of Face Identity selection is **像不像 / same-person
+likeness**. A candidate that is recognizably the same person must outrank a
+more polished, more symmetrical, or more perfectly frontal candidate that has
+lost the person's distinctive appearance. The review must never reward a
+generic beauty archetype merely because it is attractive, clean, or technically
+flawless.
+
+The reviewer records the following safe, non-biometric summary fields:
+
+```text
+same_face_score              primary likeness score; identity-critical
+                              feature relationships and distinctive traits
+                              are mandatory evidence, not generic face category
+distinctive_feature_score    supporting score for local asymmetry, eye/brow
+                              character, nose-mouth relationship, cheek/jaw
+                              contour, and other source-specific traits
+human_realism_score          natural human presence and non-plastic rendering;
+                              it is a supporting signal, not a beauty score
+ai_overperfection_penalty    explicit penalty for a too-perfect, averaged,
+                              synthetic-looking face that erases individuality
+visual_quality_score         technical/readability quality only
+pose_compliance_score        view-contract compliance; deliberately lowest
+                              priority so a modest head tilt does not erase
+                              a stronger likeness
+```
+
+Front candidates are ordered lexicographically by:
+
+```text
+(same_face_score,
+ distinctive_feature_score,
+ human_realism_score,
+ 1 - ai_overperfection_penalty,
+ visual_quality_score,
+ pose_compliance_score)
+```
+
+Missing legacy supporting fields fall back to the historical same-face score
+for readability, but new reviewers must emit the full summary. A small tilt,
+slight expression difference, or non-perfect symmetry is not an automatic
+failure. Extreme occlusion, a materially wrong person, face distortion, or a
+pose that defeats the requested evidence view may still fail the candidate.
+
+The human-realism review has two duties: preserve the real person's natural
+imperfections and prevent an AI-averaged face from receiving an inflated
+likeness score. It must not override a clearly stronger likeness merely because
+another candidate is more conventionally beautiful. Scoring is still only
+preparation evidence; the complete pack requires per-view review, cross-view
+identity review, root-truth continuity, and explicit user activation.
+
+Each required supplementary role has exactly three bounded candidates. The
+workflow is intentionally serial: the three-quarter stage starts only after a
+front winner exists, and the profile stage starts only after a three-quarter
+winner exists. Every stage uses the same likeness-first review and winner
+contract; a stage with no passing candidate blocks the pack and prevents later
+stages from running. There is no unbounded generation loop.
 
 The standard-front and supplementary images are full GPT Image 2 outputs. They
 are face-evidence views, not a body or fashion asset. The
@@ -260,11 +316,19 @@ not emit local prompt additions, negative lists, retry prose, or a fallback
 creative direction when Brain output is incomplete.
 
 The default pack has one required `standard_front`, one required
-`three_quarter`, and one required `profile` view after the winning front is
-known. A second three-quarter/profile view may be generated when the source,
-identity evidence, or downstream use justifies it. Candidate counts remain
-bounded and configuration-driven. The user explicitly activates the complete
-passing pack; scoring alone never makes an unconfirmed pack active.
+`three_quarter`, and one required `profile` view. Each required view is chosen
+from three candidates. The three-quarter candidate request references the root
+portrait and selected front output; the profile candidate request references
+the root portrait, selected front output, and selected three-quarter output.
+Candidate counts are fixed and bounded for this module rather than left to a
+caller-controlled loop. The user explicitly activates the complete passing
+pack; scoring alone never makes an unconfirmed pack active.
+
+The internal generation request enforces this evidence chain at the typed
+boundary: `standard_front` accepts exactly the root source; `three_quarter`
+accepts exactly root plus the selected front output; `profile` accepts exactly
+root plus the selected front and selected three-quarter outputs. Missing,
+duplicated, reordered, or extra evidence is rejected before generation.
 
 ## 5. Root Truth And Anchor Authority
 
@@ -673,8 +737,12 @@ add active/superseded/failed handling
 explicit root-source intake
 three standard-front candidates
 Remote Brain semantic task profile and capability activation intent
-existing shared identity/quality scoring and winner selection
-supplementary view generation using root + selected front anchor
+likeness-first identity scoring and winner selection
+three three-quarter candidates using root + selected front anchor
+likeness-first three-quarter winner selection
+three profile candidates using root + selected front + selected three-quarter
+anchor
+likeness-first profile winner selection
 per-view and whole-pack review
 complete canonical Provider prompt and hash for every candidate
 Human Realism semantic preflight/re-signing when active

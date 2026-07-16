@@ -130,6 +130,9 @@ class BrainCheckpoint(V3BaseModel):
 
 class BrainRunRequest(V3BaseModel):
     user_input: str
+    # Server-owned job identity keeps the Brain task profile and the frozen
+    # shared activation plan on the same logical V3 Job.
+    job_id: str | None = None
     stage: str = "generate"
     scenario_id: str | None = None
     template_id: str | None = None

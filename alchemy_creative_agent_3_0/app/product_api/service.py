@@ -31,7 +31,8 @@ from ..photography_profiles import (
 )
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs import ScenarioPackResolution
-from ..scenario_runtime import ScenarioRuntime
+from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
+from ..visual_assets import InMemoryVisualAssetCatalog, bind_professional_mode
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -714,6 +715,7 @@ class V3ProductApiService:
         mode_role_director: ModeAwareRoleDirector | None = None,
         photographer_profile_catalog: PhotographerProfileCatalog | None = None,
         photographer_profile_region_resolver: Callable[[], str | None] | None = None,
+        visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -732,6 +734,7 @@ class V3ProductApiService:
         self.review_merger = review_merger or OutputQualityReviewMerger()
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
+        self.visual_asset_catalog = visual_asset_catalog or InMemoryVisualAssetCatalog()
 
     def _default_scenario_runtime(self, operator_catalog=None) -> ScenarioRuntime:
         """Compose the default runtime from one reviewed Photography catalog source."""
@@ -815,6 +818,10 @@ class V3ProductApiService:
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
         )
         self._bind_server_job_instance_id(create_request)
+        self._bind_professional_mode(
+            create_request,
+            trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+        )
         if trusted_capability_plan_reuse:
             self._validate_and_bind_trusted_capability_plan_reuse(create_request)
         self._resolve_and_pin_photographer_profile(
@@ -864,6 +871,8 @@ class V3ProductApiService:
                 "specialized_scenario_plan",
                 "specialized_scenario_plan_summary",
                 "specialized_execution_summary",
+                "professional_mode",
+                "professional_mode_execution",
             )
             if key in runtime_result.metadata
         }
@@ -5250,6 +5259,14 @@ class V3ProductApiService:
                 "balance_adapter": self.balance_adapter.adapter_name,
                 "selected_vertical_pack": result.metadata.get("selected_vertical_pack"),
                 "scenario_id": result.metadata.get("scenario_id"),
+                **(
+                    {
+                        "professional_mode": True,
+                        "professional_mode_execution": result.metadata.get("professional_mode_execution"),
+                    }
+                    if result.metadata.get("professional_mode") is True
+                    else {}
+                ),
                 "shared_capabilities": self._public_metadata_projection(
                     result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run)
                 ),
@@ -7440,8 +7457,101 @@ class V3ProductApiService:
             "resolved_constraint_ledger_id",
             "frozen_remote_creative_brain",
             "v3_job_instance_id",
+            "professional_mode",
+            "professional_mode_binding",
+            "professional_mode_binding_record",
+            "professional_reference_channel_plans",
+            "professional_planning_metadata",
+            "professional_mode_execution",
+            "professional_mode_binding_error",
         }
     )
+
+    def _bind_professional_mode(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        trusted_capability_plan_reuse: bool,
+    ) -> None:
+        """Resolve and pin one explicit People Asset before Brain planning."""
+
+        metadata = dict(request.metadata or {})
+        stored_mode = str(metadata.get("professional_mode") or "").strip().lower()
+        mode = request.professional_mode
+        if trusted_capability_plan_reuse and mode == "standard" and stored_mode == "professional":
+            mode = "professional"
+        if mode == "standard":
+            if any(
+                key in metadata
+                for key in (
+                    "professional_mode_binding",
+                    "professional_mode_binding_record",
+                    "professional_reference_channel_plans",
+                )
+            ):
+                raise ValueError("professional_metadata_in_standard_mode")
+            return
+        if mode != "professional":
+            raise ValueError("professional_mode_selection_invalid")
+        project_id = str(metadata.get("project_id") or "").strip()
+        if not project_id:
+            request.metadata = {**metadata, "professional_mode": "professional", "professional_mode_binding_error": "professional_mode_requires_project_id"}
+            return
+        people_asset_id = request.people_asset_id or str(metadata.get("people_asset_id") or "").strip()
+        if not people_asset_id:
+            request.metadata = {**metadata, "professional_mode": "professional", "professional_mode_binding_error": "professional_mode_requires_people_asset"}
+            return
+        asset = self.visual_asset_catalog.get(project_id, people_asset_id)
+        if asset is None:
+            request.metadata = {**metadata, "professional_mode": "professional", "professional_mode_binding_error": "professional_people_asset_not_found"}
+            return
+        pack_version_id = asset.active_pack_version_id
+        if not pack_version_id:
+            request.metadata = {**metadata, "professional_mode": "professional", "professional_mode_binding_error": "professional_people_asset_pack_not_active"}
+            return
+        pack = self.visual_asset_catalog.get_pack(project_id, people_asset_id, pack_version_id)
+        if pack is None:
+            request.metadata = {**metadata, "professional_mode": "professional", "professional_mode_binding_error": "professional_people_asset_pack_not_found"}
+            return
+        runtime_job_id = self._planned_job_id_for_request(request)
+        requested_views = list(request.professional_identity_view_ids)
+        if not requested_views:
+            role_order = {"standard_front": 0, "three_quarter": 1, "profile": 2}
+            requested_views = [
+                item.view_id
+                for item in sorted(pack.anchor_views, key=lambda item: (role_order.get(item.view_role, 99), item.view_id))
+                if item.active
+            ][:3]
+        try:
+            binding = bind_professional_mode(
+                job_id=runtime_job_id,
+                project_id=project_id,
+                asset=asset,
+                module=asset.face_identity_module,
+                pack=pack,
+                reference_view_ids=requested_views,
+            )
+        except ValueError as exc:
+            request.metadata = {
+                **metadata,
+                "professional_mode": "professional",
+                "professional_mode_binding_error": "professional_people_asset_binding_invalid",
+            }
+            return
+        request.metadata = {
+            **metadata,
+            "professional_mode": "professional",
+            "professional_mode_binding": binding.to_brain_evidence(),
+            "professional_mode_binding_record": binding.model_dump(mode="json"),
+        }
+
+    def _planned_job_id_for_request(self, request: CreateCreativeJobRequest) -> str:
+        """Mirror ScenarioRuntime's deterministic job-id inputs before Brain."""
+
+        payload = self._runtime_request_payload(request)
+        runtime_request = ScenarioRuntimeRequest.model_validate(payload)
+        resolution = self.scenario_runtime.scenario_registry.resolve(runtime_request.scenario_selection)
+        return self.scenario_runtime._runtime_job_id(runtime_request, resolution)  # noqa: SLF001
 
     @staticmethod
     def _bind_server_job_instance_id(request: CreateCreativeJobRequest) -> None:

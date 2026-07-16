@@ -98,8 +98,11 @@ The preparation flow is a bounded sequence:
 ```text
 root source or protected text-only character direction
   -> three GPT Image 2 standard-front candidates
-  -> existing identity/quality review and best-result selection
-  -> supplementary three-quarter/profile candidates from root + winning front
+  -> likeness-first identity review and best-result selection
+  -> three three-quarter candidates from root + winning front
+  -> likeness-first three-quarter winner
+  -> three profile candidates from root + winning front + winning three-quarter
+  -> likeness-first profile winner
   -> per-view review and cross-view identity review
   -> user confirms activation of the complete passing Face Identity pack
 ```
@@ -246,7 +249,21 @@ Professional metadata never enters Standard Brain/provider/review payloads.
 one project can create multiple People Assets
 one job binds exactly one selected People Asset and active Face Identity module/pack version
 three front candidates are append-only and scored
-only the winning front seeds supplementary views
+front scoring is likeness-first: same-person resemblance and distinctive
+feature retention outrank polish, symmetry, and perfect framing
+an over-perfect/generic AI face receives an explicit penalty and cannot win
+solely on visual quality; modest head tilt remains a low-priority signal
+the reviewer records human-realism, distinctive-feature, anti-overperfection,
+visual-quality, and low-weight pose evidence alongside the primary likeness
+three three-quarter candidates are generated only after a front winner and use
+the root portrait plus that winner as admitted evidence
+three profile candidates are generated only after a three-quarter winner and
+use the root portrait plus both selected supplementary anchors as evidence
+each supplementary role selects one likeness-first winner independently
+a failed three-quarter stage blocks profile generation and pack activation
+the typed generation request rejects missing, duplicated, reordered, or extra
+evidence: front=root; three-quarter=root+front winner;
+profile=root+front winner+three-quarter winner
 Face Identity pack requires per-view and cross-view pass plus user activation
 warning/failed/superseded/unconfirmed views cannot route to Provider
 root provenance and consent remain auditable without raw paths or secrets
