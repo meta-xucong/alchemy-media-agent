@@ -62,6 +62,15 @@ mainline handoff and production-claim limits
 It is subordinate to the primary product contract and must not invent a second
 runtime contract.
 
+### Standard-Change Impact Review Protocol
+
+`PROFESSIONAL_MODE_STANDARD_CHANGE_IMPACT_REVIEW_PROTOCOL.md`
+
+Defines the repeatable handoff, impact classification, append-only register,
+and audit procedure to run after Standard Mode changes. It is the operating
+mechanism for deciding whether the Professional Mode/Face Identity documents
+need a compatible adaptation.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:
@@ -145,6 +154,10 @@ directory. A change is compatible only when it:
 3. names which existing shared authority remains responsible;
 4. preserves frozen activation, shared review/retry, and append-only history;
 5. adds an isolation regression before any runtime implementation.
+
+6. records every Standard Mode impact audit in the append-only impact register;
+7. treats shared-contract changes as `REVIEW_REQUIRED`, `ADAPT_REQUIRED`, or
+   `BLOCKED` until inspected, rather than assuming they are Standard-only.
 
 Shared-capability changes in Standard Mode are reviewed for Professional Mode
 impact. If a shared contract changes, the adapter records the supported
