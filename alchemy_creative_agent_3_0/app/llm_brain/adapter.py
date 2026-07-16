@@ -168,6 +168,7 @@ class V3LLMBrainAdapter:
         self,
         *,
         user_input: str,
+        job_id: str | None = None,
         stage: str,
         scenario_id: str | None,
         template_id: str | None,
@@ -234,6 +235,7 @@ class V3LLMBrainAdapter:
             request_metadata["photography_creative_context"] = photography_creative_context
         return BrainRunRequest(
             user_input=user_input,
+            job_id=job_id,
             stage=stage,
             scenario_id=scenario_id,
             template_id=template_id,

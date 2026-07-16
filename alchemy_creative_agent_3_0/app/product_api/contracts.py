@@ -52,6 +52,12 @@ class CreateCreativeJobRequest(ProductApiBase):
     scenario_selection: ScenarioSelection | None = None
     photographer_profile_id: str | None = None
     photographer_profile_selection_source: Literal["user_explicit_ui"] | None = None
+    # Professional Mode is an explicit outer choice. It contributes only a
+    # project-scoped People Asset binding; all creative direction remains in
+    # the existing Remote Brain/shared runtime.
+    professional_mode: Literal["standard", "professional"] = "standard"
+    people_asset_id: str | None = None
+    professional_identity_view_ids: list[str] = Field(default_factory=list)
     uploaded_asset_ids: list[str] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -79,6 +85,34 @@ class CreateCreativeJobRequest(ProductApiBase):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("people_asset_id")
+    @classmethod
+    def clean_people_asset_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("professional_identity_view_ids")
+    @classmethod
+    def clean_professional_identity_view_ids(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("professional_identity_view_ids must not contain empty strings")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("professional_identity_view_ids must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def enforce_explicit_professional_choice(self) -> "CreateCreativeJobRequest":
+        if self.professional_mode == "standard" and (
+            self.people_asset_id is not None or self.professional_identity_view_ids
+        ):
+            raise ValueError("People Asset selection requires explicit Professional Mode")
+        if self.professional_mode == "professional" and self.people_asset_id is None:
+            raise ValueError("Professional Mode requires a selected People Asset")
+        return self
 
     @property
     def effective_brand_id(self) -> str | None:

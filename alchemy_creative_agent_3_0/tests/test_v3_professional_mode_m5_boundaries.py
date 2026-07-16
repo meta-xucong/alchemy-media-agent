@@ -34,13 +34,22 @@ def test_professional_asset_package_has_no_independent_renderer_or_secret_transp
     assert all(token not in source for token in forbidden)
 
 
-def test_professional_asset_package_is_not_implicitly_imported_by_standard_runtime() -> None:
-    standard_sources = [
-        path
-        for path in APP_ROOT.rglob("*.py")
-        if "visual_assets" not in path.parts and "__pycache__" not in path.parts
-    ]
-    assert all("visual_assets" not in path.read_text(encoding="utf-8") for path in standard_sources)
+def test_standard_runtime_does_not_lookup_professional_assets_without_explicit_mode() -> None:
+    # The mainline seam intentionally imports the typed package. The
+    # isolation contract is behavioral: an ordinary Standard request must not
+    # consult a People Asset or carry Professional metadata.
+    from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create a simple landscape image.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+        }
+    )
+
+    assert result.status.value == "planned"
+    assert "professional_mode" not in result.metadata
+    assert "professional_mode_execution" not in result.metadata
 
 
 def test_m5_real_pixel_claim_requires_external_provider_evidence() -> None:

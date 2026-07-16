@@ -34,15 +34,38 @@ class ProfessionalModeExecutionRequest(V3BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     consumer_request: ProfessionalConsumerRequest
-    canonical_prompt_hash: str
+    # The semantic binding is admitted before the capability plan freezes.
+    # Canonical prompt receipts arrive later, after the shared Brain finalizer.
+    # Keep the singular field for the first-release/single-output contract,
+    # while allowing a professional set to carry one receipt per output.
+    canonical_prompt_hash: str | None = None
+    canonical_prompt_hashes: list[str] = Field(default_factory=list)
     reference_plans: list[ReferenceChannelPlan] = Field(default_factory=list)
 
     @field_validator("canonical_prompt_hash")
     @classmethod
-    def require_prompt_receipt_hash(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("Professional Mode requires a canonical Brain prompt hash")
-        return value
+    def clean_prompt_receipt_hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("canonical_prompt_hashes")
+    @classmethod
+    def clean_prompt_receipt_hashes(cls, value: list[str]) -> list[str]:
+        cleaned = [str(item).strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("canonical Brain prompt hashes must be non-empty")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("canonical Brain prompt hashes must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def prompt_hash_forms_are_consistent(self) -> "ProfessionalModeExecutionRequest":
+        if self.canonical_prompt_hash and self.canonical_prompt_hashes:
+            if self.canonical_prompt_hash != self.canonical_prompt_hashes[0]:
+                raise ValueError("canonical prompt hash forms do not match")
+        return self
 
     @model_validator(mode="after")
     def keep_standard_mode_pristine(self) -> "ProfessionalModeExecutionRequest":
@@ -124,6 +147,7 @@ class ProfessionalModeExecutionAdapter:
         metadata = self.bridge.planning_metadata(
             binding,
             canonical_prompt_hash=request.canonical_prompt_hash,
+            canonical_prompt_hashes=request.canonical_prompt_hashes,
             reference_admissions=admission,
         )
         context = ProfessionalModeExecutionContext(
@@ -136,3 +160,23 @@ class ProfessionalModeExecutionAdapter:
             planning_metadata=metadata,
         )
         return ProfessionalModePreparationResult(status="ready", context=context)
+
+    def prepare_pre_freeze(
+        self,
+        request: ProfessionalModeExecutionRequest,
+    ) -> ProfessionalModePreparationResult | None:
+        """Admit the typed asset/reference binding before plan freeze.
+
+        This is intentionally the same adapter path as final preparation. It
+        simply omits the prompt receipt that can only exist after the shared
+        Remote Brain has signed the complete canonical provider prompt.
+        """
+
+        return self.prepare(
+            request.model_copy(
+                update={
+                    "canonical_prompt_hash": None,
+                    "canonical_prompt_hashes": [],
+                }
+            )
+        )

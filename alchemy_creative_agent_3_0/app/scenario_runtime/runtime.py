@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any
 
@@ -48,6 +49,16 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_REVIEW_DIMENSIONS,
     normalize_human_realism_issue_code,
 )
+from ..visual_assets import (
+    CanonicalProviderPromptReceipt,
+    ProfessionalConsumerRequest,
+    ProfessionalModeBinding,
+    ProfessionalModeExecutionAdapter,
+    ProfessionalModeExecutionRequest,
+    ProfessionalModePreparationResult,
+    ProfessionalModeRuntimeBridge,
+    ReferenceChannelPlan,
+)
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
     CapabilityPreparationResult,
@@ -85,6 +96,8 @@ class ScenarioRuntime:
         self.visual_cluster_plugin_registry = VisualClusterPluginRegistry()
         self.llm_brain_adapter = llm_brain_adapter or V3LLMBrainAdapter()
         self.generation_router = generation_router
+        self.professional_mode_execution_adapter = ProfessionalModeExecutionAdapter()
+        self.professional_mode_runtime_bridge = ProfessionalModeRuntimeBridge()
         adapters = specialized_planning_adapters or [PhotographyScenarioPlanningAdapter()]
         self.specialized_planning_adapters = {adapter.scenario_id: adapter for adapter in adapters}
 
@@ -250,6 +263,11 @@ class ScenarioRuntime:
         quality_mode: str | None = None,
     ) -> CapabilityPreparationResult:
         mode = self._capability_activation_mode(request)
+        professional_request, professional_preparation, request = self._prepare_professional_mode(
+            request,
+            resolution,
+            activation_mode=mode,
+        )
         specialized_plan = self._prepare_specialized_scenario_plan(request, resolution)
         normalized_intent = self._normalize_v3_job_intent(request, resolution)
         if resolution.manifest.scenario_id == "photography" and mode != "enforced":
@@ -279,6 +297,7 @@ class ScenarioRuntime:
                 normalized_job_intent=normalized_intent,
                 template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
+                professional_mode_preparation=professional_preparation,
             )
 
         pre_activation_run = self._run_pre_activation_capabilities(request, resolution)
@@ -320,6 +339,7 @@ class ScenarioRuntime:
                 normalized_job_intent=normalized_intent,
                 template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
+                professional_mode_preparation=professional_preparation,
             )
 
         brain_result = self._run_llm_brain(
@@ -333,6 +353,10 @@ class ScenarioRuntime:
             template_capability_policy=policy,
         )
         self._require_remote_creative_brain(request, policy, brain_result)
+        brain_result = self._bind_professional_task_profile(
+            brain_result,
+            professional_request,
+        )
         plan = self._reuse_or_build_activation_plan(
             request,
             resolution,
@@ -382,6 +406,13 @@ class ScenarioRuntime:
             ledger,
         )
         self._require_brain_signed_provider_prompts(request, policy, brain_result, plan)
+        plan, envelope, professional_preparation = self._finalize_professional_mode(
+            professional_request,
+            professional_preparation,
+            brain_result,
+            plan,
+            envelope,
+        )
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
             brain_result=brain_result,
@@ -394,7 +425,148 @@ class ScenarioRuntime:
             resolved_constraint_ledger=ledger,
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
+            professional_mode_preparation=professional_preparation,
         )
+
+    def _prepare_professional_mode(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        activation_mode: str,
+    ) -> tuple[
+        ProfessionalModeExecutionRequest | None,
+        ProfessionalModePreparationResult | None,
+        ScenarioRuntimeRequest,
+    ]:
+        """Admit explicit Professional Mode before the shared plan freezes."""
+
+        metadata = dict(request.metadata or {})
+        raw_mode = str(metadata.get("professional_mode") or "standard").strip().lower()
+        has_professional_binding = any(
+            key in metadata
+            for key in (
+                "professional_mode_binding",
+                "professional_mode_binding_record",
+                "professional_reference_channel_plans",
+            )
+        )
+        if raw_mode == "standard":
+            if has_professional_binding:
+                raise CapabilityActivationError("professional_metadata_in_standard_mode")
+            return None, None, request
+        if raw_mode != "professional":
+            raise CapabilityActivationError("professional_mode_selection_invalid")
+        if activation_mode != "enforced":
+            raise CapabilityActivationError("professional_mode_requires_enforced_activation")
+        binding_error = str(metadata.get("professional_mode_binding_error") or "").strip()
+        if binding_error:
+            raise CapabilityActivationError(binding_error)
+
+        binding_payload = metadata.get("professional_mode_binding_record") or metadata.get(
+            "professional_mode_binding"
+        )
+        try:
+            binding = ProfessionalModeBinding.model_validate(binding_payload)
+            if binding.project_id != str(metadata.get("project_id") or binding.project_id):
+                raise ValueError("professional binding project mismatch")
+            consumer_request = ProfessionalConsumerRequest(
+                template_id=self._template_id(request, resolution),
+                mode="professional",
+                binding=binding,
+            )
+            raw_plans = metadata.get("professional_reference_channel_plans") or []
+            if not isinstance(raw_plans, list):
+                raise ValueError("professional reference plans must be a list")
+            reference_plans = [ReferenceChannelPlan.model_validate(item) for item in raw_plans]
+            execution_request = ProfessionalModeExecutionRequest(
+                consumer_request=consumer_request,
+                reference_plans=reference_plans,
+            )
+            preparation = self.professional_mode_execution_adapter.prepare_pre_freeze(execution_request)
+        except (TypeError, ValueError) as exc:
+            raise CapabilityActivationError("professional_mode_binding_invalid") from exc
+        if preparation is None:
+            raise CapabilityActivationError("professional_mode_binding_missing")
+        if preparation.status != "ready" or preparation.context is None:
+            reasons = ",".join(preparation.reason_codes) or "reference_admission_blocked"
+            raise CapabilityActivationError(f"professional_mode_reference_admission_blocked:{reasons}")
+
+        # Keep the Brain-facing transport typed and sanitized. The full
+        # server-owned record remains local runtime provenance only.
+        planning_metadata = dict(preparation.context.planning_metadata)
+        safe_metadata = {
+            **metadata,
+            "professional_mode": True,
+            "professional_mode_binding": binding.to_brain_evidence(),
+            "professional_planning_metadata": planning_metadata,
+        }
+        return execution_request, preparation, request.model_copy(update={"metadata": safe_metadata})
+
+    def _bind_professional_task_profile(
+        self,
+        brain_result: BrainRunResult,
+        execution_request: ProfessionalModeExecutionRequest | None,
+    ) -> BrainRunResult:
+        if execution_request is None:
+            return brain_result
+        profile = brain_result.visual_task_profile
+        if profile is None:
+            raise CapabilityActivationError("professional_mode_task_profile_missing")
+        try:
+            bound_profile = self.professional_mode_runtime_bridge.bind_task_profile(
+                profile,
+                execution_request.consumer_request.binding,
+            )
+        except (TypeError, ValueError) as exc:
+            raise CapabilityActivationError("professional_mode_task_profile_binding_invalid") from exc
+        return brain_result.model_copy(update={"visual_task_profile": bound_profile})
+
+    def _finalize_professional_mode(
+        self,
+        execution_request: ProfessionalModeExecutionRequest | None,
+        preflight: ProfessionalModePreparationResult | None,
+        brain_result: BrainRunResult,
+        plan: CapabilityActivationPlan,
+        envelope: CapabilityExecutionEnvelope,
+    ) -> tuple[CapabilityActivationPlan, CapabilityExecutionEnvelope, ProfessionalModePreparationResult | None]:
+        if execution_request is None:
+            return plan, envelope, preflight
+        prompts = list(brain_result.canonical_provider_prompts or [])
+        if not prompts:
+            raise CapabilityActivationError("professional_mode_canonical_prompt_missing")
+        prompt_hashes = [hashlib.sha256(item.prompt.encode("utf-8")).hexdigest() for item in prompts]
+        final_request = execution_request.model_copy(
+            update={
+                "canonical_prompt_hash": prompt_hashes[0],
+                "canonical_prompt_hashes": prompt_hashes,
+            }
+        )
+        final_preparation = self.professional_mode_execution_adapter.prepare(final_request)
+        if final_preparation is None or final_preparation.status != "ready" or final_preparation.context is None:
+            reasons = ",".join(final_preparation.reason_codes) if final_preparation else "missing_context"
+            raise CapabilityActivationError(f"professional_mode_final_admission_blocked:{reasons}")
+        final_metadata = dict(final_preparation.context.planning_metadata)
+        updated_plan = plan.model_copy(update={"metadata": {**dict(plan.metadata), **final_metadata}})
+        receipts = [
+            CanonicalProviderPromptReceipt(
+                prompt_hash=prompt_hash,
+                signed_by="remote_v3_llm_brain",
+                signature_valid=True,
+                renderer_model="gpt-image-2",
+            )
+            for prompt_hash in prompt_hashes
+        ]
+        try:
+            self.professional_mode_runtime_bridge.validate_frozen_plan(
+                updated_plan,
+                final_request.consumer_request.binding,
+                receipts,
+            )
+        except ValueError as exc:
+            raise CapabilityActivationError("professional_mode_frozen_plan_validation_failed") from exc
+        updated_envelope = envelope.model_copy(update={"activation_plan": updated_plan})
+        return updated_plan, updated_envelope, final_preparation
 
     def _require_remote_creative_brain(
         self,
@@ -528,6 +700,7 @@ class ScenarioRuntime:
 
         signing_request = BrainRunRequest(
             user_input=request.user_input,
+            job_id=self._runtime_job_id(request, resolution),
             stage="provider_prompt_finalize",
             scenario_id=resolution.manifest.scenario_id,
             template_id=self._template_id(request, resolution),
@@ -560,6 +733,7 @@ class ScenarioRuntime:
             resigning_context = self._human_naturalness_resigning_context(canonical_prompt_context)
             resigning_request = BrainRunRequest(
                 user_input=request.user_input,
+                job_id=self._runtime_job_id(request, resolution),
                 stage="provider_prompt_human_naturalness_resign",
                 scenario_id=resolution.manifest.scenario_id,
                 template_id=self._template_id(request, resolution),
@@ -871,7 +1045,11 @@ class ScenarioRuntime:
         """
 
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        return bool(metadata.get("require_real_images") or metadata.get("real_image_generation"))
+        return bool(
+            metadata.get("require_real_images")
+            or metadata.get("real_image_generation")
+            or str(metadata.get("professional_mode") or "").lower() == "professional"
+        )
 
     @staticmethod
     def _remote_creative_brain_block(
@@ -2200,6 +2378,11 @@ class ScenarioRuntime:
             catalog_version=catalog_version,
             activation_mode=mode,
             fallback_used=brain_result.fallback_used,
+            metadata=(
+                dict(request.metadata.get("professional_planning_metadata") or {})
+                if isinstance(request.metadata.get("professional_planning_metadata"), dict)
+                else None
+            ),
         )
         explicit_required = self._required_capability_ids(request)
         missing_required = [item for item in explicit_required if not plan.is_active(item)]
@@ -2410,6 +2593,33 @@ class ScenarioRuntime:
                     "capability_execution_envelope_id": envelope["envelope_id"],
                 }
             )
+        professional = preparation.professional_mode_preparation
+        if professional is not None:
+            context = professional.context
+            metadata["professional_mode"] = True
+            metadata["professional_mode_execution"] = {
+                "status": professional.status,
+                "binding": (
+                    dict(context.consumer_context.identity_binding)
+                    if context is not None
+                    else None
+                ),
+                "reference_admission": (
+                    dict(context.planning_metadata)
+                    if context is not None
+                    else {
+                        "status": "blocked",
+                        "reason_codes": list(professional.reason_codes),
+                    }
+                ),
+                "evidence_packet": (
+                    context.evidence_packet.model_dump(mode="json")
+                    if context is not None
+                    else None
+                ),
+                "creative_direction_owner": "remote_v3_llm_brain",
+                "shared_execution_owner": "v3_shared_runtime",
+            }
         return metadata
 
     def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
@@ -2534,6 +2744,15 @@ class ScenarioRuntime:
             metadata.get("project_job_sequence"),
         ]
         return "::".join(str(part) for part in parts if part not in {None, ""})
+
+    def _runtime_job_id(self, request: ScenarioRuntimeRequest, resolution) -> str:
+        return stable_id(
+            "job",
+            request.user_input,
+            request.optional_brand_id,
+            self._job_scope(request, resolution),
+            request.metadata.get("v3_job_instance_id"),
+        )
 
     def _enrich_result(
         self,
@@ -2722,9 +2941,32 @@ class ScenarioRuntime:
         if frozen is not None:
             return frozen
         base_metadata = self._brain_runtime_metadata(request, resolution, quality_mode=quality_mode)
+        if str(request.metadata.get("professional_mode") or "").lower() == "professional":
+            # The remote Brain receives only the explicit, typed creative
+            # evidence. Server job/project records and raw reference-plan
+            # payloads remain local provenance and never become Brain input.
+            safe_binding = request.metadata.get("professional_mode_binding")
+            safe_admission = request.metadata.get("professional_planning_metadata")
+            base_metadata.pop("professional_mode_binding_record", None)
+            base_metadata.pop("professional_reference_channel_plans", None)
+            base_metadata.pop("professional_planning_metadata", None)
+            base_metadata["professional_mode"] = True
+            if isinstance(safe_binding, dict):
+                base_metadata["professional_mode_binding"] = dict(safe_binding)
+            if isinstance(safe_admission, dict):
+                base_metadata["professional_reference_admission"] = {
+                    key: safe_admission[key]
+                    for key in (
+                        "reference_admission_status",
+                        "reference_evidence_packet_contract_version",
+                        "admitted_evidence_ids",
+                    )
+                    if key in safe_admission
+                }
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
         brain_request = self.llm_brain_adapter.build_request(
             user_input=request.user_input,
+            job_id=self._runtime_job_id(request, resolution),
             stage=stage,
             scenario_id=resolution.manifest.scenario_id,
             template_id=self._template_id(request, resolution),

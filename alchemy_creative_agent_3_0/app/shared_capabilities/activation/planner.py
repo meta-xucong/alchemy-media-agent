@@ -37,6 +37,7 @@ class CapabilityActivationPlanner:
         activation_mode: str,
         fallback_used: bool = False,
         budget: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> CapabilityActivationPlan:
         requested = {item.capability_id: item for item in intent.requested_capabilities}
         required = {item.capability_id: item for item in template_policy.required_capabilities}
@@ -185,6 +186,7 @@ class CapabilityActivationPlanner:
             fallback_used=fallback_used,
             catalog_version=catalog_version,
             activation_mode=activation_mode,
+            metadata=dict(metadata or {}),
         )
 
     @staticmethod
@@ -200,16 +202,34 @@ class CapabilityActivationPlanner:
         animal, or a product does not qualify.
         """
 
+        professional_evidence = [
+            item.evidence_id
+            for item in task_profile.evidence
+            if item.evidence_type == "professional_people_asset_binding"
+        ]
+        required: list[tuple[str, list[str], list[str], float]] = []
+        if task_profile.explicit_user_controls.get("professional_mode_selected") is True:
+            if not professional_evidence:
+                raise CapabilityActivationError("professional People Asset evidence is missing")
+            required.append(
+                (
+                    "portrait_identity",
+                    ["professional_people_asset_binding"],
+                    professional_evidence,
+                    1.0,
+                )
+            )
+
         visible_people = [
             entity
             for entity in task_profile.subject_entities
             if entity.entity_type.strip().casefold() == "person" and entity.visible_in_target
         ]
         if not visible_people:
-            return []
+            return required
 
         if task_profile.rendering_intent.explicitly_stylized_whole_image:
-            return []
+            return required
 
         evidence = [
             item
@@ -218,16 +238,17 @@ class CapabilityActivationPlanner:
             and item.value is not False
         ]
         if not evidence:
-            return []
+            return required
 
-        return [
+        required.append(
             (
                 "human_realism",
                 ["visible_real_person_execution_invariant"],
                 [item.evidence_id for item in evidence],
                 max([item.confidence for item in evidence] + [entity.confidence for entity in visible_people]),
             )
-        ]
+        )
+        return required
 
     def _activate(
         self,

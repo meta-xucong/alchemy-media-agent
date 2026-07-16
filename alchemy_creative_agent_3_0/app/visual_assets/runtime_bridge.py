@@ -83,21 +83,27 @@ class ProfessionalModeRuntimeBridge:
     def planning_metadata(
         binding: ProfessionalModeBinding,
         *,
-        canonical_prompt_hash: str,
+        canonical_prompt_hash: str | None = None,
+        canonical_prompt_hashes: list[str] | None = None,
         reference_admissions: ReferenceAdmissionResult | None = None,
     ) -> dict[str, object]:
-        if not canonical_prompt_hash.strip():
-            raise ValueError("canonical prompt hash is required before plan freeze")
         binding_set = VisualAssetBindingSet.from_professional_binding(binding)
         metadata: dict[str, object] = {
             "professional_mode": True,
             "professional_mode_binding": binding.to_brain_evidence(),
             "asset_channel_authority_contract_version": binding_set.contract_version,
             "asset_channel_claims": binding_set.to_provenance()["claims"],
-            "canonical_prompt_hash": canonical_prompt_hash,
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
         }
+        if canonical_prompt_hash is not None:
+            if not canonical_prompt_hash.strip():
+                raise ValueError("canonical prompt hash must be non-empty when supplied")
+            metadata["canonical_prompt_hash"] = canonical_prompt_hash
+        if canonical_prompt_hashes:
+            if any(not str(item).strip() for item in canonical_prompt_hashes):
+                raise ValueError("canonical prompt hashes must be non-empty")
+            metadata["canonical_prompt_hashes"] = list(dict.fromkeys(str(item) for item in canonical_prompt_hashes))
         if reference_admissions is None:
             metadata.update(
                 {
@@ -117,7 +123,7 @@ class ProfessionalModeRuntimeBridge:
         self,
         plan: CapabilityActivationPlan,
         binding: ProfessionalModeBinding,
-        prompt_receipt: CanonicalProviderPromptReceipt,
+        prompt_receipt: CanonicalProviderPromptReceipt | list[CanonicalProviderPromptReceipt],
     ) -> None:
         if plan.activation_mode != "enforced":
             raise ValueError("Professional Mode requires an enforced frozen capability plan")
@@ -145,10 +151,20 @@ class ProfessionalModeRuntimeBridge:
             raise ValueError("Professional Mode frozen plan contains blocked reference admission")
         if admission_status not in {"admitted", "not_requested"}:
             raise ValueError("Professional Mode reference admission is incomplete")
-        expected_hash = str(plan.metadata.get("canonical_prompt_hash") or "")
-        if not expected_hash or prompt_receipt.prompt_hash != expected_hash:
+        expected_hashes = [
+            str(item).strip()
+            for item in plan.metadata.get("canonical_prompt_hashes", [])
+            if str(item).strip()
+        ]
+        if not expected_hashes:
+            singular_hash = str(plan.metadata.get("canonical_prompt_hash") or "").strip()
+            if singular_hash:
+                expected_hashes = [singular_hash]
+        receipts = prompt_receipt if isinstance(prompt_receipt, list) else [prompt_receipt]
+        actual_hashes = [item.prompt_hash for item in receipts]
+        if not expected_hashes or actual_hashes != expected_hashes:
             raise ValueError("canonical prompt hash is missing or mismatched")
-        if prompt_receipt.signed_by != "remote_v3_llm_brain" or not prompt_receipt.signature_valid:
+        if any(item.signed_by != "remote_v3_llm_brain" or not item.signature_valid for item in receipts):
             raise ValueError("canonical prompt must be signed by the Remote Brain")
         if plan.metadata.get("human_realism_required") is True and not plan.is_active("human_realism"):
             raise ValueError("Professional Mode Human Realism activation is missing")

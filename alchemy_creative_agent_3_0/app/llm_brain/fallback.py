@@ -57,7 +57,7 @@ def build_fallback_result(request: BrainRunRequest, *, warning: str | None = Non
     # task from inheriting a fictitious person anchor from generic suite logic.
     task_profile, activation_intent = build_task_profile_and_intent(
         user_input=request.user_input,
-        job_id=stable_id("capability_job", request.project_id, request.user_input, request.stage),
+        job_id=request.job_id or stable_id("capability_job", request.project_id, request.user_input, request.stage),
         project_id=request.project_id,
         template_id=request.template_id or "general_template",
         scenario_id=request.scenario_id or "general_creative",
