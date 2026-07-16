@@ -115,6 +115,11 @@ The code-level closure is green: the focused Human Realism/review/retry
 regression passed 105 tests, the complete V3 suite passed 779 tests, and the
 Codex-native canonical prompt/reference parity suite passed 33 tests.
 
+> **Doc147 compatibility note (fresh jobs):** Doc144's Brain-only
+> non-default-personhood approval remains in force. Doc147 advances the
+> frozen shared contract to v4 so the existing shared pixel-review path also
+> attests expression ownership. It adds no local expression prompt logic.
+
 The face-visible ordinary-adult Local MCP comparison is supportive, not
 certifying: its canonical Brain plan used both signing stages and the output
 showed camera-like facial and skin material without the earlier obvious

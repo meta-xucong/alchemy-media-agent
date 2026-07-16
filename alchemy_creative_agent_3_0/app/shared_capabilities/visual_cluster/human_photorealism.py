@@ -21,6 +21,7 @@ HUMAN_REALISM_REVIEW_DIMENSIONS = (
     "human_rendering_artifact",
     "human_anatomy_or_proportion",
     "human_age_or_identity_fidelity",
+    "human_expression_context",
     "human_skin_or_retouch",
     "human_scene_coherence",
 )
@@ -28,11 +29,17 @@ HUMAN_REALISM_REVIEW_DIMENSIONS = (
 _LEGACY_HUMAN_AGE_ALIASES = {
     "adultified_child_model",
     "pageant_polish_child_face",
-    "frozen_child_smile",
     "unreal_child_eyes",
     "unreal_child_teeth",
     "child_face_ai_render",
     "age_inappropriate_rendering",
+}
+_LEGACY_HUMAN_EXPRESSION_ALIASES = {
+    # Compatibility-only aliases.  Fresh enforced review emits the broad
+    # semantic dimension below, never a smile/age-specific label.
+    "template_smile",
+    "perfect_smile_repetition",
+    "frozen_child_smile",
 }
 _LEGACY_HUMAN_SKIN_ALIASES = {
     "synthetic_child_skin",
@@ -76,6 +83,8 @@ def normalize_human_realism_issue_code(issue_code: str) -> str:
         return normalized
     if normalized in _LEGACY_HUMAN_AGE_ALIASES:
         return "human_age_or_identity_fidelity"
+    if normalized in _LEGACY_HUMAN_EXPRESSION_ALIASES:
+        return "human_expression_context"
     if normalized in _LEGACY_HUMAN_SKIN_ALIASES:
         return "human_skin_or_retouch"
     if normalized in _LEGACY_HUMAN_ANATOMY_ALIASES:
@@ -654,7 +663,7 @@ class HumanPhotorealismLayer:
             # deliberately semantic rather than a renderer word list: the
             # remote Brain owns the complete prompt and the shared reviewer
             # later verifies the same frozen intent from pixels.
-            "contract_version": "v3_human_realism_semantic_v3",
+            "contract_version": "v3_human_realism_semantic_v4",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
@@ -667,6 +676,14 @@ class HumanPhotorealismLayer:
             # not to an age, apparel, region or template-specific branch.
             "natural_presence_priority": "individual_human_presence",
             "aesthetic_boundary": "preserve_user_style_without_generic_beauty_substitution",
+            # Expression is a whole-image, situation-owned semantic decision
+            # made by the remote Brain.  This is deliberately not a local
+            # expression classifier or renderer phrase catalogue.
+            "expression_ownership_requirement": (
+                "not_applicable"
+                if is_detail
+                else "situation_owned_unless_explicit_user_direction"
+            ),
             "personhood_requirement": (
                 "not_applicable" if is_detail else "individual_noninterchangeable_presence"
             ),

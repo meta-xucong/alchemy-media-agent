@@ -11,14 +11,18 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
         guidance = as_dict(context.cluster.get("human_photorealism_guidance"))
         if not guidance.get("applies"):
             return self.contribution(context)
-        plugin_metadata = as_dict(as_dict(guidance.get("metadata")).get("human_realism_plugin"))
-        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         semantic_contract = as_dict(guidance.get("semantic_contract"))
+        review_issue_codes = [
+            str(item)
+            for item in semantic_contract.get("quality_axes", [])
+            if str(item) in HUMAN_REALISM_REVIEW_DIMENSIONS
+        ]
         human_authenticity_contract = {
             key: semantic_contract.get(key)
             for key in (
                 "contract_version",
                 "personhood_requirement",
+                "expression_ownership_requirement",
                 "photographic_material_requirement",
             )
         }
@@ -30,16 +34,19 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             prompt=[],
             negative=[],
             review={
-                "issue_codes": list(HUMAN_REALISM_REVIEW_DIMENSIONS),
+                "issue_codes": review_issue_codes,
                 "score_dimensions": ["human_realism"],
                 # This is a frozen review obligation, never provider prompt
                 # prose.  It is copied from the active shared semantic
                 # contract so stale mutable metadata cannot opt a job in.
                 "human_authenticity_contract": human_authenticity_contract,
-                "human_naturalness_verdict_required": True,
+                "human_naturalness_verdict_required": (
+                    semantic_contract.get("expression_ownership_requirement")
+                    == "situation_owned_unless_explicit_user_direction"
+                ),
             },
             retry={
-                "issue_codes": list(HUMAN_REALISM_REVIEW_DIMENSIONS),
+                "issue_codes": review_issue_codes,
                 "metadata": {"retry_evidence_only": True},
             },
             stages=["post_generation_review", "retry_patch"],

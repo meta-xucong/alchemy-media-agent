@@ -134,6 +134,10 @@ or a deterministic numerical metric.
 
 ## 7. Prohibited remedies
 
+> **Doc147 compatibility note (fresh jobs):** Doc147 supersedes the former
+> v3 contract revision with v4 expression ownership. This document's
+> Brain-owned, no-local-recipe boundary remains authoritative.
+
 - local positive/negative word stacks for pores, hands, smiles, faces or
   children;
 - child/kidswear branches, Providers, review routes or retry paths;

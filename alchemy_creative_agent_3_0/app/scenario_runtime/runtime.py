@@ -674,6 +674,7 @@ class ScenarioRuntime:
             "ordinary_age_appropriate_context",
             "natural_presence_priority",
             "aesthetic_boundary",
+            "expression_ownership_requirement",
             "personhood_requirement",
             "photographic_material_requirement",
             "creative_direction_owner",
@@ -689,7 +690,7 @@ class ScenarioRuntime:
         ):
             raise CapabilityActivationError("human_realism_semantic_contract_missing")
         if (
-            contract.get("contract_version") != "v3_human_realism_semantic_v3"
+            contract.get("contract_version") != "v3_human_realism_semantic_v4"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
@@ -698,6 +699,8 @@ class ScenarioRuntime:
             or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
             or contract.get("natural_presence_priority") != "individual_human_presence"
             or contract.get("aesthetic_boundary") != "preserve_user_style_without_generic_beauty_substitution"
+            or contract.get("expression_ownership_requirement")
+            not in {"situation_owned_unless_explicit_user_direction", "not_applicable"}
             or contract.get("personhood_requirement")
             not in {"individual_noninterchangeable_presence", "not_applicable"}
             or contract.get("photographic_material_requirement") != "camera_observed_human_materiality"

@@ -67,7 +67,7 @@ def test_doc144_resigner_gets_the_nondefault_approval_standard_without_local_pro
 
 
 def test_doc144_brain_authority_forbids_a_default_portrait_substitution_without_prescribing_renderer_words() -> None:
-    assert "default commercially posed expression" in SYSTEM_PROMPT
-    assert "universally beautified portrait" in SYSTEM_PROMPT
+    assert "default display or advertising smile" in SYSTEM_PROMPT
+    assert "fixed alternate-expression catalogue" in SYSTEM_PROMPT
     for forbidden in ("child smile", "mouth shape", "pore threshold", "negative prompt"):
         assert forbidden not in SYSTEM_PROMPT.lower()

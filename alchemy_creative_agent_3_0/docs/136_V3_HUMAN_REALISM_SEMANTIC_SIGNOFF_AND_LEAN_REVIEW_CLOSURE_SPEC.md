@@ -106,6 +106,11 @@ The implementation must prove all of the following:
 
 ## 8. Documentation status and boundaries
 
+> **Doc147 compatibility note (fresh jobs):** the v3 semantic contract named
+> below is historical. Fresh enforced Human Realism jobs use the v4 contract
+> and its shared `expression_ownership_requirement`; old v3 records remain
+> readable but are not silently re-certified.
+
 - Doc128 remains the shared activation/review authority; its former fragment-oriented compatibility fields are historical for enforced jobs.
 - Doc138 records the v2 forward semantic baseline. Doc142 adds a schema-only, same-pass re-signing receipt; Doc143 is the fresh-job v3 semantic and pixel-attestation authority. None authorizes a third Brain pass or a local prompt patch.
 - Docs134–135 remain the canonical-prompt ownership authority. This document supplies the missing typed Human Realism sign-off bridge.

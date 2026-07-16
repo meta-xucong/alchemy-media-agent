@@ -91,6 +91,7 @@ def test_doc128_legacy_human_codes_are_read_only_aliases_to_shared_dimensions() 
         "adultified_child_model": "human_age_or_identity_fidelity",
         "synthetic_child_skin": "human_skin_or_retouch",
         "bad_hands_or_body": "human_anatomy_or_proportion",
+        "template_smile": "human_expression_context",
         "flat_scene_lighting": "human_scene_coherence",
     }
 

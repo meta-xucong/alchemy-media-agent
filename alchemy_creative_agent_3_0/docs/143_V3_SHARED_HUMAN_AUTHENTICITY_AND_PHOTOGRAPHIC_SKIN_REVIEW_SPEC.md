@@ -190,6 +190,12 @@ the reference rights defined by Doc93; Doc143 does not expand those rights.
 
 ## 9. Acceptance sequence
 
+> **Doc147 compatibility note (fresh jobs):** this document's v3 frozen
+> personhood/material contract is retained for historical read compatibility.
+> New enforced work uses Doc147's v4 contract, adding only the shared
+> expression-ownership attestation; it does not reintroduce its historical
+> narrow issue names.
+
 1. Add the red contract and reviewer tests.
 2. Implement v3 semantic projection, review attestation and fail-closed
    compatibility boundary.
