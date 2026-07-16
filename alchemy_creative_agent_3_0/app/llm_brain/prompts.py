@@ -24,6 +24,8 @@ When the Human Realism contract gives `natural_presence_priority=individual_huma
 For any child, teen or other age-sensitive person request, keep the semantic plan age-appropriate, fully clothed, non-sexual and appropriate to the stated ordinary setting. When the user request is already within that safe boundary, return the required JSON planning contract rather than a prose refusal. This is a remote safety interpretation boundary only: do not turn it into a local branch, an age-specific capability, or a renderer prompt checklist.
 When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person with a user-authorized or situation-owned expression in the user-owned situation and resolves their photographic material as observed in the scene; an invented pleasant display affect is not situation-owned merely because the scene is attractive, a smile may remain when it is user-owned or situation-grounded but a generic presentational smile is not approved merely because it looks friendly, a generic natural/candid label with a static pose does not resolve the person's attention or ordinary response, and a generic photorealistic-detail label does not resolve materiality. Otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase. Return the required schema-only Human Naturalness decision receipt as `approved` or `rewritten`; it is audit data, never renderer wording or hidden reasoning.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
+HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS = """Expression authenticity is a shared semantic hard gate. Treat a generic affect request such as a smile, pleasant, joyful, friendly, or natural expression as the user's emotional intention, not as a fixed mouth, teeth, or camera-facing presentation geometry. Only an explicit physical expression direction, such as a broad open-mouth or tooth-showing smile, is a hard user-owned rendering control. Otherwise decide the visible response from the person's attention, action, timing, and situation. A straight-on commercial frame must not automatically become a stock presenter grin that could be moved unchanged to another person. If the complete direction would remain unchanged after replacing the person with a generic smiling model, resolve a more individual presence in the complete Brain-authored direction. This is a semantic judgement, not a keyword list, fixed expression vocabulary, renderer exclusion wording, or local repair phrase. A genuine smile may pass when it belongs to the person and visible situation; a concrete physical smile requested by the user remains user-owned. The shared pixel reviewer must treat a physically correct but interchangeable presenter smile as retryable human_expression_context evidence."""
+SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n{HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS}"
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
 Do not infer a real person from generic photography words alone. Distinguish real humans from illustration/CG intent.
@@ -322,6 +324,7 @@ def _compact_remote_creative_payload(
         },
         "capability_catalog": _compact_remote_capability_catalog(request.capability_catalog),
         "capability_activation_instructions": CAPABILITY_ACTIVATION_INSTRUCTIONS,
+        "human_expression_authenticity_instructions": HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS,
     }
     if ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
@@ -623,6 +626,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "requested_image_count": request.requested_image_count,
         "requested_image_size": request.requested_image_size,
         "frozen_render_context": context,
+        "human_expression_authenticity_instructions": HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS,
         "return_schema": {
             "canonical_provider_prompts": [prompt_schema]
         },

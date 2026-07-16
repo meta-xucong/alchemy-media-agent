@@ -21,6 +21,15 @@ _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
     "photographic_material_requirement",
 }
 
+HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS = (
+    "Expression review is semantic, not a phrase checklist. Treat a generic smile or other positive-affect request "
+    "as emotional intent unless the user explicitly controls a physical expression. A genuine smile may pass when it belongs to the person and visible situation; a concrete physical smile requested by the user remains user-owned. "
+    "When the pixels instead show a camera-facing presenter grin that is interchangeable across unrelated people or "
+    "unrelated situations, return human_naturalness_verdict.status=retry_recommended with only the generic "
+    "human_expression_context dimension. Do not fail a smile merely because it is visible, and do not emit renderer "
+    "wording, expression variants, demographic judgements, or a local repair phrase."
+)
+
 
 def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids: list[str]) -> dict[str, Any]:
     """Return only the v5 Human Realism review contract frozen in the ledger.
@@ -390,7 +399,7 @@ def _enforced_inspection_prompt(
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
             "Human authenticity attestation: assess the frozen personhood, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
-            "A genuine smile may pass when it belongs to the person and visible situation; when an otherwise unrequested smile reads as a generic camera-presentational default rather than an individual response, report only the existing human_expression_context dimension. "
+            + HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS + " "
             "Return only the required structured verdict and allowed generic issue codes; do not write renderer instructions, "
             "demographic classifications, facial-feature recipes, or new creative direction."
         )
