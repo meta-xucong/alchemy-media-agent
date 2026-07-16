@@ -66,12 +66,16 @@ class EcommerceRemoteBrainTestProvider:
             "optimized_direction": "Use the remote Brain's product-specific image intent.",
             "visual_direction_addons": ["Use the remote Brain's product-specific image intent."],
         }
+        # Preserve the complete fixture profile, then make only the semantic
+        # rendering decision explicitly remote. Production real-image paths
+        # now reject a response which gives merely this one sub-object.
         payload["visual_task_profile"] = {
+            **payload["visual_task_profile"],
             "rendering_intent": {
                 "rendering_mode": "photoreal",
                 "stylization_scope": "none",
                 "decision_owner": "remote_brain",
-            }
+            },
         }
         context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
         preflight = context.get("final_prompt_semantic_preflight") if isinstance(context, dict) else {}

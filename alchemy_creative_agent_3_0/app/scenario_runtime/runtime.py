@@ -426,6 +426,18 @@ class ScenarioRuntime:
                 brain_result,
                 rejected_sections=rejected_sections,
             )
+        if isinstance(rejected_sections, list) and "visual_task_profile" in rejected_sections:
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_task_profile_invalid",
+                brain_result,
+                rejected_sections=rejected_sections,
+            )
+        if isinstance(rejected_sections, list) and "capability_activation_intent" in rejected_sections:
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_capability_intent_invalid",
+                brain_result,
+                rejected_sections=rejected_sections,
+            )
         if isinstance(rejected_sections, list) and (
             "canonical_provider_prompts" in rejected_sections
             or "visual_task_profile.rendering_intent" in rejected_sections
@@ -449,6 +461,16 @@ class ScenarioRuntime:
         if not bool(brain_result.audit.get("remote_rendering_intent_received")):
             raise self._remote_creative_brain_block(
                 "remote_creative_brain_rendering_semantics_missing",
+                brain_result,
+            )
+        if not bool(brain_result.audit.get("remote_visual_task_profile_received")):
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_task_profile_missing",
+                brain_result,
+            )
+        if not bool(brain_result.audit.get("remote_capability_activation_intent_received")):
+            raise self._remote_creative_brain_block(
+                "remote_creative_brain_capability_intent_missing",
                 brain_result,
             )
 

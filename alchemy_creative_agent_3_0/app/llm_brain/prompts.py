@@ -17,6 +17,8 @@ Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-cop
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
 When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
 When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
+For a real-image planning response, return a complete semantic visual_task_profile rather than only a rendering-medium decision. Account for all visible target subjects in your own semantic judgement, including an empty list when no subject is visible. Return concise semantic evidence and uncertainty explicitly. When you decide that a real person is visibly present, represent that person and record the existing visible_person and/or real_human_output evidence purpose so the shared quality capability can be activated. This is an internal planning contract, never a renderer prompt recipe; do not use it to emit a word checklist.
+For the same real-image response, return a complete capability_activation_intent using only the supplied shared capability catalog. It is your typed activation decision for the semantic profile, not a local fallback proposal. Use empty requested/rejected lists when no optional capability applies. The runtime will validate catalog membership, dependencies and evidence links; it will not invent a semantic request that you did not return.
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 When the Human Realism contract gives `natural_presence_priority=individual_human_presence`, do not let a generic commercial-beauty archetype substitute for the requested person. For candid, ordinary or lifestyle photography, make the whole direction describe an individual naturally present in that situation; for an explicitly glamorous or editorial request, retain its aesthetic while avoiding synthetic beautification. A direction that merely repeats generic adjectives such as natural, candid or photorealistic is incomplete: resolve the natural presence materially in your own complete sentence. Never expose a checklist or a local repair phrase.
 When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person naturally present in the user-owned situation; otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase.
@@ -68,7 +70,54 @@ def _compact_required_remote_creative_schema() -> dict:
                 "rendering_mode": "photoreal|stylized|mixed|unknown",
                 "stylization_scope": "whole_image|object_surface|none|ambiguous",
                 "decision_owner": "remote_brain",
-            }
+            },
+            "subject_entities": [
+                {
+                    "entity_id": "string",
+                    "entity_type": "string",
+                    "role": "string",
+                    "source_asset_ids": ["string"],
+                    "visible_in_target": "boolean",
+                    "preservation_level": "string",
+                    "confidence": "number from 0 through 1",
+                    "attributes": {},
+                }
+            ],
+            "visual_intent_tags": ["concise semantic tag"],
+            "unknown_requirements": ["concise unresolved semantic requirement"],
+            "confidence": "number from 0 through 1",
+            "evidence": [
+                {
+                    "evidence_id": "string",
+                    "evidence_type": "string",
+                    "source": "remote_semantic_interpretation|declared_reference|user_request",
+                    "value": "boolean|string|object|null",
+                    "confidence": "number from 0 through 1",
+                    "metadata": {},
+                }
+            ],
+        },
+        "capability_activation_intent": {
+            "requested_capabilities": [
+                {
+                    "capability_id": "one supplied catalog ID",
+                    "activation_mode": "required|recommended|optional|forbidden",
+                    "reason_codes": ["concise semantic reason"],
+                    "evidence_ids": ["visual_task_profile evidence_id"],
+                    "requested_profile": "one supplied capability profile|null",
+                    "confidence": "number from 0 through 1",
+                }
+            ],
+            "rejected_capabilities": [
+                {
+                    "capability_id": "one supplied catalog ID",
+                    "reason_code": "concise semantic reason",
+                    "evidence_ids": ["visual_task_profile evidence_id"],
+                    "confidence": "number from 0 through 1",
+                }
+            ],
+            "unresolved_signals": ["concise unresolved semantic requirement"],
+            "confidence": "number from 0 through 1",
         },
         "image_set_plan": {
             "set_goal": "string",
@@ -270,6 +319,8 @@ def _compact_remote_creative_payload(
             "creative_direction_owner": policy.metadata.get("creative_direction_owner"),
             "requires_remote_creative_brain": True,
         },
+        "capability_catalog": _compact_remote_capability_catalog(request.capability_catalog),
+        "capability_activation_instructions": CAPABILITY_ACTIVATION_INSTRUCTIONS,
     }
     if ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
@@ -473,8 +524,9 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["return_schema"] = compact_schema
         payload["remote_response_contract"] = (
             "Return only this compact schema as strictly valid JSON. Every "
-            "image_set_plan field and visual_task_profile.rendering_intent "
-            "are required. Escape quotation marks inside JSON strings. Do not "
+            "image_set_plan field and every listed visual_task_profile and "
+            "capability_activation_intent semantic field are required; use explicit empty lists when there is no such "
+            "subject, evidence, tag, unknown, capability request, rejection, or unresolved signal. Escape quotation marks inside JSON strings. Do not "
             "add hidden reasoning, project-history summaries, UI copy, or any "
             "additional top-level sections."
         )
@@ -555,3 +607,28 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         # never local fragments or mutable visual-cluster prose.
         payload["candidate_canonical_provider_prompts"] = candidate_prompts
     return payload
+
+
+def _compact_remote_capability_catalog(catalog: dict[str, object]) -> dict[str, object]:
+    """Expose only generic capability choices needed for a Brain activation decision."""
+
+    raw_items = catalog.get("capabilities") if isinstance(catalog, dict) else None
+    if not isinstance(raw_items, list):
+        return {"capabilities": []}
+    capabilities: list[dict[str, object]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        capability_id = _compact_text(item.get("capability_id"), 120)
+        if not capability_id:
+            continue
+        entry: dict[str, object] = {"capability_id": capability_id}
+        for key in ("supported_entity_types", "supported_profiles"):
+            values = _compact_text_list(item.get(key), limit=12, item_limit=80)
+            if values:
+                entry[key] = values
+        threshold = item.get("minimum_activation_confidence")
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+            entry["minimum_activation_confidence"] = max(0.0, min(1.0, float(threshold)))
+        capabilities.append(entry)
+    return {"capabilities": capabilities}

@@ -1,7 +1,7 @@
 # 135 V3 Forward Creative-Logic Eradication And Document Authority Spec
 
 Status: **active, cross-cutting architecture authority.** This document and
-Docs134/136/137/138/139 define how V3 distinguishes legitimate deterministic contracts from the
+Docs134/136/137/138/139/140 define how V3 distinguishes legitimate deterministic contracts from the
 rejected “structured word-stack” creative route. Where an earlier document
 describes local prompt fragments, keyword classifications, static image recipes
 or retry prose as renderer input, that description is historical only.

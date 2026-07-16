@@ -260,8 +260,27 @@ class V3LLMBrainAdapter:
                 ):
                     rejected_sections.append(key)
                     continue
+            if key == "visual_task_profile" and requires_complete_image_set:
+                # A real image may not inherit a locally guessed semantic
+                # profile merely because a remote response supplied the small
+                # rendering-intent sub-object. The remote Brain owns semantic
+                # subject/evidence judgement; the fallback profile only binds
+                # non-creative job identifiers and compatibility defaults.
+                if not _has_complete_remote_visual_task_profile(remote_section):
+                    rejected_sections.append(key)
+                    continue
+            if key == "capability_activation_intent" and requires_complete_image_set:
+                if not _has_complete_remote_capability_activation_intent(remote_section):
+                    rejected_sections.append(key)
+                    continue
             if isinstance(remote_section, dict):
-                candidate = _merge_dict(payload.get(key, {}), remote_section)
+                candidate = (
+                    _merge_complete_remote_visual_task_profile(payload.get(key, {}), remote_section)
+                    if key == "visual_task_profile" and requires_complete_image_set
+                    else _merge_complete_remote_capability_activation_intent(payload.get(key, {}), remote_section)
+                    if key == "capability_activation_intent" and requires_complete_image_set
+                    else _merge_dict(payload.get(key, {}), remote_section)
+                )
                 # A remote plan may be valid JSON while still violating the
                 # concrete output contract (for example, declaring one image
                 # but returning three directions).  Do not truncate it at a
@@ -290,8 +309,20 @@ class V3LLMBrainAdapter:
                 **dict(payload.get("audit") or {}),
                 "remote_rendering_intent_received": True,
             }
-        elif requires_complete_image_set:
+        if _has_complete_remote_visual_task_profile(data.get("visual_task_profile")):
+            payload["audit"] = {
+                **dict(payload.get("audit") or {}),
+                "remote_visual_task_profile_received": True,
+            }
+        elif requires_complete_image_set and "visual_task_profile" not in rejected_sections:
             rejected_sections.append("visual_task_profile.rendering_intent")
+        if _has_complete_remote_capability_activation_intent(data.get("capability_activation_intent")):
+            payload["audit"] = {
+                **dict(payload.get("audit") or {}),
+                "remote_capability_activation_intent_received": True,
+            }
+        elif requires_complete_image_set and "capability_activation_intent" not in rejected_sections:
+            rejected_sections.append("capability_activation_intent")
         # A normal planning response may include an early draft of renderer
         # wording for human inspection, but only the later finalizer response
         # is allowed to become a Provider instruction.
@@ -620,6 +651,150 @@ def _has_remote_rendering_intent(candidate: Any) -> bool:
         and str(intent.get("stylization_scope") or "") in {"whole_image", "object_surface", "none", "ambiguous"}
         and str(intent.get("decision_owner") or "") == "remote_brain"
     )
+
+
+def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
+    """Accept only a complete remote semantic profile for a real-image job.
+
+    This is a contract-shape gate, not a local subject classifier.  It never
+    derives a person, age, product, style, or renderer phrase from user text.
+    It merely refuses to let a partial remote answer inherit those semantic
+    decisions from the deterministic compatibility fallback.
+    """
+
+    if not _has_remote_rendering_intent(candidate) or not isinstance(candidate, dict):
+        return False
+    required_profile_fields = {
+        "subject_entities",
+        "visual_intent_tags",
+        "unknown_requirements",
+        "confidence",
+        "evidence",
+    }
+    if not required_profile_fields.issubset(candidate):
+        return False
+    entities = candidate.get("subject_entities")
+    evidence = candidate.get("evidence")
+    tags = candidate.get("visual_intent_tags")
+    unknowns = candidate.get("unknown_requirements")
+    confidence = candidate.get("confidence")
+    if not all(isinstance(value, list) for value in (entities, evidence, tags, unknowns)):
+        return False
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
+        return False
+    entity_fields = {
+        "entity_id",
+        "entity_type",
+        "role",
+        "source_asset_ids",
+        "visible_in_target",
+        "preservation_level",
+        "confidence",
+        "attributes",
+    }
+    evidence_fields = {"evidence_id", "evidence_type", "source", "value", "confidence", "metadata"}
+    if any(
+        not isinstance(entity, dict)
+        or not entity_fields.issubset(entity)
+        or not isinstance(entity.get("source_asset_ids"), list)
+        or not isinstance(entity.get("visible_in_target"), bool)
+        or not isinstance(entity.get("attributes"), dict)
+        or not isinstance(entity.get("confidence"), (int, float))
+        or isinstance(entity.get("confidence"), bool)
+        or not 0.0 <= entity["confidence"] <= 1.0
+        for entity in entities
+    ):
+        return False
+    if any(
+        not isinstance(item, dict)
+        or not evidence_fields.issubset(item)
+        or not isinstance(item.get("metadata"), dict)
+        or not isinstance(item.get("confidence"), (int, float))
+        or isinstance(item.get("confidence"), bool)
+        or not 0.0 <= item["confidence"] <= 1.0
+        for item in evidence
+    ):
+        return False
+    return all(isinstance(item, str) and item.strip() for item in [*tags, *unknowns])
+
+
+def _merge_complete_remote_visual_task_profile(base: Any, remote: dict[str, Any]) -> dict[str, Any]:
+    """Bind structural IDs locally while preserving every remote semantic choice.
+
+    The generic compatibility merger intentionally omits empty values. That is
+    unsafe for a complete remote profile: an explicit empty `subject_entities`
+    or `evidence` list is a deliberate Brain decision, not an absent patch.
+    """
+
+    merged = _merge_dict(base if isinstance(base, dict) else {}, remote)
+    for key in (
+        "rendering_intent",
+        "subject_entities",
+        "visual_intent_tags",
+        "unknown_requirements",
+        "confidence",
+        "evidence",
+    ):
+        merged[key] = remote[key]
+    return merged
+
+
+def _has_complete_remote_capability_activation_intent(candidate: Any) -> bool:
+    """Validate a Brain-owned capability proposal without interpreting content."""
+
+    if not isinstance(candidate, dict):
+        return False
+    required_fields = {"requested_capabilities", "rejected_capabilities", "unresolved_signals", "confidence"}
+    if not required_fields.issubset(candidate):
+        return False
+    requested = candidate.get("requested_capabilities")
+    rejected = candidate.get("rejected_capabilities")
+    unresolved = candidate.get("unresolved_signals")
+    confidence = candidate.get("confidence")
+    if not all(isinstance(value, list) for value in (requested, rejected, unresolved)):
+        return False
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
+        return False
+    requested_fields = {
+        "capability_id",
+        "activation_mode",
+        "reason_codes",
+        "evidence_ids",
+        "requested_profile",
+        "confidence",
+    }
+    rejected_fields = {"capability_id", "reason_code", "evidence_ids", "confidence"}
+    if any(
+        not isinstance(item, dict)
+        or not requested_fields.issubset(item)
+        or not isinstance(item.get("reason_codes"), list)
+        or not isinstance(item.get("evidence_ids"), list)
+        or not isinstance(item.get("confidence"), (int, float))
+        or isinstance(item.get("confidence"), bool)
+        or not 0.0 <= item["confidence"] <= 1.0
+        for item in requested
+    ):
+        return False
+    if any(
+        not isinstance(item, dict)
+        or not rejected_fields.issubset(item)
+        or not isinstance(item.get("evidence_ids"), list)
+        or not isinstance(item.get("confidence"), (int, float))
+        or isinstance(item.get("confidence"), bool)
+        or not 0.0 <= item["confidence"] <= 1.0
+        for item in rejected
+    ):
+        return False
+    return all(isinstance(item, str) and item.strip() for item in unresolved)
+
+
+def _merge_complete_remote_capability_activation_intent(base: Any, remote: dict[str, Any]) -> dict[str, Any]:
+    """Keep local binding IDs while honoring empty remote capability decisions."""
+
+    merged = _merge_dict(base if isinstance(base, dict) else {}, remote)
+    for key in ("requested_capabilities", "rejected_capabilities", "unresolved_signals", "confidence"):
+        merged[key] = remote[key]
+    return merged
 
 
 def _merge_validated_section(

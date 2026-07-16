@@ -1239,7 +1239,38 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                         "rendering_mode": "photoreal",
                         "stylization_scope": "none",
                         "decision_owner": "remote_brain",
-                    }
+                    },
+                    "subject_entities": [
+                        {
+                            "entity_id": "remote_subject_1",
+                            "entity_type": "person",
+                            "role": "primary_subject",
+                            "source_asset_ids": [],
+                            "visible_in_target": True,
+                            "preservation_level": "none",
+                            "confidence": 0.95,
+                            "attributes": {},
+                        }
+                    ],
+                    "visual_intent_tags": ["photographic_portrait"],
+                    "unknown_requirements": [],
+                    "confidence": 0.95,
+                    "evidence": [
+                        {
+                            "evidence_id": "remote_visible_person",
+                            "evidence_type": "visible_person",
+                            "source": "remote_semantic_interpretation",
+                            "value": True,
+                            "confidence": 0.95,
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "capability_activation_intent": {
+                    "requested_capabilities": [],
+                    "rejected_capabilities": [],
+                    "unresolved_signals": [],
+                    "confidence": 0.95,
                 },
             }
 
@@ -1349,7 +1380,38 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                         "rendering_mode": "photoreal",
                         "stylization_scope": "none",
                         "decision_owner": "remote_brain",
-                    }
+                    },
+                    "subject_entities": [
+                        {
+                            "entity_id": "remote_subject_1",
+                            "entity_type": "person",
+                            "role": "primary_subject",
+                            "source_asset_ids": [],
+                            "visible_in_target": True,
+                            "preservation_level": "none",
+                            "confidence": 0.95,
+                            "attributes": {},
+                        }
+                    ],
+                    "visual_intent_tags": ["photographic_portrait"],
+                    "unknown_requirements": [],
+                    "confidence": 0.95,
+                    "evidence": [
+                        {
+                            "evidence_id": "remote_visible_person",
+                            "evidence_type": "visible_person",
+                            "source": "remote_semantic_interpretation",
+                            "value": True,
+                            "confidence": 0.95,
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "capability_activation_intent": {
+                    "requested_capabilities": [],
+                    "rejected_capabilities": [],
+                    "unresolved_signals": [],
+                    "confidence": 0.95,
                 },
             }
 

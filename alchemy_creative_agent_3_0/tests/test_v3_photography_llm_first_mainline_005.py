@@ -98,7 +98,7 @@ def test_photography_blocks_when_remote_brain_is_unavailable_or_role_count_is_in
     assert invalid["outcome_class"] == "remote_contract_invalid"
     assert invalid["remote_contract_rejected_sections"] == [
         "image_set_plan",
-        "visual_task_profile.rendering_intent",
+        "visual_task_profile",
         "canonical_provider_prompts",
     ]
 

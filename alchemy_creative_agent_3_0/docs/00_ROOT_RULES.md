@@ -4,7 +4,10 @@
 >
 > **Current creative-ownership direction (Docs134–136):** a new V3 image operation has exactly one renderer-facing creative prompt: the remote Central Brain’s approved canonical prompt. Active shared quality capability contracts are typed, frozen evidence supplied to that Brain sign-off; historical keyword rules, `prompt_additions`, negative lists, static recipes and retry patches may protect/read old records only and must never become new Provider or Local MCP language.
 
-> **Current Human Realism sign-off direction (Docs137-139):** when the frozen plan
+> **Current Human Realism semantic and sign-off direction (Docs137-140):** a new
+> real-image run must first receive a complete semantic task profile from the
+> remote Brain; local compatibility logic cannot silently fill a missing
+> subject/evidence decision. When the frozen plan
 > actively requires Human Realism, the remote Brain must explicitly confirm a
 > whole-image semantic preflight before its canonical prompt can be
 > materialized. A second independent remote-Brain re-signing pass then checks

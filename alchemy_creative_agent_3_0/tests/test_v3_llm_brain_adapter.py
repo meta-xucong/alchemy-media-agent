@@ -126,10 +126,17 @@ def test_required_remote_photography_contract_uses_compact_schema() -> None:
 
     payload = json.loads(build_remote_payload(request))
 
-    assert set(payload["return_schema"]) == {"image_set_plan", "prompt_guidance", "visual_task_profile"}
+    assert set(payload["return_schema"]) == {
+        "capability_activation_intent",
+        "image_set_plan",
+        "prompt_guidance",
+        "visual_task_profile",
+    }
     assert payload["return_schema"]["image_set_plan"]["image_count"] == "integer exactly equal to requested_image_count"
     assert payload["return_schema"]["visual_task_profile"]["rendering_intent"]["decision_owner"] == "remote_brain"
-    assert "capability_activation_intent" not in payload["return_schema"]
+    assert {"subject_entities", "visual_intent_tags", "unknown_requirements", "confidence", "evidence"} <= set(
+        payload["return_schema"]["visual_task_profile"]
+    )
     assert "project_memory_digest" not in payload["return_schema"]
     assert "prompt_review" not in payload["return_schema"]
     assert "user_visible_summary" not in payload["return_schema"]
@@ -205,7 +212,12 @@ def test_real_general_image_contract_is_compact_and_keeps_declared_garment_truth
     payload = json.loads(build_remote_payload(request))
     serialized = json.dumps(payload, ensure_ascii=False)
 
-    assert set(payload["return_schema"]) == {"image_set_plan", "prompt_guidance", "visual_task_profile"}
+    assert set(payload["return_schema"]) == {
+        "capability_activation_intent",
+        "image_set_plan",
+        "prompt_guidance",
+        "visual_task_profile",
+    }
     assert payload["product_profile"]["apparel_construction"]["layer_order"] == (
         "cotton lining beneath a light tulle overlay"
     )
@@ -610,7 +622,8 @@ def test_remote_brain_rejects_internally_inconsistent_image_set_plan(monkeypatch
     assert result.audit["remote_contract_partial_fallback"] is True
     assert result.audit["remote_contract_rejected_sections"] == [
         "image_set_plan",
-        "visual_task_profile.rendering_intent",
+        "visual_task_profile",
+        "capability_activation_intent",
     ]
 
 

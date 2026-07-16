@@ -10,7 +10,9 @@
 > before a new enforced Human Realism operation may materialize. Doc138 adds
 > a Brain-owned natural-presence priority. Doc139 requires an independent
 > remote-Brain re-signing pass for that active contract; it can only retain or
-> replace a complete Brain-authored canonical prompt. None of these documents
+> replace a complete Brain-authored canonical prompt. Doc140 requires a
+> complete remote semantic task profile before activation, so a local fallback
+> cannot omit a visible person from a new real-image plan. None of these documents
 > creates a child or beauty prompt recipe.
 
 ## Status

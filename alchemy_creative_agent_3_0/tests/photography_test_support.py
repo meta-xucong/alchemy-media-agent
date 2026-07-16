@@ -47,12 +47,16 @@ class PhotographyRemoteBrainTestProvider:
             "optimized_direction": "Use each remote Photography image intent as the complete creative direction.",
             "visual_direction_addons": ["Use the remote Photography image intent."],
         }
+        # The fixture mirrors a complete remote semantic profile.  A
+        # rendering-intent-only response is intentionally invalid for a real
+        # Photography image, because it could inherit a local subject guess.
         payload["visual_task_profile"] = {
+            **payload["visual_task_profile"],
             "rendering_intent": {
                 "rendering_mode": "photoreal",
                 "stylization_scope": "none",
                 "decision_owner": "remote_brain",
-            }
+            },
         }
         canonical_context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
         preflight = canonical_context.get("final_prompt_semantic_preflight") if isinstance(canonical_context, dict) else {}
