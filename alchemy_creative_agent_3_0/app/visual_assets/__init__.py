@@ -5,6 +5,7 @@ Mode binding is created. Standard Mode does not import or consult it.
 """
 
 from .binding import bind_professional_mode, select_reference_views
+from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
 from .contracts import (
     AnchorView,
     FaceIdentityModule,
@@ -23,6 +24,9 @@ __all__ = [
     "PeopleAsset",
     "ProfessionalModeBinding",
     "RootSourceProvenance",
+    "InMemoryVisualAssetCatalog",
+    "PersistentVisualAssetCatalog",
+    "PeopleAssetRevision",
     "bind_professional_mode",
     "select_reference_views",
 ]

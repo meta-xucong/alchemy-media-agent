@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from alchemy_creative_agent_3_0.app.visual_assets.catalog import PersistentVisualAssetCatalog
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     FaceIdentityModule,
-    IdentityAnchorPackVersion,
     PeopleAsset,
-    RootSourceProvenance,
 )
 
 
