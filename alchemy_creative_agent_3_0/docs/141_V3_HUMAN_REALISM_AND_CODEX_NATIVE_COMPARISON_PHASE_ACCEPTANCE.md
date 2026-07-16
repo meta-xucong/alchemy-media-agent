@@ -72,3 +72,11 @@ Before asserting an aesthetic improvement, test at least three distinct
 real-person contexts and compare the frozen remote prompt, active shared
 capabilities, real review verdict and final selected result. A single blue
 dress remains a regression fixture, never the basis for a new shared branch.
+
+## 6. Successor authority
+
+Doc142 is the implementation authority for the next shared Human Realism
+quality phase: a more accountable existing Brain re-signing receipt, shared
+pixel-feedback closure, and retirement of executable local retry phrasing.
+This document remains the accepted planning/parity baseline; it does not claim
+that the later quality phase is already implemented or pixel-certified.
