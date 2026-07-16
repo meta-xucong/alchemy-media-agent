@@ -181,8 +181,7 @@ class AnchorPackPreparationService:
         winner, winner_review = max(
             passing_fronts,
             key=lambda item: (
-                item[1].identity_scores.same_face_score,
-                item[1].identity_scores.visual_quality_score,
+                *item[1].identity_scores.selection_key(),
                 item[0].candidate_id,
             ),
         )

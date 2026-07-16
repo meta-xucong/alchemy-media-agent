@@ -70,13 +70,23 @@ class FakeReviewer:
 
     def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
         self.reviews.append(candidate)
-        score = {1: 0.80, 2: 0.96, 3: 0.88}.get(candidate.candidate_index, 0.90)
+        # Candidate 3 is the most recognizable person even though it has a
+        # small tilt. Candidate 2 is polished but intentionally genericized.
+        score = {1: 0.91, 2: 0.89, 3: 0.97}.get(candidate.candidate_index, 0.88)
+        distinctive = {1: 0.93, 2: 0.68, 3: 0.94}.get(candidate.candidate_index, 0.86)
+        realism = {1: 0.88, 2: 0.52, 3: 0.86}.get(candidate.candidate_index, 0.84)
+        pose = {1: 1.00, 2: 1.00, 3: 0.78}.get(candidate.candidate_index, 0.90)
+        overperfection = {1: 0.04, 2: 0.40, 3: 0.03}.get(candidate.candidate_index, 0.05)
         if candidate.view_role in self.failing_roles:
             return AnchorReviewDecision(
                 status="fail",
                 identity_scores=IdentityScoreSummary(
                     same_face_score=0.40,
                     visual_quality_score=0.90,
+                    distinctive_feature_score=0.40,
+                    human_realism_score=0.40,
+                    pose_compliance_score=pose,
+                    ai_overperfection_penalty=0.0,
                     evidence_codes=["same_face_failed"],
                 ),
                 issue_codes=["identity_gate_failed"],
@@ -85,8 +95,12 @@ class FakeReviewer:
             status="pass",
             identity_scores=IdentityScoreSummary(
                 same_face_score=score,
-                visual_quality_score=0.91,
-                evidence_codes=["same_face_passed"],
+                visual_quality_score=0.99 if candidate.candidate_index == 2 else 0.92,
+                distinctive_feature_score=distinctive,
+                human_realism_score=realism,
+                pose_compliance_score=pose,
+                ai_overperfection_penalty=overperfection,
+                evidence_codes=["same_face_passed", "distinctive_features_reviewed"],
             ),
         )
 
@@ -97,7 +111,7 @@ def test_m2_generates_three_front_candidates_then_two_supplementary_views() -> N
     result = AnchorPackPreparationService(generator=generator, reviewer=reviewer).prepare(_request())
 
     assert result.status == "review"
-    assert result.winner_candidate_id == "candidate_standard_front_2"
+    assert result.winner_candidate_id == "candidate_standard_front_3"
     assert [request.view_role for request in generator.requests] == [
         "standard_front",
         "standard_front",
@@ -116,7 +130,7 @@ def test_m2_supplementary_requests_reference_the_winning_front() -> None:
     AnchorPackPreparationService(generator=generator, reviewer=reviewer).prepare(_request())
 
     supplementary = generator.requests[3:]
-    assert all("output_standard_front_2" in request.reference_evidence_ids for request in supplementary)
+    assert all("output_standard_front_3" in request.reference_evidence_ids for request in supplementary)
     assert all(not hasattr(request, "prompt") for request in generator.requests)
 
 
@@ -169,6 +183,49 @@ def test_m2_requires_brain_plan_and_canonical_prompt_hash_before_generation() ->
             brain_plan_id="",
             canonical_prompt_hash="",
         )
+
+
+def test_m2_likeness_is_primary_over_polish_and_small_pose_defects() -> None:
+    reviewer = FakeReviewer()
+    candidate_scores = {
+        1: reviewer.review(
+            AnchorCandidateResult(
+                candidate_id="candidate_1",
+                view_id="view_1",
+                output_id="output_1",
+                view_role="standard_front",
+                candidate_index=1,
+                source_candidate_ids=["candidate_1"],
+                source_asset_ids=["asset_root_1"],
+            )
+        ).identity_scores,
+        2: reviewer.review(
+            AnchorCandidateResult(
+                candidate_id="candidate_2",
+                view_id="view_2",
+                output_id="output_2",
+                view_role="standard_front",
+                candidate_index=2,
+                source_candidate_ids=["candidate_2"],
+                source_asset_ids=["asset_root_1"],
+            )
+        ).identity_scores,
+        3: reviewer.review(
+            AnchorCandidateResult(
+                candidate_id="candidate_3",
+                view_id="view_3",
+                output_id="output_3",
+                view_role="standard_front",
+                candidate_index=3,
+                source_candidate_ids=["candidate_3"],
+                source_asset_ids=["asset_root_1"],
+            )
+        ).identity_scores,
+    }
+
+    assert max(candidate_scores, key=lambda index: candidate_scores[index].selection_key()) == 3
+    assert candidate_scores[2].visual_quality_score > candidate_scores[3].visual_quality_score
+    assert candidate_scores[3].pose_compliance_score < candidate_scores[1].pose_compliance_score
 
 
 def test_m2_persists_review_and_activation_history_when_catalog_is_injected(tmp_path) -> None:

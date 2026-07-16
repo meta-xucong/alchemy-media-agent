@@ -44,8 +44,22 @@ class RootSourceProvenance(_StrictVisualAssetModel):
 
 
 class IdentityScoreSummary(_StrictVisualAssetModel):
+    """Review summary for selecting an identity anchor candidate.
+
+    ``same_face_score`` is the first-principles likeness score.  It must judge
+    the person's distinctive feature relationships rather than generic beauty,
+    symmetry, or polish.  The remaining fields are supporting signals only:
+    human realism prevents an AI-averaged face from winning a close decision,
+    while pose/framing is intentionally last because a small head tilt does
+    not materially reduce future identity continuity.
+    """
+
     same_face_score: float = Field(ge=0.0, le=1.0)
     visual_quality_score: float = Field(ge=0.0, le=1.0)
+    distinctive_feature_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    human_realism_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    pose_compliance_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    ai_overperfection_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
     evidence_codes: list[str] = Field(default_factory=list)
 
     @field_validator("evidence_codes")
@@ -54,6 +68,41 @@ class IdentityScoreSummary(_StrictVisualAssetModel):
         if len(value) != len(set(value)):
             raise ValueError("identity evidence codes must be unique")
         return value
+
+    @property
+    def effective_distinctive_feature_score(self) -> float:
+        """Use legacy same-face evidence when an old record lacks this field."""
+
+        return (
+            self.same_face_score
+            if self.distinctive_feature_score is None
+            else self.distinctive_feature_score
+        )
+
+    @property
+    def effective_human_realism_score(self) -> float:
+        """Keep old persisted records readable without inventing a new signal."""
+
+        return self.same_face_score if self.human_realism_score is None else self.human_realism_score
+
+    def selection_key(self) -> tuple[float, float, float, float, float, float]:
+        """Return a likeness-first, deterministic candidate ordering key.
+
+        The tuple is deliberately lexicographic: no amount of generic polish
+        or perfect framing may outrank a candidate that is more recognizably
+        the same person.  Human realism and an anti-overperfection penalty
+        resolve close likeness decisions; pose is the final, lowest-priority
+        signal so ordinary head tilt remains usable.
+        """
+
+        return (
+            self.same_face_score,
+            self.effective_distinctive_feature_score,
+            self.effective_human_realism_score,
+            1.0 - self.ai_overperfection_penalty,
+            self.visual_quality_score,
+            self.pose_compliance_score,
+        )
 
 
 class AnchorView(_StrictVisualAssetModel):
