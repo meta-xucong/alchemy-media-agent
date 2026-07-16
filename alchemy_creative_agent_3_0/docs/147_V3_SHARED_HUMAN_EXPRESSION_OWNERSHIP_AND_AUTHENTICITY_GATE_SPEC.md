@@ -166,3 +166,34 @@ orthogonal semantic ownership concern, not as a collection of facial details.
 The Remote Brain keeps creative judgement and the vision reviewer keeps pixel
 verification; deterministic code only freezes, validates, transports and
 audits those decisions.
+
+## Controlled implementation evidence
+
+Fresh enforced jobs now freeze the v4 contract through planning, canonical
+finalization, the independent Human Realism re-sign, the canonical Provider
+materializer and the shared pixel-review contract. The re-signer cannot be
+replaced with local wording, and a hand/skin detail does not receive an
+irrelevant expression attestation.
+
+The controlled authorized blue-dress comparison was run through the General
+Local MCP relay using the exact signed prompt and admitted reference contract.
+The first v4 result proved the chain but still showed a mild familiar
+commercial smile. The follow-up clarified the existing universal rule that an
+unspecified expression is intentional latitude rather than a request to
+manufacture positive affect. The same remote Brain then returned a complete
+replacement direction with a calm, curious, attention-owned expression, and
+the second conversation-only image visibly reduced the centered display-smile
+effect without adding a child, garment, template or Provider-specific rule.
+
+This is functional creative acceptance, not a claim that every renderer will
+never produce a polished face. Remaining skin-material headroom stays a
+separate cross-scene quality question; it must not be solved with a narrow
+expression list or a local prompt patch.
+
+Regression evidence for implementation: focused Human Realism/Brain/review
+tests (`91 passed` before the final semantic clarification, with the final
+Doc147/Brain-ownership focus `14 passed`), cross-template/runtime-truth and
+canonical relay coverage (`124 passed`), complete V3 regression (`788 passed`;
+two pre-existing FastAPI deprecation warnings), and Local MCP canonical
+prompt/reference relay (`33 passed`). Static compile, browser syntax and diff
+checks passed.
