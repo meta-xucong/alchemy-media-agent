@@ -227,6 +227,8 @@ def test_doc147_remote_brain_rewrites_the_whole_prompt_without_a_local_expressio
     ] == "situation_owned_unless_explicit_user_direction"
     assert "expression_ownership_requirement" in SYSTEM_PROMPT
     assert "fixed alternate-expression catalogue" in SYSTEM_PROMPT
+    assert "absent expression as intentional creative latitude" in SYSTEM_PROMPT
+    assert "setting pleasantness or commercial polish alone" in SYSTEM_PROMPT
     assert "prompt_additions" not in json.dumps(payload, ensure_ascii=False)
     assert result.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"].startswith(
         "A real-camera photograph of a person pausing to listen"

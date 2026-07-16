@@ -60,6 +60,10 @@ Its meaning is deliberately narrow:
 - When the user has not specified one, the Remote Brain must choose an
   expression/reaction that belongs to the person, action, attention and mood
   it authors for the complete image.
+- An absent expression is intentional creative latitude, not a blank that
+  must be filled with positive affect. Pleasantness of the setting or desired
+  visual polish is not by itself a reason to invent a display smile, nor may
+  the Brain invent a decorative action merely to justify one.
 - It does not prohibit a smile, prescribe a substitute expression, inspect
   facial landmarks, or create an age-, culture-, apparel- or template-specific
   default.
@@ -78,6 +82,9 @@ The Brain remains the sole owner of final renderer language.
 1. In planning and canonical finalization, it reconciles the frozen expression
    ownership requirement with user intent, reference truth, setting, action,
    photographic mood and other resolved constraints.
+   When expression is unspecified, it keeps the person ordinarily present
+   unless an independently useful moment gives the affect a reason; it does
+   not manufacture a pleasing expression to improve commercial presentation.
 2. In `provider_prompt_human_naturalness_resign`, it retains a candidate only
    when its expression is user-authorized or visibly situation-owned. Otherwise
    it returns `rewritten` and authors a complete replacement prompt.
