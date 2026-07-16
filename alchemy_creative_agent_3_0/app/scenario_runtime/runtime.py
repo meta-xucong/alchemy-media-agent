@@ -526,13 +526,60 @@ class ScenarioRuntime:
                 ),
                 brain_result,
             ) from exc
+        final_stage = "provider_prompt_finalize"
+        if "human_realism" in plan.dependency_order:
+            # The second request receives only a Brain-authored complete
+            # candidate and frozen semantic facts.  It is not a local prompt
+            # patch, and reviewer issue codes stay with the first Brain
+            # revision pass rather than becoming renderer prose.
+            resigning_context = self._human_naturalness_resigning_context(canonical_prompt_context)
+            resigning_request = BrainRunRequest(
+                user_input=request.user_input,
+                stage="provider_prompt_human_naturalness_resign",
+                scenario_id=resolution.manifest.scenario_id,
+                template_id=self._template_id(request, resolution),
+                project_id=str(request.metadata.get("project_id") or "") or None,
+                requested_image_count=expected,
+                requested_image_size=ledger.provider_projection.get("requested_image_size"),
+                reasoning_depth="balanced",
+                metadata={
+                    "canonical_prompt_context": resigning_context,
+                    "candidate_canonical_provider_prompts": [item.model_dump(mode="json") for item in prompts],
+                },
+                template_capability_policy=policy,
+            )
+            try:
+                prompts, resigning_audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(resigning_request)
+            except Exception as exc:
+                raise self._remote_creative_brain_block(
+                    "human_realism_natural_presence_resigning_unavailable",
+                    brain_result,
+                ) from exc
+            audit = {
+                **audit,
+                **resigning_audit,
+                "human_realism_natural_presence_resigning_required": True,
+                "human_realism_natural_presence_resigned": True,
+                "human_realism_natural_presence_resigning_provider": resigning_audit.get(
+                    "canonical_provider_prompt_provider"
+                ),
+                "human_realism_natural_presence_resigning_model": resigning_audit.get(
+                    "canonical_provider_prompt_model"
+                ),
+            }
+            final_stage = "provider_prompt_human_naturalness_resign"
         return brain_result.model_copy(
             update={
                 "canonical_provider_prompts": prompts,
                 "audit": {
                     **dict(brain_result.audit or {}),
                     **audit,
-                    "canonical_provider_prompt_stage": "provider_prompt_finalize",
+                    "canonical_provider_prompt_stage": final_stage,
+                    "canonical_provider_prompt_stages": (
+                        ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+                        if final_stage == "provider_prompt_human_naturalness_resign"
+                        else ["provider_prompt_finalize"]
+                    ),
                     "canonical_provider_prompt_binding": {
                         "activation_plan_id": plan.plan_id,
                         "execution_envelope_id": envelope.envelope_id,
@@ -541,6 +588,20 @@ class ScenarioRuntime:
                 },
             }
         )
+
+    @staticmethod
+    def _human_naturalness_resigning_context(canonical_prompt_context: dict[str, Any]) -> dict[str, Any]:
+        """Remove review codes before an independent human-presence re-sign.
+
+        The first finalizer owns any normalized pixel-evidence revision.  The
+        independent pass receives that completed candidate plus the frozen
+        semantics, not a reviewer checklist that could turn into another
+        brittle prompt-composition path.
+        """
+
+        context = dict(canonical_prompt_context)
+        context.pop("retry_evidence", None)
+        return context
 
     @staticmethod
     def _active_semantic_capability_contracts(
@@ -701,6 +762,17 @@ class ScenarioRuntime:
         ):
             raise self._remote_creative_brain_block(
                 "human_realism_semantic_preflight_missing",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
+        if (
+            "human_realism" in plan.dependency_order
+            and not bool(brain_result.audit.get("frozen_execution_reuse"))
+            and not bool(brain_result.audit.get("human_realism_natural_presence_resigned"))
+        ):
+            raise self._remote_creative_brain_block(
+                "human_realism_natural_presence_resigning_missing",
                 brain_result,
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),

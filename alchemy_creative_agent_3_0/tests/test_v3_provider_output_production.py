@@ -1199,7 +1199,7 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
             return True
 
         def run(self, request):  # noqa: ANN001
-            if request.stage == "provider_prompt_finalize":
+            if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
                 canonical_context = request.metadata.get("canonical_prompt_context")
                 preflight = (
                     canonical_context.get("final_prompt_semantic_preflight")
@@ -1309,7 +1309,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
             return True
 
         def run(self, request):  # noqa: ANN001
-            if request.stage == "provider_prompt_finalize":
+            if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
                 canonical_context = request.metadata.get("canonical_prompt_context")
                 preflight = (
                     canonical_context.get("final_prompt_semantic_preflight")

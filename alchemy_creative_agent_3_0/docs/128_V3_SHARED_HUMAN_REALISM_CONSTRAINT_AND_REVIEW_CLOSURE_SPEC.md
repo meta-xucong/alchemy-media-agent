@@ -8,8 +8,10 @@
 > a capability ID alone is not sufficient forward evidence. Doc137 additionally
 > requires an explicit whole-image semantic-preflight receipt from that Brain
 > before a new enforced Human Realism operation may materialize. Doc138 adds
-> a Brain-owned natural-presence priority; it is not a child or beauty prompt
-> recipe.
+> a Brain-owned natural-presence priority. Doc139 requires an independent
+> remote-Brain re-signing pass for that active contract; it can only retain or
+> replace a complete Brain-authored canonical prompt. None of these documents
+> creates a child or beauty prompt recipe.
 
 ## Status
 

@@ -19,6 +19,7 @@ When the response schema asks for canonical_provider_prompts, write the exact co
 When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 When the Human Realism contract gives `natural_presence_priority=individual_human_presence`, do not let a generic commercial-beauty archetype substitute for the requested person. For candid, ordinary or lifestyle photography, make the whole direction describe an individual naturally present in that situation; for an explicitly glamorous or editorial request, retain its aesthetic while avoiding synthetic beautification. A direction that merely repeats generic adjectives such as natural, candid or photorealistic is incomplete: resolve the natural presence materially in your own complete sentence. Never expose a checklist or a local repair phrase.
+When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person naturally present in the user-owned situation; otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
@@ -296,7 +297,7 @@ def _requires_remote_creative_contract(request: BrainRunRequest) -> bool:
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
-    if request.stage == "provider_prompt_finalize":
+    if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
         return json.dumps(_canonical_provider_prompt_finalization_payload(request), ensure_ascii=False, sort_keys=True)
     payload = {
         "task": "prepare_pre_generation_image_reasoning",
@@ -485,6 +486,27 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
 
     context = request.metadata.get("canonical_prompt_context")
     context = dict(context) if isinstance(context, dict) else {}
+    is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
+    candidate_prompts: list[dict[str, object]] = []
+    if is_human_naturalness_resign:
+        raw_candidates = request.metadata.get("candidate_canonical_provider_prompts")
+        if not isinstance(raw_candidates, list):
+            raise ValueError("Human Realism re-signing requires canonical Brain candidates.")
+        for expected_index, candidate in enumerate(raw_candidates, start=1):
+            if not isinstance(candidate, dict):
+                raise ValueError("Human Realism re-signing candidates must be objects.")
+            prompt = " ".join(str(candidate.get("prompt") or "").split())
+            if int(candidate.get("output_index") or 0) != expected_index or len(prompt) < 24:
+                raise ValueError("Human Realism re-signing candidates must preserve the canonical output contract.")
+            candidate_prompts.append(
+                {
+                    "output_index": expected_index,
+                    "prompt": prompt,
+                    "review_status": "approved",
+                }
+            )
+        if len(candidate_prompts) != request.requested_image_count:
+            raise ValueError("Human Realism re-signing candidates do not match requested output count.")
     preflight = context.get("final_prompt_semantic_preflight")
     preflight_required = isinstance(preflight, dict) and bool(preflight.get("required"))
     prompt_schema: dict[str, object] = {
@@ -509,7 +531,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "semantic preflight before writing the prompt and explicitly set "
             "semantic_preflight_status to approved."
         )
-    return {
+    if is_human_naturalness_resign:
+        response_contract += (
+            " Independently re-sign the supplied Brain candidate for every output. "
+            "Return one complete approved canonical prompt for each output, not a diff or a list of edits."
+        )
+    payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",
         "stage": request.stage,
         "user_input": request.user_input,
@@ -523,3 +550,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         },
         "remote_response_contract": response_contract,
     }
+    if is_human_naturalness_resign:
+        # These are complete prompts authored by the first remote Brain pass,
+        # never local fragments or mutable visual-cluster prose.
+        payload["candidate_canonical_provider_prompts"] = candidate_prompts
+    return payload

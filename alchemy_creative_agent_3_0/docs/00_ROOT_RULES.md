@@ -4,13 +4,14 @@
 >
 > **Current creative-ownership direction (Docs134–136):** a new V3 image operation has exactly one renderer-facing creative prompt: the remote Central Brain’s approved canonical prompt. Active shared quality capability contracts are typed, frozen evidence supplied to that Brain sign-off; historical keyword rules, `prompt_additions`, negative lists, static recipes and retry patches may protect/read old records only and must never become new Provider or Local MCP language.
 
-> **Current Human Realism sign-off direction (Docs137-138):** when the frozen plan
+> **Current Human Realism sign-off direction (Docs137-139):** when the frozen plan
 > actively requires Human Realism, the remote Brain must explicitly confirm a
-> whole-image semantic preflight before its single canonical prompt can be
-> materialized. The typed contract prioritizes individual human presence over a
-> generic beauty archetype while preserving user-owned aesthetics. This receipt
-> never authorizes local prompt wording or substitutes for pixel-quality
-> certification.
+> whole-image semantic preflight before its canonical prompt can be
+> materialized. A second independent remote-Brain re-signing pass then checks
+> that the complete candidate describes an individual naturally present rather
+> than a generic beauty archetype, while preserving user-owned aesthetics. Both
+> passes may only return a whole canonical prompt; neither authorizes local
+> prompt wording or substitutes for pixel-quality certification.
 
 This document defines the non-negotiable development rules for Alchemy Creative Agent 3.0.
 

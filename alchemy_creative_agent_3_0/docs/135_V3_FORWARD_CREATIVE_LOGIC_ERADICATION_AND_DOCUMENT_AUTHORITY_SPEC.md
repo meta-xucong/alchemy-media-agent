@@ -1,7 +1,7 @@
 # 135 V3 Forward Creative-Logic Eradication And Document Authority Spec
 
 Status: **active, cross-cutting architecture authority.** This document and
-Docs134/136/137/138 define how V3 distinguishes legitimate deterministic contracts from the
+Docs134/136/137/138/139 define how V3 distinguishes legitimate deterministic contracts from the
 rejected “structured word-stack” creative route. Where an earlier document
 describes local prompt fragments, keyword classifications, static image recipes
 or retry prose as renderer input, that description is historical only.
@@ -16,7 +16,9 @@ by the remote Central Brain.
 ```text
 protected user intent + admitted reference truth + factual/policy constraints
 -> remote Brain reasoning
--> remote Brain final validation and one canonical prompt per frozen output
+-> remote Brain final validation and, when shared Human Realism is active, an
+   independent remote-Brain re-signing of that complete candidate
+-> one canonical prompt per frozen output
 -> Provider or Local MCP relays that exact normalized string and hash
 ```
 

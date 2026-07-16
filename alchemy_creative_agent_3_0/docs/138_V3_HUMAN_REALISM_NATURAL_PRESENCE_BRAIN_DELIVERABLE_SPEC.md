@@ -27,6 +27,11 @@ not yet the quality target. The face still trends toward an overly even,
 generic child-fashion archetype, with skin and expression more polished than
 an ordinary real-camera moment.
 
+> **Current implementation note:** Doc139 turns this finding into a second,
+> independent remote-Brain re-signing pass for every active shared Human
+> Realism contract. It supersedes any interpretation that a Doc138 receipt by
+> itself proves the final canonical direction was substantively reconsidered.
+
 That observation does **not** justify a list of face, skin, hand, child or
 camera fragments. The failure is semantic: a finalizer can return an
 `approved` receipt while treating the request as a generic commercial beauty
