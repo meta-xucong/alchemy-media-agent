@@ -577,7 +577,8 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert chat_kwargs["temperature"] == 0
 
 
-def test_remote_brain_recovers_one_malformed_json_reply_without_local_repair(monkeypatch) -> None:
+@pytest.mark.parametrize("first_content", ['{"remote": ', ""])
+def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monkeypatch, first_content) -> None:
     """The same remote Brain may redo serialization once, never a local plan."""
 
     from app.config import settings
@@ -587,7 +588,7 @@ def test_remote_brain_recovers_one_malformed_json_reply_without_local_repair(mon
     class FakeCompletions:
         def create(self, **kwargs):  # noqa: ANN003
             calls.append(kwargs)
-            content = '{"remote": ' if len(calls) == 1 else '{"remote": true}'
+            content = first_content if len(calls) == 1 else '{"remote": true}'
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
     class FakeOpenAI:

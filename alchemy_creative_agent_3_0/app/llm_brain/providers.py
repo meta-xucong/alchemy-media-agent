@@ -19,7 +19,7 @@ class BrainProviderError(RuntimeError):
 
 
 class BrainInvalidJsonResponse(BrainProviderError):
-    """The remote Brain replied, but its serialized JSON was syntactically invalid."""
+    """The remote Brain did not provide a usable serialized JSON response."""
 
 
 class BrainSemanticPreflightMissing(BrainProviderError):
@@ -294,7 +294,7 @@ def _int_env(name: str, default: int) -> int:
 def _loads_json_object(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
-        raise BrainProviderError("remote brain returned empty output")
+        raise BrainInvalidJsonResponse("remote brain returned empty JSON output")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as first_error:

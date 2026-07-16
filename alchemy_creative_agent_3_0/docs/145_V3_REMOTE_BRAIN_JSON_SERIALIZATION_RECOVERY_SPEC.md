@@ -9,8 +9,8 @@ or image-Provider routing.
 ## Observed failure
 
 The controlled post-Doc144 blue-dress plan reached the configured remote
-Central Brain with its frozen V3 context, then the remote model returned
-syntactically malformed JSON. The local runtime correctly refused to guess,
+Central Brain with its frozen V3 context, then the remote model returned either
+empty or syntactically malformed JSON. The local runtime correctly refused to guess,
 repair, or turn that partial text into a plan. A simpler request could succeed,
 so this is a response-serialization reliability failure at the remote Brain
 transport boundary, not evidence that the V3 Human Realism capability was
@@ -25,7 +25,7 @@ frozen request + frozen evidence
   -> remote Brain attempt 1
   -> valid JSON decision
   OR
-  -> syntax-invalid JSON only
+  -> absent, syntax-invalid, or non-JSON response only
   -> one remote Brain serialization-recovery attempt on the same request
   -> valid JSON decision or fail closed
 ```
@@ -37,10 +37,10 @@ operation.
 
 ## Hard boundaries
 
-1. Recovery is permitted only for a syntactically invalid or non-JSON remote
-   answer before any accepted Brain result exists. Empty responses, HTTP/
-   network failures, content policy failures, valid-but-wrong contract shapes,
-   timeouts, and canonical-prompt validation failures remain fail-closed.
+1. Recovery is permitted only for an empty, syntactically invalid, or non-JSON
+   remote answer before any accepted Brain result exists. HTTP/network
+   failures, content policy failures, valid-but-wrong contract shapes, timeouts,
+   and canonical-prompt validation failures remain fail-closed.
 2. The local runtime must never repair commas, brackets, fields, directions,
    references, creative intent, or final renderer prompts.
 3. Both attempts use the same immutable `BrainRunRequest`; the recovery does
@@ -85,7 +85,7 @@ authoritative for Brain-owned final prompts and shared Human Realism approval.
 | Case | Required result |
 | --- | --- |
 | First answer valid JSON | One request; safe receipt says one attempt. |
-| First answer malformed, second valid | Exactly two remote calls with identical user payload; recovery system instruction only on call two; accepted result records the receipt. |
-| Both malformed | Fail closed after exactly two calls; no local fallback prompt or third call. |
+| First answer empty/malformed, second valid | Exactly two remote calls with identical user payload; recovery system instruction only on call two; accepted result records the receipt. |
+| Both answers empty/malformed | Fail closed after exactly two calls; no local fallback prompt or third call. |
 | Timeout / HTTP / policy / valid-but-invalid schema | No serialization recovery; existing failure classification remains authoritative. |
 | General, E-Commerce, Photography, Local MCP | Shared behavior only; specialist fail-closed gates and template isolation remain unchanged. |
