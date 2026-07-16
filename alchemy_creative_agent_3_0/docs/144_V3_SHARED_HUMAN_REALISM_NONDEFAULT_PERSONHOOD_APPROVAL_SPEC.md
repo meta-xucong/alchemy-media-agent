@@ -138,10 +138,10 @@ model response failed JSON parsing with an `Expecting ',' delimiter` error.
 No raw response, prompt, asset path, endpoint or credential was retained in
 the record.
 
-This is a remote JSON-contract stability defect under the complete frozen V3
-context. The safe mainline behaviour is to block: it must not guess missing
-syntax, regex-repair a remote creative response, locally rebuild its plan, or
-silently issue a second creative attempt. Upstream remediation should ensure
-that the configured DeepSeek-compatible JSON mode returns syntactically valid
-objects for the full planning payload (or select an equally authoritative
-remote Brain route that does). Once fixed, the unchanged Doc144 run may resume.
+Doc145 now supplies a narrower shared transport remedy: before any accepted
+Brain decision exists, the same frozen request may receive exactly one
+serialization-only re-answer from the same remote Brain. It is not a local
+syntax repair, a creative re-plan, or a renderer retry. The subsequent
+controlled run completed the unchanged Doc144 path; its acceptance evidence is
+recorded in Doc146. The remote route can still fail closed if the initial and
+recovery answers are both unusable.
