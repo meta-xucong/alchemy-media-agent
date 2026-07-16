@@ -21,6 +21,8 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import _compact_specialized_assets
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from services.alchemy_codex_local_adapter.contracts import CodexNativeImageGenError, NativeImageGenPlanRequest
 from services.alchemy_codex_local_adapter.facade import CodexNativeImageGenFacade
 from services.alchemy_codex_local_adapter.mcp_server import TOOL_SCHEMAS, dispatch
@@ -245,6 +247,34 @@ def test_local_mode_uses_the_same_generation_request_factory_as_web_provider(mon
     assert seen[0]["resolved_constraint_ledger"]
     assert seen[0]["require_real_images"] is True
     assert seen[0]["llm_brain"]["fallback_used"] is False
+
+
+@pytest.mark.parametrize("requested_size", ["1024x1024", "1024x1536", "1536x1024"])
+def test_general_relay_preserves_the_frozen_explicit_canvas_through_web_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    requested_size: str,
+) -> None:
+    """An MCP request must not silently fall back to General's historic 1:1 default."""
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    capturing: dict[str, Any] = {}
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+    )
+
+    class _CaptureRuntime:
+        def plan_job(self, payload: dict[str, Any]):
+            capturing.update(copy.deepcopy(payload))
+            return runtime.plan_job(payload)
+
+    result = CodexNativeImageGenPlanner(runtime_factory=_CaptureRuntime).prepare_native_imagegen_plan(
+        NativeImageGenPlanRequest.from_mcp_arguments(_arguments(requested_image_size=requested_size))
+    )
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert capturing["scenario_selection"]["parameters"]["requested_image_size"] == requested_size
+    assert result["outputs"][0]["rendering_contract"]["size"] == requested_size
 
 
 def test_local_mode_never_selects_or_calls_an_upstream_image_provider(monkeypatch: pytest.MonkeyPatch) -> None:

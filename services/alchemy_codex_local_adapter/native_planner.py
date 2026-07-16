@@ -75,7 +75,15 @@ class CodexNativeImageGenPlanner:
             scenario_id=scenario_id,
             scenario_selection={
                 "scenario_id": scenario_id,
-                "parameters": {"requested_image_count": request.requested_image_count},
+                # Canvas is a frozen user contract just like output count.
+                # Put it through the normal Scenario Selection boundary as
+                # well as the normalized metadata record below; otherwise an
+                # old General default can silently reassert 1:1 while the
+                # Local MCP caller asked for a portrait or landscape canvas.
+                "parameters": {
+                    "requested_image_count": request.requested_image_count,
+                    **({"requested_image_size": request.requested_image_size} if request.requested_image_size else {}),
+                },
             },
             metadata={},
         )

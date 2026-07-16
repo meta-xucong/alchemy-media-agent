@@ -2324,6 +2324,19 @@ class ScenarioRuntime:
             )
             if activation_metadata.get(key) is not None
         }
+        # The normalized intent is the resolved canvas/count authority.  The
+        # Central Brain's historical planning object can still carry a
+        # template default (for example General's old portrait default), so
+        # reassert the frozen values on every materialized output instead of
+        # letting an earlier plan silently overwrite an explicit user canvas.
+        # This is transport integrity only; it does not construct or edit
+        # renderer language.
+        frozen_provider_metadata.update(
+            {
+                "requested_image_count": preparation.normalized_job_intent.effective_image_count,
+                "requested_image_size": preparation.normalized_job_intent.effective_image_size,
+            }
+        )
         generation_plans = [
             generation_plan.model_copy(
                 update={
