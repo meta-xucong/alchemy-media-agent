@@ -52,8 +52,9 @@ of thought, issue list or visible checklist.
 ## 4. Audit and retry
 
 The frozen job records only that an independent Human Realism re-sign occurred
-and which remote Brain/model supplied it. The candidate text is not exposed as
-a second user-facing prompt. A later shared visual retry still supplies only
+and which remote Brain/model supplied it. Local MCP may project only the
+public-safe stage receipt and boolean completion state; it cannot expose the
+candidate text as a second user-facing prompt. A later shared visual retry still supplies only
 normalized pixel-review evidence and receives a new complete Brain sign-off;
 it never applies a local repair phrase.
 

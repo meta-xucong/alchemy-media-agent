@@ -196,7 +196,6 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_remote_brain_required",
                 "Codex Native ImageGen requires a valid non-fallback remote Central Brain result.",
             )
-
         deliverable_plan = result.metadata.get("template_deliverable_plan")
         if not isinstance(deliverable_plan, dict):
             return self._blocked("codex_native_imagegen_template_deliverable_plan_missing", "V3 planning did not freeze a complete template deliverable plan.")
@@ -217,6 +216,15 @@ class CodexNativeImageGenPlanner:
             )
         if len(materializations) != request.requested_image_count:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
+        canonical_prompt_signing = self._canonical_prompt_signing_provenance(
+            llm_brain,
+            active_capability_ids=envelope.get("active_capability_ids"),
+        )
+        if canonical_prompt_signing is None:
+            return self._blocked(
+                "codex_native_imagegen_human_resigning_missing",
+                "V3 did not produce the required shared Human Realism Brain re-signing receipt.",
+            )
         for index, materialization in enumerate(materializations, start=1):
             reference_paths = [str(item["file_path"]) for item in materialization.reference_assets if item.get("file_path")]
             try:
@@ -265,7 +273,43 @@ class CodexNativeImageGenPlanner:
                 activation_plan_id=str(envelope.get("envelope_id") or ""),
                 constraint_ledger_id=str(ledger.get("ledger_id") or ""),
                 admission_fallback_observed=False,
+                canonical_prompt_signing=canonical_prompt_signing,
             ),
+        }
+
+    @staticmethod
+    def _canonical_prompt_signing_provenance(
+        llm_brain: dict[str, Any],
+        *,
+        active_capability_ids: Any,
+    ) -> dict[str, Any] | None:
+        """Project only public-safe evidence for the exact prompt relay.
+
+        Local Mode does not create a candidate, inspect a pixel, or certify a
+        delivery. It can still show whether the normal V3 runtime completed
+        the shared finalizer path that produced the canonical string being
+        handed back to Codex.
+        """
+
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        allowed_stages = {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}
+        raw_stages = audit.get("canonical_provider_prompt_stages")
+        stages = [str(item) for item in raw_stages if str(item) in allowed_stages] if isinstance(raw_stages, list) else []
+        if not stages:
+            stage = str(audit.get("canonical_provider_prompt_stage") or "")
+            stages = [stage] if stage in allowed_stages else []
+        human_active = isinstance(active_capability_ids, list) and "human_realism" in active_capability_ids
+        human_resigned = bool(audit.get("human_realism_natural_presence_resigned"))
+        if human_active and (
+            stages != ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+            or not human_resigned
+        ):
+            return None
+        if not stages:
+            return None
+        return {
+            "stages": stages,
+            "human_realism_natural_presence_resigned": human_resigned,
         }
 
     @staticmethod

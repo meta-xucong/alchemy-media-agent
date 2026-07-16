@@ -101,7 +101,11 @@ def _canonical_runtime_result(*, count: int = 1, uploaded_assets: list[Any] | No
             }
             for index in range(1, count + 1)
         ],
-        "audit": {"remote_canonical_provider_prompts_received": True},
+        "audit": {
+            "remote_canonical_provider_prompts_received": True,
+            "canonical_provider_prompt_stage": "provider_prompt_finalize",
+            "canonical_provider_prompt_stages": ["provider_prompt_finalize"],
+        },
     }
     result.metadata["llm_brain"] = remote_brain
     for plan in result.planning_result.generation_plans:

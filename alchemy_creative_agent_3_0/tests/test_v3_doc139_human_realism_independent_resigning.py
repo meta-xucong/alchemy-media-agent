@@ -155,3 +155,7 @@ def test_doc139_local_mcp_relays_the_re_signed_string_without_a_second_prompt_pa
         "in their sunlit studio, preserving the ordinary working moment and the user's requested mood."
     )
     assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 1
+    assert result["provenance"]["canonical_prompt_signing"] == {
+        "stages": ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"],
+        "human_realism_natural_presence_resigned": True,
+    }
