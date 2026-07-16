@@ -128,3 +128,20 @@ returned an invalid response. Neither attempt created a renderer operation or
 used a fallback. The next visual comparison is therefore explicitly pending a
 fresh `llm_used=true` / `fallback_used=false` plan. It must use the same
 authorized product reference and no local prompt workaround.
+
+Safe transport diagnosis subsequently narrowed this external hold further.
+The configured remote Brain is reachable and returned valid JSON for both a
+text-only planning request and a simplified request with one reference-shaped
+asset. The real blue-dress V3 request reached the `plan` stage with one
+uploaded/reference asset and a roughly 6.3KB frozen payload, but the remote
+model response failed JSON parsing with an `Expecting ',' delimiter` error.
+No raw response, prompt, asset path, endpoint or credential was retained in
+the record.
+
+This is a remote JSON-contract stability defect under the complete frozen V3
+context. The safe mainline behaviour is to block: it must not guess missing
+syntax, regex-repair a remote creative response, locally rebuild its plan, or
+silently issue a second creative attempt. Upstream remediation should ensure
+that the configured DeepSeek-compatible JSON mode returns syntactically valid
+objects for the full planning payload (or select an equally authoritative
+remote Brain route that does). Once fixed, the unchanged Doc144 run may resume.
