@@ -71,6 +71,25 @@ and audit procedure to run after Standard Mode changes. It is the operating
 mechanism for deciding whether the Professional Mode/Face Identity documents
 need a compatible adaptation.
 
+### Asset Channel Authority And Reference Admission
+
+`PROFESSIONAL_MODE_ASSET_CHANNEL_AUTHORITY_AND_REFERENCE_ADMISSION_SPEC.md`
+
+Defines:
+
+```text
+Visual Asset owned-channel claims and future module extensibility
+Professional Asset Binding Set semantics
+automatic reference-channel admission and authority conflict resolution
+safe suppression of competing identity channels
+Provider/Reviewer evidence parity and fail-closed behavior
+backend-first implementation and test gates before frontend work
+```
+
+It is the backend authority for keeping Professional Mode invisible during
+normal use while preventing non-selected references from overriding an active
+Visual Asset's owned channels.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:
