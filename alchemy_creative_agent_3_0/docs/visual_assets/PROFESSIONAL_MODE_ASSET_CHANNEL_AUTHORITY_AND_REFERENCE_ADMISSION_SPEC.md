@@ -387,6 +387,11 @@ Require a successful admission result alongside the current Professional Mode
 binding before capability-plan freeze. Preserve admitted IDs, suppressed
 channels, hashes, and contract versions in internal planning provenance.
 
+The isolated pre-runtime execution adapter may assemble this binding,
+admission result, evidence packet, and planning metadata into a typed context
+for the eventual ScenarioRuntime caller. It does not itself freeze a plan,
+invoke a Provider, or publish a public job response.
+
 ### D — Shared execution parity
 
 Ensure Provider, Reviewer, retry, and final delivery consume the same resolved

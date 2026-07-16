@@ -26,6 +26,12 @@ from .anchor_pack import (
 )
 from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
 from .runtime_bridge import CanonicalProviderPromptReceipt, ProfessionalModeRuntimeBridge
+from .execution import (
+    ProfessionalModeExecutionContext,
+    ProfessionalModeExecutionRequest,
+    ProfessionalModeExecutionAdapter,
+    ProfessionalModePreparationResult,
+)
 from .consumers import (
     ProfessionalConsumerContext,
     ProfessionalConsumerRequest,
@@ -69,6 +75,10 @@ __all__ = [
     "ReferenceEvidencePacket",
     "VisualAssetBindingSet",
     "ProfessionalModeRuntimeBridge",
+    "ProfessionalModeExecutionAdapter",
+    "ProfessionalModeExecutionContext",
+    "ProfessionalModeExecutionRequest",
+    "ProfessionalModePreparationResult",
     "ProfessionalConsumerContext",
     "ProfessionalConsumerRequest",
     "ProfessionalModeConsumerAdapter",

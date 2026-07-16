@@ -29,7 +29,8 @@ M2  bounded Face Identity anchor-pack preparation: three front candidates,
 M3  frozen-plan binding and canonical-prompt/hash bridge
 M4  General/E-Commerce/Photography consumer isolation seam
 M6  asset-channel authority, reference admission, and Provider/Reviewer
-    evidence-parity contracts; frontend intentionally deferred
+    evidence-parity contracts plus a framework-agnostic pre-runtime execution
+    adapter; frontend intentionally deferred
 ```
 
 The first release remains Face Identity only. The module contributes typed
@@ -63,13 +64,15 @@ until the mainline audit accepts the authority and admission boundary.
 
 The current branch is contract-usable for backend tests and for an explicit
 caller that constructs a validated `ProfessionalModeBinding` and typed
-`ReferenceChannelPlan`. It is **not yet end-to-end user-usable**: no existing
+`ReferenceChannelPlan`. It now includes a framework-agnostic pre-runtime
+execution adapter that returns either a safe evidence context or structured
+blocked decisions. It is **not yet end-to-end user-usable**: no existing
 ScenarioRuntime, product request route, or Provider orchestration automatically
-invokes the consumer adapter, resolves uploaded-reference channel plans,
-attaches the resulting evidence packet, or converts a blocked admission into
-the public job response. Therefore a user cannot yet select Professional Mode
-in the existing application and rely on this branch alone to enforce the
-asset authority policy during a real generation.
+invokes that adapter, resolves uploaded-reference channel plans, attaches the
+resulting evidence packet, or converts a blocked admission into the public job
+response. Therefore a user cannot yet select Professional Mode in the existing
+application and rely on this branch alone to enforce the asset authority policy
+during a real generation.
 
 This is an intentional next integration milestone, not a silent fallback. The
 integration must remain additive and must preserve Standard Mode, existing
@@ -79,7 +82,7 @@ fail-closed behavior before any frontend work begins.
 ## Verification
 
 The focused Professional Mode suite covers M0-M6 boundaries and must be run
-from this worktree; the latest focused run is 53 passed. A full repository run
+from this worktree; the latest focused run is 60 passed. A full repository run
 currently reaches the existing product-API persistence tests but four of those
 tests fail before assertions because the Windows worktree path exceeds the OS
 path limit (`WinError 206`); the latest full run is 831 passed with those four
