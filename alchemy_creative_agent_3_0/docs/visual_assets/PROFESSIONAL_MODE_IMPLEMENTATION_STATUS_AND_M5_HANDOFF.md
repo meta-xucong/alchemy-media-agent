@@ -85,7 +85,7 @@ The focused Professional Mode suite covers M0-M6 boundaries and must be run
 from this worktree; the latest focused run is 60 passed. A full repository run
 currently reaches the existing product-API persistence tests but four of those
 tests fail before assertions because the Windows worktree path exceeds the OS
-path limit (`WinError 206`); the latest full run is 831 passed with those four
+path limit (`WinError 206`); the latest full run is 838 passed with those four
 environmental failures and two existing FastAPI deprecation warnings.
 That environmental failure is unrelated to `app/visual_assets` and is recorded
 as an integration-environment issue rather than silently omitted.
