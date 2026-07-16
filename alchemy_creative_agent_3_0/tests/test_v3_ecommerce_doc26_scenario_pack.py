@@ -167,11 +167,10 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert created.status == "planned"
     assert created.ecommerce is not None
     assert created.ecommerce.image_recipes == []
-    assert [item.metadata["ecommerce_slot"] for item in created.asset_series] == [
-        "ecommerce_output_1",
-        "ecommerce_output_2",
-    ]
-    assert all(item.metadata["asset_metadata"]["ecommerce_llm_directed"] for item in created.asset_series)
+    assert all(item.metadata.get("ecommerce_slot") is None for item in created.asset_series)
+    assert all("ecommerce_llm_directed" not in item.metadata["asset_metadata"] for item in created.asset_series)
+    assert [item["index"] for item in created.ecommerce.remote_brain_output_intents] == [1, 2]
+    assert all("output_id" in item and "slot_id" not in item for item in created.ecommerce.remote_brain_output_intents)
     assert all("ecommerce_recipe" not in item.metadata for item in created.asset_series)
     planned_record = service.job_store.get(created.job_id)
     assert planned_record is not None
@@ -184,8 +183,11 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert generated.status == "generated"
     assert record is not None and record.generation_result is not None
     prompt = record.generation_result.prompt_compilations[0]
-    assert prompt.text_policy == "provider_native_text_requested"
-    assert "Adjustable warm light" in prompt.visual_prompt
+    # A local E-Commerce pack no longer turns an approved-copy field into a
+    # second prompt/compiler instruction. The remote Brain owns any literal
+    # text decision in its signed complete image direction.
+    assert prompt.text_policy == "provider_native_text_optional"
+    assert prompt.visual_prompt == "[remote_brain_canonical_provider_prompt_bound_separately]"
     assert prompt.provider_notes["text_rendering_owner"] == "image_provider"
     assert "ecommerce_recipe" not in prompt.metadata
     # One logical specialized job creates its remote direction and then one
@@ -199,8 +201,7 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert exported.export_package is not None
     assert exported.export_package["naming_pattern"] == "{opaque_output_id}.png"
     assert [item["opaque_output_id"] for item in exported.export_package["files"]] == [
-        "ecommerce_output_1",
-        "ecommerce_output_2",
+        item["output_id"] for item in created.ecommerce.remote_brain_output_intents
     ]
     assert exported.manifest is not None
     assert exported.manifest["image_recipes"] == []
@@ -296,7 +297,7 @@ def test_ecommerce_exact_count_survives_plan_generation_and_export(count: int) -
     exported = service.export_job(created.job_id)
     assert len(exported.export_package["files"]) == count
     assert [item["opaque_output_id"] for item in exported.export_package["files"]] == [
-        f"ecommerce_output_{index}" for index in range(1, count + 1)
+        item["output_id"] for item in created.ecommerce.remote_brain_output_intents
     ]
 
 

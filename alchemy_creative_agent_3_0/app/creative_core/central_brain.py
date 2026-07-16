@@ -544,8 +544,25 @@ class CentralCreativeBrain:
             "scenario_id": context.metadata.get("scenario_id") or job.metadata.get("scenario_id"),
         }
         selected_pack = self.vertical_registry.select_pack(job, brief)
+        legacy_vertical_pack = selected_pack.name
+        if self._uses_brain_owned_forward_execution(context):
+            # Keyword-selected vertical packs were part of the old local
+            # creative assembly path.  A current enforced job already has a
+            # remote Brain direction, a frozen deliverable contract and a
+            # canonical finalizer.  Letting a local pack rewrite the brief,
+            # plan, layout or compatibility prompt would quietly put a second
+            # creative author before that sign-off.  Specialized Scenario
+            # Packs remain represented by their separately frozen structural
+            # execution plan; this neutral pack deliberately adds no visual
+            # recipe of its own.
+            selected_pack = self.vertical_registry.default_pack
+            context.metadata["legacy_vertical_pack_suppressed"] = legacy_vertical_pack
         job.metadata["selected_vertical_pack"] = selected_pack.name
+        if legacy_vertical_pack != selected_pack.name:
+            job.metadata["legacy_vertical_pack_suppressed"] = legacy_vertical_pack
         brief.metadata["selected_vertical_pack"] = selected_pack.name
+        if legacy_vertical_pack != selected_pack.name:
+            brief.metadata["legacy_vertical_pack_suppressed"] = legacy_vertical_pack
         context.creative_job = job
         context.commercial_brief = brief
         context.commercial_brief = selected_pack.refine_commercial_brief(context)
@@ -580,6 +597,30 @@ class CentralCreativeBrain:
     def _llm_brain_metadata(self, context: PipelineContext) -> dict[str, Any]:
         value = context.metadata.get("llm_brain")
         return value if isinstance(value, dict) else {}
+
+    def _uses_brain_owned_forward_execution(self, context: PipelineContext) -> bool:
+        """Return whether local vertical creative refinements are forbidden.
+
+        This is deliberately based on the frozen execution envelope and the
+        remote finalizer receipt, never on prompt keywords or a template name.
+        The same rule covers General, E-Commerce and Photography once a new
+        enforced job reaches Central Brain materialization.
+        """
+
+        envelope = context.metadata.get("capability_execution_envelope")
+        plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        brain = self._llm_brain_metadata(context)
+        audit = brain.get("audit") if isinstance(brain.get("audit"), dict) else {}
+        prompts = brain.get("canonical_provider_prompts")
+        return bool(
+            isinstance(plan, dict)
+            and str(plan.get("activation_mode") or "").lower() == "enforced"
+            and brain.get("llm_used")
+            and not brain.get("fallback_used")
+            and audit.get("remote_canonical_provider_prompts_received")
+            and isinstance(prompts, list)
+            and prompts
+        )
 
     def _visual_cluster_metadata(self, context: PipelineContext) -> dict[str, Any]:
         shared = context.metadata.get("shared_capabilities")

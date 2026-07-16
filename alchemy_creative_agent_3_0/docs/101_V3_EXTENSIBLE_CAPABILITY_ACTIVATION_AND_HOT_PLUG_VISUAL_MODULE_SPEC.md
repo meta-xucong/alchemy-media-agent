@@ -1,5 +1,9 @@
 # 101 V3 Extensible Capability Activation And Hot-Plug Visual Module Spec
 
+> **Doc135 forward-path note:** activation selects evidence/review executors;
+> it does not authorize any selected capability to compose renderer wording,
+> prompt atoms, negative lists or retry text.
+
 Status: accepted development specification. This document phase changes
 governance and implementation instructions only; selective runtime execution is
 not considered complete until the migration and acceptance tests in this

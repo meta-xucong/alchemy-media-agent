@@ -1,5 +1,7 @@
 # 48 V3 LLM Brain Adapter And Pre-Generation Reasoning Spec
 
+> **Current-status note (Docs 134–135):** The remote Brain remains the creative authority, but any historical local fallback plan, prompt compiler output or keyword/rule-derived image direction in this document is compatibility-only. New renderer text must come from the Brain’s final canonical sign-off.
+
 Current authority note:
 
 ```text

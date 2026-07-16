@@ -45,22 +45,29 @@ def test_doc67_ecommerce_outputs_are_owned_by_remote_brain_not_static_pack() -> 
         }
     )
 
-    slots = [item.metadata["ecommerce_slot"] for item in created.asset_series]
-    assert slots == ["ecommerce_output_1", "ecommerce_output_2", "ecommerce_output_3"]
-    assert all(item.metadata["asset_metadata"]["ecommerce_llm_directed"] for item in created.asset_series)
+    assert all(item.metadata.get("ecommerce_slot") is None for item in created.asset_series)
+    assert all("ecommerce_llm_directed" not in item.metadata["asset_metadata"] for item in created.asset_series)
+    assert created.ecommerce is not None
+    output_bindings = created.ecommerce.remote_brain_output_intents
+    assert len(output_bindings) == 3
+    assert [item["index"] for item in output_bindings] == [1, 2, 3]
+    assert all(item["output_id"].startswith("template_deliverable_") for item in output_bindings)
+    assert all("slot_id" not in item for item in output_bindings)
 
     generated = service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {"requested_image_count": 3}})
     record = service.job_store.get(created.job_id)
     deliverable_plan = record.generation_result.metadata["template_deliverable_plan"]
     feature_prompt = record.generation_result.prompt_compilations[1].visual_prompt
+    signed_feature_prompt = record.generation_result.metadata["llm_brain"]["canonical_provider_prompts"][1]["prompt"]
 
     assert deliverable_plan["owner"] == "ecommerce_template"
     assert deliverable_plan["creative_direction_owner"] == "remote_v3_llm_brain"
-    assert len(deliverable_plan["deliverables"]) == len(slots) == len(generated.candidates)
+    assert len(deliverable_plan["deliverables"]) == len(output_bindings) == len(generated.candidates)
     assert all(item["source"] == "remote_v3_llm_brain" for item in deliverable_plan["deliverables"])
     assert all(not candidate.metadata.get("mode_role_recipe") for candidate in generated.candidates)
-    assert "Remote Brain test output 2" in feature_prompt
-    assert "main_image" not in feature_prompt
+    assert feature_prompt == "[remote_brain_canonical_provider_prompt_bound_separately]"
+    assert "Remote Brain approved complete product image 2" in signed_feature_prompt
+    assert "main_image" not in signed_feature_prompt
 
 
 def test_doc67_human_photorealism_contract_gets_real_photo_detail_without_clone_pressure() -> None:

@@ -1,5 +1,7 @@
 # 50 V3 Native Visual Capability Cluster And Checkpoint Brain Spec
 
+> **Current-status note (Docs 134–135):** Shared capabilities remain active as evidence, activation and review executors. Their historical prompt atoms, negative additions and recipe-like guidance are not Provider input for a new V3 Job; only the remote Brain may turn accepted facts into final image language.
+
 Current authority note:
 
 ```text

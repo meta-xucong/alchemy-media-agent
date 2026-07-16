@@ -1,5 +1,10 @@
 # 51 V3 Visual Consistency Pro And Lovart Gap Closure Spec
 
+> **Doc135 forward-path note:** historical visual-consistency prompt atoms,
+> retry phrases and reference word stacks below are evidence-only. A new V3
+> Job sends facts and normalized review evidence to the remote Brain, which
+> alone signs the complete renderer prompt.
+
 Doc93 compatibility note:
 
 ```text

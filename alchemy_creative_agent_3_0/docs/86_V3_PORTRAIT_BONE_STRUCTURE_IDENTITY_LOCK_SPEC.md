@@ -1,5 +1,9 @@
 # 86 V3 Portrait Bone-Structure Identity Lock Spec
 
+> **Doc135 forward-path note:** identity geometry is protected evidence, not
+> a local facial-feature prompt stack. Review failures are sent to the remote
+> Brain as normalized evidence for a newly signed complete prompt.
+
 Doc93 authority update:
 
 ```text

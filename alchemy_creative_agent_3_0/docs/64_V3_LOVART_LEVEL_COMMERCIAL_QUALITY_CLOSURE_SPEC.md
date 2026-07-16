@@ -1,5 +1,9 @@
 # 64 V3 Lovart-Level Commercial Quality Closure Spec
 
+> **Doc135 forward-path note:** quality ambitions and review evidence remain
+> useful; any local phrase catalogue, visual recipe or retry instruction is
+> historical and cannot become renderer language for a new V3 Job.
+
 Doc93 compatibility note:
 
 ```text

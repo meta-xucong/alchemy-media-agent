@@ -744,7 +744,10 @@ def test_project_mode_passes_ecommerce_requested_count_to_pack(tmp_path) -> None
 
     assert job["metadata"]["scenario_parameters"]["requested_image_count"] == 2
     assert job["ecommerce"]["image_recipes"] == []
-    assert [item["slot_id"] for item in job["ecommerce"]["remote_brain_output_intents"]] == ["ecommerce_output_1", "ecommerce_output_2"]
+    output_intents = job["ecommerce"]["remote_brain_output_intents"]
+    assert [item["index"] for item in output_intents] == [1, 2]
+    assert all(item["output_id"].startswith("template_deliverable_") for item in output_intents)
+    assert all("slot_id" not in item for item in output_intents)
 
 
 def test_project_mode_forwards_explicit_approved_copy_to_remote_brain_context(tmp_path) -> None:

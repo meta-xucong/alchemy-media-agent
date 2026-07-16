@@ -65,17 +65,23 @@ def _ecommerce_root(handlers: V3ProductRouteHandlers) -> tuple[dict, dict]:
     return project, root
 
 
+def _opaque_output_id(root: dict, index: int) -> str:
+    intents = root["ecommerce"]["remote_brain_output_intents"]
+    return str(intents[index - 1]["output_id"])
+
+
 def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() -> None:
     handlers = _handlers()
     project, root = _ecommerce_root(handlers)
     root_record = handlers.service.get_job_record(root["job_id"])
     assert root_record is not None
     parent_metadata = deepcopy(root_record.request.metadata)
+    output_id = _opaque_output_id(root, 2)
 
     continuation = handlers.post_project_ecommerce_slot_continuation(
         project["project_id"],
         root["job_id"],
-        "ecommerce_output_2",
+        output_id,
         {"correction_note": "Make the feature angle cleaner and more legible.", "metadata": {"source": "ecommerce_workspace"}},
     )
 
@@ -84,7 +90,7 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
     assert continuation["child_job_id"] != root["job_id"]
     assert continuation["lineage"]["root_job_id"] == root["job_id"]
     assert continuation["lineage"]["parent_job_id"] == root["job_id"]
-    assert continuation["lineage"]["parent_slot_id"] == "ecommerce_output_2"
+    assert continuation["lineage"]["parent_slot_id"] == output_id
     assert child_record.request.metadata["capability_activation_plan"] == parent_metadata["capability_activation_plan"]
     assert "capability_plan_amendment" not in child_record.request.metadata
     assert root_record.request.metadata == parent_metadata
@@ -94,14 +100,15 @@ def test_slot_continuation_creates_append_only_child_with_exact_frozen_plan() ->
 def test_slot_delivery_uses_latest_successful_child_and_keeps_parent_history() -> None:
     handlers = _handlers()
     project, root = _ecommerce_root(handlers)
+    output_id = _opaque_output_id(root, 2)
     continuation = handlers.post_project_ecommerce_slot_continuation(
-        project["project_id"], root["job_id"], "ecommerce_output_2", {"correction_note": "Use a closer product detail."}
+        project["project_id"], root["job_id"], output_id, {"correction_note": "Use a closer product detail."}
     )
 
     generated_child = handlers.post_project_job_generate(
         project["project_id"], continuation["child_job_id"], {"quality_mode": "standard"}
     )
-    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "ecommerce_output_2")
+    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], output_id)
 
     assert generated_child["status"] == "generated"
     assert delivery["current_delivery"]["job_id"] == continuation["child_job_id"]
@@ -118,12 +125,13 @@ def test_slot_continuation_lineage_survives_project_store_reload(tmp_path) -> No
     store_root = tmp_path / "projects"
     first = _handlers(project_store=PersistentProjectStore(store_root))
     project, root = _ecommerce_root(first)
+    output_id = _opaque_output_id(root, 1)
 
     restarted = _handlers(project_store=PersistentProjectStore(store_root))
     continuation = restarted.post_project_ecommerce_slot_continuation(
-        project["project_id"], root["job_id"], "ecommerce_output_1", {"correction_note": "Keep the same product but improve framing."}
+        project["project_id"], root["job_id"], output_id, {"correction_note": "Keep the same product but improve framing."}
     )
-    delivery = restarted.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "ecommerce_output_1")
+    delivery = restarted.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], output_id)
 
     assert continuation["lineage"]["root_job_id"] == root["job_id"]
     assert continuation["child_status"] == "planned"
@@ -140,6 +148,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
     )
     root_record = handlers.service.get_job_record(root["job_id"])
     assert root_record is not None
+    output_id = _opaque_output_id(root, 2)
     parent_plan = root_record.request.metadata["capability_activation_plan"]
     active = list(parent_plan["active_capabilities"])
     order = list(parent_plan["dependency_order"])
@@ -164,7 +173,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
     amended = handlers.post_project_ecommerce_slot_continuation(
         project["project_id"],
         root["job_id"],
-        "ecommerce_output_2",
+        output_id,
         {"new_evidence_asset_ids": [later_evidence]},
     )
 
@@ -179,7 +188,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
         handlers.post_project_ecommerce_slot_continuation(
             project["project_id"],
             root["job_id"],
-            "ecommerce_output_2",
+            output_id,
             {"new_evidence_asset_ids": [newer_evidence]},
         )
     assert exhausted.value.code == "slot_plan_amendment_exhausted"

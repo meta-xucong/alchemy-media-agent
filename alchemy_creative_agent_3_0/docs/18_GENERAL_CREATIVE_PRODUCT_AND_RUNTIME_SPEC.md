@@ -1,5 +1,9 @@
 # 18 General Creative Product, UI, and Application Runtime Specification
 
+> **Doc135 authority:** historical presets, named slots and local prompt
+> fields below are not forward image instructions. General’s actual image
+> direction is remote-Brain-signed canonical text.
+
 This document defines the complete user-facing **General Creative** product module for Alchemy Creative Agent 3.x.
 
 It is designed to be implemented **after**:

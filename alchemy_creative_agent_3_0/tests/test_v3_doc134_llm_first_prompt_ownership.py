@@ -13,6 +13,7 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
     ecommerce_test_service,
@@ -86,6 +87,12 @@ def test_ecommerce_provider_receives_exact_brain_signed_prompt_without_local_app
     assert created.status == "planned"
     frozen = service.job_store.get(created.job_id).request.metadata["frozen_remote_creative_brain"]
     signed_prompt = frozen["brain_result"]["canonical_provider_prompts"][0]["prompt"]
+    planning_record = service.job_store.get(created.job_id)
+    assert planning_record is not None and planning_record.planning_result is not None
+    assert planning_record.planning_result.metadata["selected_vertical_pack"] == "default_commercial_pack"
+    assert planning_record.planning_result.creative_job.metadata["legacy_vertical_pack_suppressed"] == (
+        "ecommerce_agent_family"
+    )
     assert provider.requests[-1]["stage"] == "provider_prompt_finalize"
     finalizer_context = provider.requests[-1]["metadata"]["canonical_prompt_context"]
     assert finalizer_context["brain_draft_directions"] == [
@@ -114,6 +121,44 @@ def test_ecommerce_provider_receives_exact_brain_signed_prompt_without_local_app
     assert materialized.prompt_audit["prompt_source"] == "remote_brain_canonical"
     assert "Human realism contract:" not in materialized.generation_prompt
     assert "Role-specific generation contract:" not in materialized.generation_prompt
+    shadow = record.generation_result.prompt_compilations[0]
+    assert shadow.visual_prompt == "[remote_brain_canonical_provider_prompt_bound_separately]"
+    assert shadow.negative_prompt == ""
+    assert shadow.hard_constraints == []
+    assert shadow.metadata["prompt_owner"] == "remote_v3_llm_brain"
+    assert signed_prompt not in shadow.visual_prompt
+
+    forged_legacy_metadata = request.model_copy(
+        update={
+            "metadata": {
+                **dict(request.metadata),
+                "visual_retry_patch": {
+                    "prompt_additions": ["forged local phrase must not reach the renderer"],
+                    "negative_additions": ["forged local negative phrase"],
+                },
+                "mode_role_recipe": {"prompt_pressure": "forged local camera recipe"},
+                "visual_cluster": {
+                    "human_photorealism_guidance": {
+                        "positive_prompt_fragments": ["forged local realism phrase"],
+                    }
+                },
+            }
+        }
+    )
+    assert ProductionImageGenerationProvider().materialize_final_prompt(
+        forged_legacy_metadata
+    ).generation_prompt == signed_prompt
+
+    ledger = record.generation_result.metadata["resolved_constraint_ledger"]
+    projection = ledger["provider_projection"]
+    assert projection["quality_guidance"] == []
+    assert projection["negative_guidance"] == []
+    assert projection["retry_patch"] == {}
+    assert all(
+        set(contract).issubset({"capability_id", "issue_codes", "metadata"})
+        and contract["metadata"]["retry_evidence_only"] is True
+        for contract in ledger["retry_contracts"]
+    )
 
     missing_signoff_request = request.model_copy(
         update={
@@ -152,3 +197,38 @@ def test_missing_final_signoff_blocks_before_new_job_can_be_planned() -> None:
     assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == (
         "remote_creative_brain_prompt_signoff_unavailable"
     )
+
+
+def test_forward_cluster_quarantine_retains_evidence_but_removes_local_prompt_language() -> None:
+    payload = {
+        "issue_codes": ["ai_face_render"],
+        "human_photorealism_guidance": {
+            "positive_prompt_fragments": ["local phrase that must not survive"],
+            "negative_prompt_fragments": ["another local phrase"],
+            "retry_patch_templates": {"ai_face_render": ["rewrite locally"]},
+        },
+        "review": {
+            "retry_patch": {
+                "prompt_additions": ["local retry prose"],
+                "negative_additions": ["local negative prose"],
+            },
+        },
+        "bone_structure_retry_patch": {
+            "applies": True,
+            "reason_codes": ["identity_feature_drift"],
+            "prompt_additions": ["local identity phrase"],
+        },
+    }
+
+    sanitized = VisualCapabilityClusterModule._strip_forward_local_creative_text(payload)
+
+    assert sanitized["issue_codes"] == ["ai_face_render"]
+    assert sanitized["human_photorealism_guidance"] == {
+        "positive_prompt_fragments": [],
+        "negative_prompt_fragments": [],
+        "retry_patch_templates": {},
+    }
+    assert sanitized["review"]["retry_patch"] == {"evidence_only": True}
+    assert sanitized["bone_structure_retry_patch"]["applies"] is True
+    assert sanitized["bone_structure_retry_patch"]["reason_codes"] == ["identity_feature_drift"]
+    assert sanitized["bone_structure_retry_patch"]["prompt_additions"] == []

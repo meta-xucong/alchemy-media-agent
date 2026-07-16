@@ -1,5 +1,9 @@
 # 91 V3 Human Realism Plugin Governance Spec
 
+> **Doc135 forward-path note:** this shared plugin may freeze whether Human
+> Realism is required and what pixel evidence to review. It may not append
+> local realism words after the remote Brain's final canonical sign-off.
+
 Doc94 correction note:
 
 ```text

@@ -1,5 +1,9 @@
 # Doc125 V3 Doc117–124 Mainline Integration Audit Checkpoint
 
+> **Doc135 refinement:** this checkpoint must be read with the current
+> Brain-owned final-prompt boundary. Any older local phrase/retry examples are
+> historical evidence, not an executable forward contract.
+
 Status: reviewed integration checkpoint. This document records the isolated
 mainline audit of the cumulative shared-foundation candidate
 `origin/codex/doc118-review-projection-closure-20260715@8724a3d`. It is not a

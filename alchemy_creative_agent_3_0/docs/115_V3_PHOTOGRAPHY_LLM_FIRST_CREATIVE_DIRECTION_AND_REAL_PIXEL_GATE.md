@@ -1,5 +1,9 @@
 # Doc115: Photography LLM-First Creative Direction And Real-Pixel Gate
 
+> **Doc135 refinement:** photography roles are structural lineage only. No
+> local camera, lighting, pose or retry phrase may be materialized; each
+> complete image direction is signed by the remote Brain.
+
 ## Purpose
 
 An active `photographer_template` is an LLM-first specialized template.  It

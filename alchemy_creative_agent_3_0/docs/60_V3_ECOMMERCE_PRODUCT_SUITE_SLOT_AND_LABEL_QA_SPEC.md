@@ -1,5 +1,7 @@
 # 60 V3 E-Commerce Product Suite Slot And Label QA Spec
 
+> **Current-status note (Docs 111, 113, E17, 134–135):** Static E-Commerce slots, label recipes and local retry wording below are superseded. New E-Commerce Jobs use explicit template selection, factual evidence and remote-Brain whole-image directions; historical fields are read-compatible only.
+
 > Historical/compatibility notice (Docs111 and 113): the static product-suite
 > slots, label/logo prompt guidance, and local role mapping below are retained
 > only to read historical records and derive neutral regression fixtures. They

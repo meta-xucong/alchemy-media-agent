@@ -1,5 +1,10 @@
 # Photography Module Foundation Rules
 
+> **Doc115/135 authority note:** Photography contributes structural session
+> lineage, immutable profile/reference facts and review criteria only. It may
+> never create a local camera, pose, lighting or retry phrase stack for the
+> renderer.
+
 ## 1. Classification
 
 All work governed by this document is specialized Photography Template work.

@@ -1,5 +1,9 @@
 # 69A V3 Reference Experience Absorption Audit
 
+> **Doc135 forward-path note:** this audit may inform factual governance and
+> regression fixtures only. It cannot authorize local prompt wording, a
+> keyword-based creative classification or a deterministic retry recipe.
+
 Status: auxiliary audit for Doc69.
 
 This document records what was learned from earlier V2 code/documents and from

@@ -1,5 +1,9 @@
 # Doc122 V3 Remote-Brain Retry Determinism and Safe No-Result Provenance
 
+> **Doc135 refinement:** deterministic retry means deterministic evidence,
+> binding and budget—not a deterministic local replacement prompt. The remote
+> Brain alone converts accepted retry evidence into renderer language.
+
 Status: corrective shared-foundation authority discovered during the controlled
 Doc121 General reference acceptance. It applies to all V3 templates and does
 not add a child, apparel, product, E-Commerce, Photography, or General prompt

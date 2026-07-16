@@ -1,5 +1,9 @@
 # 68A V3 Casebook Distillation Reference
 
+> **Doc135 forward-path note:** casebook material is retrospective evidence
+> only. It must not be revived as a keyword router, case-derived prompt stack
+> or static renderer recipe for a new V3 Job.
+
 Doc93 compatibility note:
 
 ```text

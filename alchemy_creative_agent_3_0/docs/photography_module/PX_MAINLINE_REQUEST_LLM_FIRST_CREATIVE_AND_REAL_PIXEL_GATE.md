@@ -1,5 +1,9 @@
 # PX-MAINLINE-005: LLM-First Photography Creative Direction And Real-Pixel Gate
 
+> **Doc135 refinement:** this fulfilled request is governed by the one final
+> canonical remote-Brain prompt rule. Historical request language cannot be
+> read as permission for local photographic phrase assembly or retry patches.
+
 > Historical request, fulfilled by mainline `fc3f5c2` and `db70c44`. It is
 > retained as the acceptance contract. The remaining work is real-provider
 > evidence, not a missing Photography-private implementation.

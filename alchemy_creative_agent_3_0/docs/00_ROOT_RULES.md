@@ -1,6 +1,8 @@
 # 00 Root Rules
 
 > **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering guidance in this historical foundation document. New work uses LLM creative direction and provider-native complete-image generation.
+>
+> **Current creative-ownership direction (Doc134/135):** a new V3 image operation has exactly one renderer-facing creative prompt: the remote Central Brain’s approved canonical prompt. Historical keyword rules, `prompt_additions`, negative lists, static recipes and retry patches may protect/read old records only; they must never become new Provider or Local MCP language.
 
 This document defines the non-negotiable development rules for Alchemy Creative Agent 3.0.
 

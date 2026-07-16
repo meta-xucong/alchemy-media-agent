@@ -1,5 +1,9 @@
 # Doc132: V3 Provider-Independent Code Closure And Local MCP Acceptance Guide
 
+> **Doc135 refinement:** Provider-independent acceptance proves canonical
+> prompt/reference parity only; Local MCP must not author, append, repair or
+> persist a substitute renderer prompt.
+
 Status: active companion to Doc127. This document defines the fastest
 complete acceptance route for **Alchemy-owned code** while the Web image
 gateway or an upstream Provider is unavailable. It does not loosen Doc127's

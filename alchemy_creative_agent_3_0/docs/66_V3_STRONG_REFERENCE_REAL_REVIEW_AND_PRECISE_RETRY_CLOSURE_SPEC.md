@@ -1,5 +1,9 @@
 # 66 V3 Strong Reference Real Review And Precise Retry Closure Spec
 
+> **Doc135 forward-path note:** strong-reference truth and pixel review remain
+> active; any prompt additions, negative lists or local retry prose described
+> below are read-compatible history, not a renderer path.
+
 Doc93 compatibility note:
 
 ```text

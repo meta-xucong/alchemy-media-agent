@@ -1,5 +1,10 @@
 # 55 V3 Post Generation Vision Inspection And Review Spec
 
+> **Doc135 forward-path note:** inspection may classify pixels and issue
+> normalized evidence codes, but it may not manufacture local re-prompt,
+> negative-word or repair text for a new V3 Job. Those former examples are
+> archival compatibility context only.
+
 Doc93 compatibility note:
 
 ```text

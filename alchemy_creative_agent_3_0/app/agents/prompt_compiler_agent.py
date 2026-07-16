@@ -40,6 +40,24 @@ class PromptCompilerAgent(BaseAgent):
         brand_profile: BrandProfile,
         llm_brain: dict | None = None,
     ) -> AgentResult[PromptCompilationResult]:
+        # A new LLM-first Job already carries a remote-Brain-approved complete
+        # renderer instruction.  This legacy compiler still supplies the
+        # structural object required by the historical Central Brain data
+        # model, but it must not manufacture a second creative prompt, a
+        # negative-word pile, or a role recipe that could later be mistaken for
+        # Provider language.  The rendering boundary reads the signed Brain
+        # record directly.
+        if self._has_brain_signed_canonical_prompt(llm_brain):
+            return AgentResult(
+                output=self._brain_owned_shadow_compilation(
+                    brief=brief,
+                    creative_plan=creative_plan,
+                    layout_plan=layout_plan,
+                    brand_profile=brand_profile,
+                    llm_brain=llm_brain,
+                ),
+                reasoning_summary="Remote Brain canonical Provider prompt is bound separately; local creative prompt assembly skipped.",
+            )
         style_notes = list(dict.fromkeys([*brief.visual_tone, *brand_profile.visual_tone]))
         brain_guidance = self._brain_prompt_guidance(llm_brain)
         raw_user_request = self._user_request_brief(brief)
@@ -252,6 +270,71 @@ class PromptCompilerAgent(BaseAgent):
             ),
         )
         return AgentResult(output=result, reasoning_summary="Compiled provider-neutral V3 prompt contract.")
+
+    @staticmethod
+    def _has_brain_signed_canonical_prompt(llm_brain: dict | None) -> bool:
+        if not isinstance(llm_brain, dict):
+            return False
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        prompts = llm_brain.get("canonical_provider_prompts")
+        return bool(
+            llm_brain.get("llm_used")
+            and not llm_brain.get("fallback_used")
+            and audit.get("remote_canonical_provider_prompts_received")
+            and isinstance(prompts, list)
+            and prompts
+        )
+
+    def _brain_owned_shadow_compilation(
+        self,
+        *,
+        brief: CommercialBrief,
+        creative_plan: CreativePlan,
+        layout_plan: LayoutPlan,
+        brand_profile: BrandProfile,
+        llm_brain: dict,
+    ) -> PromptCompilationResult:
+        """Return a non-creative compatibility shape for a signed V3 Job.
+
+        It intentionally holds no copy of the Brain's text.  The canonical
+        prompt has one frozen owner and one Provider/MCP projection boundary;
+        duplicating it here would make this legacy structure look authoritative.
+        """
+
+        asset_metadata = layout_plan.metadata.get("asset_metadata", {})
+        if not isinstance(asset_metadata, dict):
+            asset_metadata = {}
+        provider_text, provider_text_policy = self._provider_native_text_intent(layout_plan, None)
+        return PromptCompilationResult(
+            prompt_compilation_id=stable_id("brain_owned_prompt_shadow", layout_plan.asset_id, creative_plan.creative_plan_id),
+            asset_id=layout_plan.asset_id,
+            visual_prompt="[remote_brain_canonical_provider_prompt_bound_separately]",
+            negative_prompt="",
+            hard_constraints=[],
+            text_policy=provider_text_policy,
+            style_notes=[],
+            layout_notes=[],
+            provider_notes={
+                "text_overlay_required": False,
+                "reserve_clean_text_areas": False,
+                "text_rendering_owner": "image_provider",
+                "provider_native_text": provider_text,
+                "provider_native_text_policy": provider_text_policy,
+                "prompt_owner": "remote_v3_llm_brain",
+                "prompt_assembly_mode": "brain_signed_shadow",
+                "asset_metadata": asset_metadata,
+            },
+            metadata=self.metadata(
+                rules_version=RULE_VERSION,
+                brand_id=brand_profile.brand_id,
+                asset_metadata=asset_metadata,
+                llm_brain_enabled=True,
+                llm_brain_used=True,
+                canonical_provider_prompt_bound=True,
+                prompt_owner="remote_v3_llm_brain",
+                prompt_assembly_mode="brain_signed_shadow",
+            ),
+        )
 
     def _user_request_brief(self, brief: CommercialBrief) -> str:
         raw = str(brief.metadata.get("normalized_input") or "").strip()

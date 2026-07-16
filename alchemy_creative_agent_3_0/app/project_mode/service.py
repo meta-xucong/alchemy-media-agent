@@ -2242,9 +2242,9 @@ class V3ProjectModeService:
         # continuation works without any fixed marketplace slot vocabulary.
         output_intents = ecommerce.remote_brain_output_intents or []
         declared = [
-            str(intent.get("slot_id") or "").strip()
+            str(intent.get("output_id") or intent.get("slot_id") or "").strip()
             for intent in output_intents
-            if isinstance(intent, dict) and str(intent.get("slot_id") or "").strip()
+            if isinstance(intent, dict) and str(intent.get("output_id") or intent.get("slot_id") or "").strip()
         ]
         if declared:
             return list(dict.fromkeys(declared))

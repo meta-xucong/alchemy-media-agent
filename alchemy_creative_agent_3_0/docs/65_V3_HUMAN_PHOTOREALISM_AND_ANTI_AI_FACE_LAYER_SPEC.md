@@ -1,5 +1,9 @@
 # 65 V3 Human Photorealism And Anti-AI Face Layer Spec
 
+> **Doc135 forward-path note:** Human Realism supplies shared factual
+> activation, review obligations and normalized findings. Its old positive,
+> negative and anatomy repair phrase bundles are not forward Provider input.
+
 > Historical/compatibility notice (Docs91, 94, 113, and 117): this is source
 > material for the shared Human Realism capability, not a live implementation
 > recipe. Its demographic, mode, prompt, and retry examples must not be copied

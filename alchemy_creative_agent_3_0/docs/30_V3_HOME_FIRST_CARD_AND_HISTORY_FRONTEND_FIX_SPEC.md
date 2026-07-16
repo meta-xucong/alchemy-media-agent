@@ -1,5 +1,8 @@
 # 30 V3 Home-First Card And History Frontend Fix Specification
 
+> **Doc135 authority:** UI labels and presets may never create a local image
+> recipe or a second renderer prompt; a new image always remains Brain-owned.
+
 This document corrects the V3 commercial frontend entry logic after documents
 `27`, `28`, and `29`.
 

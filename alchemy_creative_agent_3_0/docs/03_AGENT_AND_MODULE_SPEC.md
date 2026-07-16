@@ -1,5 +1,9 @@
 # 03 Agent and Module Spec
 
+> **Doc135 authority:** any local keyword branch, static recipe, prompt atom or
+> retry wording retained below is historical/offline-only. It may not influence
+> a new enforced Provider or Local MCP prompt.
+
 > **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering guidance in this historical module specification. New work uses LLM creative direction and provider-native complete-image generation.
 
 This document defines the recommended V3 agent roles, module boundaries, schemas, and first-pass implementation structure.

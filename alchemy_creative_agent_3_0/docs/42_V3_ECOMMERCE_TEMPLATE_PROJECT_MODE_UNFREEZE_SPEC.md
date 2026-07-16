@@ -1,5 +1,9 @@
 # 42 V3 E-Commerce Template Project Mode Unfreeze Spec
 
+> **Doc135 authority:** this is a historical pre-LLM-native unfreeze design.
+> Its slot recipes, keyword maps and local marketplace directions are
+> read-compatible history only; E17/Doc135 govern all new E-Commerce work.
+
 This document defines how to unfreeze the E-Commerce Template after Project Mode
 and General Template continuation are stable.
 

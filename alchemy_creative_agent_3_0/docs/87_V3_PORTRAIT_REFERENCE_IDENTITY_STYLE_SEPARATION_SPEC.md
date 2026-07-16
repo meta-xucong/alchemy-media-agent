@@ -1,5 +1,9 @@
 # 87 V3 Portrait Reference Identity And Style Separation Spec
 
+> **Doc135 forward-path note:** channel ownership remains active, but former
+> local identity/style repair wording is compatibility-only. The remote Brain
+> owns the one complete new renderer instruction.
+
 Doc93 authority update:
 
 ```text

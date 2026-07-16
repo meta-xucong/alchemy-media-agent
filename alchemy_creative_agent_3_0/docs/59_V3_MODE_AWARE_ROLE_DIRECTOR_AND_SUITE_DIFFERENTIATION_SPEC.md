@@ -1,5 +1,7 @@
 # 59 V3 Mode-Aware Role Director And Suite Differentiation Spec
 
+> **Current-status note (Docs 76, 113, 134–135):** This document is historical for local mode-role directions and retry recipes. New General work has no static professional suite, and specialized templates may provide only structural deliverable lineage; the Brain creates every whole-image direction.
+
 > Historical/compatibility notice (Docs111 and 113): the shared director,
 > role-recipe, and prompt-compilation design below is not a forward production
 > path. General remains scenario-neutral; specialist templates own their own

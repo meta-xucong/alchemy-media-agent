@@ -1,5 +1,9 @@
 # 25 General Creative Delta For Shared Capability Modules
 
+> **Doc135 authority:** shared capabilities contribute factual evidence,
+> activation and review obligations only. Any historical local prompt fragment
+> or keyword-derived image direction is compatibility-only.
+
 This document supplements `18`, `19`, and `20`.
 
 The General Creative module should benefit from the V1/V2-derived shared capabilities, but it must remain policy-neutral. It should not become an e-commerce agent by accident.

@@ -1,5 +1,9 @@
 # 19 General Creative Quick-Start Presets, UI, and Resolution Specification
 
+> **Doc135 authority:** preset selection may preserve an explicit user control
+> or technical canvas requirement, but must not expand into a local creative
+> recipe, prompt word stack, text slot or renderer patch.
+
 Source mapping: this is the V3 repository placement of the draft
 `17.1_GENERAL_CREATIVE_QUICK_START_PRESETS_SPEC.md`. It is numbered as document
 19 here because documents 17 and 18 are already used for the Scenario Pack

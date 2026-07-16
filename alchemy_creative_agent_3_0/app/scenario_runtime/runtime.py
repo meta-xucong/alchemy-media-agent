@@ -1189,6 +1189,13 @@ class ScenarioRuntime:
                 prior_results=list(pre_activation_run.results) if pre_activation_run else [],
                 metadata={
                     "capability_phase": "active",
+                    # The active capability pass may contribute factual
+                    # evidence and review obligations, but it must not leave
+                    # a second, locally-authored prompt route alive.  The
+                    # visual cluster uses this explicit marker to quarantine
+                    # legacy phrase/patch fields before its result can enter
+                    # the frozen envelope for a new enforced V3 Job.
+                    "brain_owned_forward_execution": plan.activation_mode == "enforced",
                     "capability_activation_plan": plan.model_dump(mode="json"),
                     "capability_activation_plan_summary": plan.summary(),
                     # The active executor must consume the semantic decision
@@ -1627,20 +1634,10 @@ class ScenarioRuntime:
                     ],
                 )
             )
-        for capability_id, fragment in enumerate(composed.prompt_additions, 1):
-            entries.append(
-                ResolvedConstraintEntry(
-                    constraint_id=stable_id("constraint", plan.plan_id, "quality", capability_id, fragment),
-                    channel="quality_guidance",
-                    owner="active_capability",
-                    strength="soft",
-                    precedence=50,
-                    requested_value=fragment,
-                    resolved_value=fragment,
-                    resolution="accepted",
-                    provenance=[{"source": "ComposedVisualContribution", "activation_plan_id": plan.plan_id}],
-                )
-            )
+        # Capability contributions may establish facts, review obligations and
+        # activation scope.  They may not persist a second local phrase list
+        # in a new enforced ledger.  The remote Brain is the only component
+        # allowed to turn those facts into renderer language at final sign-off.
         hard_capabilities = {
             "product_identity",
             "portrait_identity",
@@ -1691,7 +1688,6 @@ class ScenarioRuntime:
             if value not in (None, "", [], {})
         }
         template_evidence_retry_contract = self._template_delivery_evidence_retry_contract(resolved_deliverables)
-        retry_patch = self._server_resolved_retry_patch(request, plan)
         provider_projection = {
             "projection_version": "resolved_constraint_ledger_v1",
             "template_id": normalized_intent.template_id,
@@ -1705,13 +1701,9 @@ class ScenarioRuntime:
             "deliverables": resolved_deliverables,
             "product_truth": product_truth,
             "apparel_construction": apparel_construction.provider_projection(),
-            "quality_guidance": [
-                entry.resolved_value
-                for entry in entries
-                if entry.channel == "quality_guidance" and entry.resolution == "accepted"
-            ],
-            "negative_guidance": list(composed.negative_additions),
-            "retry_patch": retry_patch,
+            "quality_guidance": [],
+            "negative_guidance": [],
+            "retry_patch": {},
             "capability_projection": self._ledger_capability_projection(raw_cluster, plan),
             "legacy_adapter": {
                 "source": "accepted_active_executor_results",
@@ -1756,10 +1748,12 @@ class ScenarioRuntime:
                 "conflict_count": len(conflicts),
             },
             review_contracts=list(composed.review_contracts),
-            retry_contracts=[
-                *list(composed.retry_contracts),
-                *([template_evidence_retry_contract] if template_evidence_retry_contract else []),
-            ],
+            retry_contracts=self._evidence_only_retry_contracts(
+                [
+                    *list(composed.retry_contracts),
+                    *([template_evidence_retry_contract] if template_evidence_retry_contract else []),
+                ]
+            ),
             hard_semantic_contract=hard_semantic_contract,
             provenance=[
                 {
@@ -1796,20 +1790,46 @@ class ScenarioRuntime:
         return {
             "capability_id": "template_deliverable_owner",
             "issue_codes": ["delivery_evidence_dimension_mismatch"],
-            "templates": {
-                "prompt_additions": [
-                    "preserve the frozen template-owned delivery intent and visibly demonstrate this output's assigned evidence dimension without replacing it with a stock role or static recipe"
-                ],
-                "composition_repair": [
-                    "make the evidence assigned to each output visibly distinct while keeping the already-frozen Brain direction"
-                ],
-            },
             "metadata": {
                 "source": "resolved_constraint_ledger.template_deliverables",
                 "static_recipe_present": False,
+                "retry_evidence_only": True,
                 "brain_evidence_rows": evidence_rows,
             },
         }
+
+    @staticmethod
+    def _evidence_only_retry_contracts(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Retain retry scope without retaining local renderer prose.
+
+        An active capability can say which normalized failure codes it owns;
+        it cannot prescribe a phrase-level repair.  The next remote Brain
+        finalization receives the codes and independently signs a full prompt.
+        """
+
+        evidence_only: list[dict[str, Any]] = []
+        for raw_contract in contracts:
+            contract = (
+                raw_contract.model_dump(mode="json")
+                if hasattr(raw_contract, "model_dump")
+                else raw_contract
+            )
+            if not isinstance(contract, dict):
+                continue
+            capability_id = str(contract.get("capability_id") or "").strip()
+            issue_codes = [str(code).strip() for code in contract.get("issue_codes", []) if str(code).strip()]
+            if not capability_id or not issue_codes:
+                continue
+            metadata = dict(contract.get("metadata") or {})
+            metadata["retry_evidence_only"] = True
+            evidence_only.append(
+                {
+                    "capability_id": capability_id,
+                    "issue_codes": list(dict.fromkeys(issue_codes)),
+                    "metadata": metadata,
+                }
+            )
+        return evidence_only
 
     @staticmethod
     def _server_resolved_retry_patch(
@@ -1818,6 +1838,15 @@ class ScenarioRuntime:
     ) -> dict[str, Any]:
         """Accept a retry patch only when Product API bound it to this plan."""
 
+        normalized = request.metadata.get("normalized_v3_job_intent")
+        envelope = request.metadata.get("capability_execution_envelope")
+        frozen_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        if isinstance(normalized, dict) and isinstance(frozen_plan, dict) and str(
+            frozen_plan.get("activation_mode") or ""
+        ).lower() == "enforced":
+            # Current V3 jobs preserve only review evidence/provenance; local
+            # patches are archival compatibility data, never forward input.
+            return {}
         patch = request.metadata.get("resolved_retry_patch")
         provenance = request.metadata.get("resolved_retry_provenance")
         if not isinstance(patch, dict) or not isinstance(provenance, dict):

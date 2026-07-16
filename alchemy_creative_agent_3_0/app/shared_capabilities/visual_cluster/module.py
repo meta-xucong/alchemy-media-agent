@@ -178,6 +178,28 @@ GENERAL_VISUAL_FORBIDDEN_TERMS = (
     "product claims",
 )
 
+# These fields were introduced by the historical local prompt-compiler and
+# retry-patch route.  They may remain readable inside old archived records,
+# but a new enforced V3 capability result must not carry their locally written
+# prose into the envelope that the remote Brain later signs.  Issue codes,
+# binding facts and structural execution contracts remain intact.
+FORWARD_LOCAL_CREATIVE_TEXT_FIELDS = frozenset(
+    {
+        "prompt_additions",
+        "negative_additions",
+        "identity_reinforcement",
+        "artifact_repair",
+        "reference_requirements",
+        "positive_prompt_fragments",
+        "negative_prompt_fragments",
+        "provider_prompt_rules",
+        "negative_prompt_rules",
+        "prompt_guidance",
+        "negative_guidance",
+        "compact_negative_guidance",
+    }
+)
+
 
 def _structured_appearance_rules() -> list[str]:
     return [
@@ -264,6 +286,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
 
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
         cluster = self._build_cluster(capability_input)
+        if self._is_brain_owned_forward_execution(capability_input):
+            cluster = self._quarantine_forward_local_creative_language(cluster)
         constraints = self._constraints(cluster)
         activation_plan = self._activation_plan(capability_input)
         status = CapabilityStatus.SUCCESS if cluster.has_visual_evidence else CapabilityStatus.SKIPPED
@@ -445,6 +469,61 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "active_capability_ids": list(activation_plan.get("dependency_order") or []) if activation_plan else [],
             },
         )
+
+    @staticmethod
+    def _is_brain_owned_forward_execution(capability_input: CapabilityInput) -> bool:
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        plan = metadata.get("capability_activation_plan")
+        return bool(
+            metadata.get("brain_owned_forward_execution")
+            and isinstance(plan, dict)
+            and str(plan.get("activation_mode") or "").lower() == "enforced"
+            and not bool(metadata.get("legacy_prompt_compatibility_record"))
+        )
+
+    @classmethod
+    def _quarantine_forward_local_creative_language(
+        cls,
+        cluster: VisualCapabilityClusterResult,
+    ) -> VisualCapabilityClusterResult:
+        """Remove retired local prompt prose without erasing review evidence.
+
+        The canonical finalizer receives facts, opaque bindings and normalized
+        issue codes.  It must never see a second local phrase catalogue from a
+        capability result.  Keep this at the capability boundary so a future
+        caller cannot accidentally re-enable the old route by reading a
+        metadata field that happens to survive downstream filtering.
+        """
+
+        payload = cls._strip_forward_local_creative_text(cluster.model_dump(mode="json"))
+        metadata = dict(payload.get("metadata") or {})
+        metadata["forward_local_creative_language_quarantined"] = True
+        metadata["forward_prompt_owner"] = "remote_v3_llm_brain"
+        payload["metadata"] = metadata
+        return VisualCapabilityClusterResult.model_validate(payload)
+
+    @classmethod
+    def _strip_forward_local_creative_text(cls, value: Any, *, parent_key: str | None = None) -> Any:
+        if isinstance(value, list):
+            return [cls._strip_forward_local_creative_text(item, parent_key=parent_key) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        sanitized: dict[str, Any] = {}
+        for raw_key, nested in value.items():
+            key = str(raw_key)
+            lowered = key.lower()
+            if lowered in FORWARD_LOCAL_CREATIVE_TEXT_FIELDS:
+                sanitized[key] = []
+            elif lowered == "retry_patch_templates" or (lowered == "templates" and parent_key == "retry"):
+                sanitized[key] = {}
+            elif lowered == "retry_patch":
+                # Keep the shape auditable, but never retain local repair
+                # language.  Review reason codes live beside this field.
+                sanitized[key] = {"evidence_only": True} if nested else {}
+            else:
+                sanitized[key] = cls._strip_forward_local_creative_text(nested, parent_key=lowered)
+        return sanitized
 
     def _build_cluster(self, capability_input: CapabilityInput) -> VisualCapabilityClusterResult:
         human_realism_active = self._capability_active(capability_input, "human_realism")

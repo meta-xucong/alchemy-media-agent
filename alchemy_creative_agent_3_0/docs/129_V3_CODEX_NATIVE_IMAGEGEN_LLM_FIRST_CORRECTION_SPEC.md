@@ -9,6 +9,11 @@ creative directions for new Local Mode calls.
 > Mode invariant: the MCP returns the exact final `generation_prompt` that the
 > V3 Web Provider materializes for the same frozen plan. This document's
 > previous "Codex conversation authors" language is archival only.
+>
+> **Doc135 clarification:** this document cannot be used to revive a local
+> phrase list, keyword classifier, retry patch or alternate Codex-authored
+> prompt.  Local Mode relays the remote Brain's complete approved canonical
+> prompt and its admitted references byte-for-byte, or blocks.
 
 ## Why N1 is superseded
 

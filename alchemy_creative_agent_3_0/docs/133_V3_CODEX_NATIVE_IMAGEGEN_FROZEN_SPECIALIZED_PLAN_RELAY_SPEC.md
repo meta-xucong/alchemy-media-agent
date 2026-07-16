@@ -1,5 +1,9 @@
 # Doc133: V3 Codex Native ImageGen Frozen Specialized-Plan Relay
 
+> **Doc135 refinement:** a specialized relay transports only the exact
+> remote-Brain canonical prompt and admitted references. Structural roles are
+> opaque lineage, never local camera/scene/phrase instructions.
+
 Status: active, explicit, conversation-only developer-preview extension of
 Docs130/131. It supersedes only their former Local MCP availability restriction
 for `ecommerce_template` and `photographer_template`; it does **not** relax

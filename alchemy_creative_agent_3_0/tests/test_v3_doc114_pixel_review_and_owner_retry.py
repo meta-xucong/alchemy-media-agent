@@ -150,7 +150,7 @@ def test_pixel_review_accepts_only_frozen_apparel_contract_issue_codes(monkeypat
     assert report.retryable is True
 
 
-def test_owner_local_retry_keeps_frozen_brain_evidence_map_and_product_truth(monkeypatch) -> None:
+def test_owner_retry_keeps_frozen_brain_evidence_map_and_product_truth_without_local_prose(monkeypatch) -> None:
     result = _ecommerce_result(monkeypatch)
     service = V3ProductApiService()
 
@@ -163,9 +163,7 @@ def test_owner_local_retry_keeps_frozen_brain_evidence_map_and_product_truth(mon
 
     assert source == "doc114_phase_d_test"
     assert codes == ["product_pattern_registration_drift", "delivery_evidence_dimension_mismatch"]
-    assert any("supplied product" in item for item in patch["product_reinforcement"])
-    assert any("prior frozen template-owned evidence map" in item for item in patch["prompt_additions"])
-    assert any("output 1:" in item for item in patch["prompt_additions"])
+    assert patch == {}
 
 
 def test_multi_output_pixel_review_binds_each_asset_to_its_frozen_brain_evidence(monkeypatch) -> None:
@@ -205,5 +203,5 @@ def test_generic_human_realism_issues_route_back_to_their_active_owner(monkeypat
     )
 
     assert codes == ["human_scene_coherence"]
-    assert patch["prompt_additions"]
+    assert patch == {}
     assert "ignored_out_of_scope_issue_codes" not in result.metadata.get("capability_activation_audit", {})

@@ -1,5 +1,9 @@
 # 41 V3 Template Manifest Registry And Activation Gate Spec
 
+> **Doc135 authority:** a manifest may govern availability, binding and
+> cardinality, never compose a local creative prompt, static role recipe or
+> keyword-derived renderer decision.
+
 This document defines the Project Mode template registry and activation gate.
 
 It prevents future templates from becoming clickable visual cards without a real

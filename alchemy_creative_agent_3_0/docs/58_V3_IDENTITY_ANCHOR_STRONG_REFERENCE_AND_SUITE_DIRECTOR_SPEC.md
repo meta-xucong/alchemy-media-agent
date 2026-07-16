@@ -1,5 +1,7 @@
 # 58 V3 Identity Anchor Strong Reference And Suite Director Spec
 
+> **Current-status note (Docs 93–96, 134–135):** Reference evidence and append-only continuity remain valid. Historical anchor/suite prompt additions are not forward renderer language; only declared reference truth and immutable channel ownership reach the Brain.
+
 Doc93 compatibility note:
 
 ```text

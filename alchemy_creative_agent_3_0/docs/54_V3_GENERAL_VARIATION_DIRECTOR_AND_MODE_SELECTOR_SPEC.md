@@ -1,5 +1,7 @@
 # 54 V3 General Variation Director And Mode Selector Spec
 
+> **Current-status note (Docs 76, 113, 134–135):** General may retain simple structural user choices, but any former mode-derived shot, role, camera or prompt recipe is historical. It must not author a new Provider prompt or leak specialized-suite semantics into General.
+
 Doc93 compatibility note:
 
 ```text

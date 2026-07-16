@@ -1,5 +1,9 @@
 # Doc114 V3 Apparel-on-Child Realism and Garment Truth Optimization
 
+> **Doc135 refinement:** apparel and age-appropriate realism are shared,
+> evidence-driven constraints. They must never become a child-specific local
+> prompt recipe or a keyword-derived renderer decision.
+
 Status: post-Doc113 capability specification; implementation is explicitly out
 of scope for the Doc113 correction task.
 

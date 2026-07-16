@@ -1,5 +1,10 @@
 # 57 V3 E-Commerce Lifestyle Count And Watermark QA Spec
 
+> **Doc135 forward-path note:** this document cannot authorize a local
+> image-role recipe, camera/scene phrase list or retry wording. New
+> E-Commerce creative directions are whole-image directions signed by the
+> remote Brain under E17.
+
 > Historical/compatibility notice (Docs111 and 113): this document records the
 > pre-LLM-native static-suite approach. Its lifestyle categories, slot ordering,
 > prompt rules, and fixed count-selection proposals are not forward runtime

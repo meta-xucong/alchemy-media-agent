@@ -1,5 +1,10 @@
 # E07 Development Roadmap, Method, and Technology Stack
 
+> **Doc135/E17 authority note:** no roadmap item may introduce a local
+> marketplace slot recipe, default marketing phrase, keyword-derived creative
+> decision or retry word stack. E-Commerce supplies factual/template evidence;
+> the remote Brain signs each whole-image prompt.
+
 ## Development method
 
 Use small, reversible milestones on the isolated branch:

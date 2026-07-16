@@ -266,5 +266,6 @@ def test_doc66_product_api_prefers_real_review_signal_for_precise_retry() -> Non
     assert codes == ["visible_text_artifact"]
     assert patch["target_candidate_ids"] == ["candidate_doc66_retry"]
     assert patch["target_output_ids"] == ["output_doc66_retry"]
-    assert "remove visible text and watermark" in patch["artifact_repair"]
     assert "artifact" in patch["issue_groups"]
+    assert "artifact_repair" not in patch
+    assert "negative_additions" not in patch

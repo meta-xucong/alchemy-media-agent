@@ -1,5 +1,9 @@
 # 29 V3 Development Document Execution Audit
 
+> **Doc135 authority:** this is an historical audit. Its old prompt-atom,
+> keyword and local-retry language cannot be revived as forward rendering
+> behavior.
+
 This audit answers:
 
 ```text

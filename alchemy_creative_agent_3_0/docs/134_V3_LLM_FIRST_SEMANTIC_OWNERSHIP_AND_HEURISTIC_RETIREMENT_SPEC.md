@@ -1,6 +1,7 @@
 # Doc134 V3 LLM-First Semantic Ownership and Heuristic Retirement
 
-Status: forward shared-foundation authority.  This document extends Docs120
+Status: forward shared-foundation authority. Together with Doc135, this document
+defines the mandatory prompt-ownership and legacy-quarantine boundary. This document extends Docs120
 and 128 after a controlled real-image audit found that a local keyword check
 could overrule an already-frozen Human Realism decision.  It applies to every
 template.  It creates no children, apparel, commerce, General, or Photography

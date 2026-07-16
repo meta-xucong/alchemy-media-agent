@@ -1,5 +1,10 @@
 # 102 V3 Doc101 Runtime Migration And Capability Isolation Implementation Spec
 
+> **Doc135 forward-path note:** the frozen plan/envelope controls execution
+> scope only. New forward paths retain facts and issue evidence, then require
+> a remote-Brain canonical prompt sign-off; they do not replay local module
+> prompt or retry fragments.
+
 Status: accepted implementation companion for Doc101. This document phase does
 not change runtime code. Future code work must implement the phases and gates in
 this document in order.

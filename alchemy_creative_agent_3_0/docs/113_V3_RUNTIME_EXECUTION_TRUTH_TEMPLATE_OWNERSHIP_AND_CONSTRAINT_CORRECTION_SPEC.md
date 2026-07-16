@@ -1,5 +1,9 @@
 # Doc113 V3 Runtime Execution Truth, Template Ownership, and Constraint Correction
 
+> **Doc135 refinement:** the constraint ledger is a factual adjudication
+> record. It must not retain local quality/negative guidance or retry prose as
+> a latent alternate prompt; the remote Brain signs all renderer language.
+
 Status: corrective implementation authority after Docs 100--103 and Doc111
 
 Scope: V3 Foundation, General Template boundary, E-Commerce Template boundary,

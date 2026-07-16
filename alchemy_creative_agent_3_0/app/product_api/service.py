@@ -2357,6 +2357,7 @@ class V3ProductApiService:
                 record=record,
                 result=merged_result,
                 generate_request=generate_request,
+                provider_strategy=provider_strategy,
                 attempt_index=attempt_index,
                 max_attempts=max_attempts,
                 seen_issue_codes=seen_issue_codes,
@@ -2375,6 +2376,7 @@ class V3ProductApiService:
             identity_local_repair = (
                 {}
                 if self._uses_brain_signed_provider_prompts(merged_result)
+                or not self._legacy_prompt_compatibility_allowed(merged_result)
                 else self._identity_local_repair_metadata(
                     merged_result,
                     attempt_index=attempt_index,
@@ -2528,9 +2530,10 @@ class V3ProductApiService:
         issue_codes, retry_patch, _source = self._visual_retry_signal(result, {})
         issue_codes = self._dedupe_strings(issue_codes)
         attempt_index = max_attempts + 1
+        legacy_prompt_compatibility = self._legacy_prompt_compatibility_allowed(result)
         local_repair = (
             {}
-            if self._uses_brain_signed_provider_prompts(result)
+            if self._uses_brain_signed_provider_prompts(result) or not legacy_prompt_compatibility
             else self._identity_local_repair_metadata(
                 result,
                 attempt_index=attempt_index,
@@ -2543,6 +2546,7 @@ class V3ProductApiService:
         if (
             not self._visual_retry_patch_has_content(retry_patch)
             and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced"
+            and legacy_prompt_compatibility
         ):
             retry_patch = self._visual_retry_patch_from_issues(issue_codes)
         if not self._visual_retry_patch_has_content(retry_patch):
@@ -2804,6 +2808,7 @@ class V3ProductApiService:
         record: ProductJobRecord,
         result: PlanningResult,
         generate_request: GenerateJobRequest,
+        provider_strategy: ProviderStrategy,
         attempt_index: int,
         max_attempts: int,
         seen_issue_codes: set[str],
@@ -2868,17 +2873,65 @@ class V3ProductApiService:
             }
 
         brain_signed_retry = self._uses_brain_signed_provider_prompts(result)
+        legacy_prompt_compatibility = self._legacy_prompt_compatibility_allowed(result)
         if brain_signed_retry:
             # The review service is allowed to classify what it observed.  It
             # is not allowed to translate those observations into a pile of
             # new words.  The remote Brain receives only these normalized
             # evidence codes during its next canonical prompt sign-off.
             retry_patch = {}
-        elif not retry_patch and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced":
+        elif (
+            not retry_patch
+            and str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() != "enforced"
+            and legacy_prompt_compatibility
+        ):
             retry_patch = self._visual_retry_patch_from_issues(retryable_codes)
         if bool(metadata.get("force_empty_visual_retry_patch")):
             retry_patch = {}
-        if not brain_signed_retry and not self._visual_retry_patch_has_content(retry_patch):
+        evidence_only_retry = brain_signed_retry or not legacy_prompt_compatibility
+        if evidence_only_retry and not brain_signed_retry and source == "request_metadata":
+            # A caller may report an issue for auditing, but cannot use a
+            # request-side code to force a second unbound generation.  Only a
+            # shared post-generation review result can enter the evidence-only
+            # mock lifecycle below; real runs additionally require Brain
+            # sign-off.  Keep the historical skipped status for this explicit
+            # no-patch compatibility case.
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="skipped",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=retryable_codes,
+                    retry_patch={},
+                    source=source,
+                    blocked_reason="empty_retry_patch",
+                ),
+            }
+        if (
+            evidence_only_retry
+            and not brain_signed_retry
+            and provider_strategy != ProviderStrategy.MOCK_GENERATION
+        ):
+            # A current real-image operation needs a new remote Brain sign-off
+            # before it may submit another outer generation.  The mock route
+            # is intentionally allowed to exercise the append-only review
+            # lifecycle with evidence only; it never reaches a real renderer.
+            return {
+                "should_retry": False,
+                "record": self._visual_retry_execution_record(
+                    record=record,
+                    status="blocked",
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                    reason_codes=retryable_codes,
+                    retry_patch={},
+                    source=source,
+                    blocked_reason="remote_brain_retry_signoff_required",
+                ),
+            }
+        if not evidence_only_retry and not self._visual_retry_patch_has_content(retry_patch):
             return {
                 "should_retry": False,
                 "record": self._visual_retry_execution_record(
@@ -2905,15 +2958,25 @@ class V3ProductApiService:
         result: PlanningResult,
         request_metadata: dict[str, Any],
     ) -> tuple[list[str], dict[str, Any], str]:
+        brain_signed = self._uses_brain_signed_provider_prompts(result)
+        legacy_prompt_compatibility = self._legacy_prompt_compatibility_allowed(result)
         explicit_codes = self._metadata_issue_codes(request_metadata)
         if explicit_codes:
+            if brain_signed:
+                codes, _patch, source = self._activation_filtered_retry_signal(
+                    result,
+                    explicit_codes,
+                    {},
+                    "request_metadata",
+                )
+                return codes, {}, source
             codes, patch, source = self._activation_filtered_retry_signal(
                 result,
                 explicit_codes,
-                self._metadata_retry_patch(request_metadata),
+                self._metadata_retry_patch(request_metadata) if legacy_prompt_compatibility else {},
                 "request_metadata",
             )
-            return (codes, {}, source) if self._uses_brain_signed_provider_prompts(result) else (codes, patch, source)
+            return codes, patch, source
 
         enforced = str(self._activation_plan_from_result(result).get("activation_mode") or "").lower() == "enforced"
         result_metadata = dict(result.metadata or {})
@@ -2934,7 +2997,7 @@ class V3ProductApiService:
                         signal_patch,
                         "real_review_signal_package",
                     )
-                    return (codes, {}, source) if self._uses_brain_signed_provider_prompts(result) else (codes, patch, source)
+                    return (codes, {}, source) if brain_signed else (codes, patch, source)
             return [], {}, "envelope_bound_review"
 
         text_deliveries: list[dict[str, Any]] = []
@@ -2951,14 +3014,17 @@ class V3ProductApiService:
                 return self._activation_filtered_retry_signal(
                     result,
                     self._dedupe_strings(generation_retry.get("reason_codes")),
-                    dict(generation_retry.get("retry_patch") or {}),
+                    dict(generation_retry.get("retry_patch") or {}) if legacy_prompt_compatibility else {},
                     "text_pixel_delivery",
                 )
 
         cluster = self._visual_cluster_metadata_from_result(result)
         real_signal = self._real_review_signal_package_from_cluster(cluster)
         if real_signal:
-            signal_codes, signal_patch = self._visual_retry_signal_from_real_review(real_signal)
+            signal_codes, signal_patch = self._visual_retry_signal_from_real_review(
+                real_signal,
+                allow_legacy_patch=legacy_prompt_compatibility,
+            )
             if signal_codes:
                 return self._activation_filtered_retry_signal(
                     result,
@@ -2977,7 +3043,7 @@ class V3ProductApiService:
             return self._activation_filtered_retry_signal(
                 result,
                 self._dedupe_strings(decision.get("reason_codes")),
-                dict(decision.get("retry_patch") or {}),
+                dict(decision.get("retry_patch") or {}) if legacy_prompt_compatibility else {},
                 "visual_cluster",
             )
         return [], {}, "visual_cluster"
@@ -3009,7 +3075,7 @@ class V3ProductApiService:
 
         plan = self._activation_plan_from_result(result)
         if str(plan.get("activation_mode") or "").lower() != "enforced":
-            return {"visual_retry_patch": dict(retry_patch)}
+            return {"visual_retry_patch": dict(retry_patch)} if self._legacy_prompt_compatibility_allowed(result) else {}
         plan_id = str(plan.get("plan_id") or "").strip()
         fingerprint = str(plan.get("fingerprint") or "").strip()
         if not plan_id or not fingerprint:
@@ -3053,6 +3119,25 @@ class V3ProductApiService:
             prompts = brain.get("canonical_provider_prompts")
             audit = brain.get("audit") if isinstance(brain.get("audit"), dict) else {}
             if isinstance(prompts, list) and prompts and bool(audit.get("remote_canonical_provider_prompts_received")):
+                return True
+        return False
+
+    @staticmethod
+    def _legacy_prompt_compatibility_allowed(result: PlanningResult) -> bool:
+        """Allow old local retry prose only for an explicit archival record.
+
+        No current create/generate request writes this marker.  This keeps
+        historical records readable for diagnosis while preventing a caller
+        from entering the abandoned prompt-patch route merely by omitting an
+        enforced activation envelope or remote Brain binding.
+        """
+
+        for source in (getattr(result, "metadata", {}), getattr(getattr(result, "creative_job", None), "metadata", {})):
+            if not isinstance(source, dict):
+                continue
+            if source.get("normalized_v3_job_intent") or source.get("capability_execution_envelope"):
+                return False
+            if bool(source.get("legacy_prompt_compatibility_record")):
                 return True
         return False
 
@@ -3139,10 +3224,23 @@ class V3ProductApiService:
             )
         if not filtered:
             return [], {}, source
-        # Enforced retries use only templates published by active capability
-        # contracts in the frozen ledger.  Review/request metadata may name an
-        # issue, but cannot inject a prompt patch or revive a legacy mapper.
+        # A current V3 retry never translates an issue code into a local prompt
+        # patch.  The frozen ledger establishes scope only; the remote Brain
+        # receives the normalized evidence and signs a complete replacement
+        # prompt.  The old templates remain readable exclusively for records
+        # explicitly marked as archival compatibility data.
         filtered = self._dedupe_strings(filtered)
+        if self._uses_brain_signed_provider_prompts(result) or not self._legacy_prompt_compatibility_allowed(result):
+            # Candidate/output targeting is append-only review provenance, not
+            # renderer language.  Preserve only those opaque identifiers for
+            # the retry record and the next Brain deliberation; never carry a
+            # caller/local prompt fragment through this branch.
+            provenance = {
+                key: values
+                for key in ("target_candidate_ids", "target_output_ids", "issue_groups")
+                if (values := self._dedupe_strings(retry_patch.get(key) if isinstance(retry_patch, dict) else []))
+            }
+            return filtered, provenance, source
         resolved_patch = self._ledger_retry_patch(ledger, filtered)
         # Candidate/output targeting is review provenance, not prompt text.
         # Preserve it so append-only history explains which failed output the
@@ -3337,10 +3435,6 @@ class V3ProductApiService:
             for signal in retry_signals
             for code in self._dedupe_strings(signal.get("retryable_issue_codes"))
         )
-        patches = [dict(signal.get("retry_patch") or {}) for signal in retry_signals]
-        retry_patch = self._merge_visual_retry_patches(patches)
-        if allow_legacy_patch and not self._visual_retry_patch_has_content(retry_patch):
-            retry_patch = self._visual_retry_patch_from_issues(reason_codes)
         target_candidate_ids = self._dedupe_strings(signal.get("candidate_id") for signal in retry_signals if signal.get("candidate_id"))
         target_output_ids = self._dedupe_strings(signal.get("output_id") for signal in retry_signals if signal.get("output_id"))
         issue_groups = self._dedupe_strings(
@@ -3348,12 +3442,24 @@ class V3ProductApiService:
             for signal in retry_signals
             for group in self._string_list((signal.get("metadata") or {}).get("issue_groups") if isinstance(signal.get("metadata"), dict) else [])
         )
+        provenance_patch: dict[str, Any] = {}
         if target_candidate_ids:
-            retry_patch["target_candidate_ids"] = target_candidate_ids
+            provenance_patch["target_candidate_ids"] = target_candidate_ids
         if target_output_ids:
-            retry_patch["target_output_ids"] = target_output_ids
+            provenance_patch["target_output_ids"] = target_output_ids
         if issue_groups:
-            retry_patch["issue_groups"] = issue_groups
+            provenance_patch["issue_groups"] = issue_groups
+        # Enforced review feeds the next remote Brain sign-off only with
+        # normalized evidence.  Do not even construct local prompt fragments
+        # before discarding them; that old translator is compatibility-only for
+        # explicitly non-enforced historical records.
+        if not allow_legacy_patch:
+            return reason_codes, provenance_patch
+        patches = [dict(signal.get("retry_patch") or {}) for signal in retry_signals]
+        retry_patch = self._merge_visual_retry_patches(patches)
+        if allow_legacy_patch and not self._visual_retry_patch_has_content(retry_patch):
+            retry_patch = self._visual_retry_patch_from_issues(reason_codes)
+        retry_patch.update(provenance_patch)
         return reason_codes, retry_patch
 
     def _merge_visual_retry_patches(self, patches: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3419,6 +3525,13 @@ class V3ProductApiService:
         return all(bool((report.get("metadata") or {}).get("pre_generation")) for report in report_dicts)
 
     def _visual_retry_patch_from_issues(self, issue_codes: list[str]) -> dict[str, Any]:
+        """Historical non-forward retry translator.
+
+        It is deliberately reachable only from compatibility branches for
+        non-enforced records.  New V3 execution uses normalized review issue
+        codes and obtains a fresh complete canonical prompt from the remote
+        Brain; it must never call this local phrase catalogue.
+        """
         prompt_additions: list[str] = []
         negative_additions: list[str] = []
         identity_reinforcement: list[str] = []
@@ -6593,7 +6706,10 @@ class V3ProductApiService:
             output_id = str(generated.get("output_id") or "").strip()
             if not output_id:
                 continue
-            opaque_output_id = str(intent.get("slot_id") or output_id).strip()
+            # A new LLM-native E-Commerce run exposes the immutable
+            # deliverable binding, not a local semantic slot.  ``slot_id`` is
+            # retained below only for historical records/read compatibility.
+            opaque_output_id = str(intent.get("output_id") or intent.get("slot_id") or output_id).strip()
             files.append(
                 {
                     "opaque_output_id": opaque_output_id,
@@ -6753,6 +6869,47 @@ class V3ProductApiService:
         result = record.generation_result or record.planning_result
         if result is None:
             return []
+
+        # New jobs receive their exact-N output bindings from the frozen
+        # TemplateDeliverablePlan.  Do not reconstruct a marketplace slot from
+        # asset metadata: that was the retired local E-Commerce pack path and
+        # could reintroduce ``ecommerce_output_1``/recipe semantics after the
+        # remote Brain had already authored the whole-image direction.
+        plan = record.request.metadata.get("template_deliverable_plan")
+        if not isinstance(plan, dict):
+            plan = result.metadata.get("template_deliverable_plan") if isinstance(result.metadata, dict) else None
+        deliverables = plan.get("deliverables") if isinstance(plan, dict) else None
+        if isinstance(deliverables, list) and str(plan.get("scenario_id") or "") == "ecommerce":
+            assets = list(result.series_plan.assets)
+            output_intents: list[dict[str, Any]] = []
+            for raw_deliverable in deliverables:
+                if not isinstance(raw_deliverable, dict):
+                    continue
+                try:
+                    index = int(raw_deliverable.get("output_index"))
+                except (TypeError, ValueError):
+                    continue
+                output_id = str(raw_deliverable.get("deliverable_id") or "").strip()
+                direction = str(raw_deliverable.get("image_intent") or "").strip()
+                if not output_id or not direction or index < 1 or index > len(assets):
+                    # A malformed frozen plan must not be substituted with a
+                    # local output label.  Leave the public summary empty so
+                    # its closure check remains attention/blocked.
+                    return []
+                output_intents.append(
+                    {
+                        "output_id": output_id,
+                        "index": index,
+                        "intent": direction,
+                        "source": "remote_v3_llm_brain",
+                        "asset_id": assets[index - 1].asset_id,
+                    }
+                )
+            if len(output_intents) == len(deliverables):
+                return output_intents
+
+        # Historical records can remain readable through their old slot
+        # projection.  No current creation path writes these fields.
         intents: list[dict[str, Any]] = []
         for asset in result.series_plan.assets:
             metadata = dict(asset.metadata or {})

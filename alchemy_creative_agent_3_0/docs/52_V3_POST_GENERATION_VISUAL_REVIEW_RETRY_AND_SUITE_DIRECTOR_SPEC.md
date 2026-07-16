@@ -1,5 +1,7 @@
 # 52 V3 Post Generation Visual Review Retry And Suite Director Spec
 
+> **Current-status note (Docs 111, 134–135):** Review still observes quality and may request a bounded retry, but it now sends normalized evidence to the remote Brain. Any historical retry prompt/negative patch, suite wording or local re-prompt described below is superseded and cannot reach a Provider.
+
 Doc93 compatibility note:
 
 ```text

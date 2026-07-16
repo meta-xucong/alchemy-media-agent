@@ -80,9 +80,10 @@ def test_doc132_shared_fixture_keeps_exact_brain_count_and_project_aggregation(
     assert job["status"] == "planned"
     assert job["scenario"]["selected_mode_id"] is None
     assert job["scenario"]["selected_preset_id"] is None
-    assert [item["slot_id"] for item in job["ecommerce"]["remote_brain_output_intents"]] == [
-        f"ecommerce_output_{index}" for index in range(1, count + 1)
-    ]
+    output_intents = job["ecommerce"]["remote_brain_output_intents"]
+    assert [item["index"] for item in output_intents] == list(range(1, count + 1))
+    assert all(item["output_id"].startswith("template_deliverable_") for item in output_intents)
+    assert all("slot_id" not in item for item in output_intents)
     assert len(provider.requests) == 2
 
     brain_request = provider.requests[0]
@@ -154,16 +155,17 @@ def test_doc132_refresh_reopen_preserves_final_project_aggregation(tmp_path: Pat
 def test_doc132_child_continuation_is_append_only_and_blocked_parent_has_no_delivery(tmp_path: Path) -> None:
     handlers = _handlers(tmp_path)
     project, root = _new_project_job(handlers, count=2)
+    output_id = root["ecommerce"]["remote_brain_output_intents"][0]["output_id"]
     continuation = handlers.post_project_ecommerce_slot_continuation(
         project["project_id"],
         root["job_id"],
-        "ecommerce_output_1",
+        output_id,
         {"correction_note": "Keep the same product truth while improving the requested direction."},
     )
     child = handlers.post_project_job_generate(
         project["project_id"], continuation["child_job_id"], {"quality_mode": "standard"}
     )
-    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], "ecommerce_output_1")
+    delivery = handlers.get_project_ecommerce_slot_delivery(project["project_id"], root["job_id"], output_id)
 
     assert child["status"] == "generated"
     assert continuation["child_job_id"] != root["job_id"]

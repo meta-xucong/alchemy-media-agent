@@ -4,6 +4,14 @@ Status: slot-continuation runtime implemented on the mainline; text-pixel
 delivery remains a shared non-production gate until deterministic composition,
 OCR, and live-provider Gate C evidence are accepted.
 
+> **Doc135 forward-ownership correction:** the historical route name retains
+> `{slot_id}` for API compatibility, but a new job’s value is an opaque frozen
+> `TemplateDeliverablePlan.deliverable_id`, not a semantic marketplace role.
+> New execution must not mint `main_image`, `feature_image`,
+> `ecommerce_output_1`, camera/crop recipe or text-slot meanings. All
+> text-pixel/OCR/overlay sections below are archived by Doc111 and do not
+> authorize a forward local rendering path.
+
 Correction (Doc111): Sections 6-8 are historical only. New jobs use
 provider-native complete-image text and observational final-pixel review; they
 must not activate a deterministic compositor, `CopyRenderPlan`, fonts, or
@@ -60,7 +68,8 @@ does not erase the prior successful delivery.
 Validation rules:
 
 - the parent belongs to `ecommerce_template` and its project;
-- `slot_id` is a declared role in the parent's frozen E-Commerce suite;
+- `slot_id` is the opaque binding of one declared output in the parent's
+  frozen E-Commerce deliverable plan; it is not a visual role or recipe;
 - the parent has a frozen capability plan and readable lineage metadata;
 - correction text is prompt direction, not evidence of a new capability;
 - new evidence must already be an authorized project asset or selected output;
@@ -239,7 +248,7 @@ this contract's tests, and its own template activation gate all pass.
 Create a child only; then use the ordinary project-job generation endpoint:
 
 ```json
-POST /api/v3/creative-agent/projects/project_demo/jobs/job_parent/ecommerce-slots/feature_image_1/continuations
+POST /api/v3/creative-agent/projects/project_demo/jobs/job_parent/ecommerce-slots/template_deliverable_opaque_binding/continuations
 {
   "correction_note": "Show the adjustable shade more clearly.",
   "new_evidence_asset_ids": ["asset_new_product_angle"],

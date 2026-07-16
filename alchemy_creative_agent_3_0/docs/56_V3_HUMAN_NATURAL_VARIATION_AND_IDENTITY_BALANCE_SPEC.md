@@ -1,5 +1,7 @@
 # 56 V3 Human Natural Variation And Identity Balance Spec
 
+> **Current-status note (Docs 91–96, 134–135):** Human/identity quality remains a shared evidence and review concern. Its former local positive/negative phrase bundles do not authorize a second renderer prompt; frozen Brain semantics and the final Brain sign-off own creative wording.
+
 Doc93 compatibility note:
 
 ```text

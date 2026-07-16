@@ -1,5 +1,7 @@
 # 53 V3 Visual Auto Retry Execution Guardrails Spec
 
+> **Current-status note (Docs 111, 134–135):** The bounded/append-only retry lifecycle remains valid. Historical deterministic repair phrases and `retry_patch` word stacks are compatibility-only; a new retry supplies issue evidence to the Brain, which signs a complete replacement prompt.
+
 ## 1. Status And Authority
 
 This document is the implementation authority for the automatic retry

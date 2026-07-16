@@ -1,5 +1,7 @@
 # 84 V3 Structured Appearance Identity And General Prompt Purity Closure Spec
 
+> **Current-status note (Docs 93–96, 113, 134–135):** Structured appearance facts remain evidence with explicit ownership and precedence. They may not be serialized as a local creative prompt, keyword-derived subject decision or retry word stack; the remote Brain validates the final whole-image wording.
+
 Doc93 compatibility note:
 
 ```text

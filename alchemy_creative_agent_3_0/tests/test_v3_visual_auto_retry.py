@@ -70,7 +70,7 @@ def test_visual_retry_no_result_keeps_safe_pre_provider_provenance(tmp_path) -> 
     }
 
 
-def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_path) -> None:
+def test_unbound_general_mock_retry_is_withheld_without_a_local_prompt_patch(tmp_path) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
 
@@ -88,37 +88,20 @@ def test_visual_auto_retry_appends_outputs_without_overwriting_originals(tmp_pat
     internal_result = _internal_generation_result(service, created.job_id)
     retry_summary = internal_result.metadata["visual_auto_retry"]
     internal_assets = internal_result.asset_pack.assets
-    retry_candidates = [
-        asset
-        for asset in internal_assets
-        if asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
-    ]
-    original_candidates = [
-        asset
-        for asset in internal_assets
-        if not asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
-    ]
-
     assert generated.status == ProductJobStatusValue.GENERATED
     assert retry_summary["enabled"] is True
-    assert retry_summary["executed_count"] == 1
+    assert retry_summary["executed_count"] == 0
     assert retry_summary["append_only"] is True
-    assert retry_summary["records"][0]["status"] == "executed"
+    assert retry_summary["records"][0]["status"] == "skipped"
+    assert retry_summary["records"][0]["blocked_reason"] == "empty_retry_patch"
     assert "visible_text_artifact" in retry_summary["issue_codes"]
-    assert original_candidates
-    assert retry_candidates
-    assert {candidate.metadata["selected_candidate_id"] for candidate in original_candidates}.isdisjoint(
-        {candidate.metadata["selected_candidate_id"] for candidate in retry_candidates}
-    )
-    assert all(
-        candidate.metadata["candidate_metadata"]["visual_auto_retry_attempt"] == 1
-        for candidate in retry_candidates
-    )
+    assert internal_assets
+    assert not any(asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output") for asset in internal_assets)
     assert generated.metadata["visual_auto_retry"]["append_only"] is True
     assert "retry_patch" not in generated.metadata["visual_auto_retry"]["records"][0]
 
 
-def test_visual_auto_retry_does_not_merge_a_retry_that_has_no_materialized_pixels(tmp_path, monkeypatch) -> None:
+def test_unbound_general_mock_retry_does_not_enter_a_second_generation_loop(tmp_path, monkeypatch) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
     original_generate = service.scenario_runtime.generate_job
@@ -157,11 +140,10 @@ def test_visual_auto_retry_does_not_merge_a_retry_that_has_no_materialized_pixel
     internal_result = _internal_generation_result(service, created.job_id)
     retry_summary = internal_result.metadata["visual_auto_retry"]
 
-    assert invocation_count == 2
+    assert invocation_count == 1
     assert retry_summary["executed_count"] == 0
-    assert retry_summary["records"][0]["status"] == "blocked"
-    assert retry_summary["records"][0]["blocked_reason"] == "retry_generation_returned_without_pixels"
-    assert retry_summary["records"][0]["retry_output_ids"] == []
+    assert retry_summary["records"][0]["status"] == "skipped"
+    assert retry_summary["records"][0]["blocked_reason"] == "empty_retry_patch"
     assert not any(
         asset.metadata.get("candidate_metadata", {}).get("visual_auto_retry_output")
         for asset in internal_result.asset_pack.assets
@@ -169,7 +151,7 @@ def test_visual_auto_retry_does_not_merge_a_retry_that_has_no_materialized_pixel
     assert not internal_result.metadata.get("retry_generation_result_ids")
 
 
-def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path) -> None:
+def test_unbound_general_mock_retry_never_repeats_a_local_issue_patch_in_strict_mode(tmp_path) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
 
@@ -188,9 +170,9 @@ def test_visual_auto_retry_stops_when_same_issue_repeats_in_strict_mode(tmp_path
     records = retry_summary["records"]
 
     assert retry_summary["max_attempts"] == 2
-    assert retry_summary["executed_count"] == 1
-    assert [record["status"] for record in records] == ["executed", "blocked"]
-    assert records[-1]["blocked_reason"] == "same_issue_repeated"
+    assert retry_summary["executed_count"] == 0
+    assert [record["status"] for record in records] == ["skipped"]
+    assert records[-1]["blocked_reason"] == "empty_retry_patch"
     assert records[-1]["original_job_id"] == created.job_id
 
 
@@ -204,6 +186,11 @@ def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(t
         service,
         "_visual_retry_patch_from_issues",
         lambda _codes: (_ for _ in ()).throw(AssertionError("enforced retry must not use legacy issue mapper")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_ledger_retry_patch",
+        lambda _ledger, _codes: (_ for _ in ()).throw(AssertionError("enforced retry must not build ledger prose")),
     )
     created = service.create_job(
         {

@@ -1,5 +1,9 @@
 # E17 LLM-Native E-Commerce Architecture Correction
 
+> **Doc135 refinement:** the rule here applies to every forward V3 route:
+> facts and policy evidence may be structured, but no local layer may turn
+> them into final prompt fragments after the remote Brain's sign-off.
+
 Status: active migration authority for new E-Commerce jobs
 Scope: E-Commerce specialized template and its narrowly required shared seams
 
@@ -17,7 +21,7 @@ seller request + product references + sourced facts + explicit user choices
 -> LLM-decided per-output image intent in natural language
 -> GPT Image 2 renders each complete image
 -> shared visual review and bounded provider-native revision
--> append-only delivery history and current output per opaque E-Commerce slot
+-> append-only delivery history and current output per opaque frozen-output binding
 ```
 
 Structured objects only carry facts, evidence provenance, user-approved
@@ -47,7 +51,10 @@ creative plan.
 E-Commerce owns the factual context supplied to the Brain: product truth and
 reference bindings; seller-supplied audience, claims, approved literal copy,
 locales, and goals; category evidence questions; versioned platform constraints
-and provenance; per-output opaque slot lineage and UI presentation.
+and provenance; per-output opaque binding lineage and UI presentation.  New
+records derive the binding from `TemplateDeliverablePlan.deliverable_id`; they
+must not mint `ecommerce_output_1`, `main_image`, `feature_image`, or any
+other semantic role name.
 
 It may say that a shopper must be able to judge material, scale, use, or a
 supported claim. It cannot decide that an output is a macro, lifestyle frame,
@@ -84,9 +91,9 @@ layout.
 
 ## Continuation and text compatibility
 
-Doc105 continuation keeps a stable `slot_id`, but new slot IDs are opaque
-output identities (`ecommerce_output_1`, etc.), not semantic platform or
-category recipes. The delivered output's LLM-generated intent is displayed
+Doc105 continuation keeps the historical `slot_id` route parameter, but a new
+value is the opaque frozen `TemplateDeliverablePlan.deliverable_id`, not a
+semantic platform or category recipe. The delivered output's LLM-generated intent is displayed
 with it.
 
 Doc111 remains authoritative for in-image text: exact approved literal copy
@@ -98,8 +105,8 @@ repair is a bounded provider-native revision. No local text operation exists.
 1. New planning contains no static slot/recipe/camera/crop/default-copy fields.
 2. A remote Brain receives only factual E-Commerce context and returns a
    complete per-output plan matching the requested count.
-3. The vertical pack turns that plan into opaque output identities; it never
-   invents or fills an intent.
+3. The shared frozen TemplateDeliverablePlan exposes opaque output bindings;
+   no vertical pack invents, labels, or fills an intent.
 4. General and Photography tests prove their Brain payloads and role plans do
    not gain E-Commerce terms or behavior.
 5. Legacy text-pixel calls remain read-compatible but cannot reach fonts, OCR,

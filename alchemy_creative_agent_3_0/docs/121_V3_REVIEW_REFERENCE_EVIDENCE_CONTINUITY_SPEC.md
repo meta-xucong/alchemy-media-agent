@@ -1,5 +1,9 @@
 # Doc121 V3 Review Reference Evidence Continuity
 
+> **Doc135 refinement:** review/reference continuity returns evidence and
+> certification state, never a local prompt patch. Any retry must be re-signed
+> by the remote Brain before a renderer is called.
+
 Status: corrective shared-foundation authority discovered during the controlled
 Doc118/Doc120 General reference acceptance. It does not create a child,
 apparel, product, commerce, photography, or General-template-specific branch.

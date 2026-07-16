@@ -1,5 +1,9 @@
 # 08 Golden Cases
 
+> **Doc135 authority:** these early cases remain regression history. They do
+> not authorize keyword-derived creative decisions or locally assembled
+> renderer prompts for a new enforced job.
+
 > **Current text-image direction (2026-07-13):** [Doc111](111_V3_PROVIDER_NATIVE_TEXT_AND_ECOMMERCE_CREATIVE_DIRECTION_CORRECTION.md) supersedes any external-overlay, local-font, fixed-copy-region, or deterministic text-rendering expectation in these historical cases. New work uses LLM creative direction and provider-native complete-image generation.
 
 This document defines golden test cases for the V3 foundation pipeline.
