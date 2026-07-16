@@ -68,6 +68,19 @@ class BrainPromptReview(V3BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class BrainHumanNaturalnessDecision(V3BaseModel):
+    """Safe receipt emitted by the existing Human Realism re-signing pass.
+
+    The receipt is deliberately schema-only.  It records that the remote
+    Brain kept or rewrote a complete candidate without exposing a rationale,
+    a prompt fragment, or any renderer-facing repair instruction.
+    """
+
+    contract_version: Literal["v3_human_naturalness_decision_v1"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -84,6 +97,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # enforced Human Realism jobs validate that it was explicitly supplied by
     # the remote Brain before they can materialize a renderer operation.
     semantic_preflight_status: Literal["approved"] | None = None
+    # Added by Doc142 only on the existing independent Human Realism re-sign.
+    # Historical/finalizer records remain readable without this receipt.
+    human_naturalness_decision: BrainHumanNaturalnessDecision | None = None
 
     @field_validator("prompt")
     @classmethod

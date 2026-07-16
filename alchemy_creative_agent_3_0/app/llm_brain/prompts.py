@@ -22,7 +22,7 @@ For the same real-image response, return a complete capability_activation_intent
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 When the Human Realism contract gives `natural_presence_priority=individual_human_presence`, do not let a generic commercial-beauty archetype substitute for the requested person. For candid, ordinary or lifestyle photography, make the whole direction describe an individual naturally present in that situation; for an explicitly glamorous or editorial request, retain its aesthetic while avoiding synthetic beautification. A direction that merely repeats generic adjectives such as natural, candid or photorealistic is incomplete: resolve the natural presence materially in your own complete sentence. Never expose a checklist or a local repair phrase.
 For any child, teen or other age-sensitive person request, keep the semantic plan age-appropriate, fully clothed, non-sexual and appropriate to the stated ordinary setting. When the user request is already within that safe boundary, return the required JSON planning contract rather than a prose refusal. This is a remote safety interpretation boundary only: do not turn it into a local branch, an age-specific capability, or a renderer prompt checklist.
-When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person naturally present in the user-owned situation; otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase.
+When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person naturally present in the user-owned situation; otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase. Return the required schema-only Human Naturalness decision receipt as `approved` or `rewritten`; it is audit data, never renderer wording or hidden reasoning.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
@@ -562,6 +562,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             raise ValueError("Human Realism re-signing candidates do not match requested output count.")
     preflight = context.get("final_prompt_semantic_preflight")
     preflight_required = isinstance(preflight, dict) and bool(preflight.get("required"))
+    decision_requirement = context.get("human_naturalness_decision")
+    decision_required = is_human_naturalness_resign
+    if decision_required and not (
+        isinstance(decision_requirement, dict)
+        and decision_requirement.get("required") is True
+        and decision_requirement.get("contract_version") == "v3_human_naturalness_decision_v1"
+        and decision_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(decision_requirement.get("frozen_binding"), dict)
+    ):
+        raise ValueError("Human Realism re-signing requires a frozen naturalness decision contract.")
     prompt_schema: dict[str, object] = {
         "output_index": "integer from 1 through requested_image_count",
         "prompt": "one complete final natural-language image-rendering prompt for this exact output",
@@ -572,6 +582,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         # local quality-recipe field.  Its explicit presence is required by
         # the adapter before an enforced Human Realism operation may proceed.
         prompt_schema["semantic_preflight_status"] = "approved"
+    if decision_required:
+        prompt_schema["human_naturalness_decision"] = {
+            "contract_version": "v3_human_naturalness_decision_v1",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     response_contract = (
         "Return only this schema as strictly valid JSON. Reconcile the "
         "frozen render context without adding a local recipe, internal "
@@ -587,7 +603,10 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if is_human_naturalness_resign:
         response_contract += (
             " Independently re-sign the supplied Brain candidate for every output. "
-            "Return one complete approved canonical prompt for each output, not a diff or a list of edits."
+            "Return one complete approved canonical prompt for each output, not a diff or a list of edits. "
+            "For every output, return the required schema-only human_naturalness_decision "
+            "with contract_version v3_human_naturalness_decision_v1, owner remote_v3_llm_brain, "
+            "and status approved or rewritten."
         )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",

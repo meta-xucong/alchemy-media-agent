@@ -10,7 +10,7 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
-from ..llm_brain.providers import BrainSemanticPreflightMissing
+from ..llm_brain.providers import BrainHumanNaturalnessDecisionMissing, BrainSemanticPreflightMissing
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -44,7 +44,10 @@ from ..shared_capabilities.activation import (
     compatibility_policy,
 )
 from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
-from ..shared_capabilities.visual_cluster.human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS
+from ..shared_capabilities.visual_cluster.human_photorealism import (
+    HUMAN_REALISM_REVIEW_DIMENSIONS,
+    normalize_human_realism_issue_code,
+)
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
     CapabilityPreparationResult,
@@ -566,7 +569,9 @@ class ScenarioRuntime:
                 reasoning_depth="balanced",
                 metadata={
                     "canonical_prompt_context": resigning_context,
-                    "candidate_canonical_provider_prompts": [item.model_dump(mode="json") for item in prompts],
+                    "candidate_canonical_provider_prompts": [
+                        item.model_dump(mode="json", exclude_none=True) for item in prompts
+                    ],
                 },
                 template_capability_policy=policy,
             )
@@ -574,7 +579,11 @@ class ScenarioRuntime:
                 prompts, resigning_audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(resigning_request)
             except Exception as exc:
                 raise self._remote_creative_brain_block(
-                    "human_realism_natural_presence_resigning_unavailable",
+                    (
+                        "human_realism_natural_presence_decision_missing"
+                        if isinstance(exc, BrainHumanNaturalnessDecisionMissing)
+                        else "human_realism_natural_presence_resigning_unavailable"
+                    ),
                     brain_result,
                 ) from exc
             audit = {
@@ -623,6 +632,14 @@ class ScenarioRuntime:
 
         context = dict(canonical_prompt_context)
         context.pop("retry_evidence", None)
+        context["human_naturalness_decision"] = {
+            "required": True,
+            "contract_version": "v3_human_naturalness_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            # This is an integrity reference to the already-frozen context,
+            # not a second mutable plan or a creative-language instruction.
+            "frozen_binding": dict(context.get("frozen_binding") or {}),
+        }
         return context
 
     @staticmethod
@@ -745,9 +762,7 @@ class ScenarioRuntime:
             "reference_bindings": references,
             "retry_evidence": {
                 "active": bool(request.metadata.get("visual_auto_retry_active")),
-                "issue_codes": [
-                    str(item) for item in request.metadata.get("visual_retry_reason_codes", []) if str(item).strip()
-                ],
+                "issue_codes": ScenarioRuntime._normalized_retry_evidence_issue_codes(request, plan),
             },
             # These are opaque integrity bindings for the runtime, not
             # creative vocabulary for the final prompt.
@@ -757,6 +772,28 @@ class ScenarioRuntime:
                 "execution_fingerprint": envelope.execution_fingerprint,
             },
         }
+
+    @staticmethod
+    def _normalized_retry_evidence_issue_codes(
+        request: ScenarioRuntimeRequest,
+        plan: CapabilityActivationPlan,
+    ) -> list[str]:
+        """Normalize Human Realism review evidence before the next Brain pass.
+
+        This is data normalization only.  It never creates a repair sentence
+        or changes other frozen capability evidence.  Historical fine-grained
+        Human Realism labels collapse to the five shared dimensions before
+        they are presented to the Brain.
+        """
+
+        raw_codes = [
+            str(item).strip()
+            for item in request.metadata.get("visual_retry_reason_codes", [])
+            if str(item).strip()
+        ]
+        if "human_realism" not in plan.dependency_order:
+            return list(dict.fromkeys(raw_codes))
+        return list(dict.fromkeys(normalize_human_realism_issue_code(item) for item in raw_codes))
 
     def _require_brain_signed_provider_prompts(
         self,
@@ -795,6 +832,17 @@ class ScenarioRuntime:
         ):
             raise self._remote_creative_brain_block(
                 "human_realism_natural_presence_resigning_missing",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
+        if (
+            "human_realism" in plan.dependency_order
+            and not bool(brain_result.audit.get("frozen_execution_reuse"))
+            and not bool(brain_result.audit.get("human_realism_natural_presence_decision_signed"))
+        ):
+            raise self._remote_creative_brain_block(
+                "human_realism_natural_presence_decision_missing",
                 brain_result,
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),

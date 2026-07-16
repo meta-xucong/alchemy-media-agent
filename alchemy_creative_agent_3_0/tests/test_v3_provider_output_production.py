@@ -1211,6 +1211,17 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                     if isinstance(preflight, dict) and preflight.get("required")
                     else {}
                 )
+                decision_receipt = (
+                    {
+                        "human_naturalness_decision": {
+                            "contract_version": "v3_human_naturalness_decision_v1",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if request.stage == "provider_prompt_human_naturalness_resign"
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
@@ -1218,6 +1229,7 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                             "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
                             "review_status": "approved",
                             **receipt,
+                            **decision_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]
@@ -1352,6 +1364,17 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                     if isinstance(preflight, dict) and preflight.get("required")
                     else {}
                 )
+                decision_receipt = (
+                    {
+                        "human_naturalness_decision": {
+                            "contract_version": "v3_human_naturalness_decision_v1",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if request.stage == "provider_prompt_human_naturalness_resign"
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
@@ -1359,6 +1382,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                             "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
                             "review_status": "approved",
                             **receipt,
+                            **decision_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]

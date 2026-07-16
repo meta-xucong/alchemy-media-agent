@@ -80,6 +80,7 @@ class EcommerceRemoteBrainTestProvider:
         context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
         preflight = context.get("final_prompt_semantic_preflight") if isinstance(context, dict) else {}
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
+        requires_human_naturalness_decision = request.stage == "provider_prompt_human_naturalness_resign"
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -89,6 +90,17 @@ class EcommerceRemoteBrainTestProvider:
                 ),
                 "review_status": "approved",
                 **({"semantic_preflight_status": "approved"} if requires_human_preflight else {}),
+                **(
+                    {
+                        "human_naturalness_decision": {
+                            "contract_version": "v3_human_naturalness_decision_v1",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_human_naturalness_decision
+                    else {}
+                ),
             }
             for index in range(1, count + 1)
         ]

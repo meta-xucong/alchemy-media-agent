@@ -300,9 +300,18 @@ class CodexNativeImageGenPlanner:
             stages = [stage] if stage in allowed_stages else []
         human_active = isinstance(active_capability_ids, list) and "human_realism" in active_capability_ids
         human_resigned = bool(audit.get("human_realism_natural_presence_resigned"))
+        human_decision_signed = bool(audit.get("human_realism_natural_presence_decision_signed"))
+        raw_decisions = audit.get("human_realism_natural_presence_decisions")
+        decision_statuses = [
+            str(item.get("status"))
+            for item in raw_decisions
+            if isinstance(item, dict) and str(item.get("status") or "") in {"approved", "rewritten"}
+        ] if isinstance(raw_decisions, list) else []
         if human_active and (
             stages != ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
             or not human_resigned
+            or not human_decision_signed
+            or not decision_statuses
         ):
             return None
         if not stages:
@@ -310,6 +319,7 @@ class CodexNativeImageGenPlanner:
         return {
             "stages": stages,
             "human_realism_natural_presence_resigned": human_resigned,
+            "human_realism_natural_presence_decision_statuses": decision_statuses,
         }
 
     @staticmethod

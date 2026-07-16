@@ -61,9 +61,17 @@ def test_doc139_active_human_jobs_use_one_finalizer_and_one_independent_resigner
         }
     ]
     assert resign["metadata"]["canonical_prompt_context"] == {
-        key: value
-        for key, value in first["metadata"]["canonical_prompt_context"].items()
-        if key != "retry_evidence"
+        **{
+            key: value
+            for key, value in first["metadata"]["canonical_prompt_context"].items()
+            if key != "retry_evidence"
+        },
+        "human_naturalness_decision": {
+            "required": True,
+            "contract_version": "v3_human_naturalness_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": first["metadata"]["canonical_prompt_context"]["frozen_binding"],
+        },
     }
     payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
     assert payload["candidate_canonical_provider_prompts"] == [
@@ -158,4 +166,5 @@ def test_doc139_local_mcp_relays_the_re_signed_string_without_a_second_prompt_pa
     assert result["provenance"]["canonical_prompt_signing"] == {
         "stages": ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"],
         "human_realism_natural_presence_resigned": True,
+        "human_realism_natural_presence_decision_statuses": ["approved"],
     }

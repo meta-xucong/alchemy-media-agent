@@ -691,7 +691,15 @@ class HumanPhotorealismLayer:
                 status="not_applicable",
                 metadata={"doc": "65", **dict(metadata or {})},
             )
-        retry_patch = dict(guidance.retry_patch_templates) if issue_codes else {}
+        # New enforced jobs send only normalized review evidence back to the
+        # remote Brain.  Even constructing a local Human Realism phrase patch
+        # here would leave an executable compatibility escape hatch.
+        brain_owned_forward_execution = bool(guidance.metadata.get("brain_owned_forward_execution"))
+        retry_patch = (
+            {}
+            if brain_owned_forward_execution or not issue_codes
+            else dict(guidance.retry_patch_templates)
+        )
         plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
         hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         return AntiAIFaceReviewResult(
@@ -712,7 +720,11 @@ class HumanPhotorealismLayer:
                 if issue_codes
                 else ["Hand and skin realism will be checked after generation"] if hand_detail else ["Face realism will be checked after generation"]
             ),
-            metadata={"doc": "65", **dict(metadata or {})},
+            metadata={
+                "doc": "65",
+                "retry_evidence_only": brain_owned_forward_execution,
+                **dict(metadata or {}),
+            },
         )
 
     @classmethod

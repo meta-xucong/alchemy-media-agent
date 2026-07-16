@@ -22,6 +22,10 @@ class BrainSemanticPreflightMissing(BrainProviderError):
     """The Brain returned a prompt but omitted a required semantic receipt."""
 
 
+class BrainHumanNaturalnessDecisionMissing(BrainProviderError):
+    """The independent Human Realism re-sign lacked its required safe receipt."""
+
+
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 

@@ -19,7 +19,13 @@ from .context_digest import (
 )
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_skipped_result
-from .providers import BrainProviderError, BrainProviderUnavailable, BrainSemanticPreflightMissing, V3LLMBrainProvider
+from .providers import (
+    BrainHumanNaturalnessDecisionMissing,
+    BrainProviderError,
+    BrainProviderUnavailable,
+    BrainSemanticPreflightMissing,
+    V3LLMBrainProvider,
+)
 from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
 
 
@@ -119,6 +125,14 @@ class V3LLMBrainAdapter:
             raise BrainSemanticPreflightMissing(
                 "Remote Brain did not explicitly approve the required Human Realism semantic preflight."
             )
+        naturalness_decision_required = _requires_human_naturalness_decision(request)
+        if naturalness_decision_required and not _matches_human_naturalness_decision_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+        ):
+            raise BrainHumanNaturalnessDecisionMissing(
+                "Remote Brain did not return the required Human Realism naturalness decision receipt."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -131,6 +145,17 @@ class V3LLMBrainAdapter:
                 "canonical_provider_prompt_model": self.provider.model,
                 "human_realism_semantic_preflight_required": semantic_preflight_required,
                 "human_realism_semantic_preflight_signed": semantic_preflight_required,
+                "human_realism_natural_presence_decision_required": naturalness_decision_required,
+                "human_realism_natural_presence_decision_signed": naturalness_decision_required,
+                "human_realism_natural_presence_decisions": (
+                    [
+                        prompt.human_naturalness_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.human_naturalness_decision is not None
+                    ]
+                    if naturalness_decision_required
+                    else []
+                ),
             },
         )
     def build_request(
@@ -634,6 +659,34 @@ def _matches_human_semantic_preflight_receipts(candidate: Any, *, expected_count
         isinstance(item, dict)
         and int(item.get("output_index") or 0) == index
         and item.get("semantic_preflight_status") == "approved"
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _requires_human_naturalness_decision(request: BrainRunRequest) -> bool:
+    """Require a schema receipt only on the existing Human Realism re-sign.
+
+    This checks a frozen execution stage and contract boundary; it does not
+    inspect creative language or classify people from prompt keywords.
+    """
+
+    return request.stage == "provider_prompt_human_naturalness_resign" and _requires_human_semantic_preflight(request)
+
+
+def _matches_human_naturalness_decision_receipts(candidate: Any, *, expected_count: int) -> bool:
+    """Validate the public-safe Doc142 receipt before Pydantic projection."""
+
+    expected_keys = {"contract_version", "status", "owner"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("human_naturalness_decision"), dict)
+        and set(item["human_naturalness_decision"]) == expected_keys
+        and item["human_naturalness_decision"].get("contract_version") == "v3_human_naturalness_decision_v1"
+        and item["human_naturalness_decision"].get("status") in {"approved", "rewritten"}
+        and item["human_naturalness_decision"].get("owner") == "remote_v3_llm_brain"
         for index, item in enumerate(candidate, start=1)
     )
 
