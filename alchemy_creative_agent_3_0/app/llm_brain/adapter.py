@@ -25,6 +25,7 @@ from .providers import (
     BrainProviderUnavailable,
     BrainSemanticPreflightMissing,
     V3LLMBrainProvider,
+    pop_transport_receipt,
 )
 from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
 
@@ -58,6 +59,7 @@ class V3LLMBrainAdapter:
             return fallback
         try:
             data = self.provider.run(request)
+            transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
             result = self._merge_remote_result(
                 fallback,
                 data,
@@ -72,6 +74,7 @@ class V3LLMBrainAdapter:
                 "source": "v3_remote_brain",
                 "remote_reasoning_visible": False,
                 "remote_provider_available": True,
+                **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
             }
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
@@ -113,6 +116,7 @@ class V3LLMBrainAdapter:
             raise
         except Exception as exc:  # pragma: no cover - defensive provider boundary
             raise BrainProviderError("Remote Brain failed while signing the canonical provider prompt.") from exc
+        transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
@@ -143,6 +147,7 @@ class V3LLMBrainAdapter:
                 "remote_canonical_provider_prompts_received": True,
                 "canonical_provider_prompt_provider": self.provider.provider,
                 "canonical_provider_prompt_model": self.provider.model,
+                **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
                 "human_realism_semantic_preflight_required": semantic_preflight_required,
                 "human_realism_semantic_preflight_signed": semantic_preflight_required,
                 "human_realism_natural_presence_decision_required": naturalness_decision_required,

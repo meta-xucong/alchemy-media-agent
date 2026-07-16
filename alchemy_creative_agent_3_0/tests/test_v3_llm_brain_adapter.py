@@ -5,10 +5,12 @@ from types import SimpleNamespace
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
-from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
+from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainInvalidJsonResponse, V3LLMBrainProvider
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
@@ -448,6 +450,11 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
                         "summary": "Remote brain clarified the intent.",
                     }
                 ],
+                "_alchemy_brain_transport": {
+                    "attempts": 2,
+                    "json_serialization_recovery_attempted": True,
+                    "json_serialization_recovery_succeeded": True,
+                },
             }
 
     provider = FakeBrainProvider()
@@ -466,6 +473,11 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
     assert result.llm_used is True
     assert result.fallback_used is False
     assert result.provider == "openai"
+    assert result.audit["remote_brain_transport"] == {
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": True,
+    }
     assert result.prompt_guidance.optimized_direction == "remote refined summer portrait direction"
     assert len(result.checkpoints) >= 6
     assert result.checkpoints[0].stage == "remote_intent"
@@ -563,6 +575,81 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert chat_kwargs["model"] == "deepseek-primary"
     assert chat_kwargs["response_format"] == {"type": "json_object"}
     assert chat_kwargs["temperature"] == 0
+
+
+def test_remote_brain_recovers_one_malformed_json_reply_without_local_repair(monkeypatch) -> None:
+    """The same remote Brain may redo serialization once, never a local plan."""
+
+    from app.config import settings
+
+    calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+            content = '{"remote": ' if len(calls) == 1 else '{"remote": true}'
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+
+    assert result["remote"] is True
+    assert result["_alchemy_brain_transport"] == {
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": True,
+    }
+    assert len(calls) == 2
+    assert calls[0]["messages"][1] == calls[1]["messages"][1]
+    assert "TRANSPORT RECOVERY" not in calls[0]["messages"][0]["content"]
+    assert "TRANSPORT RECOVERY" in calls[1]["messages"][0]["content"]
+    assert all(call["temperature"] == 0 for call in calls)
+
+
+def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None:
+    """Two malformed replies fail closed; no third remote request is allowed."""
+
+    from app.config import settings
+
+    attempts = 0
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            nonlocal attempts
+            attempts += 1
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"remote":'))])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    with pytest.raises(BrainInvalidJsonResponse):
+        V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+
+    assert attempts == 2
 
 
 def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:

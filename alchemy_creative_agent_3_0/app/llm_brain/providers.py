@@ -18,6 +18,10 @@ class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
 
 
+class BrainInvalidJsonResponse(BrainProviderError):
+    """The remote Brain replied, but its serialized JSON was syntactically invalid."""
+
+
 class BrainSemanticPreflightMissing(BrainProviderError):
     """The Brain returned a prompt but omitted a required semantic receipt."""
 
@@ -46,11 +50,37 @@ class V3LLMBrainProvider:
             return False
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
-        if self.provider in {"anthropic", "kimi", "claude"}:
-            return self._run_anthropic_compatible(request)
-        return self._run_openai_compatible(request)
+        """Run one Brain decision, with one serialization-only remote recovery.
 
-    def _run_openai_compatible(self, request: BrainRunRequest) -> dict[str, Any]:
+        A malformed JSON reply is not an accepted creative decision.  The
+        recovery therefore asks the same remote Brain to re-answer the same
+        frozen request once; it never locally repairs JSON, reconstructs a
+        prompt, changes a reference, or starts an image operation.
+        """
+
+        if self.provider in {"anthropic", "kimi", "claude"}:
+            runner = self._run_anthropic_compatible
+        else:
+            runner = self._run_openai_compatible
+        try:
+            return _with_transport_receipt(
+                runner(request),
+                attempts=1,
+                json_recovery_attempted=False,
+            )
+        except BrainInvalidJsonResponse:
+            return _with_transport_receipt(
+                runner(request, json_recovery=True),
+                attempts=2,
+                json_recovery_attempted=True,
+            )
+
+    def _run_openai_compatible(
+        self,
+        request: BrainRunRequest,
+        *,
+        json_recovery: bool = False,
+    ) -> dict[str, Any]:
         api_key, base_url = self._credentials()
         # DeepSeek is OpenAI-compatible but its deployed endpoint exposes the
         # broadly supported Chat Completions contract rather than the newer
@@ -62,6 +92,7 @@ class V3LLMBrainProvider:
                 api_key=api_key,
                 base_url=base_url,
                 request=request,
+                json_recovery=json_recovery,
             )
         try:
             from openai import OpenAI
@@ -74,7 +105,7 @@ class V3LLMBrainProvider:
             response = client.responses.create(
                 model=self.model,
                 input=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": _system_prompt(json_recovery=json_recovery)},
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 text={"format": {"type": "json_object"}},
@@ -85,6 +116,8 @@ class V3LLMBrainProvider:
             if not text:
                 text = _response_text_from_openai(response)
             return _loads_json_object(text)
+        except BrainInvalidJsonResponse:
+            raise
         except Exception as exc:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
@@ -94,6 +127,7 @@ class V3LLMBrainProvider:
         api_key: str,
         base_url: str | None,
         request: BrainRunRequest,
+        json_recovery: bool = False,
     ) -> dict[str, Any]:
         """Run a JSON-only Central Brain request through Chat Completions.
 
@@ -113,7 +147,7 @@ class V3LLMBrainProvider:
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": _system_prompt(json_recovery=json_recovery)},
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 response_format={"type": "json_object"},
@@ -125,10 +159,17 @@ class V3LLMBrainProvider:
             message = getattr(choices[0], "message", None) if choices else None
             text = getattr(message, "content", None) or ""
             return _loads_json_object(text)
+        except BrainInvalidJsonResponse:
+            raise
         except Exception as exc:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
-    def _run_anthropic_compatible(self, request: BrainRunRequest) -> dict[str, Any]:
+    def _run_anthropic_compatible(
+        self,
+        request: BrainRunRequest,
+        *,
+        json_recovery: bool = False,
+    ) -> dict[str, Any]:
         api_key, base_url = self._credentials()
         if not base_url:
             raise BrainProviderUnavailable("anthropic-compatible brain base URL is not configured")
@@ -143,13 +184,15 @@ class V3LLMBrainProvider:
                 "model": self.model,
                 "max_tokens": self.max_tokens,
                 "temperature": 0.2,
-                "system": SYSTEM_PROMPT,
+                "system": _system_prompt(json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             return _loads_json_object(_anthropic_text(response.json()))
+        except BrainInvalidJsonResponse:
+            raise
         except Exception as exc:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
@@ -249,15 +292,76 @@ def _loads_json_object(text: str) -> dict[str, Any]:
         raise BrainProviderError("remote brain returned empty output")
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as first_error:
         start = raw.find("{")
         end = raw.rfind("}")
         if start < 0 or end <= start:
-            raise BrainProviderError("remote brain returned non-json output")
-        parsed = json.loads(raw[start : end + 1])
+            raise BrainInvalidJsonResponse("remote brain returned malformed JSON output") from first_error
+        try:
+            parsed = json.loads(raw[start : end + 1])
+        except json.JSONDecodeError as sliced_error:
+            raise BrainInvalidJsonResponse("remote brain returned malformed JSON output") from sliced_error
     if not isinstance(parsed, dict):
         raise BrainProviderError("remote brain json output was not an object")
     return parsed
+
+
+_TRANSPORT_RECEIPT_KEY = "_alchemy_brain_transport"
+_JSON_SERIALIZATION_RECOVERY_SUFFIX = """
+
+TRANSPORT RECOVERY: Your immediately preceding response could not be parsed as
+JSON. Re-evaluate the same frozen request and return one complete, strictly
+valid JSON object that satisfies the existing output contract. Do not add
+commentary, Markdown, diagnostics, or local workaround instructions. Do not
+reuse or quote malformed output; author the full contract again yourself.
+""".strip()
+
+
+def _system_prompt(*, json_recovery: bool) -> str:
+    """Keep a recovery transport instruction outside creative prompt ownership."""
+
+    return (
+        f"{SYSTEM_PROMPT}\n\n{_JSON_SERIALIZATION_RECOVERY_SUFFIX}"
+        if json_recovery
+        else SYSTEM_PROMPT
+    )
+
+
+def _with_transport_receipt(
+    payload: dict[str, Any],
+    *,
+    attempts: int,
+    json_recovery_attempted: bool,
+) -> dict[str, Any]:
+    """Attach only safe transport provenance for adapter/job audit projection."""
+
+    result = dict(payload)
+    result[_TRANSPORT_RECEIPT_KEY] = {
+        "attempts": attempts,
+        "json_serialization_recovery_attempted": json_recovery_attempted,
+        "json_serialization_recovery_succeeded": json_recovery_attempted,
+    }
+    return result
+
+
+def pop_transport_receipt(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove and validate the private, non-creative transport receipt."""
+
+    raw = payload.pop(_TRANSPORT_RECEIPT_KEY, None)
+    if not isinstance(raw, dict):
+        return {}
+    attempts = raw.get("attempts")
+    attempted = raw.get("json_serialization_recovery_attempted")
+    succeeded = raw.get("json_serialization_recovery_succeeded")
+    if attempts not in {1, 2} or not isinstance(attempted, bool) or not isinstance(succeeded, bool):
+        return {}
+    if succeeded and not attempted:
+        return {}
+    return {
+        "attempts": attempts,
+        "json_serialization_recovery_attempted": attempted,
+        "json_serialization_recovery_succeeded": succeeded,
+    }
 
 
 def _response_text_from_openai(response: Any) -> str:
