@@ -3,8 +3,9 @@
 ## Status
 
 Implemented shared Human Realism refinement. It strengthens the existing
-Doc147 semantic signing duty; it does not add a child, apparel, template,
-provider, or Local MCP path.
+Doc147 semantic signing duty; Doc152 further clarifies that this duty allows
+situation-owned smiles while rejecting a default camera-presentational smile.
+Neither document adds a child, apparel, template, provider, or Local MCP path.
 
 ## Controlled observation
 

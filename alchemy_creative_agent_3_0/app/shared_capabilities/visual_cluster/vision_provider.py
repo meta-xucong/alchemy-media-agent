@@ -390,6 +390,7 @@ def _enforced_inspection_prompt(
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
             "Human authenticity attestation: assess the frozen personhood, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
+            "A genuine smile may pass when it belongs to the person and visible situation; when an otherwise unrequested smile reads as a generic camera-presentational default rather than an individual response, report only the existing human_expression_context dimension. "
             "Return only the required structured verdict and allowed generic issue codes; do not write renderer instructions, "
             "demographic classifications, facial-feature recipes, or new creative direction."
         )
