@@ -89,4 +89,3 @@ authoritative for Brain-owned final prompts and shared Human Realism approval.
 | Both malformed | Fail closed after exactly two calls; no local fallback prompt or third call. |
 | Timeout / HTTP / policy / valid-but-invalid schema | No serialization recovery; existing failure classification remains authoritative. |
 | General, E-Commerce, Photography, Local MCP | Shared behavior only; specialist fail-closed gates and template isolation remain unchanged. |
-
