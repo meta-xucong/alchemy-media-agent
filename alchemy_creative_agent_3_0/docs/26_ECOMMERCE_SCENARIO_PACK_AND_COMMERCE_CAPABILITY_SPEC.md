@@ -1,5 +1,11 @@
 # 26 E-Commerce Scenario Pack And Commerce Capability Spec
 
+> **Current-status note (Docs 111, 113, E17 and 135):** The Scenario Pack
+> owns factual context, explicit count and opaque deliverable lineage only.
+> Any historical static marketplace role, slot, copy, camera or scene recipe
+> below is read-compatible context, not a new E-Commerce generation path. The
+> remote Brain signs every whole-image direction and final renderer prompt.
+
 This document defines the future E-Commerce Scenario Pack.
 
 It must be implemented and activated only after:

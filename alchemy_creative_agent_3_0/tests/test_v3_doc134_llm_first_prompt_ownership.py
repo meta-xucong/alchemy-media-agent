@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 
 import pytest
 
@@ -10,10 +11,12 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     GenerationRequest,
     ProductionImageGenerationProvider,
 )
+from alchemy_creative_agent_3_0.app.agents.prompt_compiler_agent import PromptCompilerAgent
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
     ecommerce_test_service,
@@ -232,3 +235,40 @@ def test_forward_cluster_quarantine_retains_evidence_but_removes_local_prompt_la
     assert sanitized["bone_structure_retry_patch"]["applies"] is True
     assert sanitized["bone_structure_retry_patch"]["reason_codes"] == ["identity_feature_drift"]
     assert sanitized["bone_structure_retry_patch"]["prompt_additions"] == []
+
+
+def test_doc135_forward_boundaries_precede_legacy_local_assemblers() -> None:
+    """Keep the compatibility source physically behind the signed-Job boundary.
+
+    Historic assemblers remain readable for archived records and non-rendering
+    fixture compatibility.  This guard deliberately checks the executable
+    forward functions rather than merely grepping the repository: moving a
+    signed-prompt guard below any local assembler would re-enable exactly the
+    word-stack route that Docs 134-135 prohibit.
+    """
+
+    compiler_source = inspect.getsource(PromptCompilerAgent.compile_prompt)
+    assert compiler_source.index("self._has_brain_signed_canonical_prompt") < compiler_source.index(
+        "style_notes ="
+    )
+    assert compiler_source.index("self._brain_owned_shadow_compilation") < compiler_source.index(
+        "mode_role_recipe ="
+    )
+
+    provider_source = inspect.getsource(ProductionImageGenerationProvider._generation_prompt)
+    assert provider_source.index("canonical_prompt = self._brain_signed_provider_prompt") < provider_source.index(
+        "prompt = request.prompt_compilation"
+    )
+    assert provider_source.index("return canonical_prompt") < provider_source.index(
+        "visual_direction ="
+    )
+
+    finalizer_context_source = inspect.getsource(ScenarioRuntime._canonical_prompt_context)
+    for forbidden_local_renderer_field in (
+        "prompt_additions",
+        "negative_additions",
+        "mode_role_recipe",
+        "quality_guidance",
+        "negative_guidance",
+    ):
+        assert forbidden_local_renderer_field not in finalizer_context_source

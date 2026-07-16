@@ -1,5 +1,9 @@
 # Doc130: V3 Codex Native ImageGen Canonical Provider Prompt Parity
 
+> **Current-status note (Docs 134–135):** Parity includes ownership, not just
+> a matching hash: Local MCP cannot repair, paraphrase, append, deduplicate or
+> replace the Brain-approved renderer prompt with local keyword/recipe logic.
+
 Status: active developer-preview Local Mode authority. This document supersedes
 Doc129's "Codex authors the image direction" contract for every new Local Mode
 call. Doc126 remains an archive of the rejected Platform API/artifact route;

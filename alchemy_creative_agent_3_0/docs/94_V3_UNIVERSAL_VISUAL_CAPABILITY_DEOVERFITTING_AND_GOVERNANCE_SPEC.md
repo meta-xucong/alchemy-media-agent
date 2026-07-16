@@ -1,5 +1,11 @@
 # 94 V3 Universal Visual Capability De-Overfitting And Governance Spec
 
+> **Current-status note (Docs 134–135):** This governance rule now includes
+> final-prompt ownership: orthogonal variables and evidence may be resolved
+> deterministically, but only the remote Brain may translate them into a
+> complete renderer instruction. Keyword/regex subject interpretation remains
+> technical admission evidence, never creative or stylistic authority.
+
 ## 1. Purpose
 
 Doc94 is the corrective authority for V3 foundation quality and the General

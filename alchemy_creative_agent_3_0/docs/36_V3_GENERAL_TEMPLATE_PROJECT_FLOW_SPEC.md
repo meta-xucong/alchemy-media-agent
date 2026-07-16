@@ -1,5 +1,10 @@
 # 36 V3 General Template Project Flow Specification
 
+> **Current-status note (Docs 113, 134–135):** General remains a neutral
+> project flow. Historical preset/mode wording may preserve user intent or
+> read old records, but must never compile a new scene, role, camera or retry
+> prompt. A remote Brain-approved canonical prompt is the only renderer text.
+
 Current compatibility note:
 
 ```text

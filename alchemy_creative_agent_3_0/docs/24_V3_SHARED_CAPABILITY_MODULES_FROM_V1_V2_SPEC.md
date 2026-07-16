@@ -1,5 +1,11 @@
 # 24 V3 Shared Capability Modules From V1/V2 Migration Spec
 
+> **Current-status note (Docs 111, 113, 134–135):** Shared capabilities may
+> contribute evidence, hard truth, admission and review obligations only. Any
+> older prompt fragments, keyword-derived creative decisions, recipe fields or
+> retry prose in this document are historical compatibility material and must
+> not become renderer language for a new V3 Job.
+
 This document defines how to migrate the valuable V1/V2 capabilities into V3 without contaminating the V3 architecture.
 
 The core decision:

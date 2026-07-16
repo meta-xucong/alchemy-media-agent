@@ -1,5 +1,10 @@
 # 37 V3 Template Interface And Audit Specification
 
+> **Current-status note (Docs 113, 134–135):** A template may bind structural
+> facts, count, lineage and safety boundaries. It may not use an interface
+> field, preset or audit result to author local creative words, static roles or
+> retry patches for a new renderer operation.
+
 This document defines how V3 templates plug into Project Mode.
 
 The goal is to avoid creating a second module system. Templates are

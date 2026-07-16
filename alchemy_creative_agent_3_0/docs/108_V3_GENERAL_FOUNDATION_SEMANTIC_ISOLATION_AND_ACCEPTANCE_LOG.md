@@ -1,5 +1,10 @@
 # Doc108: V3 General Foundation Semantic Isolation and Acceptance Log
 
+> **Current-status note (Docs 134–135):** The historic raw-substring defect
+> documented here is permanently retired from creative routing. Any remaining
+> text matching is limited to technical parsing or explicit evidence and may
+> not choose medium, subject treatment, realism, prompt wording or retry text.
+
 ## Status
 
 This log records the General Template foundation corrective milestone completed

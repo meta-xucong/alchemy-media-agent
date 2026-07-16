@@ -1,5 +1,10 @@
 # Doc117 V3 Real Reference Provider Capability and Failure Closure
 
+> **Current-status note (Docs 134–135):** Reference admission and failure
+> classification remain shared factual controls. They cannot use a 4xx,
+> reference keyword or failure code to synthesize a local replacement prompt,
+> alter the requested subject, or bypass the Brain-owned final prompt.
+
 Status: post-Doc113/Doc114 corrective foundation authority and gated
 acceptance contract. The shared real-visible-person activation guard from
 `e458d23` is integrated in the Doc117 implementation candidate. The derived
