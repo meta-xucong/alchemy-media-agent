@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorPackPreparationService,
     AnchorReviewDecision,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.catalog import PersistentVisualAssetCatalog
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     FaceIdentityModule,
     PeopleAsset,
@@ -56,6 +57,7 @@ class FakeGenerator:
             view_id=f"view_{token}",
             output_id=f"output_{token}",
             view_role=request.view_role,
+            candidate_index=request.candidate_index,
             source_candidate_ids=[f"candidate_{token}"],
             source_asset_ids=["asset_root_1"],
         )
@@ -137,7 +139,7 @@ def test_m2_supplementary_failure_blocks_activation() -> None:
 
     assert result.status == "blocked"
     assert result.failure_codes == ["required_supplementary_view_failed"]
-    with pytest.raises(ValueError, match="user activation"):
+    with pytest.raises(ValueError, match="complete reviewed"):
         AnchorPackPreparationService(generator=generator, reviewer=reviewer).activate(result.pack, confirmed=True)
 
 
@@ -167,3 +169,21 @@ def test_m2_requires_brain_plan_and_canonical_prompt_hash_before_generation() ->
             brain_plan_id="",
             canonical_prompt_hash="",
         )
+
+
+def test_m2_persists_review_and_activation_history_when_catalog_is_injected(tmp_path) -> None:
+    generator = FakeGenerator()
+    reviewer = FakeReviewer()
+    catalog = PersistentVisualAssetCatalog(tmp_path)
+    service = AnchorPackPreparationService(generator=generator, reviewer=reviewer, catalog=catalog)
+
+    result = service.prepare(_request())
+    assert result.pack.status == "review"
+    assert catalog.get_pack("project_1", "person_1", result.pack.pack_version_id).status == "review"
+
+    active = service.activate(result.pack, confirmed=True)
+    assert active.status == "active"
+    assert [item.event_type for item in catalog.list_pack_history("project_1", "person_1")] == [
+        "review",
+        "activate",
+    ]
