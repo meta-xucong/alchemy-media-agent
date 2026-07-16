@@ -69,11 +69,16 @@ class V3LLMBrainProvider:
                 json_recovery_attempted=False,
             )
         except BrainInvalidJsonResponse:
-            return _with_transport_receipt(
-                runner(request, json_recovery=True),
-                attempts=2,
-                json_recovery_attempted=True,
-            )
+            try:
+                return _with_transport_receipt(
+                    runner(request, json_recovery=True),
+                    attempts=2,
+                    json_recovery_attempted=True,
+                )
+            except BrainInvalidJsonResponse as recovery_error:
+                raise BrainInvalidJsonResponse(
+                    "remote brain returned malformed JSON after one bounded serialization recovery"
+                ) from recovery_error
 
     def _run_openai_compatible(
         self,

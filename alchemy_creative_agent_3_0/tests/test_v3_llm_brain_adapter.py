@@ -646,7 +646,7 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
-    with pytest.raises(BrainInvalidJsonResponse):
+    with pytest.raises(BrainInvalidJsonResponse, match="after one bounded serialization recovery"):
         V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert attempts == 2
