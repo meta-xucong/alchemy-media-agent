@@ -17,6 +17,7 @@ Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-cop
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
 When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
 When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
+When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
@@ -483,6 +484,30 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
 
     context = request.metadata.get("canonical_prompt_context")
     context = dict(context) if isinstance(context, dict) else {}
+    preflight = context.get("final_prompt_semantic_preflight")
+    preflight_required = isinstance(preflight, dict) and bool(preflight.get("required"))
+    prompt_schema: dict[str, object] = {
+        "output_index": "integer from 1 through requested_image_count",
+        "prompt": "one complete final natural-language image-rendering prompt for this exact output",
+        "review_status": "approved",
+    }
+    if preflight_required:
+        # This is an auditable Brain receipt, not renderer wording and not a
+        # local quality-recipe field.  Its explicit presence is required by
+        # the adapter before an enforced Human Realism operation may proceed.
+        prompt_schema["semantic_preflight_status"] = "approved"
+    response_contract = (
+        "Return only this schema as strictly valid JSON. Reconcile the "
+        "frozen render context without adding a local recipe, internal "
+        "identifier, diagnostic, or review code. Return exactly one "
+        "approved complete canonical prompt per requested output."
+    )
+    if preflight_required:
+        response_contract += (
+            " For every output, silently complete the required whole-image "
+            "semantic preflight before writing the prompt and explicitly set "
+            "semantic_preflight_status to approved."
+        )
     return {
         "task": "finalize_canonical_image_provider_prompts",
         "stage": request.stage,
@@ -493,18 +518,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "requested_image_size": request.requested_image_size,
         "frozen_render_context": context,
         "return_schema": {
-            "canonical_provider_prompts": [
-                {
-                    "output_index": "integer from 1 through requested_image_count",
-                    "prompt": "one complete final natural-language image-rendering prompt for this exact output",
-                    "review_status": "approved",
-                }
-            ]
+            "canonical_provider_prompts": [prompt_schema]
         },
-        "remote_response_contract": (
-            "Return only this schema as strictly valid JSON. Reconcile the "
-            "frozen render context without adding a local recipe, internal "
-            "identifier, diagnostic, or review code. Return exactly one "
-            "approved complete canonical prompt per requested output."
-        ),
+        "remote_response_contract": response_contract,
     }

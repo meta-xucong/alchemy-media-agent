@@ -80,6 +80,10 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     output_index: int = Field(ge=1)
     prompt: str
     review_status: Literal["approved"] = "approved"
+    # This receipt remains optional for historical record readability.  New
+    # enforced Human Realism jobs validate that it was explicitly supplied by
+    # the remote Brain before they can materialize a renderer operation.
+    semantic_preflight_status: Literal["approved"] | None = None
 
     @field_validator("prompt")
     @classmethod

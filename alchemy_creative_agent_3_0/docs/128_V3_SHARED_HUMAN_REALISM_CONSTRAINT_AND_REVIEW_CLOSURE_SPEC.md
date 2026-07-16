@@ -5,7 +5,9 @@
 > infer a complete image style from keywords or emit local positive/negative
 > wording after the Brain has signed the renderer prompt. Doc136 additionally
 > requires the active typed semantic contract to reach that Brain sign-off;
-> a capability ID alone is not sufficient forward evidence.
+> a capability ID alone is not sufficient forward evidence. Doc137 additionally
+> requires an explicit whole-image semantic-preflight receipt from that Brain
+> before a new enforced Human Realism operation may materialize.
 
 ## Status
 

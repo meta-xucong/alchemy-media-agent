@@ -18,6 +18,10 @@ class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
 
 
+class BrainSemanticPreflightMissing(BrainProviderError):
+    """The Brain returned a prompt but omitted a required semantic receipt."""
+
+
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 

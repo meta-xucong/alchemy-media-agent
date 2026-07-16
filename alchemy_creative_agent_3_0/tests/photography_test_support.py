@@ -54,6 +54,9 @@ class PhotographyRemoteBrainTestProvider:
                 "decision_owner": "remote_brain",
             }
         }
+        canonical_context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
+        preflight = canonical_context.get("final_prompt_semantic_preflight") if isinstance(canonical_context, dict) else {}
+        requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -62,6 +65,7 @@ class PhotographyRemoteBrainTestProvider:
                     "rendering that respects the user's request and frozen reference truth."
                 ),
                 "review_status": "approved",
+                **({"semantic_preflight_status": "approved"} if requires_human_preflight else {}),
             }
             for index in range(1, count + 1)
         ]

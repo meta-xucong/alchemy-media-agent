@@ -10,6 +10,7 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain.providers import BrainSemanticPreflightMissing
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -377,7 +378,7 @@ class ScenarioRuntime:
             envelope,
             ledger,
         )
-        self._require_brain_signed_provider_prompts(request, policy, brain_result)
+        self._require_brain_signed_provider_prompts(request, policy, brain_result, plan)
         return CapabilityPreparationResult(
             pre_activation_run=pre_activation_run,
             brain_result=brain_result,
@@ -518,7 +519,11 @@ class ScenarioRuntime:
             # Do not expose an upstream body or turn it into local text.  The
             # activation boundary records the public-safe reason code only.
             raise self._remote_creative_brain_block(
-                "remote_creative_brain_prompt_signoff_unavailable",
+                (
+                    "human_realism_semantic_preflight_missing"
+                    if isinstance(exc, BrainSemanticPreflightMissing)
+                    else "remote_creative_brain_prompt_signoff_unavailable"
+                ),
                 brain_result,
             ) from exc
         return brain_result.model_copy(
@@ -644,6 +649,12 @@ class ScenarioRuntime:
             "apparel_construction": projection.get("apparel_construction", {}),
             "active_shared_capability_ids": list(plan.dependency_order),
             "active_semantic_capability_contracts": semantic_contracts,
+            "final_prompt_semantic_preflight": {
+                "required": bool(semantic_contracts),
+                "scope": "whole_image_human_photographic_plausibility",
+                "owner": "remote_v3_llm_brain",
+                "revision_mode": "rewrite_complete_canonical_prompt",
+            },
             "reference_bindings": references,
             "retry_evidence": {
                 "active": bool(request.metadata.get("visual_auto_retry_active")),
@@ -665,6 +676,7 @@ class ScenarioRuntime:
         request: ScenarioRuntimeRequest,
         policy: TemplateCapabilityPolicy,
         brain_result: BrainRunResult,
+        plan: CapabilityActivationPlan,
     ) -> None:
         if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
             return
@@ -676,6 +688,15 @@ class ScenarioRuntime:
         ):
             raise self._remote_creative_brain_block(
                 "remote_creative_brain_prompt_signoff_invalid",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
+        if "human_realism" in plan.dependency_order and not bool(
+            brain_result.audit.get("human_realism_semantic_preflight_signed")
+        ):
+            raise self._remote_creative_brain_block(
+                "human_realism_semantic_preflight_missing",
                 brain_result,
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),
@@ -722,6 +743,7 @@ class ScenarioRuntime:
         elif reason_code in {
             "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
+            "human_realism_semantic_preflight_missing",
         }:
             outcome_class = "remote_prompt_signoff_unavailable"
         elif brain_result.skipped:

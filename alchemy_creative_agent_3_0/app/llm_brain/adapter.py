@@ -19,7 +19,7 @@ from .context_digest import (
 )
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_skipped_result
-from .providers import BrainProviderError, BrainProviderUnavailable, V3LLMBrainProvider
+from .providers import BrainProviderError, BrainProviderUnavailable, BrainSemanticPreflightMissing, V3LLMBrainProvider
 from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
 
 
@@ -111,6 +111,14 @@ class V3LLMBrainAdapter:
         expected_count = request.requested_image_count
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
             raise BrainProviderError("Remote Brain returned an invalid canonical provider-prompt contract.")
+        semantic_preflight_required = _requires_human_semantic_preflight(request)
+        if semantic_preflight_required and not _matches_human_semantic_preflight_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+        ):
+            raise BrainSemanticPreflightMissing(
+                "Remote Brain did not explicitly approve the required Human Realism semantic preflight."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -121,6 +129,8 @@ class V3LLMBrainAdapter:
                 "remote_canonical_provider_prompts_received": True,
                 "canonical_provider_prompt_provider": self.provider.provider,
                 "canonical_provider_prompt_model": self.provider.model,
+                "human_realism_semantic_preflight_required": semantic_preflight_required,
+                "human_realism_semantic_preflight_signed": semantic_preflight_required,
             },
         )
     def build_request(
@@ -560,6 +570,41 @@ def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_c
             return False
         indexes.append(index)
     return indexes == list(range(1, expected_count + 1))
+
+
+def _requires_human_semantic_preflight(request: BrainRunRequest) -> bool:
+    """Read the frozen finalizer requirement without interpreting prompt text.
+
+    The typed Human Realism capability contract remains the source of truth.
+    This tiny helper only decides whether the remote finalizer must explicitly
+    acknowledge its whole-image semantic check; it never creates a prompt
+    rule or infers a demographic from user language.
+    """
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    requirement = context.get("final_prompt_semantic_preflight")
+    return (
+        isinstance(requirement, dict)
+        and bool(requirement.get("required"))
+        and str(requirement.get("owner") or "") == "remote_v3_llm_brain"
+        and str(requirement.get("scope") or "") == "whole_image_human_photographic_plausibility"
+        and str(requirement.get("revision_mode") or "") == "rewrite_complete_canonical_prompt"
+    )
+
+
+def _matches_human_semantic_preflight_receipts(candidate: Any, *, expected_count: int) -> bool:
+    """Require an explicit remote receipt for each new Human Realism output."""
+
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and item.get("semantic_preflight_status") == "approved"
+        for index, item in enumerate(candidate, start=1)
+    )
 
 
 def _has_remote_rendering_intent(candidate: Any) -> bool:

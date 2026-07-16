@@ -1200,12 +1200,24 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
 
         def run(self, request):  # noqa: ANN001
             if request.stage == "provider_prompt_finalize":
+                canonical_context = request.metadata.get("canonical_prompt_context")
+                preflight = (
+                    canonical_context.get("final_prompt_semantic_preflight")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
+                receipt = (
+                    {"semantic_preflight_status": "approved"}
+                    if isinstance(preflight, dict) and preflight.get("required")
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
                             "output_index": index,
                             "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
                             "review_status": "approved",
+                            **receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]
@@ -1298,12 +1310,24 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
 
         def run(self, request):  # noqa: ANN001
             if request.stage == "provider_prompt_finalize":
+                canonical_context = request.metadata.get("canonical_prompt_context")
+                preflight = (
+                    canonical_context.get("final_prompt_semantic_preflight")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
+                receipt = (
+                    {"semantic_preflight_status": "approved"}
+                    if isinstance(preflight, dict) and preflight.get("required")
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
                             "output_index": index,
                             "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
                             "review_status": "approved",
+                            **receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]
