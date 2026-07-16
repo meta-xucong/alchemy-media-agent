@@ -572,6 +572,8 @@ class ScenarioRuntime:
             "physical_coherence",
             "reference_boundary",
             "ordinary_age_appropriate_context",
+            "natural_presence_priority",
+            "aesthetic_boundary",
             "creative_direction_owner",
             "provider_prompt_owner",
         }
@@ -585,13 +587,15 @@ class ScenarioRuntime:
         ):
             raise CapabilityActivationError("human_realism_semantic_contract_missing")
         if (
-            contract.get("contract_version") != "v3_human_realism_semantic_v1"
+            contract.get("contract_version") != "v3_human_realism_semantic_v2"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
             or contract.get("physical_coherence") != "required"
             or contract.get("reference_boundary") != "resolved_channels_only"
             or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
+            or contract.get("natural_presence_priority") != "individual_human_presence"
+            or contract.get("aesthetic_boundary") != "preserve_user_style_without_generic_beauty_substitution"
             or contract.get("creative_direction_owner") != "remote_v3_llm_brain"
             or contract.get("provider_prompt_owner") != "remote_v3_llm_brain"
         ):

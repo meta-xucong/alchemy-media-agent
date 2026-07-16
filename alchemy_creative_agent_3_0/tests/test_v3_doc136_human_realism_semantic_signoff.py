@@ -51,9 +51,11 @@ def test_doc136_enforced_human_guidance_is_typed_and_has_no_local_prompt_or_retr
     assert guidance.reference_preserve_rules == []
     assert guidance.reference_do_not_inherit_rules == []
     assert guidance.retry_patch_templates == {}
-    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v1"
+    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v2"
     assert guidance.semantic_contract["rendering_goal"] == "photographic_real_person"
     assert guidance.semantic_contract["ordinary_age_appropriate_context"] is True
+    assert guidance.semantic_contract["natural_presence_priority"] == "individual_human_presence"
+    assert guidance.semantic_contract["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     assert set(guidance.semantic_contract["quality_axes"]) == set(HUMAN_REALISM_REVIEW_DIMENSIONS)
     assert guidance.semantic_contract["creative_direction_owner"] == "remote_v3_llm_brain"
     assert guidance.semantic_contract["provider_prompt_owner"] == "remote_v3_llm_brain"
@@ -99,6 +101,8 @@ def test_doc136_general_runtime_delivers_human_contract_to_remote_finalizer(monk
     assert len(contracts) == 1
     assert contracts[0]["capability_id"] == "human_realism"
     assert contracts[0]["rendering_goal"] == "photographic_real_person"
+    assert contracts[0]["natural_presence_priority"] == "individual_human_presence"
+    assert contracts[0]["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     assert set(contracts[0]["quality_axes"]) == set(HUMAN_REALISM_REVIEW_DIMENSIONS)
     assert "prompt_additions" not in json.dumps(context, ensure_ascii=False)
     assert "negative_additions" not in json.dumps(context, ensure_ascii=False)

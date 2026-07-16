@@ -650,7 +650,7 @@ class HumanPhotorealismLayer:
 
         is_detail = human_subject_kind == "hand_or_skin_detail"
         return {
-            "contract_version": "v3_human_realism_semantic_v1",
+            "contract_version": "v3_human_realism_semantic_v2",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
@@ -658,6 +658,11 @@ class HumanPhotorealismLayer:
             "physical_coherence": "required",
             "reference_boundary": "resolved_channels_only",
             "ordinary_age_appropriate_context": bool(activation.get("safety_sensitive_person")),
+            # These are semantic priorities for the remote Brain, never local
+            # renderer fragments.  They apply to every real visible person,
+            # not to an age, apparel, region or template-specific branch.
+            "natural_presence_priority": "individual_human_presence",
+            "aesthetic_boundary": "preserve_user_style_without_generic_beauty_substitution",
             "creative_direction_owner": "remote_v3_llm_brain",
             "provider_prompt_owner": "remote_v3_llm_brain",
         }
