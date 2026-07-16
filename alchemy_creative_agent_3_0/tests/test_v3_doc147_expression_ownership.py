@@ -230,6 +230,11 @@ def test_doc147_remote_brain_rewrites_the_whole_prompt_without_a_local_expressio
     assert "fixed alternate-expression catalogue" in SYSTEM_PROMPT
     assert "absent expression as intentional creative latitude" in SYSTEM_PROMPT
     assert "setting pleasantness or commercial polish alone" in SYSTEM_PROMPT
+    assert "plus a static pose is not an expression decision" in SYSTEM_PROMPT
+    assert "static pose does not resolve the person's attention or ordinary response" in SYSTEM_PROMPT
+    assert "static pose does not by itself resolve the person's attention or ordinary response" in payload[
+        "remote_response_contract"
+    ]
     assert "prompt_additions" not in json.dumps(payload, ensure_ascii=False)
     assert result.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"].startswith(
         "A real-camera photograph of a person pausing to listen"

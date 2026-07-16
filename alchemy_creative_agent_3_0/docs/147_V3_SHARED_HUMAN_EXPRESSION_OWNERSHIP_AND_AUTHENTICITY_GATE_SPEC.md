@@ -7,6 +7,11 @@ capability, Remote Brain signing, and shared pixel-review/retry path. It does
 not add a template, a specialist route, a new provider, or a child/apparel
 capability.
 
+**Doc150 follow-up.** The same Remote Brain duty now explicitly treats a
+generic natural/candid label plus a static pose as insufficient personhood
+resolution. This is not a local expression rule and does not alter this
+document's shared pixel-review boundary.
+
 ## Problem
 
 Some generated people can be anatomically credible and conventionally
