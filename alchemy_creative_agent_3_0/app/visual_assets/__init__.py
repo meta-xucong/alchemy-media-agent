@@ -5,6 +5,15 @@ Mode binding is created. Standard Mode does not import or consult it.
 """
 
 from .binding import bind_professional_mode, select_reference_views
+from .anchor_pack import (
+    AnchorCandidateAttempt,
+    AnchorCandidateResult,
+    AnchorGenerationRequest,
+    AnchorPackPreparationRequest,
+    AnchorPackPreparationResult,
+    AnchorPackPreparationService,
+    AnchorReviewDecision,
+)
 from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
 from .contracts import (
     AnchorView,
@@ -18,6 +27,13 @@ from .contracts import (
 
 __all__ = [
     "AnchorView",
+    "AnchorCandidateAttempt",
+    "AnchorCandidateResult",
+    "AnchorGenerationRequest",
+    "AnchorPackPreparationRequest",
+    "AnchorPackPreparationResult",
+    "AnchorPackPreparationService",
+    "AnchorReviewDecision",
     "FaceIdentityModule",
     "IdentityAnchorPackVersion",
     "IdentityScoreSummary",
