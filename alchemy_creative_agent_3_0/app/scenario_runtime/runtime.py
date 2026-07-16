@@ -43,6 +43,7 @@ from ..shared_capabilities.activation import (
     compatibility_policy,
 )
 from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
+from ..shared_capabilities.visual_cluster.human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
     CapabilityPreparationResult,
@@ -485,6 +486,20 @@ class ScenarioRuntime:
         ):
             return brain_result
 
+        try:
+            canonical_prompt_context = self._canonical_prompt_context(
+                request,
+                plan,
+                envelope,
+                ledger,
+                brain_result,
+            )
+        except CapabilityActivationError as exc:
+            raise self._remote_creative_brain_block(
+                "human_realism_semantic_contract_missing",
+                brain_result,
+            ) from exc
+
         signing_request = BrainRunRequest(
             user_input=request.user_input,
             stage="provider_prompt_finalize",
@@ -494,15 +509,7 @@ class ScenarioRuntime:
             requested_image_count=expected,
             requested_image_size=ledger.provider_projection.get("requested_image_size"),
             reasoning_depth="balanced",
-            metadata={
-                "canonical_prompt_context": self._canonical_prompt_context(
-                    request,
-                    plan,
-                    envelope,
-                    ledger,
-                    brain_result,
-                )
-            },
+            metadata={"canonical_prompt_context": canonical_prompt_context},
             template_capability_policy=policy,
         )
         try:
@@ -531,6 +538,62 @@ class ScenarioRuntime:
         )
 
     @staticmethod
+    def _active_semantic_capability_contracts(
+        plan: CapabilityActivationPlan,
+        ledger: ResolvedConstraintLedger,
+    ) -> list[dict[str, Any]]:
+        """Read only validated shared semantic obligations for Brain sign-off.
+
+        This is intentionally a narrow bridge between frozen executor facts
+        and the remote finalizer.  It neither reconstructs a prompt nor lets a
+        mutable Visual Capability Cluster payload become a Provider fallback.
+        """
+
+        if "human_realism" not in plan.dependency_order:
+            return []
+        projection = dict(ledger.provider_projection or {})
+        capabilities = projection.get("capability_projection")
+        guidance = capabilities.get("human_photorealism_guidance") if isinstance(capabilities, dict) else None
+        contract = guidance.get("semantic_contract") if isinstance(guidance, dict) else None
+        if not isinstance(contract, dict):
+            raise CapabilityActivationError("human_realism_semantic_contract_missing")
+
+        allowed_keys = {
+            "contract_version",
+            "capability_id",
+            "rendering_goal",
+            "quality_axes",
+            "identity_age_fidelity",
+            "physical_coherence",
+            "reference_boundary",
+            "ordinary_age_appropriate_context",
+            "creative_direction_owner",
+            "provider_prompt_owner",
+        }
+        if set(contract) != allowed_keys:
+            raise CapabilityActivationError("human_realism_semantic_contract_missing")
+        quality_axes = contract.get("quality_axes")
+        if (
+            not isinstance(quality_axes, list)
+            or not quality_axes
+            or any(str(item) not in HUMAN_REALISM_REVIEW_DIMENSIONS for item in quality_axes)
+        ):
+            raise CapabilityActivationError("human_realism_semantic_contract_missing")
+        if (
+            contract.get("contract_version") != "v3_human_realism_semantic_v1"
+            or contract.get("capability_id") != "human_realism"
+            or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
+            or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
+            or contract.get("physical_coherence") != "required"
+            or contract.get("reference_boundary") != "resolved_channels_only"
+            or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
+            or contract.get("creative_direction_owner") != "remote_v3_llm_brain"
+            or contract.get("provider_prompt_owner") != "remote_v3_llm_brain"
+        ):
+            raise CapabilityActivationError("human_realism_semantic_contract_missing")
+        return [dict(contract)]
+
+    @staticmethod
     def _canonical_prompt_context(
         request: ScenarioRuntimeRequest,
         plan: CapabilityActivationPlan,
@@ -547,6 +610,7 @@ class ScenarioRuntime:
         """
 
         projection = dict(ledger.provider_projection or {})
+        semantic_contracts = ScenarioRuntime._active_semantic_capability_contracts(plan, ledger)
         references = []
         for asset in request.uploaded_assets:
             role = asset.role.value if hasattr(asset.role, "value") else asset.role
@@ -579,6 +643,7 @@ class ScenarioRuntime:
             "product_truth": projection.get("product_truth", {}),
             "apparel_construction": projection.get("apparel_construction", {}),
             "active_shared_capability_ids": list(plan.dependency_order),
+            "active_semantic_capability_contracts": semantic_contracts,
             "reference_bindings": references,
             "retry_evidence": {
                 "active": bool(request.metadata.get("visual_auto_retry_active")),

@@ -212,6 +212,17 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
     apparel_contract = review_contract.get("apparel_construction_truth") or {}
     output_evidence = _active_output_evidence_contract(metadata, review_contract)
     reference_count = len(_inspection_reference_paths(metadata))
+    if review_contract["enforced"]:
+        return _enforced_inspection_prompt(
+            user_goal=user_goal,
+            template_id=template_id,
+            reference_policy=reference_policy,
+            reference_count=reference_count,
+            feedback_contract=feedback_contract,
+            review_contract=review_contract,
+            apparel_contract=apparel_contract,
+            output_evidence=output_evidence,
+        )
     prompt = "\n".join(
         [
             "You are V3's post-generation visual inspector.",
@@ -261,6 +272,78 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
         ]
     )
     return _scope_inspection_prompt(prompt, metadata)
+
+
+def _review_response_shape(contract: dict[str, Any]) -> str:
+    """Return the response shape strictly derived from frozen review fields."""
+
+    score_shape = {item: 0.0 for item in contract["score_dimensions"]}
+    return (
+        'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
+        '"confidence":0.0,"issue_codes":[],"scores":'
+        + json.dumps(score_shape, ensure_ascii=False, separators=(",", ":"))
+        + ',"identity_deltas":[],"preserved_elements":[],"drift_warnings":[],'
+        '"artifact_warnings":[],"summary":[],"feedback_verdict":{"status":"pass|violation|not_verifiable",'
+        '"violated_directions":[]},"similarity_verdict":{"status":"distinct|near_duplicate|not_verifiable",'
+        '"compared_reference_output_ids":[]},"retry_patch":{}}'
+    )
+
+
+def _enforced_inspection_prompt(
+    *,
+    user_goal: str,
+    template_id: str,
+    reference_policy: dict[str, Any],
+    reference_count: int,
+    feedback_contract: dict[str, Any],
+    review_contract: dict[str, Any],
+    apparel_contract: dict[str, Any],
+    output_evidence: dict[str, Any],
+) -> str:
+    """Build a lean inspection request directly from frozen enforced truth.
+
+    Do not construct a historical issue catalogue and delete it afterwards:
+    that makes an enforced review depend on names outside its frozen contract.
+    This is review-schema projection only; it has no creative-authoring role.
+    """
+
+    frozen_contract = {
+        "issue_codes": review_contract["issue_codes"],
+        "score_dimensions": review_contract["score_dimensions"],
+        "review_capability_sources": review_contract["review_capability_sources"],
+        "hard_semantic_contract": bool(review_contract["hard_semantic_contract"]),
+    }
+    lines = [
+        "You are V3's post-generation visual inspector.",
+        "Inspect the generated image after it exists. Return strict JSON only; do not include markdown.",
+        (
+            "Image 1 is the generated result. Following images are admitted references; compare only the channels assigned by the frozen reference policy."
+            if reference_count
+            else "Image 1 is the generated result; no readable reference image was supplied to this inspection."
+        ),
+        "Judge only the frozen review contract below. Do not invent issue codes, static roles, prompt language, or a new creative direction.",
+        f"Template: {template_id}",
+        f"User goal: {user_goal}",
+        f"Resolved reference policy: {json.dumps(reference_policy, ensure_ascii=False)[:2200]}",
+        f"Frozen review contract: {json.dumps(frozen_contract, ensure_ascii=False)}",
+    ]
+    if apparel_contract.get("applies"):
+        lines.append(
+            "Frozen apparel construction truth: inspect only visibly verifiable supplied garment facts and allowed variation boundaries. "
+            + json.dumps(apparel_contract, ensure_ascii=False)
+        )
+    if output_evidence:
+        lines.append(
+            "Frozen template output evidence: inspect the assigned Brain-owned evidence dimensions without inventing a role or recipe. "
+            + json.dumps(output_evidence, ensure_ascii=False)
+        )
+    if feedback_contract.get("applies"):
+        lines.append(
+            "Feedback acceptance contract: inspect these user-rejected visual directions as criteria only: "
+            + json.dumps(feedback_contract.get("rejected_directions", []), ensure_ascii=False)
+        )
+    lines.append(_review_response_shape(review_contract))
+    return "\n".join(lines)
 
 
 def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -440,16 +523,7 @@ def _scope_inspection_prompt(prompt: str, metadata: dict[str, Any]) -> str:
         if line.startswith("Allowed issue_codes:"):
             line = "Allowed issue_codes: " + ", ".join(contract["issue_codes"]) + "."
         elif line.startswith('Return keys: {"status"'):
-            score_shape = {item: 0.0 for item in contract["score_dimensions"]}
-            line = (
-                'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
-                '"confidence":0.0,"issue_codes":[],"scores":'
-                + json.dumps(score_shape, ensure_ascii=False, separators=(",", ":"))
-                + ',"identity_deltas":[],"preserved_elements":[],"drift_warnings":[],'
-                '"artifact_warnings":[],"summary":[],"feedback_verdict":{"status":"pass|violation|not_verifiable",'
-                '"violated_directions":[]},"similarity_verdict":{"status":"distinct|near_duplicate|not_verifiable",'
-                '"compared_reference_output_ids":[]},"retry_patch":{}}'
-            )
+            line = _review_response_shape(contract)
         lines.append(line)
     lines.append("Active review capabilities: " + ", ".join(contract["review_capability_sources"]))
     return "\n".join(lines)

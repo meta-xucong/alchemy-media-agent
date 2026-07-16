@@ -351,6 +351,7 @@ class HumanPhotorealismGuidance(V3BaseModel):
     subject_type: str = "generic"
     realism_level: str = "not_applicable"
     variation_mode: str = "delivery_suite"
+    semantic_contract: dict[str, Any] = Field(default_factory=dict)
     positive_prompt_fragments: list[str] = Field(default_factory=list)
     negative_prompt_fragments: list[str] = Field(default_factory=list)
     reference_preserve_rules: list[str] = Field(default_factory=list)

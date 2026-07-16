@@ -3954,6 +3954,7 @@ def test_lab_image_planner_never_routes_to_deepseek():
     original_lab_doubao_key = settings.lab_doubao_vision_api_key
     original_deepseek_key = settings.deepseek_llm_api_key
     original_openai_key = settings.openai_api_key
+    original_lab_openai_key = settings.lab_openai_api_key
     original_kimi_key = settings.lab_kimi_api_key
     original_kimi_model = settings.kimi_llm_model
 
@@ -3963,6 +3964,7 @@ def test_lab_image_planner_never_routes_to_deepseek():
         settings.lab_doubao_vision_api_key = "sk-test-doubao"
         settings.deepseek_llm_api_key = "sk-test-deepseek"
         settings.openai_api_key = "sk-test-openai"
+        settings.lab_openai_api_key = "sk-test-lab-openai"
         settings.lab_kimi_api_key = "sk-test-kimi"
         settings.kimi_llm_model = "kimi-k2.6"
 
@@ -3979,6 +3981,7 @@ def test_lab_image_planner_never_routes_to_deepseek():
         settings.lab_doubao_vision_api_key = original_lab_doubao_key
         settings.deepseek_llm_api_key = original_deepseek_key
         settings.openai_api_key = original_openai_key
+        settings.lab_openai_api_key = original_lab_openai_key
         settings.lab_kimi_api_key = original_kimi_key
         settings.kimi_llm_model = original_kimi_model
 

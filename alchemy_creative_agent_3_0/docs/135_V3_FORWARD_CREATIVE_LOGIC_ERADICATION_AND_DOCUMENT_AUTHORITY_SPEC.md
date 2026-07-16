@@ -1,7 +1,7 @@
 # 135 V3 Forward Creative-Logic Eradication And Document Authority Spec
 
 Status: **active, cross-cutting architecture authority.** This document and
-Doc134 define how V3 distinguishes legitimate deterministic contracts from the
+Docs134/136 define how V3 distinguishes legitimate deterministic contracts from the
 rejected “structured word-stack” creative route. Where an earlier document
 describes local prompt fragments, keyword classifications, static image recipes
 or retry prose as renderer input, that description is historical only.
@@ -78,7 +78,7 @@ model. The Brain owns that conversion and validates the completed wording.
 | `PromptCompilerAgent` | Produces only a non-creative compatibility shadow when a canonical Brain prompt exists. | Generating a second visual prompt, negatives or hard-constraint word stack for a signed Job. |
 | `ProductionImageGenerationProvider` | Relays the signed canonical text; every normalized real-image materialization and every actual Provider operation fails closed when that sign-off is absent. | Appending Human Realism, reference, role, retry or recipe text after sign-off. |
 | `V3ProductApiService` retry | Forwards normalized issue codes and bounded retry provenance to the next Brain sign-off. | Translating issue codes or ledger templates into local repair language. |
-| Human Realism | Executes frozen, Brain-owned rendering semantics and contributes evidence/review obligations. | Inferring whole-image stylization from a raw word or emitting a second Provider prompt. |
+| Human Realism | Executes frozen, Brain-owned rendering semantics; contributes its typed semantic contract to Brain sign-off and contributes evidence/review obligations. | Inferring whole-image stylization from a raw word, emitting a second Provider prompt, or retaining the semantic contract only as an unreachable ledger field. |
 | Codex Native MCP | Projects the same canonical string, reference paths and hash as the Web Provider; it creates no Web candidate/delivery. | Replanning, paraphrasing, prompt authoring, Provider fallback or persistence. |
 
 Reference-file admission is equally non-creative.  The frozen Reference

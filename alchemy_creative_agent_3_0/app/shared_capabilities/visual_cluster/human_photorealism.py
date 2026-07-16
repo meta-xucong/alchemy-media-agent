@@ -454,6 +454,7 @@ class HumanPhotorealismLayer:
         applies = bool(activation.get("applies"))
         reason = str(activation.get("primary_reason") or activation.get("disabled_reason") or "unknown")
         guidance_id = stable_id("human_photorealism_guidance", project_id, job_id, scenario_id, user_input, variation_mode)
+        brain_owned_forward_execution = bool(metadata.get("brain_owned_forward_execution"))
         if not applies:
             return HumanPhotorealismGuidance(
                 guidance_id=guidance_id,
@@ -483,6 +484,7 @@ class HumanPhotorealismLayer:
                 realism_level=realism_level,
                 activation=activation,
                 rendering_profile=rendering_profile,
+                brain_owned_forward_execution=brain_owned_forward_execution,
             )
         positives = [
             "Render the visible person as a physically credible real-camera photograph; preserve explicit or reference-backed identity and age direction.",
@@ -512,6 +514,11 @@ class HumanPhotorealismLayer:
             ],
             "identity_reinforcement": preserve,
         }
+        semantic_contract = self._semantic_contract(
+            activation=activation,
+            human_subject_kind=human_subject_kind,
+            review_targets=review_targets,
+        )
         return HumanPhotorealismGuidance(
             guidance_id=guidance_id,
             project_id=project_id,
@@ -520,12 +527,13 @@ class HumanPhotorealismLayer:
             subject_type=subject_type,
             realism_level=realism_level,
             variation_mode=variation_mode,
-            positive_prompt_fragments=_dedupe(positives),
-            negative_prompt_fragments=_dedupe(negatives),
-            reference_preserve_rules=_dedupe(preserve),
-            reference_do_not_inherit_rules=_dedupe(do_not_inherit),
+            semantic_contract=semantic_contract,
+            positive_prompt_fragments=[] if brain_owned_forward_execution else _dedupe(positives),
+            negative_prompt_fragments=[] if brain_owned_forward_execution else _dedupe(negatives),
+            reference_preserve_rules=[] if brain_owned_forward_execution else _dedupe(preserve),
+            reference_do_not_inherit_rules=[] if brain_owned_forward_execution else _dedupe(do_not_inherit),
             review_targets=_dedupe(review_targets),
-            retry_patch_templates=retry_patch_templates,
+            retry_patch_templates={} if brain_owned_forward_execution else retry_patch_templates,
             user_visible_summary=[
                 "Keeps the person recognizable",
                 "Adds real-photo skin, expression, and hair detail",
@@ -548,6 +556,7 @@ class HumanPhotorealismLayer:
                 },
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": has_identity_reference,
+                "brain_owned_forward_execution": brain_owned_forward_execution,
             },
         )
 
@@ -562,6 +571,7 @@ class HumanPhotorealismLayer:
         realism_level: str,
         activation: dict[str, Any],
         rendering_profile: dict[str, Any],
+        brain_owned_forward_execution: bool,
     ) -> HumanPhotorealismGuidance:
         """Keep the shared human capability precise for a hand/skin detail."""
         positives = [
@@ -595,12 +605,17 @@ class HumanPhotorealismLayer:
             subject_type=subject_type,
             realism_level=realism_level,
             variation_mode=variation_mode,
-            positive_prompt_fragments=_dedupe(positives),
-            negative_prompt_fragments=_dedupe(negatives),
+            semantic_contract=self._semantic_contract(
+                activation=activation,
+                human_subject_kind="hand_or_skin_detail",
+                review_targets=review_targets,
+            ),
+            positive_prompt_fragments=[] if brain_owned_forward_execution else _dedupe(positives),
+            negative_prompt_fragments=[] if brain_owned_forward_execution else _dedupe(negatives),
             reference_preserve_rules=[],
-            reference_do_not_inherit_rules=do_not_inherit,
+            reference_do_not_inherit_rules=[] if brain_owned_forward_execution else do_not_inherit,
             review_targets=review_targets,
-            retry_patch_templates=retry_patch_templates,
+            retry_patch_templates={} if brain_owned_forward_execution else retry_patch_templates,
             user_visible_summary=[
                 "Adds real-camera hand and skin detail",
                 "Checks finger anatomy and physical object contact",
@@ -615,8 +630,37 @@ class HumanPhotorealismLayer:
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": False,
+                "brain_owned_forward_execution": brain_owned_forward_execution,
             },
         )
+
+    @staticmethod
+    def _semantic_contract(
+        *,
+        activation: dict[str, Any],
+        human_subject_kind: str,
+        review_targets: list[str],
+    ) -> dict[str, Any]:
+        """Return typed Human Realism obligations, never Provider prose.
+
+        The contract deliberately uses a small closed vocabulary.  The remote
+        Brain decides how to honour it in the complete canonical image prompt;
+        deterministic code must not translate it into a local word stack.
+        """
+
+        is_detail = human_subject_kind == "hand_or_skin_detail"
+        return {
+            "contract_version": "v3_human_realism_semantic_v1",
+            "capability_id": "human_realism",
+            "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
+            "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
+            "identity_age_fidelity": "explicit_or_reference_backed" if not is_detail else "not_applicable",
+            "physical_coherence": "required",
+            "reference_boundary": "resolved_channels_only",
+            "ordinary_age_appropriate_context": bool(activation.get("safety_sensitive_person")),
+            "creative_direction_owner": "remote_v3_llm_brain",
+            "provider_prompt_owner": "remote_v3_llm_brain",
+        }
 
     def review(
         self,

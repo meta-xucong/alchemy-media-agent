@@ -114,7 +114,10 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "v3PhotographyPresetRow" in index.text
     assert "v3EcommerceAdvanced" in index.text
     assert "v3EcommerceFields" in index.text
-    assert "one_click_product_set" in index.text
+    # E17/Doc132 retire executable fixed E-Commerce preset defaults from new
+    # browser flows. Historical IDs remain read compatibility only and must
+    # not be projected as a current static suite choice.
+    assert "one_click_product_set" not in index.text
     assert 'data-v3-preset="single_hero" data-v3-preset-scope="photography"' in index.text
     assert 'data-v3-preset="reference_reshoot" data-v3-preset-scope="photography"' in index.text
     assert 'data-v3-preset="professional_set" data-v3-preset-scope="photography"' in index.text

@@ -1641,6 +1641,19 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     ) -> StrongReferenceContinuationPlan | None:
         if plan is None or guidance is None or not guidance.applies:
             return plan
+        if bool(guidance.metadata.get("brain_owned_forward_execution")):
+            # Doc136: the frozen semantic contract reaches Brain sign-off
+            # directly.  Do not even construct a local reference/prompt
+            # overlay in a new enforced path.
+            return plan.model_copy(
+                update={
+                    "metadata": {
+                        **dict(plan.metadata),
+                        "human_photorealism_layer": guidance.guidance_id,
+                        "human_photorealism_forward_semantic_contract": True,
+                    }
+                }
+            )
         return plan.model_copy(
             update={
                 "prompt_additions": _dedupe(
@@ -1671,6 +1684,19 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     ) -> RoleSpecificGenerationPlan:
         if guidance is None or not guidance.applies:
             return plan
+        if bool(guidance.metadata.get("brain_owned_forward_execution")):
+            # A role plan may retain opaque lineage, but cannot acquire a
+            # second Human Realism prompt language path after Brain ownership
+            # has been frozen.
+            return plan.model_copy(
+                update={
+                    "metadata": {
+                        **dict(plan.metadata),
+                        "human_photorealism_layer": guidance.guidance_id,
+                        "human_photorealism_forward_semantic_contract": True,
+                    }
+                }
+            )
         return plan.model_copy(
             update={
                 "prompt_additions": _dedupe([*plan.prompt_additions, *guidance.positive_prompt_fragments])[:16],

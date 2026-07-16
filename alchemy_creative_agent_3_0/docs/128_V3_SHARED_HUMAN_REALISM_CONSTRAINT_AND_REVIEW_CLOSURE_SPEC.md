@@ -1,9 +1,11 @@
 # Doc128 — Shared Human Realism Constraint And Review Closure
 
-> **Current-status note (Docs 134–135):** Human Realism is constrained to
+> **Current-status note (Docs 134–136):** Human Realism is constrained to
 > evidence, activation, review dimensions and safety boundaries. It must not
 > infer a complete image style from keywords or emit local positive/negative
-> wording after the Brain has signed the renderer prompt.
+> wording after the Brain has signed the renderer prompt. Doc136 additionally
+> requires the active typed semantic contract to reach that Brain sign-off;
+> a capability ID alone is not sufficient forward evidence.
 
 ## Status
 
