@@ -24,7 +24,12 @@ from .contracts import (
 
 
 class AnchorGenerationRequest(V3BaseModel):
-    """Typed evidence request; prompt content is deliberately not a field."""
+    """Typed evidence request; prompt content is deliberately not a field.
+
+    The reference list is a serial identity chain, not an arbitrary bag of
+    images: front uses only the root, three-quarter uses root plus the winning
+    front, and profile uses root plus both prior winners.
+    """
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -44,6 +49,26 @@ class AnchorGenerationRequest(V3BaseModel):
         if not value.strip():
             raise ValueError("Brain plan, canonical prompt hash, and root evidence are required")
         return value
+
+    @model_validator(mode="after")
+    def enforce_serial_reference_chain(self) -> "AnchorGenerationRequest":
+        references = self.reference_evidence_ids
+        if not references or references[0] != self.root_source_asset_id:
+            raise ValueError("anchor generation references must start with the root source asset")
+        if len(references) != len(set(references)):
+            raise ValueError("anchor generation references must be unique")
+
+        expected_reference_count = {
+            "standard_front": 1,
+            "three_quarter": 2,
+            "profile": 3,
+        }[self.view_role]
+        if len(references) != expected_reference_count:
+            raise ValueError(
+                f"{self.view_role} requires the serial identity chain with "
+                f"{expected_reference_count} reference evidence IDs"
+            )
+        return self
 
 
 class AnchorPackPreparationRequest(V3BaseModel):

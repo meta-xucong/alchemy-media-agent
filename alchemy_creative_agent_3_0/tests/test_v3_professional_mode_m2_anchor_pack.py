@@ -182,6 +182,49 @@ def test_m2_failed_three_quarter_stage_does_not_generate_profile_candidates() ->
     assert all(request.view_role != "profile" for request in generator.requests)
 
 
+@pytest.mark.parametrize(
+    ("view_role", "reference_evidence_ids"),
+    [
+        ("standard_front", ["asset_root_1", "output_front_1"]),
+        ("three_quarter", ["asset_root_1"]),
+        ("profile", ["asset_root_1", "output_front_1"]),
+        ("profile", ["asset_root_1", "output_front_1", "output_three_quarter_1", "extra"]),
+        ("profile", ["output_front_1", "asset_root_1", "output_three_quarter_1"]),
+    ],
+)
+def test_m2_generation_contract_rejects_non_serial_reference_chains(
+    view_role: str, reference_evidence_ids: list[str]
+) -> None:
+    with pytest.raises(ValidationError, match="serial identity chain|root source asset|unique"):
+        AnchorGenerationRequest(
+            project_id="project_1",
+            people_asset_id="person_1",
+            pack_version_id="pack_1",
+            view_role=view_role,
+            candidate_index=1,
+            root_source_asset_id="asset_root_1",
+            reference_evidence_ids=reference_evidence_ids,
+            brain_plan_id="brain_plan_1",
+            canonical_prompt_hash="sha256:prompt_1",
+        )
+
+
+def test_m2_generation_contract_accepts_the_serial_profile_chain() -> None:
+    request = AnchorGenerationRequest(
+        project_id="project_1",
+        people_asset_id="person_1",
+        pack_version_id="pack_1",
+        view_role="profile",
+        candidate_index=3,
+        root_source_asset_id="asset_root_1",
+        reference_evidence_ids=["asset_root_1", "output_front_3", "output_three_quarter_2"],
+        brain_plan_id="brain_plan_1",
+        canonical_prompt_hash="sha256:prompt_1",
+    )
+
+    assert request.reference_evidence_ids == ["asset_root_1", "output_front_3", "output_three_quarter_2"]
+
+
 def test_m2_activation_requires_explicit_user_confirmation() -> None:
     generator = FakeGenerator()
     reviewer = FakeReviewer()

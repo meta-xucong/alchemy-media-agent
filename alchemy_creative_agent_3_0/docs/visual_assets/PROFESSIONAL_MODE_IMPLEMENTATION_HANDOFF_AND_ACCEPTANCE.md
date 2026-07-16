@@ -261,6 +261,9 @@ three profile candidates are generated only after a three-quarter winner and
 use the root portrait plus both selected supplementary anchors as evidence
 each supplementary role selects one likeness-first winner independently
 a failed three-quarter stage blocks profile generation and pack activation
+the typed generation request rejects missing, duplicated, reordered, or extra
+evidence: front=root; three-quarter=root+front winner;
+profile=root+front winner+three-quarter winner
 Face Identity pack requires per-view and cross-view pass plus user activation
 warning/failed/superseded/unconfirmed views cannot route to Provider
 root provenance and consent remain auditable without raw paths or secrets

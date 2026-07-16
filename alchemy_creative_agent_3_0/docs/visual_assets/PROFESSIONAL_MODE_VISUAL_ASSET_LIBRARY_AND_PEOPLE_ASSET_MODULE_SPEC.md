@@ -324,6 +324,12 @@ Candidate counts are fixed and bounded for this module rather than left to a
 caller-controlled loop. The user explicitly activates the complete passing
 pack; scoring alone never makes an unconfirmed pack active.
 
+The internal generation request enforces this evidence chain at the typed
+boundary: `standard_front` accepts exactly the root source; `three_quarter`
+accepts exactly root plus the selected front output; `profile` accepts exactly
+root plus the selected front and selected three-quarter outputs. Missing,
+duplicated, reordered, or extra evidence is rejected before generation.
+
 ## 5. Root Truth And Anchor Authority
 
 People Assets have a strict authority hierarchy:
