@@ -5,6 +5,11 @@ extends Docs 128 and 136–142 after their controlled M4 pixel matrix. It does
 not replace the V3 execution architecture or authorize a template, Provider,
 or demographic-specific visual route.
 
+**Doc151 follow-up.** The shared review obligations remain unchanged; Doc151
+strengthens the preceding Remote Brain sign-off so that generic photographic
+language is not mistaken for a whole-image material decision. It introduces no
+local skin prompt, demographic branch, or second reviewer.
+
 ## 1. Evidence and precise problem statement
 
 The Doc142 controlled matrix proved that the shared route is live:
