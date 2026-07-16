@@ -72,6 +72,7 @@ The effective authority is selected by the execution mode:
 | Professional Mode with an active selected People Asset | This document set for asset selection/lifecycle, plus existing shared V3 documents for execution | Use exactly one selected project People Asset and its active Face Identity module/pack version in the first release. |
 | Professional Mode without a valid asset/pack | This document set | Block safely; never silently run Standard Mode. |
 | Shared Provider / review / retry / delivery | Existing Doc93/95/96/97/100/101/121/128 contracts | No replacement provider, registry, reviewer, retry loop, or storage. |
+| Shared Brain semantic/prompt gates | Existing Doc134/135/136/137/138/139/140 contracts | Face Identity supplies typed evidence only; missing profile, activation intent, canonical prompt/hash, or required Human Realism sign-off blocks. |
 
 The Professional Mode set may narrow or strengthen an existing shared contract
 for the selected asset, but may not weaken, bypass, or globally rewrite it.
@@ -89,7 +90,30 @@ Doc100 GPT Image 2 sole-renderer governance
 Doc101 capability activation and frozen-plan governance
 Doc121 review/reference evidence continuity
 Doc128 shared Human Realism constraints and review closure
+Doc134 semantic ownership and heuristic retirement
+Doc135 forward creative-logic eradication and document authority
+Doc136 Human Realism semantic sign-off and lean review closure
+Doc137 Human Realism Brain semantic preflight and re-signing
+Doc138 Human Realism natural-presence Brain deliverable
+Doc139 independent Human Realism Brain re-signing
+Doc140 complete Remote Brain semantic task-profile requirement
 ```
+
+The current integration target is the post-Doc140 shared forward path:
+
+```text
+sanitized Professional Mode selection + asset evidence
+  -> complete Remote Brain semantic task profile and activation intent
+  -> frozen CapabilityActivationPlan
+  -> complete signed canonical Provider prompt and hashes
+  -> Human Realism preflight/re-signing when active
+  -> exact Provider prompt materialization
+  -> shared real-pixel review, bounded retry, and final delivery
+```
+
+The People Asset/Face Identity documents add lifecycle and evidence binding to
+this path. They do not author prompt prose, perform local semantic fallback,
+create a second reviewer/provider, or change the Standard Mode path.
 
 Standard Mode's existing `ProjectIdentityAnchor`, `SubjectIdentityCard`,
 `auto_batch_identity_anchor`, and Doc97 continuity records remain valid. They
@@ -107,6 +131,8 @@ Do not send a synthetic white-background face card as unrestricted Provider
 Do not use local face swap, canvas compositing, or private pixel repair.
 Do not claim Provider Gate, Gate C/D, P10, or production readiness from pack
   creation alone.
+Do not let Standard Mode UI, defaults, keyword heuristics, or local prompt
+fragments become implicit Professional Mode behavior.
 ```
 
 ## Change-Management Rule
@@ -119,6 +145,12 @@ directory. A change is compatible only when it:
 3. names which existing shared authority remains responsible;
 4. preserves frozen activation, shared review/retry, and append-only history;
 5. adds an isolation regression before any runtime implementation.
+
+Shared-capability changes in Standard Mode are reviewed for Professional Mode
+impact. If a shared contract changes, the adapter records the supported
+contract version and either adapts explicitly or returns a structured
+incompatibility block; it never silently migrates or reinterprets an active
+People Asset.
 
 If a future change would require changing Standard Mode or a shared numbered
 contract, it must first be proposed as a separate architecture decision. It

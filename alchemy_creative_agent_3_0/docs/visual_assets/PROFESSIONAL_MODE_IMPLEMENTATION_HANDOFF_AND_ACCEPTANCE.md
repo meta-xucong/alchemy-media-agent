@@ -17,6 +17,23 @@ The primary authority is:
 
 `PROFESSIONAL_MODE_VISUAL_ASSET_LIBRARY_AND_PEOPLE_ASSET_MODULE_SPEC.md`
 
+The implementation must target the current post-Doc140 shared V3 path, not an
+older local-prompt interpretation:
+
+```text
+sanitized mode/asset evidence
+  -> complete Remote Brain semantic task profile and activation intent
+  -> frozen CapabilityActivationPlan
+  -> complete signed canonical Provider prompt and hashes
+  -> Human Realism preflight/re-signing when active
+  -> exact GPT Image 2 Provider request
+  -> shared real-pixel review, bounded retry, and final delivery
+```
+
+The Face Identity implementation contributes typed evidence and lifecycle
+state only. It must not author prompt prose, add negatives, locally classify
+the scene, patch retry prompts, or create a second reviewer/provider.
+
 ## 1. Execution Boundary
 
 The only supported Professional Mode path is:
@@ -53,6 +70,8 @@ freeze modular People Asset semantics with Face Identity as the only first-relea
 freeze root guard + pack-support ordering
 freeze user-confirmed pack activation
 add Standard/Professional isolation red tests
+freeze compatibility with Doc134/135/136/137/138/139/140 semantic and prompt
+signing gates
 ```
 
 ### M1 — Project People Asset Catalog
@@ -85,13 +104,22 @@ root source or protected text-only character direction
   -> user confirms activation of the complete passing Face Identity pack
 ```
 
-View names constrain evidence coverage only. The existing Brain creates each
-candidate's natural-language creative direction. No fixed camera, lighting,
-makeup, background, or cosmetic recipe may be added by this module.
+View names constrain evidence coverage only. Remote Brain owns the complete
+semantic task profile and canonical Provider prompt for each candidate. No
+fixed camera, lighting, makeup, background, or cosmetic recipe may be added by
+this module, and no local prompt fragment may fill a missing Brain decision.
 
 The original uploaded portrait remains the root guard. Provider materialization
 uses Doc93/95 evidence preparation; a generated white-background presentation
 card is not sent as unrestricted full-frame evidence.
+
+Each candidate must pass through the Remote Brain semantic task-profile and
+capability-activation gates before planning. The candidate is not executable
+until Remote Brain returns a complete canonical Provider prompt and verified
+hash. If Human Realism is active, its semantic preflight and independent
+natural-presence re-signing must also pass. The pack module supplies view and
+identity evidence; it does not fill any missing semantic or prompt field
+locally.
 
 Only a user-confirmed `active` Face Identity pack version can enter
 Professional Mode Provider inputs. Warning, failed, superseded, or unconfirmed
@@ -105,13 +133,21 @@ The bridge must:
 ```text
 resolve one selected People Asset for the job
 activate Professional Mode before CapabilityActivationPlan freeze
-pass only approved face root/anchor reference IDs into existing V3 inputs
+pass sanitized mode/asset/version evidence and approved face root/anchor
+  reference IDs into the existing Remote Brain semantic task profile
+require complete capability activation intent before plan freeze
+pass only the typed identity evidence binding into existing V3 inputs
+require exact canonical_provider_prompts[] and hashes before Provider
+require Human Realism preflight/re-signing when that capability is active
 preserve the selected asset/version in internal provenance
 leave the public Brain request free of asset-library internals
 ```
 
 It must not inject identity capability after planning, create a private retry
-loop, or alter General/E-Commerce/Photography role contracts.
+loop, author local prompt prose, use a keyword/heuristic fallback, or alter
+General/E-Commerce/Photography role contracts. Local MCP/Codex Native may only
+relay the same canonical prompt and reference hashes and remains
+conversation-only/non-certifying.
 
 ### M4 — Template Consumers
 
@@ -154,9 +190,12 @@ or video readiness.
 | Identity metrics | Doc96 | Ephemeral/approved summaries only; no biometric vectors. |
 | Continuity routing | Doc97 | Approved pack views become reviewed generated support; root guard remains. |
 | Renderer | Doc100 | Existing GPT Image 2 only. |
-| Plan freeze | Doc101 | Professional capability active before freeze; no late activation. |
+| Plan freeze | Doc101 | Professional capability active before freeze; no late activation. The asset binding is typed evidence, not a local creative contribution. |
 | Review evidence | Doc121 | Reviewer sees exactly the admitted evidence used for the candidate. |
 | Human realism/safety | Doc128 | Shared constraints remain active; age change is prompt-owned and reviewed. |
+| Semantic ownership | Doc134/135/140 | Remote Brain owns semantic judgment, task-profile completeness, activation intent, and creative direction; no local fallback or prompt fragments. |
+| Canonical prompt | Doc135/136 | Provider receives only the complete Brain-signed canonical prompt and matching hash. |
+| Human Realism gates | Doc137/138/139 | When active, semantic preflight and independent natural-presence re-signing are required before Provider/MCP. |
 | Module extensibility | This document set | Face Identity is the only first-release module; each future dimension needs its own contract and activation. |
 
 ## 4. Required Failure Semantics
@@ -170,6 +209,9 @@ root provenance is missing when an uploaded root exists
 required view or cross-view identity review fails
 unwanted-person pixels cannot be isolated from a non-identity reference
 CapabilityActivationPlan was frozen before the Professional capability existed
+Remote Brain semantic task profile or capability activation intent is incomplete
+canonical Provider prompt is missing, stale, or hash-mismatched
+required Human Realism semantic preflight or independent re-signing failed
 Provider/review evidence continuity is incomplete
 shared review or final-delivery gate fails
 ```
@@ -181,6 +223,7 @@ fall back to Standard Mode
 use an unreviewed or warning anchor as identity truth
 replace the uploaded root with a generated output
 retry indefinitely
+use a keyword/heuristic semantic fallback or local prompt fragment
 create a local pixel repair or face-swap path
 claim certification from metadata-only review
 ```
@@ -214,11 +257,21 @@ body/hair/styling modules are absent and cannot activate from legacy metadata
 
 ```text
 activation is frozen before Professional contributions
+Professional Mode binds sanitized mode/asset/version evidence before Brain
+semantic planning
+complete Remote Brain task profile and capability activation intent are
+required before plan freeze
+Face Identity emits no prompt additions, negative lists, retry prose, or
+keyword-based activation
+canonical Provider prompt and hash parity is verified before Provider/MCP
+Human Realism preflight and independent re-signing are enforced when active
 Provider receives GPT Image 2 requests only
 first-release Provider inputs contain Face Identity evidence, not body/style locks
 Doc95 evidence derivatives are used instead of synthetic matte cards
 Reviewer receives the same admitted root/anchor evidence as Provider
 shared retry remains bounded and append-only
+Local MCP/Codex Native only relays the canonical prompt/reference hashes and
+cannot re-plan or certify Professional Mode delivery
 no local face swap, overlay, OCR, font, or private repair loop appears
 ```
 
@@ -233,6 +286,25 @@ an explicit age change is reviewed as a same-person prompt transformation
 an explicit different-person request blocks until asset/mode changes
 ```
 
+### Shared-Contract Adaptation
+
+Every future Standard Mode optimization must be classified before integration:
+
+```text
+Standard-only UI/default/heuristic change
+  -> no Professional Mode behavior change
+
+shared foundation contract change
+  -> update this adapter, record supported contract versions, and rerun
+     Professional Mode isolation/semantic/prompt-parity tests
+
+unsupported shared contract change
+  -> structured incompatibility block; never silently reinterpret an active pack
+```
+
+This keeps the Face Identity module reusable while preventing Standard Mode
+defaults or local creative logic from leaking into Professional Mode.
+
 ## 6. Evidence And Release Gate
 
 Source tests and mock contracts are not production certification. Before any
@@ -245,6 +317,8 @@ per-view and cross-view review results
 shared retry history and final-winner evidence
 real-pixel Provider/review status
 template-specific acceptance evidence
+Remote Brain semantic task profile, capability activation intent, canonical
+prompt/hash, and Human Realism preflight/re-sign provenance
 ```
 
 Professional Mode remains non-production until the existing GPT Image 2,

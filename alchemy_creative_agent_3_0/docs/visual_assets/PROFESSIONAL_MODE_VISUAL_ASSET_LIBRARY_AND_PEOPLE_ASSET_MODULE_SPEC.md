@@ -44,14 +44,39 @@ Standard Mode
 Professional Mode, only after an explicit mode choice and selected People Asset
   -> this document owns asset selection, pack lifecycle, and identity-source
      eligibility
-  -> Doc93/95/96/97/100/101/121/128 continue to own reference channels,
-     evidence, provider materialization, activation freezing, review, retry,
-     and human-realism safety
+  -> Doc93/95/96/97/100/101/121/128/134/135/136/137/138/139/140 continue to
+     own reference channels, evidence, semantic task profiling, capability
+     activation, provider-prompt finalization/signing, review, retry, and
+     human-realism safety
 ```
 
 The overlay may narrow or strengthen an existing shared contract for the
 selected People Asset, but it may not weaken, bypass, or globally rewrite it.
 No old document is edited, renumbered, or made obsolete by this specification.
+
+### 0.2 Current Shared Forward Path
+
+The Professional Mode overlay must attach to the current standard V3 forward
+path. It must not preserve an older “local module writes a creative direction”
+interpretation:
+
+```text
+explicit mode + selected People Asset evidence
+  -> Remote Central Brain complete visual_task_profile and capability intent
+  -> frozen CapabilityActivationPlan
+  -> Remote Brain complete canonical_provider_prompts[] and prompt hashes
+  -> Human Realism semantic preflight and independent re-signing when active
+  -> exact GPT Image 2 provider materialization
+  -> shared real-pixel review, bounded retry, and final-result selection
+```
+
+The Face Identity Module may supply typed identity evidence, view coverage,
+and user-selected asset provenance to this path. It may not author provider
+prompt prose, append local prompt fragments, classify semantics locally,
+patch a retry prompt, or bypass a missing Brain decision. A missing or stale
+semantic profile, frozen activation intent, canonical prompt, prompt hash, or
+required Human Realism sign-off is a fail-closed condition before Provider or
+MCP execution.
 
 ## 1. Product Decision
 
@@ -174,13 +199,19 @@ face geometry and feature relationships
 same-face identity evidence
 face-view coverage (front / three-quarter / profile)
 face-specific age direction evidence
-face review, activation, and provenance
+pack readiness, user activation, version lifecycle, and provenance
 ```
 
 It does not own body shape, body proportions, pose, hair, makeup, wardrobe,
 accessories, lighting, scene, camera, composition, or whole-image style. Those
 channels remain prompt-owned or governed by another explicitly selected
 reference/module under the existing V3 contracts.
+
+Pixel-quality review, Human Realism semantic sign-off, retry planning, Provider
+prompt creation, and final-result selection remain owned by the shared V3
+runtime. “Face review” in this document means pack/view readiness and identity
+evidence closure; it does not authorize a private face reviewer or private
+identity repair path.
 
 The People Asset container contains:
 
@@ -219,11 +250,14 @@ module must not create a face card through local face swapping, coordinate
 warping, canvas overlays, deterministic facial reconstruction, or a private
 pixel-repair path.
 
-The view names are evidence contracts, not static image recipes. The existing
-Brain must write the natural-language direction for every candidate. The pack
-module may constrain the requested view, identity evidence, safety, and review
-target, but it must not hard-code a camera, lens, makeup, lighting, background,
-pose, or cosmetic prompt recipe.
+The view names are evidence contracts, not static image recipes. The Remote
+Brain must first return a complete semantic task profile and capability
+activation intent, then create the complete canonical Provider prompt for every
+candidate. The pack module may declare the requested view, identity evidence,
+safety, and review target as typed inputs, but it must not hard-code a camera,
+lens, makeup, lighting, background, pose, or cosmetic prompt recipe. It must
+not emit local prompt additions, negative lists, retry prose, or a fallback
+creative direction when Brain output is incomplete.
 
 The default pack has one required `standard_front`, one required
 `three_quarter`, and one required `profile` view after the winning front is
@@ -288,6 +322,20 @@ current prompt
 other uploaded images
   may contribute only the explicitly assigned non-identity channels
 ```
+
+The explicit Professional Mode choice and selected `people_asset_id`/
+`pack_version_id` are sanitized user controls and evidence bindings. They must
+reach the Remote Brain semantic task profile before the capability plan is
+frozen; they must not be hidden in local metadata that the Brain never sees.
+The binding carries identity-source eligibility and provenance, not private
+asset-library internals, raw prompt bodies, or provider instructions.
+
+The selected pack is a bounded reference source, not an instruction to replay
+every stored view. The shared adaptive reference selector must honor the
+current maximum admitted identity sources (currently three per job unless the
+shared contract is versioned otherwise). A project may store more views, but a
+job must choose a view-aware subset and record the exact reference IDs and
+hashes used by Provider and Reviewer.
 
 An uploaded image that contains another person must not be sent as a complete
 style or scene reference while claiming that its person is ignored. Full image
@@ -370,9 +418,15 @@ current contracts:
 | Doc96 high-fidelity identity | Request high input fidelity where applicable; use ephemeral metrics, fused review, bounded shared rerender, and best-result selection. No new local face/pixel repair is introduced. |
 | Doc97 subject continuity | Store generated anchors as reviewed support, retain uploaded root truth, route views adaptively, quarantine weak generated support. |
 | Doc100 sole renderer | All anchor candidates and Professional Mode images use the existing GPT Image 2 provider; no sidecar or second pixel renderer. |
-| Doc101 activation plan | Professional Mode must be active before the job plan freezes; no late capability injection or hidden fallback. |
+| Doc101 activation plan | Professional Mode must be active before the job plan freezes; no late capability injection or hidden fallback. The Face Identity binding is registered as a typed capability input, not a local creative prompt contribution. |
 | Doc121 evidence continuity | Review receives the same admitted root/anchor evidence actually used by Provider materialization. |
 | Doc128 Human Realism | Preserve shared age, safety, realism, and review constraints without taking ownership of asset selection. |
+| Doc134 semantic ownership | Brain owns visible-subject judgment, evidence interpretation, and semantic creative intent; the module supplies evidence, not local semantic classification. |
+| Doc135 heuristic retirement | No local prompt fragments, deterministic scene recipes, keyword activation, retry prose, or forward creative logic may be emitted by the Face Identity Module. |
+| Doc136 lean review closure | Shared review consumes the final pixels and Brain-owned evidence; pack readiness does not certify a generated delivery. |
+| Doc137/139 Human Realism Brain gates | When Human Realism is active, semantic preflight and independent natural-presence re-signing must pass before Provider/MCP execution. |
+| Doc138 natural human presence | Human-presence quality remains a Brain-owned semantic deliverable, not a Face Identity prompt recipe. |
+| Doc140 task-profile completeness | A new enforced real-image job requires a complete remote semantic task profile and capability activation intent; local fallback cannot fill semantic gaps. |
 | Module boundary | The first release activates only Face Identity; future body/style modules require their own contracts and explicit activation. |
 | Doc91/92 Human Realism | Improve human rendering without acquiring reference-channel ownership. |
 | shared GPT Image 2 provider | Render anchor candidates and later Professional Mode images through the existing provider contract. |
@@ -380,8 +434,10 @@ current contracts:
 
 No People Asset implementation may create a second Brain, provider, review
 system, retry system, image store, or reference registry. It may add a
-project-scoped catalog/index, but reference admission, evidence preparation,
-provider execution, review, retry, and final delivery remain shared.
+project-scoped catalog/index and a Doc101-governed typed binding adapter, but
+reference admission, semantic judgment, evidence preparation, Provider prompt
+finalization, Provider execution, review, retry, and final delivery remain
+shared.
 
 ## 9. Ownership And Isolation
 
@@ -393,6 +449,7 @@ root-source provenance pointers, not copied files
 anchor-pack version lifecycle
 view coverage and pack activation/supersession
 user consent and per-job asset selection state
+typed Professional Mode binding and asset/version provenance
 ```
 
 The library may contain multiple People Assets in one project. It does not
@@ -413,6 +470,9 @@ the final user-facing creation result
 ```text
 reference-channel ownership
 identity/product/appearance evidence
+semantic task profile and capability activation intent
+canonical Provider prompt creation, signing, and hash verification
+Human Realism semantic preflight and independent re-signing
 provider transport
 pixel review
 bounded retry
@@ -486,6 +546,15 @@ mode-specific marketplace, A+, or photography role fields
 raw filesystem paths, provider-private prompts, or unredacted source payloads
 ```
 
+The catalog contract is intentionally separate from the shared execution
+contract. A future change to Standard Mode may improve a shared capability,
+but it must not silently change People Asset semantics. Each shared contract
+version used by an active pack/job must be recorded in internal provenance;
+the Professional Mode adapter must either support the new version or block
+with a structured incompatibility state. It must never reinterpret a stale
+pack as a new module, silently migrate a selected asset, or copy Standard Mode
+defaults into Professional Mode.
+
 ## 11. Runtime Integration Boundary
 
 The intended execution seam is:
@@ -494,9 +563,13 @@ The intended execution seam is:
 Professional Mode selection
   -> resolve selected People Asset
   -> resolve its active Face Identity Module (first release)
+  -> bind sanitized mode/asset/version evidence before semantic planning
+  -> require complete Remote Brain visual_task_profile and capability intent
   -> activate the declared Professional Mode capability before plan freeze
   -> inject approved face root/anchor reference IDs into existing V3 capability input
-  -> run existing planning / provider / review / retry / delivery path
+  -> require complete Brain canonical_provider_prompts[] and hashes
+  -> require Human Realism preflight/re-signing when active
+  -> run exact-prompt Provider / shared review / bounded retry / final delivery
   -> preserve Professional Mode provenance and selected asset version
 ```
 
@@ -519,6 +592,13 @@ fields, or new Brain prompt prose. A UI/session selection may carry the mode
 into the existing sanitized project-job context, but it must not become a
 variation mode, scenario role, marketplace field, or provider control.
 
+The adapter may bind typed reference IDs, view roles, hashes, and channel
+eligibility. It must not translate those values into local prompt prose. The
+Provider receives only the exact complete canonical prompt signed by Remote
+Brain. The Local MCP/Codex Native path, if used later, may relay that same
+prompt and reference hashes for conversation-only rendering; it may not
+re-plan, rewrite, or certify the Professional Mode delivery.
+
 The Professional Mode bridge must fail closed for:
 
 ```text
@@ -527,6 +607,10 @@ inactive or superseded pack version
 pack review not complete
 root provenance missing where required
 reference-channel isolation failure
+Remote Brain semantic task profile or capability activation intent incomplete
+canonical Provider prompt missing, stale, or hash-mismatched
+required Human Realism semantic preflight or independent re-signing failed
+local creative fallback, legacy prompt fragment, or heuristic activation detected
 provider/review failure during pack creation
 ```
 
@@ -588,9 +672,12 @@ add active/superseded/failed handling
 ```text
 explicit root-source intake
 three standard-front candidates
-existing identity/quality scoring and winner selection
+Remote Brain semantic task profile and capability activation intent
+existing shared identity/quality scoring and winner selection
 supplementary view generation using root + selected front anchor
 per-view and whole-pack review
+complete canonical Provider prompt and hash for every candidate
+Human Realism semantic preflight/re-signing when active
 activate only a complete passing Face Identity pack after user confirmation
 ```
 
@@ -599,6 +686,9 @@ activate only a complete passing Face Identity pack after user confirmation
 ```text
 add Professional Mode selection to General, E-Commerce, and Photography
 consume only the selected People Asset in Professional Mode
+bind the explicit mode and selected asset/version before Brain planning
+use the existing portrait/reference capabilities through a Doc101 adapter
+never emit local prompt prose or semantic fallback from the Face module
 keep Standard Mode byte/contract compatible
 prove no raw person reference leaks into Professional Mode provider inputs
 ```
@@ -632,6 +722,18 @@ The first-release module does not lock body, hair, wardrobe, or whole-image styl
 Future modules cannot activate from prompt keywords or legacy metadata.
 Professional Mode may contain multiple project People Assets and binds one per job.
 The selected asset is activated before the frozen capability plan.
+Professional Mode supplies a complete Brain semantic task profile and
+capability activation intent before the plan freezes.
+Face Identity cannot emit local prompt additions, negative lists, retry prose,
+or keyword-based activation.
+Provider execution is blocked when the canonical prompt or its hash is absent,
+stale, or mismatched.
+Human Realism preflight and independent natural-presence re-signing are
+required whenever the shared plan activates Human Realism.
+Provider and Local MCP/Codex Native paths receive the same canonical prompt
+and reference hashes; Local MCP cannot re-plan or certify the result.
+Stored pack views may exceed the per-job reference limit, but adaptive routing
+selects a bounded, view-aware subset and records the exact IDs used.
 An explicit age change preserves same-person geometry and is reviewed as a
 prompt-owned transformation.
 An uploaded second person cannot enter as a full style reference.
@@ -668,8 +770,18 @@ The Professional Mode foundation is not ready to integrate until:
 11. The active capability plan is frozen before Professional Mode contributions
     enter generation, review, or retry.
 12. Standard, E-Commerce, Photography, and future Video consumers can select
-   the same asset contract without duplicating identity logic.
+    the same asset contract without duplicating identity logic.
 13. No production or Provider Gate claim is made solely from pack creation.
+14. A Professional Mode job uses the same complete Remote Brain semantic
+    profile, frozen activation plan, canonical prompt signing, and shared
+    review/retry path as the current standard V3 forward path.
+15. An incomplete semantic profile, missing activation intent, missing prompt
+    signature/hash, or failed Human Realism sign-off blocks before Provider.
+16. The Face Identity Module contains no local creative prompt, heuristic
+    semantic classifier, private retry patch, or second reviewer/provider.
+17. Future Standard Mode shared-capability upgrades can be adopted through a
+    versioned adapter or produce a structured incompatibility block; they do
+    not silently change Professional Mode asset semantics.
 ```
 
 ## 16. Non-Goals
@@ -710,4 +822,9 @@ Existing V3 foundation modules remain the implementation machinery.
 
 The mode boundary controls whether those assets are consulted; it does not
 rewrite the existing foundation contracts.
+
+Future Standard Mode improvements may improve the shared foundation used by
+Professional Mode, but only through an explicit, versioned compatibility
+adapter and regression review. Standard Mode UI, defaults, heuristics, and
+scenario semantics never become implicit Professional Mode behavior.
 ```
