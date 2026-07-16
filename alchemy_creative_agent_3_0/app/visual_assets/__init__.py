@@ -5,6 +5,16 @@ Mode binding is created. Standard Mode does not import or consult it.
 """
 
 from .binding import bind_professional_mode, select_reference_views
+from .authority import (
+    AssetChannelClaim,
+    ReferenceAdmissionDecision,
+    ReferenceAdmissionResolver,
+    ReferenceAdmissionResult,
+    ReferenceChannelEvidence,
+    ReferenceChannelPlan,
+    ReferenceEvidencePacket,
+    VisualAssetBindingSet,
+)
 from .anchor_pack import (
     AnchorCandidateAttempt,
     AnchorCandidateResult,
@@ -40,6 +50,7 @@ __all__ = [
     "AnchorPackPreparationResult",
     "AnchorPackPreparationService",
     "AnchorReviewDecision",
+    "AssetChannelClaim",
     "FaceIdentityModule",
     "IdentityAnchorPackVersion",
     "IdentityScoreSummary",
@@ -50,6 +61,13 @@ __all__ = [
     "PersistentVisualAssetCatalog",
     "PeopleAssetRevision",
     "CanonicalProviderPromptReceipt",
+    "ReferenceAdmissionDecision",
+    "ReferenceAdmissionResolver",
+    "ReferenceAdmissionResult",
+    "ReferenceChannelEvidence",
+    "ReferenceChannelPlan",
+    "ReferenceEvidencePacket",
+    "VisualAssetBindingSet",
     "ProfessionalModeRuntimeBridge",
     "ProfessionalConsumerContext",
     "ProfessionalConsumerRequest",

@@ -26,6 +26,8 @@ M2  bounded Face Identity anchor-pack preparation: three front candidates,
     profile candidates from root+front+three-quarter winner
 M3  frozen-plan binding and canonical-prompt/hash bridge
 M4  General/E-Commerce/Photography consumer isolation seam
+M6  asset-channel authority, reference admission, and Provider/Reviewer
+    evidence-parity contracts; frontend intentionally deferred
 ```
 
 The first release remains Face Identity only. The module contributes typed
@@ -50,10 +52,15 @@ Identity anchor pack. The typed generation request now rejects any missing,
 duplicated, reordered, or extra evidence in the serial root/front/three-quarter
 chain before a candidate can be generated.
 
+The new asset-authority backend contracts are implemented on the isolated
+feature branch, but they do not themselves constitute real Provider evidence
+or production certification. Frontend work remains intentionally deferred
+until the mainline audit accepts the authority and admission boundary.
+
 ## Verification
 
-The focused Professional Mode suite covers M0-M5 boundaries and must be run
-from this worktree; the current M0-M5 run is 39 passed. A full repository run
+The focused Professional Mode suite covers M0-M6 boundaries and must be run
+from this worktree; the current focused run is 52 passed. A full repository run
 currently reaches the existing product-API persistence tests but four of those
 tests fail before assertions because the Windows worktree path exceeds the OS
 path limit (`WinError 206`); the latest full run is 812 passed with those four

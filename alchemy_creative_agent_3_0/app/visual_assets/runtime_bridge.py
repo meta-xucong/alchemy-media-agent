@@ -12,6 +12,13 @@ from ..shared_capabilities.activation.contracts import (
     VisualTaskProfile,
 )
 from ..schemas.models import V3BaseModel
+from .authority import (
+    ReferenceAdmissionResolver,
+    ReferenceAdmissionResult,
+    ReferenceChannelPlan,
+    ReferenceEvidencePacket,
+    VisualAssetBindingSet,
+)
 from .contracts import ProfessionalModeBinding
 
 
@@ -27,6 +34,23 @@ class CanonicalProviderPromptReceipt(V3BaseModel):
 
 class ProfessionalModeRuntimeBridge:
     """Prepare typed planning evidence and validate the frozen handoff."""
+
+    def resolve_reference_admissions(
+        self,
+        binding: ProfessionalModeBinding,
+        plans: list[ReferenceChannelPlan],
+    ) -> ReferenceAdmissionResult:
+        """Validate Brain/shared-evidence reference plans before Provider use."""
+
+        binding_set = VisualAssetBindingSet.from_professional_binding(binding)
+        return ReferenceAdmissionResolver().resolve(binding_set, plans)
+
+    @staticmethod
+    def validate_reference_evidence_parity(packet: ReferenceEvidencePacket) -> None:
+        """Require Provider and Reviewer to consume one identical evidence set."""
+
+        if set(packet.provider_evidence_ids) != set(packet.reviewer_evidence_ids):
+            raise ValueError("Provider and Reviewer evidence sets must be identical")
 
     def bind_task_profile(
         self,
@@ -56,16 +80,38 @@ class ProfessionalModeRuntimeBridge:
         return profile.model_copy(update={"explicit_user_controls": controls, "evidence": [*existing, evidence]})
 
     @staticmethod
-    def planning_metadata(binding: ProfessionalModeBinding, *, canonical_prompt_hash: str) -> dict[str, object]:
+    def planning_metadata(
+        binding: ProfessionalModeBinding,
+        *,
+        canonical_prompt_hash: str,
+        reference_admissions: ReferenceAdmissionResult | None = None,
+    ) -> dict[str, object]:
         if not canonical_prompt_hash.strip():
             raise ValueError("canonical prompt hash is required before plan freeze")
-        return {
+        binding_set = VisualAssetBindingSet.from_professional_binding(binding)
+        metadata: dict[str, object] = {
             "professional_mode": True,
             "professional_mode_binding": binding.to_brain_evidence(),
+            "asset_channel_authority_contract_version": binding_set.contract_version,
+            "asset_channel_claims": binding_set.to_provenance()["claims"],
             "canonical_prompt_hash": canonical_prompt_hash,
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
         }
+        if reference_admissions is None:
+            metadata.update(
+                {
+                    "reference_admission_contract_version": "visual_asset_reference_admission_v1",
+                    "reference_admission_status": "not_requested",
+                    "reference_evidence_packet_contract_version": "visual_asset_reference_evidence_packet_v1",
+                    "admitted_evidence_ids": [],
+                }
+            )
+        else:
+            if reference_admissions.status != "admitted":
+                raise ValueError("Professional Mode reference admission is blocked")
+            metadata.update(reference_admissions.to_provenance())
+        return metadata
 
     def validate_frozen_plan(
         self,
@@ -85,6 +131,20 @@ class ProfessionalModeRuntimeBridge:
             raise ValueError("Professional Mode binding was not frozen before planning")
         if plan.metadata.get("professional_mode_binding") != binding.to_brain_evidence():
             raise ValueError("Professional Mode frozen plan binding does not match selected asset")
+        binding_set = VisualAssetBindingSet.from_professional_binding(binding)
+        if plan.metadata.get("asset_channel_authority_contract_version") != binding_set.contract_version:
+            raise ValueError("Professional Mode asset authority contract is missing or unsupported")
+        if plan.metadata.get("asset_channel_claims") != binding_set.to_provenance()["claims"]:
+            raise ValueError("Professional Mode asset channel claims do not match selected asset")
+        if plan.metadata.get("reference_evidence_packet_contract_version") != (
+            "visual_asset_reference_evidence_packet_v1"
+        ):
+            raise ValueError("Professional Mode reference evidence packet contract is missing or unsupported")
+        admission_status = str(plan.metadata.get("reference_admission_status") or "not_requested")
+        if admission_status == "blocked":
+            raise ValueError("Professional Mode frozen plan contains blocked reference admission")
+        if admission_status not in {"admitted", "not_requested"}:
+            raise ValueError("Professional Mode reference admission is incomplete")
         expected_hash = str(plan.metadata.get("canonical_prompt_hash") or "")
         if not expected_hash or prompt_receipt.prompt_hash != expected_hash:
             raise ValueError("canonical prompt hash is missing or mismatched")

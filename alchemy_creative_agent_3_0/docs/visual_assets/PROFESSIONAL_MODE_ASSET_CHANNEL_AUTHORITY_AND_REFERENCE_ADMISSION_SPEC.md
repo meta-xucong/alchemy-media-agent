@@ -157,6 +157,8 @@ typed internal plan for each user-supplied reference:
 
 ```text
 ReferenceChannelPlan:
+  project_id
+  job_id
   reference_id
   declared_channels[]
   channel_evidence[]
@@ -313,6 +315,12 @@ admitted non-owned reference evidence IDs
 suppressed/conflicting channel decisions
 canonical Brain prompt hash
 ```
+
+The backend represents this parity with one immutable internal evidence
+packet. Its `evidence_ids`, `provider_evidence_ids`, and
+`reviewer_evidence_ids` must be identical. A packet cannot be created from a
+blocked admission, and a frozen plan cannot pass when the evidence-packet
+contract is missing or unsupported.
 
 Retry is append-only. A retry may refine the Brain-owned canonical prompt only
 through the existing shared retry contract; it may not re-admit a suppressed
