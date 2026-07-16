@@ -307,6 +307,43 @@ def test_remote_brain_fallback_blocks_before_prompt_projection() -> None:
     assert result["code"] == "codex_native_imagegen_remote_brain_required"
 
 
+def test_remote_brain_block_projects_only_safe_failure_evidence() -> None:
+    runtime_result = _canonical_runtime_result()
+    runtime_result.status = ScenarioRuntimeStatus.BLOCKED
+    runtime_result.planning_result = None
+    runtime_result.metadata["remote_creative_brain_outcome"] = {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_brain_unavailable",
+        "outcome_class": "remote_provider_error",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": True,
+        "remote_error_class": "timeout",
+        "remote_http_status_code": 504,
+        "remote_provider_error": "must not leave the V3 runtime",
+        "private_provider_endpoint": "must not leave the V3 runtime",
+    }
+
+    result = _planner_for(runtime_result).prepare_native_imagegen_plan(
+        NativeImageGenPlanRequest.from_mcp_arguments(_arguments())
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_remote_brain_unavailable"
+    assert result["planning_failure"] == {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_brain_unavailable",
+        "outcome_class": "remote_provider_error",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": True,
+        "remote_error_class": "timeout",
+        "remote_http_status_code": 504,
+    }
+
+
 def test_missing_brain_signed_final_prompt_blocks_without_legacy_composition() -> None:
     runtime_result = _canonical_runtime_result()
     # The fixture shares the frozen Brain record between planning metadata and

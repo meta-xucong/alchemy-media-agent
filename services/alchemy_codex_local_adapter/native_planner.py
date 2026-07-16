@@ -398,5 +398,29 @@ class CodexNativeImageGenPlanner:
     def _blocked_from_runtime(self, metadata: dict[str, Any], message: str) -> dict[str, Any]:
         remote = metadata.get("remote_creative_brain_outcome") if isinstance(metadata, dict) else None
         if isinstance(remote, dict) and str(remote.get("reason_code") or "").strip():
-            return self._blocked(f"codex_native_imagegen_{str(remote['reason_code'])}", message)
+            result = self._blocked(f"codex_native_imagegen_{str(remote['reason_code'])}", message)
+            # Keep Local MCP diagnosis actionable without exposing the raw
+            # provider exception, endpoint, prompt or credential.  This is
+            # the same public-safe outcome shape persisted by V3 jobs; it is
+            # not a second runtime state machine and cannot authorize a
+            # fallback, retry, provider request or delivery.
+            safe_fields = {
+                "schema_version",
+                "state",
+                "reason_code",
+                "outcome_class",
+                "llm_used",
+                "fallback_used",
+                "remote_provider_available",
+                "remote_error_class",
+                "remote_http_status_code",
+                "remote_contract_rejected_sections",
+                "expected_image_count",
+                "actual_image_count",
+                "actual_direction_count",
+            }
+            result["planning_failure"] = {
+                key: value for key, value in remote.items() if key in safe_fields
+            }
+            return result
         return self._blocked("codex_native_imagegen_planning_blocked", message)

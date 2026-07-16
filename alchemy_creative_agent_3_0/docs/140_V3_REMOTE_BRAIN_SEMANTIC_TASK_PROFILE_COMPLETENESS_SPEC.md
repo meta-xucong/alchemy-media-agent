@@ -54,6 +54,12 @@ deterministic compatibility profile and capability proposal remain readable
 for legacy/non-real draft planning only; they cannot fill semantic gaps or
 activate a new real-image run.
 
+For a Local MCP planning block, the relay may project only the existing V3
+safe remote-outcome receipt: state, reason class, remote availability, safe
+HTTP/error classification and cardinality facts. It never returns a raw
+provider exception, endpoint, credential, prompt, reference content or a
+second lifecycle record.
+
 ## 4. Universal consequences
 
 - A real visible person activates shared `human_realism` through the normal
