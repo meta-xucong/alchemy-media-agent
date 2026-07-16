@@ -137,7 +137,7 @@ def test_doc147_freezes_one_shared_expression_requirement_across_person_contexts
 
     for context in contexts:
         contract = _guidance(context)["semantic_contract"]
-        assert contract["contract_version"] == "v3_human_realism_semantic_v5"
+        assert contract["contract_version"] == "v3_human_realism_semantic_v6"
         assert contract["expression_ownership_requirement"] == "situation_owned_unless_explicit_user_direction"
         assert "human_expression_context" in contract["quality_axes"]
         assert "smile" not in json.dumps(contract, ensure_ascii=False).lower()
@@ -181,9 +181,10 @@ def test_doc147_enforced_review_receives_the_frozen_generic_expression_contract(
     prompt = _inspection_prompt(metadata)
 
     assert contract["human_authenticity_contract"] == {
-        "contract_version": "v3_human_realism_semantic_v5",
+        "contract_version": "v3_human_realism_semantic_v6",
         "personhood_requirement": "individual_noninterchangeable_presence",
         "expression_ownership_requirement": "situation_owned_unless_explicit_user_direction",
+        "expression_resolution_requirement": "individual_situation_not_stock_geometry",
         "complexion_rendering_requirement": "preserve_reference_or_user_owned_complexion_with_scene_balanced_color",
         "photographic_material_requirement": "camera_observed_human_materiality",
     }

@@ -51,12 +51,13 @@ def test_doc136_enforced_human_guidance_is_typed_and_has_no_local_prompt_or_retr
     assert guidance.reference_preserve_rules == []
     assert guidance.reference_do_not_inherit_rules == []
     assert guidance.retry_patch_templates == {}
-    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v5"
+    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v6"
     assert guidance.semantic_contract["rendering_goal"] == "photographic_real_person"
     assert guidance.semantic_contract["ordinary_age_appropriate_context"] is True
     assert guidance.semantic_contract["natural_presence_priority"] == "individual_human_presence"
     assert guidance.semantic_contract["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     assert guidance.semantic_contract["expression_ownership_requirement"] == "situation_owned_unless_explicit_user_direction"
+    assert guidance.semantic_contract["expression_resolution_requirement"] == "individual_situation_not_stock_geometry"
     assert guidance.semantic_contract["personhood_requirement"] == "individual_noninterchangeable_presence"
     assert guidance.semantic_contract["complexion_rendering_requirement"] == (
         "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
