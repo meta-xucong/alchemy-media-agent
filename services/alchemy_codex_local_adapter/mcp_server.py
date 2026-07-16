@@ -145,6 +145,15 @@ def main() -> int:
     parser.add_argument("--enable-native-imagegen", action="store_true")
     arguments = parser.parse_args()
     adapter = CodexNativeImageGenFacade(enabled=arguments.enable_native_imagegen)
+
+    # MCP JSON is UTF-8 regardless of the host console code page.  Without
+    # this explicit stream contract, Windows decodes a user-authorized Chinese
+    # reference filename through the active OEM/ANSI code page and the
+    # resolver reports a false ``path_unavailable`` failure before V3 sees it.
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     for raw_line in sys.stdin:
         try:
             request = json.loads(raw_line)
