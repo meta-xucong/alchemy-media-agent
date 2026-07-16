@@ -5,6 +5,8 @@
 ```text
 M0-M4 IMPLEMENTED ON ISOLATED FEATURE BRANCH
 M2 SERIAL THREE-VIEW CANDIDATE CONTRACT IMPLEMENTED
+M6 ASSET-CHANNEL AUTHORITY/ADMISSION CONTRACT IMPLEMENTED
+BACKEND SEAM NOT YET WIRED TO PRODUCTION REQUEST ROUTES
 M5 REAL-PIXEL ACCEPTANCE BLOCKED BY EXTERNAL EVIDENCE
 NO PRODUCTION CLAIM
 STANDARD MODE UNCHANGED
@@ -57,14 +59,31 @@ feature branch, but they do not themselves constitute real Provider evidence
 or production certification. Frontend work remains intentionally deferred
 until the mainline audit accepts the authority and admission boundary.
 
+## Usability audit boundary
+
+The current branch is contract-usable for backend tests and for an explicit
+caller that constructs a validated `ProfessionalModeBinding` and typed
+`ReferenceChannelPlan`. It is **not yet end-to-end user-usable**: no existing
+ScenarioRuntime, product request route, or Provider orchestration automatically
+invokes the consumer adapter, resolves uploaded-reference channel plans,
+attaches the resulting evidence packet, or converts a blocked admission into
+the public job response. Therefore a user cannot yet select Professional Mode
+in the existing application and rely on this branch alone to enforce the
+asset authority policy during a real generation.
+
+This is an intentional next integration milestone, not a silent fallback. The
+integration must remain additive and must preserve Standard Mode, existing
+scenario semantics, Remote Brain ownership, shared Provider/review/retry, and
+fail-closed behavior before any frontend work begins.
+
 ## Verification
 
 The focused Professional Mode suite covers M0-M6 boundaries and must be run
-from this worktree; the current focused run is 52 passed. A full repository run
+from this worktree; the latest focused run is 53 passed. A full repository run
 currently reaches the existing product-API persistence tests but four of those
 tests fail before assertions because the Windows worktree path exceeds the OS
-path limit (`WinError 206`); the latest full run is 812 passed with those four
-environmental failures.
+path limit (`WinError 206`); the latest full run is 831 passed with those four
+environmental failures and two existing FastAPI deprecation warnings.
 That environmental failure is unrelated to `app/visual_assets` and is recorded
 as an integration-environment issue rather than silently omitted.
 
