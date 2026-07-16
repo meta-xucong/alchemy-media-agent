@@ -207,3 +207,22 @@ This document does not promise that a generative model will never create an
 imperfect face. It raises the shared semantic and pixel-review bar, supplies a
 bounded corrective path when that bar is not met, and preserves a clear audit
 trail when a result must be withheld.
+
+## 10. Initial controlled acceptance record
+
+The Doc143 implementation passed its full offline contract suite. A traced
+remote-Brain adult plan subsequently reached planning, canonical finalization
+and the existing Human Realism re-signing with a valid v3 contract. This proves
+the v3 obligation is compatible with the real Brain boundary; it is not a
+test-double-only contract.
+
+The same authorized blue-dress reference then produced one frozen,
+Brain-signed Local MCP image-edit plan. Its one permitted conversation-only
+Codex ImageGen call was rejected at **output moderation** before any pixels
+were returned. That record is non-counting for visual quality. The prompt,
+reference input, model path and semantics were not altered to evade the
+decision, and no candidate or delivery was created.
+
+The next qualifying pixel comparison remains the unchanged blue-dress plan
+when the renderer accepts it, plus the ordinary-adult materiality comparison.
+Neither may be replaced with a child-specific or prompt-keyword workaround.
