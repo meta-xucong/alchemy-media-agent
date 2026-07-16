@@ -346,3 +346,33 @@ This document does not authorize a new Provider, Brain, storage system, review
 system, retry loop, template, specialist mode, image lifecycle, local prompt
 optimization, twenty-five rendered instructions, or a subject-specific quality
 branch.
+
+### M4 controlled evidence update (2026-07-16)
+
+The young-person plus authorized product-reference cell has completed once in
+an isolated controlled runtime.  This is a safe provenance record only; it
+does not contain media, raw prompts, credentials, endpoints, hidden reasoning,
+or provider-internal responses.
+
+```text
+template/scenario: General / general_creative
+requested output: 1 at 1024x1536
+active shared capabilities: product_identity, human_realism
+Brain: remote used; no fallback; one complete direction; natural-presence
+       re-signing receipt approved
+Provider operation: one image-edit materialization; pixels received
+review: hybrid / pass / verified
+visual retry: 0 of 1
+delivery: ready; automatic delivery available; one final output
+```
+
+The inspected result is age-appropriate, fully clothed, and physically
+coherent with a natural outdoor setting.  It is acceptable evidence that the
+shared Human Realism execution and certified-pixel lifecycle operate together.
+It is **not** a SKU-level garment-print certification: the authorized product
+reference was retained materially, but generated artwork remains an
+approximation and must not be represented as an exact print match.
+
+This closes only one M4 matrix cell.  Ordinary adult, person/object
+interaction, and non-bright real-person cells remain required before marking
+the cross-scene M4 release-quality matrix complete.
