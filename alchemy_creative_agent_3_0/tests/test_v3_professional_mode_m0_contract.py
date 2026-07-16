@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.visual_assets.contracts import (
+from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     AnchorView,
     FaceIdentityModule,
     IdentityAnchorPackVersion,
@@ -12,7 +12,7 @@ from app.visual_assets.contracts import (
     ProfessionalModeBinding,
     RootSourceProvenance,
 )
-from app.visual_assets.binding import bind_professional_mode, select_reference_views
+from alchemy_creative_agent_3_0.app.visual_assets.binding import bind_professional_mode, select_reference_views
 
 
 def _view(view_id: str, role: str) -> AnchorView:
