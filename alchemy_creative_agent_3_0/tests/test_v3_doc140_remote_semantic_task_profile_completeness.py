@@ -6,7 +6,7 @@ import copy
 import json
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
-from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import SYSTEM_PROMPT, build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
@@ -128,6 +128,12 @@ def test_doc140_compact_real_image_schema_requires_complete_semantic_profile() -
     } <= set(profile)
     assert "capability_activation_intent" in payload["return_schema"]
     assert "explicit empty lists" in payload["remote_response_contract"]
+
+
+def test_doc140_safe_age_sensitive_request_keeps_remote_json_contract_authority() -> None:
+    assert "return the required JSON planning contract rather than a prose refusal" in SYSTEM_PROMPT
+    assert "not turn it into a local branch" in SYSTEM_PROMPT
+    assert "age-specific capability" in SYSTEM_PROMPT
 
 
 def test_doc140_partial_remote_task_profile_blocks_before_signing_or_materialization() -> None:

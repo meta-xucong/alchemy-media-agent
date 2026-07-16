@@ -48,6 +48,13 @@ For a visible real person, the Brain records the existing generic
 capability evidence, not a prompt fragment, content recipe, keyword detector
 or demographic rule.
 
+When a request concerns a young or otherwise age-sensitive person but is
+already ordinary, fully clothed, non-sexual and age-appropriate, the remote
+Brain must return the same complete JSON contract instead of a prose refusal.
+This is a general remote safety interpretation boundary. It does not create a
+child route, age-specific capability, local classifier or renderer phrase
+list.
+
 If either response is absent, malformed or partial, the job is blocked before
 template planning, Provider/MCP materialization, review or delivery. The
 deterministic compatibility profile and capability proposal remain readable
