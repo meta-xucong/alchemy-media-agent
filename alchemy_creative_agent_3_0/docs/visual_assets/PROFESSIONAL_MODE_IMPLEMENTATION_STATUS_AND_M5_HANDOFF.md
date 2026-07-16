@@ -4,6 +4,7 @@
 
 ```text
 M0-M4 IMPLEMENTED ON ISOLATED FEATURE BRANCH
+M2 SERIAL THREE-VIEW CANDIDATE CONTRACT IMPLEMENTED
 M5 REAL-PIXEL ACCEPTANCE BLOCKED BY EXTERNAL EVIDENCE
 NO PRODUCTION CLAIM
 STANDARD MODE UNCHANGED
@@ -20,7 +21,9 @@ The feature branch contains the following additive, isolated seams:
 ```text
 M0  strict Professional/Standard contracts and red tests
 M1  project-scoped People Asset catalog and append-only lifecycle
-M2  bounded Face Identity anchor-pack preparation
+M2  bounded Face Identity anchor-pack preparation: three front candidates,
+    then three three-quarter candidates from root+front winner, then three
+    profile candidates from root+front+three-quarter winner
 M3  frozen-plan binding and canonical-prompt/hash bridge
 M4  General/E-Commerce/Photography consumer isolation seam
 ```
@@ -43,14 +46,18 @@ Therefore M5 is **blocked**, not passed. Mock contracts, lifecycle tests, and
 source-boundary tests prove the shape of the implementation only; they cannot
 certify identity quality, Provider Gate status, Gate C/D, P10, or production
 readiness. There is no production claim for Professional Mode or for the Face
-Identity anchor pack.
+Identity anchor pack. The typed generation request now rejects any missing,
+duplicated, reordered, or extra evidence in the serial root/front/three-quarter
+chain before a candidate can be generated.
 
 ## Verification
 
 The focused Professional Mode suite covers M0-M5 boundaries and must be run
-from this worktree. A full repository run currently reaches the existing
-product-API persistence tests but four of those tests fail before assertions
-because the Windows worktree path exceeds the OS path limit (`WinError 206`).
+from this worktree; the current M0-M5 run is 39 passed. A full repository run
+currently reaches the existing product-API persistence tests but four of those
+tests fail before assertions because the Windows worktree path exceeds the OS
+path limit (`WinError 206`); the latest full run is 812 passed with those four
+environmental failures.
 That environmental failure is unrelated to `app/visual_assets` and is recorded
 as an integration-environment issue rather than silently omitted.
 
