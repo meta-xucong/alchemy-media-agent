@@ -1,6 +1,8 @@
 # Doc142 - V3 Shared Human Natural Presence and Pixel Feedback Closure
 
-Status: **proposed shared-foundation implementation authority.**
+Status: **active shared-foundation implementation authority.** M0-M3 are
+implemented and regression-verified; M4 real-pixel acceptance remains pending
+the controlled acceptance environment.
 
 This is the bounded quality phase after Doc141. It improves the existing shared
 Human Realism capability without replacing V3 architecture, adding a template,
@@ -60,10 +62,9 @@ Doc136 records the v1 typed-contract baseline and its historical implementation
 evidence. Doc138 is the current forward v2 Human Realism semantic-contract
 authority: it retains the v1 boundary and adds only the generic
 natural-presence and aesthetic-boundary decisions. Doc137 preflight remains
-mandatory. Doc139 remains the one independent re-signing pass. When its M1
-contract is implemented, Doc142 extends that same pass with a schema-only
-`approved|rewritten` receipt; it neither adds a third Brain call nor creates a
-local decision, prompt, retry or review path.
+mandatory. Doc139 remains the one independent re-signing pass. Doc142 extends
+that same pass with a schema-only `approved|rewritten` receipt; it neither adds
+a third Brain call nor creates a local decision, prompt, retry or review path.
 
 Where an older document describes a retry repair intent, it means normalized
 semantic review evidence supplied to the Brain, never literal runtime prose.
@@ -309,14 +310,33 @@ parity, review mode/verdict, retry count, and final delivery/withholding state.
 Do not commit raw prompts, credentials, endpoints, hidden reasoning, or
 unlicensed media.
 
+### Implementation record (2026-07-16)
+
+M0-M3 are implemented in the shared Brain, ScenarioRuntime, Human Realism and
+Local MCP provenance paths. The receipt is required only for the existing
+active Human Realism re-signing stage; it is validated for exact output
+cardinality, version, owner and `approved|rewritten` status. A missing or
+malformed receipt blocks before Provider or Local MCP materialization.
+
+Enforced review-to-retry transport now contains only normalized shared issue
+evidence. It cannot construct Human Realism renderer phrases. Regression
+coverage proves the same contract across ordinary adult, young-person/product,
+person/object interaction and low-key older-adult code contexts, plus full V3
+and Local MCP parity suites.
+
+M4 real-pixel acceptance is still pending. Its evidence must come from the
+shared `vision_model` or `hybrid` review path in a controlled environment; a
+planning/MCP parity result alone cannot certify rendered pixels or final
+delivery.
+
 ## 12. Acceptance and non-goals
 
-Doc142 is accepted only when architecture and template boundaries remain
+Doc142 code closure is accepted when architecture and template boundaries remain
 unchanged; enforced real-person prompts are Brain-authored and signed; no local
 Human Realism text affects Provider input; metadata-only cannot certify
-delivery; bounded retry reuses Brain; cross-template/full-V3 regressions pass;
-and the cross-scene matrix has shared-review evidence where real pixels are
-available.
+delivery; bounded retry reuses Brain; and cross-template/full-V3 regressions
+pass. The release-quality portion is accepted only when the cross-scene matrix
+has shared-review evidence where real pixels are available.
 
 MCP may prove planning, prompt, reference and materialization parity. It cannot
 by itself satisfy pixel review, production Provider, Gate C/D, P10,

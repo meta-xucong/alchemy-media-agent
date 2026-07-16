@@ -13,10 +13,10 @@
 > replace a complete Brain-authored canonical prompt. Doc140 requires a
 > complete remote semantic task profile before activation, so a local fallback
 > cannot omit a visible person from a new real-image plan. None of these documents
-> creates a child or beauty prompt recipe. Doc142 specifies a proposed
-> additive Brain-owned decision receipt for the existing re-signing pass and
-> closes executable local retry phrasing; when its M1 contract is implemented,
-> it does not add another framework stage or a local prompt route.
+> creates a child or beauty prompt recipe. Doc142 adds an active, additive
+> Brain-owned decision receipt to the existing re-signing pass and closes
+> executable local retry phrasing. It does not add another framework stage or
+> a local prompt route.
 
 ## Status
 
