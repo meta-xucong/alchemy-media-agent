@@ -31,6 +31,9 @@ an ordinary real-camera moment.
 > independent remote-Brain re-signing pass for every active shared Human
 > Realism contract. It supersedes any interpretation that a Doc138 receipt by
 > itself proves the final canonical direction was substantively reconsidered.
+> **Forward-design note:** Doc142 specifies an additive, schema-only
+> `approved|rewritten` decision receipt for that same re-signing pass. When its
+> M1 contract is implemented, it does not create a third Brain call.
 
 That observation does **not** justify a list of face, skin, hand, child or
 camera fragments. The failure is semantic: a finalizer can return an
@@ -90,7 +93,9 @@ decision before it signs each output:
   particularity instead of introducing synthetic beautification.
 
 The Brain incorporates the resolution into its one complete final prompt in
-its own language. It returns the existing Doc137 audit receipt. It must not
+its own language. It returns the existing Doc137 audit receipt. When Doc142 M1
+is implemented, it additionally returns the same-pass Human Naturalness
+decision receipt. It must not
 emit a checklist, inner reasoning, issue code, negative prompt or a separate
 repair phrase. Merely echoing generic adjectives such as "natural", "candid"
 or "photorealistic" is not a completed semantic resolution.

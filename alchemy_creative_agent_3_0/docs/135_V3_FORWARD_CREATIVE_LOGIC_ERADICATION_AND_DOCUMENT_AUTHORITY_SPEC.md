@@ -4,7 +4,8 @@ Status: **active, cross-cutting architecture authority.** This document and
 Docs134/136/137/138/139/140 define how V3 distinguishes legitimate deterministic contracts from the
 rejected “structured word-stack” creative route. Where an earlier document
 describes local prompt fragments, keyword classifications, static image recipes
-or retry prose as renderer input, that description is historical only.
+or retry prose as renderer input, that description is historical only. Doc142
+defines the proposed next Human Realism closure without changing current runtime.
 
 ## 1. Non-negotiable rule
 
@@ -21,6 +22,10 @@ protected user intent + admitted reference truth + factual/policy constraints
 -> one canonical prompt per frozen output
 -> Provider or Local MCP relays that exact normalized string and hash
 ```
+
+When Doc142 M1 is implemented, it adds only a validated result receipt to the
+existing Doc139 re-signing pass. It does not authorize another Brain pass, a
+local evaluator, or a local prompt-repair path.
 
 No local stage may add, remove, reorder, deduplicate, translate or “repair”
 creative words after that sign-off. A missing, unapproved or wrong-cardinality

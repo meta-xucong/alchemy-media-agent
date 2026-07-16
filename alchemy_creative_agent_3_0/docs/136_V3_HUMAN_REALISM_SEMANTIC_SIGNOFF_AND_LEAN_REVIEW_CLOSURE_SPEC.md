@@ -1,6 +1,6 @@
 # Doc136 — V3 Human Realism Semantic Sign-off and Lean Review Closure
 
-Status: **active shared-foundation implementation authority.** This document closes a controlled General real-image audit finding. It extends Docs 128, 134 and 135; it does not create a child, apparel, E-Commerce, General or Photography-specific creative route.
+Status: **active shared-foundation implementation authority.** This document closes a controlled General real-image audit finding. It extends Docs 128, 134 and 135; it does not create a child, apparel, E-Commerce, General or Photography-specific creative route. The v1 payload recorded below is the historical implementation baseline. Doc138 defines the current v2 forward contract; Doc142 specifies a future schema-level receipt for the existing Doc139 re-signing pass.
 
 ## 1. Recorded finding
 
@@ -33,7 +33,7 @@ The Human Realism contract is an input to Brain reasoning, not renderer prose. O
 
 ## 3. Typed Human Realism semantic contract
 
-When active in a new enforced job, Human Realism must contribute only this allow-listed, data-only contract:
+The v1 payload below is the historical implementation baseline for the allow-listed, data-only contract:
 
 ```json
 {
@@ -56,7 +56,7 @@ When active in a new enforced job, Human Realism must contribute only this allow
 }
 ```
 
-For a hand/skin-detail task, the three applicable axes are anatomy, skin/retouch and scene coherence. The contract remains shared and is still owned by the Brain. `ordinary_age_appropriate_context` is a generic, evidence-gated safety boundary: it is not an age classifier, a prompt recipe, a demographic route or a substitute for user intent.
+For a hand/skin-detail task, the three applicable axes are anatomy, skin/retouch and scene coherence. The contract remains shared and is still owned by the Brain. `ordinary_age_appropriate_context` is a generic, evidence-gated safety boundary: it is not an age classifier, a prompt recipe, a demographic route or a substitute for user intent. A new enforced job uses Doc138 contract v2, which retains this baseline and adds only the generic natural-presence and aesthetic-boundary decisions; it does not revive any local renderer prose.
 
 An active Human Realism capability with a missing, malformed or incompatible semantic contract must block final Brain sign-off with the safe reason `human_realism_semantic_contract_missing`. It must never silently revert to legacy local fragments.
 
@@ -107,6 +107,7 @@ The implementation must prove all of the following:
 ## 8. Documentation status and boundaries
 
 - Doc128 remains the shared activation/review authority; its former fragment-oriented compatibility fields are historical for enforced jobs.
+- Doc138 is the current forward semantic-contract authority (v2). When Doc142 M1 is implemented, it adds a schema-only, same-pass re-signing receipt; neither document authorizes a third Brain pass or a local prompt patch.
 - Docs134–135 remain the canonical-prompt ownership authority. This document supplies the missing typed Human Realism sign-off bridge.
 - Child/apparel samples are regression evidence only. Later visual-quality work may refine the remote Brain or visual review using cross-scene evidence, but must not add a child-specific runtime module or structured prompt stack.
 - This closure does not certify a rendered image by itself. It makes the Brain/Provider contract complete; visual quality still needs the appropriate real-pixel or Local-MCP comparison evidence under the active acceptance plan.

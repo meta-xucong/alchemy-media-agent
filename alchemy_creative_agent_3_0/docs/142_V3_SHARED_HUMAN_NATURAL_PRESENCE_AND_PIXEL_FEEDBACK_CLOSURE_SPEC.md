@@ -54,6 +54,23 @@ child, teen, kidswear, East Asian, fashion, e-commerce, photography, or
 social-media capability, route, template rule, review profile, or prompt
 recipe.
 
+### 2.1 Authority resolution
+
+Doc136 records the v1 typed-contract baseline and its historical implementation
+evidence. Doc138 is the current forward v2 Human Realism semantic-contract
+authority: it retains the v1 boundary and adds only the generic
+natural-presence and aesthetic-boundary decisions. Doc137 preflight remains
+mandatory. Doc139 remains the one independent re-signing pass. When its M1
+contract is implemented, Doc142 extends that same pass with a schema-only
+`approved|rewritten` receipt; it neither adds a third Brain call nor creates a
+local decision, prompt, retry or review path.
+
+Where an older document describes a retry repair intent, it means normalized
+semantic review evidence supplied to the Brain, never literal runtime prose.
+Where a legacy record contains v1 fields or local phrase data, it remains
+read-only archival provenance and cannot reach a new enforced finalizer,
+Provider or Local MCP relay.
+
 ## 3. Non-negotiable invariants
 
 ```text

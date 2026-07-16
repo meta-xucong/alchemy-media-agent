@@ -7,6 +7,11 @@ Brain pass only for an already active shared `human_realism` contract. It does
 not create an age, apparel, template, Provider, review, retry or prompt-fragment
 branch.
 
+> **Forward-design note:** Doc142 specifies a safe `approved|rewritten` Human
+> Naturalness decision receipt for this same second pass. When its M1 contract
+> is implemented, it does not add a third Remote Brain call, a local evaluator,
+> or renderer-facing prose.
+
 ## 1. Why a second Brain pass
 
 Doc138 showed that a text-only finalizer can return a formally valid preflight
@@ -51,10 +56,12 @@ of thought, issue list or visible checklist.
 
 ## 4. Audit and retry
 
-The frozen job records only that an independent Human Realism re-sign occurred
-and which remote Brain/model supplied it. Local MCP may project only the
-public-safe stage receipt and boolean completion state; it cannot expose the
-candidate text as a second user-facing prompt. A later shared visual retry still supplies only
+The frozen job records that an independent Human Realism re-sign occurred and
+which remote Brain/model supplied it. When Doc142 M1 is implemented, it also
+records the safe same-pass Human Naturalness decision receipt
+(`approved|rewritten`). Local MCP may project only the public-safe stage
+receipts and boolean completion state; it cannot expose
+the candidate text as a second user-facing prompt. A later shared visual retry still supplies only
 normalized pixel-review evidence and receives a new complete Brain sign-off;
 it never applies a local repair phrase.
 
@@ -69,6 +76,9 @@ it never applies a local repair phrase.
 5. Web Provider and Local MCP continue to materialize the same final re-signed
    string and admitted reference hashes.
 6. Full V3, Local MCP parity and cross-template isolation regressions pass.
+7. When Doc142 M1 is enabled, its decision receipt has valid owner, version,
+   cardinality and frozen binding, and its absence blocks before Provider/MCP
+   materialization.
 
 ## 6. Acceptance interpretation
 

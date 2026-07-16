@@ -1,6 +1,6 @@
 # Doc128 — Shared Human Realism Constraint And Review Closure
 
-> **Current-status note (Docs 134–136):** Human Realism is constrained to
+> **Current-status note (Docs 134–142):** Human Realism is constrained to
 > evidence, activation, review dimensions and safety boundaries. It must not
 > infer a complete image style from keywords or emit local positive/negative
 > wording after the Brain has signed the renderer prompt. Doc136 additionally
@@ -13,7 +13,10 @@
 > replace a complete Brain-authored canonical prompt. Doc140 requires a
 > complete remote semantic task profile before activation, so a local fallback
 > cannot omit a visible person from a new real-image plan. None of these documents
-> creates a child or beauty prompt recipe.
+> creates a child or beauty prompt recipe. Doc142 specifies a proposed
+> additive Brain-owned decision receipt for the existing re-signing pass and
+> closes executable local retry phrasing; when its M1 contract is implemented,
+> it does not add another framework stage or a local prompt route.
 
 ## Status
 
@@ -94,10 +97,11 @@ They map to the common `human_realism` score dimension. A visual result that is
 only metadata or local heuristic evidence remains non-certifying under Docs113
 and 118.
 
-The one shared bounded retry consumes a resolved repair intent such as
-“repair photographic naturalness and physical coherence without changing
-user-owned direction.” It must not serialize raw vision output, old issue-code
-names, anatomy micro-instructions, beauty language, or a child-specific patch.
+The one shared bounded retry passes only normalized, frozen applicable review
+dimensions as semantic evidence to a fresh Remote Brain whole-prompt sign-off.
+It must not construct or serialize a local repair intent, raw vision output,
+old issue-code names, anatomy micro-instructions, beauty language, or a
+child-specific patch.
 
 ### 4. Compatibility
 
