@@ -94,14 +94,14 @@ fail-closed behavior before any frontend work begins.
 ## Verification
 
 The focused Professional Mode suite covers M0-M6 boundaries and the mainline
-Product API/ScenarioRuntime seam. The current integration run includes 64
-focused Professional Mode tests and 80 tests across the affected runtime,
-activation, Project Mode, and Doc102 checkpoint suites. A short-checkout full
-run is the authoritative regression environment; the earlier isolated feature
-worktree run reported 861 passed, with four unrelated Windows `WinError 206`
-path-limit failures that disappear in the short checkout. These tests prove
-the backend contract and isolation only; they do not certify real pixels,
-Provider quality, M5, Gate C/D, or production readiness.
+Product API/ScenarioRuntime seam: 64 passed. The combined
+Professional-Mode/Doc102 filter passed 128 tests. The final short-checkout
+mainline regression passed 865 tests with two existing FastAPI deprecation
+warnings. The earlier isolated feature worktree run reported 861 passed with
+four unrelated Windows `WinError 206` path-limit failures; those environmental
+failures do not occur in the short checkout. These tests prove the backend
+contract and isolation only; they do not certify real pixels, Provider
+quality, M5, Gate C/D, or production readiness.
 
 The mainline maintainer should independently rerun the full suite from a
 shorter checkout path after merge, then perform the real-pixel acceptance with

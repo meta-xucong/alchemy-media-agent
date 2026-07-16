@@ -72,9 +72,9 @@ Professional Mode interpretation.
 ## Verification completed
 
 - Professional Mode focused and mainline seam tests: 64 passed.
-- Affected runtime/activation/Project Mode/Doc102 checkpoint tests: 80 passed.
-- Short-checkout full V3 regression baseline: 861 passed before the final
-  integration rerun; the final integrated run is required before merge.
+- Professional Mode plus Doc102 checkpoint filter: 128 passed.
+- Final short-checkout full V3 mainline regression: 865 passed, with two
+  existing FastAPI deprecation warnings.
 - `compileall`, frontend `node --check`, and `git diff --check` are required
   merge gates.
 
