@@ -5,7 +5,9 @@ import pytest
 from alchemy_creative_agent_3_0.app.visual_assets.catalog import PersistentVisualAssetCatalog
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     FaceIdentityModule,
+    IdentityAnchorPackVersion,
     PeopleAsset,
+    RootSourceProvenance,
 )
 
 
@@ -96,3 +98,23 @@ def test_catalog_does_not_accept_cross_project_pack_or_asset_history(tmp_path) -
         catalog.save(asset, project_id="project_other", event_type="update")
 
     assert catalog.list_history("project_other", "person_1") == []
+
+
+def test_catalog_persists_pack_versions_and_append_only_pack_history(tmp_path) -> None:
+    catalog = PersistentVisualAssetCatalog(tmp_path)
+    pack = IdentityAnchorPackVersion(
+        pack_version_id="pack_1",
+        people_asset_id="person_1",
+        status="review",
+        root_source_provenance=RootSourceProvenance(
+            source_type="uploaded_portrait",
+            source_asset_id="asset_root_1",
+            project_id="project_1",
+        ),
+    )
+
+    catalog.save_pack(pack, event_type="prepare")
+    restored = PersistentVisualAssetCatalog(tmp_path)
+
+    assert restored.get_pack("project_1", "person_1", "pack_1").status == "review"
+    assert [item.event_type for item in restored.list_pack_history("project_1", "person_1")] == ["prepare"]
