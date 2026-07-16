@@ -6,6 +6,11 @@ Implemented shared transport hardening. This document does not change visual
 direction, Human Realism semantics, template ownership, reference inheritance,
 or image-Provider routing.
 
+**Doc149 follow-up.** Explicit output-token-limit finishes are now a distinct
+transport truth (`BrainOutputTruncated`) and the safe default output capacity
+is documented in Doc149.  The one-recovery limit and same-frozen-request rule
+in this document remain unchanged.
+
 ## Observed failure
 
 The controlled post-Doc144 blue-dress plan reached the configured remote

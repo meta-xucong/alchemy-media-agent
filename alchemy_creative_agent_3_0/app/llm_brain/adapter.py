@@ -20,6 +20,7 @@ from .context_digest import (
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_skipped_result
 from .providers import (
+    BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainProviderError,
     BrainProviderUnavailable,
@@ -530,6 +531,8 @@ def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
     chain = _exception_chain(exc)
+    if any(isinstance(item, BrainOutputTruncated) for item in chain):
+        return "truncated_response"
     if any(isinstance(item, JSONDecodeError) for item in chain):
         return "invalid_response"
     text = " ".join(str(item or "") for item in chain).lower()

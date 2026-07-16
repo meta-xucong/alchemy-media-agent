@@ -6,6 +6,11 @@ Implementation specification for the shared Human Realism capability. This is
 a foundation-quality refinement, not a child, apparel, portrait, marketplace,
 or template feature.
 
+**Transport note.** Doc149 later separated remote Brain output-budget
+truncation from this Human Realism semantic contract.  A truncated plan is a
+fail-closed transport event, not a complexion, reference, or pixel-quality
+verdict.
+
 ## Observed gap
 
 The Doc143–147 chain now makes a person read as situation-specific, naturally

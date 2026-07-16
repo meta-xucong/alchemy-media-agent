@@ -22,6 +22,10 @@ class BrainInvalidJsonResponse(BrainProviderError):
     """The remote Brain did not provide a usable serialized JSON response."""
 
 
+class BrainOutputTruncated(BrainInvalidJsonResponse):
+    """The remote Brain exhausted its transport output budget before JSON completed."""
+
+
 class BrainSemanticPreflightMissing(BrainProviderError):
     """The Brain returned a prompt but omitted a required semantic receipt."""
 
@@ -38,7 +42,13 @@ class V3LLMBrainProvider:
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
         self.timeout = _float_env("V3_LLM_BRAIN_TIMEOUT_SECONDS", 120.0)
-        self.max_tokens = _int_env("V3_LLM_BRAIN_MAX_TOKENS", 4200)
+        # A compact V3 plan can still need substantial output allowance when a
+        # reasoning-capable remote model accounts for its private deliberation
+        # before returning the complete JSON contract.  The old 4200-token
+        # default truncated otherwise valid plans at the transport boundary.
+        # This is an output-capacity setting only: it neither changes frozen
+        # evidence nor permits local JSON/prompt reconstruction.
+        self.max_tokens = _int_env("V3_LLM_BRAIN_MAX_TOKENS", 8000)
 
     def available(self, *, force: bool = False) -> bool:
         if not _remote_enabled(force=force):
@@ -76,6 +86,10 @@ class V3LLMBrainProvider:
                     json_recovery_attempted=True,
                 )
             except BrainInvalidJsonResponse as recovery_error:
+                if isinstance(recovery_error, BrainOutputTruncated):
+                    raise BrainOutputTruncated(
+                        "remote brain response was truncated after one bounded serialization recovery"
+                    ) from recovery_error
                 raise BrainInvalidJsonResponse(
                     "remote brain returned malformed JSON after one bounded serialization recovery"
                 ) from recovery_error
@@ -120,6 +134,8 @@ class V3LLMBrainProvider:
             text = getattr(response, "output_text", None) or ""
             if not text:
                 text = _response_text_from_openai(response)
+            if _response_ended_at_output_limit(response):
+                raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
             return _loads_json_object(text)
         except BrainInvalidJsonResponse:
             raise
@@ -163,6 +179,8 @@ class V3LLMBrainProvider:
             choices = getattr(response, "choices", None) or []
             message = getattr(choices[0], "message", None) if choices else None
             text = getattr(message, "content", None) or ""
+            if _response_ended_at_output_limit(response, choice=choices[0] if choices else None):
+                raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
             return _loads_json_object(text)
         except BrainInvalidJsonResponse:
             raise
@@ -195,7 +213,10 @@ class V3LLMBrainProvider:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
-            return _loads_json_object(_anthropic_text(response.json()))
+            response_json = response.json()
+            if _response_ended_at_output_limit(response_json):
+                raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+            return _loads_json_object(_anthropic_text(response_json))
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
@@ -309,6 +330,42 @@ def _loads_json_object(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise BrainProviderError("remote brain json output was not an object")
     return parsed
+
+
+def _response_ended_at_output_limit(response: Any, *, choice: Any | None = None) -> bool:
+    """Recognize provider-neutral transport truncation without reading model text."""
+
+    values: list[Any] = []
+    if isinstance(response, dict):
+        values.extend(
+            [
+                response.get("stop_reason"),
+                response.get("finish_reason"),
+                (response.get("incomplete_details") or {}).get("reason")
+                if isinstance(response.get("incomplete_details"), dict)
+                else None,
+            ]
+        )
+    else:
+        incomplete = getattr(response, "incomplete_details", None)
+        values.extend(
+            [
+                getattr(response, "status", None),
+                getattr(incomplete, "reason", None),
+            ]
+        )
+    values.append(getattr(choice, "finish_reason", None))
+    normalized = {str(value or "").strip().lower() for value in values}
+    return bool(
+        normalized
+        & {
+            "length",
+            "max_tokens",
+            "max_output_tokens",
+            "output_token_limit",
+            "output_tokens_limit",
+        }
+    )
 
 
 _TRANSPORT_RECEIPT_KEY = "_alchemy_brain_transport"

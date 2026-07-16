@@ -10,7 +10,11 @@ import pytest
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
-from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainInvalidJsonResponse, V3LLMBrainProvider
+from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainInvalidJsonResponse,
+    BrainOutputTruncated,
+    V3LLMBrainProvider,
+)
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
@@ -499,6 +503,16 @@ def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None
     assert provider.timeout >= 120
 
 
+def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(monkeypatch) -> None:
+    """The default must not truncate a valid JSON plan during private reasoning."""
+
+    monkeypatch.delenv("V3_LLM_BRAIN_MAX_TOKENS", raising=False)
+
+    provider = V3LLMBrainProvider()
+
+    assert provider.max_tokens == 8000
+
+
 def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monkeypatch) -> None:
     """A configured default Brain must win over an unrelated OpenAI image key."""
 
@@ -648,6 +662,98 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
     with pytest.raises(BrainInvalidJsonResponse, match="after one bounded serialization recovery"):
+        V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+
+    assert attempts == 2
+
+
+def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(monkeypatch) -> None:
+    """A transport length finish may recover once through the same frozen request."""
+
+    from app.config import settings
+
+    calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content='{"remote":'),
+                            finish_reason="length",
+                        )
+                    ]
+                )
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"remote": true}'),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+
+    assert result["remote"] is True
+    assert result["_alchemy_brain_transport"]["attempts"] == 2
+    assert len(calls) == 2
+    assert calls[0]["messages"][1] == calls[1]["messages"][1]
+    assert all(call["max_tokens"] == 8000 for call in calls)
+
+
+def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> None:
+    """Two length finishes remain fail-closed and retain their safe diagnosis."""
+
+    from app.config import settings
+
+    attempts = 0
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            nonlocal attempts
+            attempts += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"remote":'),
+                        finish_reason="length",
+                    )
+                ]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    with pytest.raises(BrainOutputTruncated, match="truncated after one bounded"):
         V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert attempts == 2
