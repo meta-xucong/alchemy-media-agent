@@ -324,10 +324,12 @@ coverage proves the same contract across ordinary adult, young-person/product,
 person/object interaction and low-key older-adult code contexts, plus full V3
 and Local MCP parity suites.
 
-M4 real-pixel acceptance is still pending. Its evidence must come from the
-shared `vision_model` or `hybrid` review path in a controlled environment; a
-planning/MCP parity result alone cannot certify rendered pixels or final
-delivery.
+M4 real-pixel acceptance completed in an isolated controlled runtime. Every
+matrix cell received a remote-Brain direction with no fallback, an approved
+natural-presence re-signing receipt, real Provider pixels, and a shared
+`hybrid / pass / verified` review before one final delivery. Planning/MCP
+parity remains supporting provenance only; it is not used as a substitute for
+the pixel result.
 
 ## 12. Acceptance and non-goals
 
@@ -347,32 +349,33 @@ system, retry loop, template, specialist mode, image lifecycle, local prompt
 optimization, twenty-five rendered instructions, or a subject-specific quality
 branch.
 
-### M4 controlled evidence update (2026-07-16)
+### M4 controlled evidence record (2026-07-16)
 
-The young-person plus authorized product-reference cell has completed once in
-an isolated controlled runtime.  This is a safe provenance record only; it
-does not contain media, raw prompts, credentials, endpoints, hidden reasoning,
-or provider-internal responses.
+The complete four-cell matrix ran in one isolated controlled runtime. This is
+safe provenance only: it contains no media, raw prompts, credentials,
+endpoints, hidden reasoning, or provider-internal responses.
 
-```text
-template/scenario: General / general_creative
-requested output: 1 at 1024x1536
-active shared capabilities: product_identity, human_realism
-Brain: remote used; no fallback; one complete direction; natural-presence
-       re-signing receipt approved
-Provider operation: one image-edit materialization; pixels received
-review: hybrid / pass / verified
-visual retry: 0 of 1
-delivery: ready; automatic delivery available; one final output
-```
+| Matrix cell | Provider operation | Shared review | Retry | Final delivery |
+| --- | --- | --- | --- | --- |
+| young person with authorized product reference | one image edit; pixels received | `hybrid / pass / verified` | 0 of 1 | one ready output |
+| ordinary adult person | one image generation; pixels received | `hybrid / pass / verified` | 0 of 1 | one ready output |
+| person/object interaction | one image generation; pixels received | `hybrid / pass / verified` | 0 of 1 | one ready output |
+| non-bright real-person context | one image generation; pixels received | `hybrid / pass / verified` | 0 of 1 | one ready output |
 
-The inspected result is age-appropriate, fully clothed, and physically
-coherent with a natural outdoor setting.  It is acceptable evidence that the
-shared Human Realism execution and certified-pixel lifecycle operate together.
-It is **not** a SKU-level garment-print certification: the authorized product
-reference was retained materially, but generated artwork remains an
-approximation and must not be represented as an exact print match.
+Across all four cells, the active Human Realism path used the remote Brain,
+did not fall back, produced exactly one complete direction, and carried an
+`approved` natural-presence re-signing receipt owned by
+`remote_v3_llm_brain`. The outputs were physically coherent with their
+requested contexts and did not show a systematic bright-commercial-style
+override in the low-key scene.
 
-This closes only one M4 matrix cell.  Ordinary adult, person/object
-interaction, and non-bright real-person cells remain required before marking
-the cross-scene M4 release-quality matrix complete.
+For the young-person/product-reference cell, the result is age-appropriate,
+fully clothed, and coherent with the supplied garment. It is **not** a
+SKU-level garment-print certification: the authorized reference was retained
+materially, but generated artwork remains an approximation and must not be
+represented as an exact print match.
+
+This completes Doc142's M4 cross-scene Human Realism release-quality matrix.
+It does not certify template-specific production gates such as E-Commerce Gate
+C/D or Photography P10, which retain their own material, workflow and
+browser-acceptance requirements.
