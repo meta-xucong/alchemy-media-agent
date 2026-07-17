@@ -90,6 +90,15 @@ It is the backend authority for keeping Professional Mode invisible during
 normal use while preventing non-selected references from overriding an active
 Visual Asset's owned channels.
 
+### M5 Real-Pixel Acceptance Record
+
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
+
+Records the current non-counting M5 Provider pre-flight, supplied-portrait
+fingerprint, blocked reason, and the evidence still required for a real
+front/three-quarter/profile acceptance. It does not certify pixels or open a
+production gate.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:

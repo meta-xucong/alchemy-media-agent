@@ -45,8 +45,11 @@ configuration, UI path, or production switch was changed by this branch.
 M5 requires real pixels from the existing authorized GPT Image 2 Provider,
 shared review evidence, bounded retry/final-winner evidence, and a human visual
 acceptance across the front, three-quarter, and profile views. Those artifacts
-are not available in this isolated implementation run, and no credential or
-external Provider call was attempted.
+are not available in this isolated implementation run. The M5 pre-flight found
+no explicit `OPENAI_API_KEY` process credential; the settings layer's key
+presence came through a Codex-auth fallback and was intentionally not used.
+The observed base host was `aiself.vip`, with no independently verified
+authorized GPT Image 2 route. No external Provider call was attempted.
 
 Therefore M5 is **blocked**, not passed. Mock contracts, lifecycle tests, and
 source-boundary tests prove the shape of the implementation only; they cannot
@@ -95,13 +98,11 @@ fail-closed behavior before any frontend work begins.
 
 The focused Professional Mode suite covers M0-M6 boundaries and the mainline
 Product API/ScenarioRuntime seam: 64 passed. The combined
-Professional-Mode/Doc102 filter passed 128 tests. The final short-checkout
-mainline regression passed 865 tests with two existing FastAPI deprecation
-warnings. The earlier isolated feature worktree run reported 861 passed with
-four unrelated Windows `WinError 206` path-limit failures; those environmental
-failures do not occur in the short checkout. These tests prove the backend
-contract and isolation only; they do not certify real pixels, Provider
-quality, M5, Gate C/D, or production readiness.
+Professional-Mode/Doc102 filter passed 128 tests. The latest mainline
+verification record reports 868 full-suite tests passed with two existing
+FastAPI deprecation warnings. These tests prove the backend contract and
+isolation only; they do not certify real pixels, Provider quality, M5, Gate
+C/D, or production readiness.
 
 The mainline maintainer should independently rerun the full suite from a
 shorter checkout path after merge, then perform the real-pixel acceptance with
