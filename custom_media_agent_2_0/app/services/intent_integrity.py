@@ -7,9 +7,9 @@ from app.services.ids import new_id
 
 
 # This is a guardrail for the compiled provider artifact, not permission to
-# crop user intent.  It is deliberately large enough for normal template plus
-# reference jobs; anything beyond it is stopped for explicit compaction rather
-# than truncated on the way to the provider.
+# crop user intent. It is deliberately large enough for normal template plus
+# reference jobs; when needed, framework material is compacted before anything
+# reaches the provider.
 PROMPT_BUDGET_CHARS = 12000
 HARD_REFERENCE_ROLES = {"subject_reference", "logo_reference", "face_reference", "background_reference"}
 
@@ -23,19 +23,21 @@ def compile_prompt_artifact(
     asset_sections: Iterable[dict[str, Any]] | None = None,
     visual_grammar_section: str = "",
     control_sections: Iterable[dict[str, Any]] | None = None,
+    semantic_user_compaction: str = "",
     budget_chars: int = PROMPT_BUDGET_CHARS,
 ) -> tuple[str, dict[str, Any]]:
     """Compile V2's provider prompt without silently truncating semantic input.
 
     The compiler deliberately treats the user request and a usable Claude final
-    decision as required sections.  It may omit only sections marked ``soft``;
-    when the remaining required/strong content cannot fit, it returns the full
-    artifact together with ``budget_satisfied=False``.  Generation preflight is
-    responsible for stopping that request before it reaches a provider.
+    decision as required sections. It first removes only framework material
+    already represented by a Claude decision. If the raw user request itself
+    cannot fit, it uses that Claude decision as a semantic narrative compression
+    rather than cutting characters from the request. The original request stays
+    intact in the trace for audit and history.
     """
 
     sections: list[dict[str, Any]] = []
-    _append_section(
+    user_section = _append_section(
         sections,
         intent_id="intent_user_request",
         source="user_request",
@@ -60,7 +62,7 @@ def compile_prompt_artifact(
             role=role,
             reference_index=reference_index,
         )
-    _append_section(
+    creative_section = _append_section(
         sections,
         intent_id="intent_creative_decision",
         source=creative_source,
@@ -97,6 +99,7 @@ def compile_prompt_artifact(
     required_ids = [item["intent_id"] for item in sections if item["priority"] == "required"]
     included = list(sections)
     omitted: list[dict[str, Any]] = []
+    represented_required_ids: list[str] = []
     prompt = _render_sections(included)
     for candidate in [item for item in reversed(included) if item["priority"] == "soft"]:
         if len(prompt) <= budget_chars:
@@ -111,8 +114,54 @@ def compile_prompt_artifact(
         )
         prompt = _render_sections(included)
 
+    compact_user_intent = _normalise_text(semantic_user_compaction)
+    can_semantically_compact = bool(
+        compact_user_intent
+        and creative_source == "claude_final_prompt"
+        and user_section
+        and creative_section
+    )
+    if len(prompt) > budget_chars and can_semantically_compact:
+        for candidate in list(reversed(included)):
+            if candidate["intent_id"] not in {"intent_template_frame", "intent_visual_grammar"}:
+                continue
+            included.remove(candidate)
+            omitted.append(
+                {
+                    "intent_id": candidate["intent_id"],
+                    "reason": "framework_covered_by_claude_decision",
+                    "priority": candidate["priority"],
+                }
+            )
+            prompt = _render_sections(included)
+            if len(prompt) <= budget_chars:
+                break
+
+    if len(prompt) > budget_chars and can_semantically_compact:
+        user_section["source_text"] = user_section["text"]
+        user_section["text"] = compact_user_intent
+        user_section["title"] = "USER REQUEST (SEMANTIC COMPACTION)"
+        user_section["source"] = "claude_semantic_compaction"
+        user_section["compression_mode"] = "claude_semantic_compaction"
+        if creative_section in included:
+            included.remove(creative_section)
+            if creative_section["intent_id"] in required_ids:
+                represented_required_ids.append(creative_section["intent_id"])
+            omitted.append(
+                {
+                    "intent_id": creative_section["intent_id"],
+                    "reason": "represented_by_user_intent_semantic_compaction",
+                    "priority": creative_section["priority"],
+                }
+            )
+        prompt = _render_sections(included)
+
     included_ids = [item["intent_id"] for item in included]
-    required_missing = [intent_id for intent_id in required_ids if intent_id not in included_ids]
+    required_missing = [
+        intent_id
+        for intent_id in required_ids
+        if intent_id not in included_ids and intent_id not in represented_required_ids
+    ]
     budget_satisfied = len(prompt) <= budget_chars and not required_missing
     manifest = {
         "manifest_id": new_id("imf"),
@@ -120,6 +169,7 @@ def compile_prompt_artifact(
         "budget_chars": budget_chars,
         "budget_satisfied": budget_satisfied,
         "required_intent_ids": required_ids,
+        "represented_required_intent_ids": represented_required_ids,
         "included_intent_ids": included_ids,
         "omitted_intents": omitted,
         "required_intent_ids_missing": required_missing,
@@ -183,7 +233,8 @@ def preflight_prompt_integrity(
         }
     required_ids = set(_string_list(manifest.get("required_intent_ids")))
     included_ids = set(_string_list(manifest.get("included_intent_ids")))
-    missing = sorted(required_ids - included_ids)
+    represented_ids = set(_string_list(manifest.get("represented_required_intent_ids")))
+    missing = sorted(required_ids - included_ids - represented_ids)
     if missing:
         return {
             **result,
@@ -261,22 +312,24 @@ def _append_section(
     asset_id: str | None = None,
     role: str | None = None,
     reference_index: Any = None,
-) -> None:
+) -> dict[str, Any] | None:
     clean = _normalise_text(text)
     if not clean:
-        return
-    sections.append(
-        {
-            "intent_id": intent_id,
-            "source": source,
-            "priority": priority if priority in {"required", "strong", "soft"} else "strong",
-            "title": _normalise_text(title),
-            "text": clean,
-            "asset_id": asset_id,
-            "role": role,
-            "reference_index": reference_index,
-        }
-    )
+        return None
+    section = {
+        "intent_id": intent_id,
+        "source": source,
+        "priority": priority if priority in {"required", "strong", "soft"} else "strong",
+        "title": _normalise_text(title),
+        "text": clean,
+        "source_text": clean,
+        "compression_mode": "lossless",
+        "asset_id": asset_id,
+        "role": role,
+        "reference_index": reference_index,
+    }
+    sections.append(section)
+    return section
 
 
 def _render_sections(sections: Iterable[dict[str, Any]]) -> str:
@@ -293,6 +346,9 @@ def _trace_atom(section: dict[str, Any]) -> dict[str, Any]:
         "reference_index": section.get("reference_index"),
         "text_hash": _hash_text(section["text"]),
         "text_length": len(section["text"]),
+        "source_text_hash": _hash_text(section.get("source_text") or section["text"]),
+        "source_text_length": len(str(section.get("source_text") or section["text"])),
+        "compression_mode": section.get("compression_mode") or "lossless",
     }
 
 

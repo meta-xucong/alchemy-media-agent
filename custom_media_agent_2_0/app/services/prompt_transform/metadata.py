@@ -31,6 +31,7 @@ def build_prompt_transform_metadata(
     constraints: list[str],
     applied: bool,
     fallback_used: bool = False,
+    skipped_for_budget: bool = False,
     error: str | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
@@ -41,6 +42,7 @@ def build_prompt_transform_metadata(
         "fidelity_mode": mode_info.get("fidelity_mode", ""),
         "applied": bool(applied),
         "fallback_used": bool(fallback_used),
+        "skipped_for_budget": bool(skipped_for_budget),
         "constraint_count": len(constraints),
         "constraints": [_sanitize_metadata_text(item) for item in constraints[:12]],
         "base_prompt_chars": len(base_prompt or ""),

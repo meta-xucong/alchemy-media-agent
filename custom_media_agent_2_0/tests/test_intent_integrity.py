@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from app.repositories.memory import utc_now
 from app.schemas import ImageJob, ImageOutput, ImagePromptPlan
-from app.services.intent_integrity import compile_prompt_artifact, preflight_prompt_integrity
+from app.services.intent_integrity import PROMPT_BUDGET_CHARS, compile_prompt_artifact, preflight_prompt_integrity
 from app.services.output_review import review_output
+from app.services.prompt_transform.transformer import transform_prompt_plan
 
 
 def test_compiler_keeps_required_tail_and_reports_unsatisfied_budget() -> None:
@@ -23,6 +24,72 @@ def test_compiler_keeps_required_tail_and_reports_unsatisfied_budget() -> None:
     assert trace["manifest"]["budget_satisfied"] is False
     assert trace["manifest"]["required_intent_ids"] == ["intent_user_request", "intent_creative_decision"]
     assert trace["manifest"]["included_intent_ids"] == ["intent_user_request", "intent_creative_decision"]
+
+
+def test_compiler_semantically_compacts_overbudget_user_request_without_character_cutting() -> None:
+    user_prompt = "Long original request " + ("unique detail " * 40) + " REQUIRED_USER_TAIL"
+    compact_intent = "Create the requested scene and preserve every explicit material, composition, and delivery constraint."
+
+    prompt, trace = compile_prompt_artifact(
+        user_prompt=user_prompt,
+        creative_prompt=compact_intent,
+        creative_source="claude_final_prompt",
+        semantic_user_compaction=compact_intent,
+        budget_chars=180,
+    )
+
+    manifest = trace["manifest"]
+    user_atom = next(atom for atom in manifest["atoms"] if atom["intent_id"] == "intent_user_request")
+    assert len(prompt) <= 180
+    assert user_prompt not in prompt
+    assert compact_intent in prompt
+    assert manifest["budget_satisfied"] is True
+    assert manifest["represented_required_intent_ids"] == ["intent_creative_decision"]
+    assert user_atom["compression_mode"] == "claude_semantic_compaction"
+    assert user_atom["source_text_length"] == len(" ".join(user_prompt.split()))
+    assert user_atom["text_length"] == len(compact_intent)
+    assert preflight_prompt_integrity(
+        trace=trace,
+        effective_prompt=prompt,
+        input_images=[],
+        provider_input_plan={},
+    )["preflight"]["status"] == "passed"
+
+
+def test_compiler_drops_only_claude_covered_framework_before_compacting_user_request() -> None:
+    user_prompt = "Keep the customer request exactly intact."
+    compact_intent = "Create the customer-requested hero composition with the selected visual grammar."
+
+    prompt, trace = compile_prompt_artifact(
+        user_prompt=user_prompt,
+        creative_prompt=compact_intent,
+        creative_source="claude_final_prompt",
+        semantic_user_compaction=compact_intent,
+        template_section="template framework " * 25,
+        visual_grammar_section="visual framework " * 25,
+        budget_chars=210,
+    )
+
+    omitted = trace["manifest"]["omitted_intents"]
+    assert user_prompt in prompt
+    assert compact_intent in prompt
+    assert trace["manifest"]["budget_satisfied"] is True
+    assert {item["intent_id"] for item in omitted} == {"intent_template_frame", "intent_visual_grammar"}
+
+
+def test_strict_transform_drops_only_the_added_guard_when_it_would_exceed_budget() -> None:
+    base_prompt = "x" * (PROMPT_BUDGET_CHARS - 8)
+    plan = ImagePromptPlan(
+        plan_id="plan_budget_guard",
+        mode="smart_enhance",
+        prompt=base_prompt,
+        user_variables={"prompt_transform_mode": "enhanced"},
+    )
+
+    transformed = transform_prompt_plan(plan)
+
+    assert transformed.user_variables["generation_prompt"] == base_prompt
+    assert transformed.user_variables["prompt_transform"]["skipped_for_budget"] is True
 
 
 def test_preflight_rejects_missing_required_reference() -> None:

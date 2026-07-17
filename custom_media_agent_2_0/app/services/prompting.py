@@ -181,6 +181,7 @@ def compose_prompt_plan(
         asset_sections=asset_sections,
         visual_grammar_section=visual_grammar_section,
         control_sections=control_sections,
+        semantic_user_compaction=creative_prompt if prompt_source == "claude_final_prompt" else "",
     )
     if prompt_source == "claude_final_prompt":
         prompt_source = "compiled_from_claude_and_manifest"
@@ -281,7 +282,10 @@ def _should_use_claude_final_prompt(orchestrator_decision: CreativeOrchestratorD
         return False
     if orchestrator_decision.provider != "claude-code" or orchestrator_decision.fallback_reason:
         return False
-    return bool(_clean_prompt_text(orchestrator_decision.final_prompt, limit=2400))
+    # This is only an availability check.  Do not crop the Claude decision here:
+    # the compiler owns capacity management and will use this decision for
+    # semantic compression when the complete provider artifact is too large.
+    return bool(_normalise_prompt_text(orchestrator_decision.final_prompt))
 
 
 def _clean_prompt_text(value: str, *, limit: int) -> str:

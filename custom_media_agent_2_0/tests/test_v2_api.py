@@ -3161,29 +3161,45 @@ def test_creative_run_template_lock_binds_uploaded_subject_asset() -> None:
     assert any("Template Lock" in note for note in review["notes"])
 
 
-def test_creative_run_blocks_over_budget_intent_before_provider_resolution(monkeypatch) -> None:
+def test_creative_run_semantically_compacts_over_budget_intent_before_provider_resolution(monkeypatch) -> None:
     client = fresh_client()
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
 
-    async def provider_must_not_be_resolved(*_args, **_kwargs):
-        raise AssertionError("provider resolution must not happen after integrity preflight failure")
+    def fake_claude_decision(*, candidate_cases, **_kwargs):
+        return {
+            "mode": "smart_enhance",
+            "selected_case_ids": [candidate_cases[0].case_id],
+            "final_prompt": (
+                "Create the requested image as one coherent scene; preserve every explicit customer constraint, "
+                "the requested subject, material, composition, lighting, and delivery intent."
+            ),
+            "negative_prompt": "watermark, unrelated text",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "prompt_rationale": "Central Claude decision is the semantic compression of the complete request.",
+            "confidence": 0.9,
+        }
 
-    monkeypatch.setattr("app.services.generation.get_v2_image_provider", provider_must_not_be_resolved)
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", fake_claude_decision)
+    user_prompt = "Preserve this complete client requirement: " + ("semantic-detail " * 1000)
     response = client.post(
         "/api/v2/creative/runs",
         json={
-            "user_prompt": "Preserve this complete client requirement: " + ("semantic-detail " * 1000),
+            "user_prompt": user_prompt,
             "output": {"count": 1, "provider_hint": "mock_image"},
         },
     )
 
     assert response.status_code == 202
     run = response.json()
-    assert run["status"] == "failed"
+    assert run["status"] == "completed"
     job = run["generation_jobs"][0]
-    assert job["provider_id"] == "v2_intent_preflight"
-    assert job["error"]["error_code"] == "constraint_budget_unsatisfied"
-    assert job["outputs"] == []
-    assert run["prompt_plan"]["user_variables"]["prompt_integrity"]["preflight"]["status"] == "failed"
+    assert job["provider_id"] == "mock_image"
+    assert len(job["outputs"]) == 1
+    integrity = run["prompt_plan"]["user_variables"]["prompt_integrity"]
+    assert integrity["preflight"]["status"] == "passed"
+    user_atom = next(item for item in integrity["manifest"]["atoms"] if item["intent_id"] == "intent_user_request")
+    assert user_atom["compression_mode"] == "claude_semantic_compaction"
+    assert user_atom["source_text_length"] == len(" ".join(user_prompt.split()))
 
 
 def test_creative_run_without_template_uses_free_agent_asset_binding() -> None:
