@@ -1,7 +1,7 @@
 # Professional Mode Serial Anchor Reference Budget
 
 Date: 2026-07-17  
-Status: implementation proposal on the Professional M5 feature branch  
+Status: implementation proposal on the Professional M5 feature branch; view-conditioned derivative details are superseded by the 2026-07-18 companion specification
 Strategy id: `serial_anchor_pack_root_reuse_v1`
 
 ## Purpose
@@ -37,8 +37,8 @@ reference policy explicitly assigns them.
 | Stage | Provider reference set | Count |
 | --- | --- | ---: |
 | `standard_front` | root feature-detail + root head-geometry | 2 |
-| `three_quarter` | reused root geometry anchor + front winner feature-detail + front winner head-geometry | 3 |
-| `profile` | reused root geometry anchor + front winner feature-detail + front winner head-geometry + three-quarter winner feature-detail + three-quarter winner head-geometry | 5 |
+| `three_quarter` | reused root view-geometry anchor + front winner feature-detail + front winner view-geometry | 3 |
+| `profile` | reused root view-geometry anchor + front winner feature-detail/view-geometry + three-quarter winner feature-detail/view-geometry | 5 |
 
 The profile stage therefore fits the current five-reference transport limit
 without dropping a selected view and without splitting one stage into extra
@@ -53,11 +53,13 @@ MCP caller cannot choose derivative paths, provider settings, or a replacement
 reference policy. Standard Mode and ordinary Professional jobs without this
 strategy retain the existing complementary two-derivative behavior.
 
-For Professional serial stages, the materializer emits one existing
-`portrait_identity_geometry_crop` derivative for the uploaded root and the
-normal feature-detail/geometry pair for reviewed generated winners. The source
-image is never modified. The selected/dropped derivative IDs and source hashes
-remain part of the shared reference provenance.
+For Professional supplementary serial stages, the materializer emits one
+`portrait_identity_pose_geometry_crop` derivative for the uploaded root and a
+feature-detail/view-geometry pair for each reviewed generated winner. This
+replaces a derivative kind; it does not add an input. The source image is never
+modified. The selected/dropped derivative IDs and source hashes remain part of
+the shared reference provenance. Standard Mode and ordinary Professional jobs
+continue using the existing feature-detail/head-geometry pair.
 
 ## Quality and future expansion
 

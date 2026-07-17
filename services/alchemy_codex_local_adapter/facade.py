@@ -9,14 +9,35 @@ from .contracts import (
     NativeSpecializedImageGenPlanRequest,
 )
 from .native_planner import CodexNativeImageGenPlanner
+from .professional_binding import persistent_professional_binding_resolver
 
 
 class CodexNativeImageGenFacade:
     """No artifact, candidate, review, retry, or delivery state exists here."""
 
-    def __init__(self, *, enabled: bool = False, planner: CodexNativeImageGenPlanner | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = False,
+        planner: CodexNativeImageGenPlanner | None = None,
+        professional_binding_resolver=None,
+        professional_asset_catalog_root=None,
+    ) -> None:
         self.enabled = bool(enabled)
-        self._planner = planner or CodexNativeImageGenPlanner()
+        if planner is not None and (
+            professional_binding_resolver is not None
+            or professional_asset_catalog_root is not None
+        ):
+            raise ValueError("planner and Professional binding configuration are mutually exclusive")
+        if planner is not None:
+            self._planner = planner
+        else:
+            resolver = professional_binding_resolver
+            if resolver is None and professional_asset_catalog_root is not None:
+                resolver = persistent_professional_binding_resolver(professional_asset_catalog_root)
+            self._planner = CodexNativeImageGenPlanner(
+                professional_binding_resolver=resolver,
+            )
 
     def prepare_native_imagegen_plan(self, request: NativeImageGenPlanRequest) -> dict:
         if not self.enabled:

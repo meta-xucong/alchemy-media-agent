@@ -63,12 +63,15 @@ face-reference role; it does not add a public capability.
 
 For the Professional serial anchor-pack stages, the server-owned strategy
 `serial_anchor_pack_root_reuse_v1` reuses one already-prepared root identity
-anchor after the front stage. Three-quarter therefore receives root geometry
-plus the front winner's two identity derivatives; profile receives root
-geometry plus the front and three-quarter winners' two derivatives each. This
-is the shared Provider's bounded five-reference contract, not an extra image
-generation or a caller-selected crop. Standard Mode and ordinary non-serial
-reference requests retain their existing derivative behavior.
+anchor after the front stage. Three-quarter therefore receives root
+view-conditioned geometry plus the front winner's feature-detail and
+view-conditioned geometry; profile receives root view-conditioned geometry plus
+the front and three-quarter winners' two derivatives each. This is the shared
+Provider's bounded five-reference contract, not an extra image generation or a
+caller-selected crop. Standard Mode and ordinary non-serial reference
+requests retain their existing derivative behavior. A supplementary stage is
+blocked before Provider dispatch if any required feature/pose evidence scope is
+missing.
 
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the
@@ -80,7 +83,16 @@ the built-in tool is unavailable, stop without a fallback.
 
 Reference/image-to-image parity is described in Doc131. Codex must pass each
 returned `reference_image_paths` list unchanged with the returned
-`imagegen_prompt`. Text-to-image returns an empty list.
+`imagegen_prompt`. Text-to-image returns an empty list. The host must also
+record an exact renderer parity receipt (renderer, model, size, quality, and
+format); a missing or mismatched field is blocked/non-counting evidence.
+
+For a real Professional relay, the embedding host may start the MCP with an
+explicit metadata-only catalog root, for example
+`--professional-asset-catalog-root <catalog-root>`. This is process
+configuration, never a request field, and it reads only the existing
+People-Asset/Face-Identity metadata. Without it, the Professional relay
+correctly fails closed.
 
 ## Local repository setup
 

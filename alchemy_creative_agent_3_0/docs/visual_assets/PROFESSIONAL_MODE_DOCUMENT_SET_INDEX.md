@@ -104,6 +104,15 @@ artifact and its reference/output fingerprints, followed by a bounded shared
 review timeout. It remains non-counting M5 evidence and does not open a
 production gate.
 
+### M5 View-Conditioned Evidence and Renderer Parity
+
+`PROFESSIONAL_MODE_VIEW_CONDITIONED_EVIDENCE_AND_RENDERER_PARITY_SPEC_20260718.md`
+
+Defines the bounded 2/3/5 view-conditioned evidence compiler, the
+pre-Provider readiness gate, the host renderer-parity receipt, and the
+explicit metadata-only binding resolver. It does not weaken shared Vision,
+create a second renderer, or certify M5 pixels.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:

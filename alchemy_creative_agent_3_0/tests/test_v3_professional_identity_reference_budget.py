@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationRequest,
@@ -18,6 +19,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
     ProviderStrategy,
 )
 from app.services.provider_reference import prepare_reference_truth_derivatives
+from app.providers.base import ProviderRuntimeError
 
 
 def _image(path: Path, color: tuple[int, int, int]) -> Path:
@@ -144,12 +146,19 @@ def test_professional_profile_uses_five_references_root_once_and_winners_twice(t
         "three_quarter_output",
     ]
     assert [item["derivative_kind"] for item in plan["assets"]] == [
-        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
         "portrait_identity_crop",
-        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
         "portrait_identity_crop",
-        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
     ]
+    evidence = plan["provider_input_plan"]["view_conditioned_evidence"]
+    assert evidence["ready"] is True
+    assert evidence["required_source_scopes"] == {
+        "root_asset": ["pose_geometry"],
+        "front_output": ["feature_detail", "pose_geometry"],
+        "three_quarter_output": ["feature_detail", "pose_geometry"],
+    }
 
     legacy_metadata = dict(request.metadata)
     legacy_metadata.pop("professional_identity_reference_strategy", None)
@@ -172,3 +181,48 @@ def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:
         "portrait_identity_crop",
         "portrait_identity_geometry_crop",
     ]
+
+
+def test_pose_geometry_derivative_preserves_a_view_conditioned_crop_scope(tmp_path: Path) -> None:
+    source = _image(tmp_path / "portrait.png", (220, 180, 160))
+    derivatives = prepare_reference_truth_derivatives(
+        source,
+        asset_id="professional_root",
+        truth_layers=["portrait_identity_truth"],
+        portrait_identity_derivative_kinds=("portrait_identity_pose_geometry_crop",),
+    )
+
+    assert len(derivatives) == 1
+    derivative = derivatives[0]
+    assert derivative["derivative_kind"] == "portrait_identity_pose_geometry_crop"
+    assert derivative["identity_evidence_scope"] == "pose_geometry"
+    assert derivative["identity_color_retention"] == 0.58
+    assert derivative["provider_only"] is True
+    assert Path(derivative["path"]).exists()
+
+
+def test_professional_supplementary_materialization_blocks_when_pose_scope_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _image(tmp_path / "root.png", (220, 180, 160))
+    front = _image(tmp_path / "front.png", (220, 181, 160))
+    three_quarter = _image(tmp_path / "three-quarter.png", (220, 182, 160))
+    request = _request(root, front, three_quarter)
+
+    import app.services.provider_reference as provider_reference
+
+    original = provider_reference.prepare_reference_truth_derivatives
+
+    def without_pose(*args, **kwargs):
+        return [
+            item
+            for item in original(*args, **kwargs)
+            if item.get("derivative_kind") != "portrait_identity_pose_geometry_crop"
+        ]
+
+    monkeypatch.setattr(provider_reference, "prepare_reference_truth_derivatives", without_pose)
+    provider = ProductionImageGenerationProvider()
+    with pytest.raises(ProviderRuntimeError) as exc:
+        provider.materialize_final_prompt(request)
+    assert exc.value.detail["failure_code"] == "professional_view_conditioned_evidence_incomplete"

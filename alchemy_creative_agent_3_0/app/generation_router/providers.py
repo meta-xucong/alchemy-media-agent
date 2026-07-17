@@ -1752,6 +1752,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         admitted_reference_assets = self._reference_assets(request)
         asset_plan = self._asset_plan(request, admitted_reference_assets)
+        self._assert_professional_view_evidence_ready(request, asset_plan)
         # ``asset_plan`` is the single provider-input authority.  The Web
         # adapter reads its ``storage_path`` entries, so this materializer and
         # the Codex relay must project those same resolved files rather than
@@ -2425,7 +2426,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 truth_layers=truth_layers,
                 reference_policy=reference_policy,
             )
-            if portrait_identity_derivative_kinds == ("portrait_identity_geometry_crop",):
+            if portrait_identity_derivative_kinds in {
+                ("portrait_identity_geometry_crop",),
+                ("portrait_identity_pose_geometry_crop",),
+            }:
                 reference_sanitization = {
                     "applies": True,
                     "reason_codes": ["professional_root_identity_anchor_reused"],
@@ -2510,6 +2514,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         for item in assets
                         if item.get("identity_evidence_scope")
                     ]
+                ),
+                "view_conditioned_evidence": self._professional_view_conditioned_evidence(
+                    request,
+                    assets,
+                    reference_assets,
                 ),
                 "original_reference_asset_ids": _dedupe([asset["asset_id"] for asset in reference_assets]),
                 "suppressed_full_frame_identity_asset_ids": suppressed_original_ids,
@@ -2892,8 +2901,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         """Reuse one prepared root anchor in later serial identity stages.
 
         The Professional anchor-pack contract keeps the immutable root truth
-        as a single geometry-preserving anchor after the front stage. Reviewed
-        generated winners retain the complementary feature/geometry pair. The
+        as a single view-conditioned geometry anchor after the front stage.
+        Reviewed generated winners retain the complementary feature/view
+        geometry pair. The
         strategy is opt-in and therefore cannot change Standard Mode or an
         ordinary uploaded-portrait job.
         """
@@ -2904,9 +2914,105 @@ class ProductionImageGenerationProvider(GenerationProvider):
         stage = str(metadata.get("professional_reference_stage") or "").strip()
         if stage not in {"three_quarter", "profile"}:
             return None
-        if not self._is_uploaded_truth_source(asset) or asset.get("output_id"):
+        if self._is_uploaded_truth_source(asset) and not asset.get("output_id"):
+            return ("portrait_identity_pose_geometry_crop",)
+        if self._is_selected_generated_source(asset):
+            return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
+        return None
+
+    def _assert_professional_view_evidence_ready(
+        self,
+        request: GenerationRequest,
+        asset_plan: dict[str, Any],
+    ) -> None:
+        input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else {}
+        evidence = input_plan.get("view_conditioned_evidence") if isinstance(input_plan, dict) else None
+        if not isinstance(evidence, dict) or evidence.get("ready") is not False:
+            return
+        missing = evidence.get("missing")
+        if not missing:
+            return
+        raise ProviderRuntimeError(
+            "Professional supplementary-stage reference evidence is incomplete.",
+            provider=self.provider_name,
+            detail={
+                "failure_code": "professional_view_conditioned_evidence_incomplete",
+                "fallback": "blocked",
+                "professional_reference_stage": evidence.get("stage"),
+                "missing": missing,
+            },
+        )
+
+    def _professional_view_conditioned_evidence(
+        self,
+        request: GenerationRequest,
+        assets: list[dict[str, Any]],
+        reference_assets: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Report the serial view evidence contract without adding inputs.
+
+        Supplementary stages use a pose-aware geometry derivative for the
+        immutable root and a feature/pose pair for each reviewed winner. This
+        is a readiness record consumed by the shared materializer; it never
+        invents missing evidence or changes the hard 2/3/5 input budget.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
-        return ("portrait_identity_geometry_crop",)
+        stage = str(metadata.get("professional_reference_stage") or "").strip()
+        if stage not in {"standard_front", "three_quarter", "profile"}:
+            return None
+        # The front stage keeps the long-standing complementary pair and is
+        # admitted by the existing identity truth policy. The new readiness
+        # record is only needed where a later view must carry pose evidence.
+        if stage == "standard_front":
+            return None
+        sources: dict[str, dict[str, Any]] = {}
+        for item in assets:
+            source_id = str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
+            scope = str(item.get("identity_evidence_scope") or "").strip()
+            if not source_id or not scope:
+                continue
+            record = sources.setdefault(source_id, {"scopes": [], "derivative_kinds": []})
+            if scope not in record["scopes"]:
+                record["scopes"].append(scope)
+            derivative_kind = str(item.get("derivative_kind") or "").strip()
+            if derivative_kind and derivative_kind not in record["derivative_kinds"]:
+                record["derivative_kinds"].append(derivative_kind)
+        expected: dict[str, list[str]] = {}
+        raw_reference_assets = reference_assets or metadata.get("uploaded_assets") or []
+        for raw_asset in raw_reference_assets:
+            if not isinstance(raw_asset, dict):
+                continue
+            source_id = str(raw_asset.get("asset_id") or raw_asset.get("output_id") or "").strip()
+            if not source_id:
+                continue
+            raw_metadata = raw_asset.get("metadata") if isinstance(raw_asset.get("metadata"), dict) else {}
+            generated = self._is_selected_generated_source({**raw_asset, **raw_metadata})
+            expected[source_id] = (
+                ["feature_detail", "pose_geometry"]
+                if generated
+                else ["pose_geometry"]
+                if stage in {"three_quarter", "profile"}
+                else ["feature_detail", "head_geometry"]
+            )
+        missing: list[dict[str, Any]] = []
+        for source_id, required_scopes in expected.items():
+            present = set(sources.get(source_id, {}).get("scopes") or [])
+            absent = [scope for scope in required_scopes if scope not in present]
+            if absent:
+                missing.append({"source_asset_id": source_id, "missing_scopes": absent})
+        return {
+            "schema_version": "professional_view_conditioned_evidence_v1",
+            "strategy": "serial_anchor_pack_root_reuse_v1",
+            "stage": stage,
+            "reference_budget": {"standard_front": 2, "three_quarter": 3, "profile": 5}[stage],
+            "required_source_scopes": expected,
+            "admitted_sources": sources,
+            "ready": not missing and bool(expected),
+            "missing": missing,
+        }
 
     def _is_uploaded_truth_source(self, asset: dict[str, Any]) -> bool:
         source_type = str(asset.get("source_type") or "").lower()
@@ -3059,6 +3165,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "Complementary crop 2 of the same single uploaded person, not a separate candidate: use this head-geometry "
                 "view for forehead-midface-lower-face proportion, temple-cheek-jaw contour, face width/length, cheek volume, "
                 "jaw slope, and chin scale. Ignore its hair styling, clothing, background, light, and color grade. "
+                + base
+            )
+        if kind == "portrait_identity_pose_geometry_crop":
+            return (
+                "View-conditioned geometry evidence of the same single person, not a separate candidate: use it to preserve "
+                "the requested head direction, visible ear relationship, forehead-to-midface-to-lower-face plane, cheek-to-jaw "
+                "silhouette, chin projection, neck entry, and shoulder/head-axis continuity. It is allowed to carry neutral "
+                "pose evidence, but ignore its hair styling, clothing, background, light, color grade, and whole-image style. "
                 + base
             )
         return base

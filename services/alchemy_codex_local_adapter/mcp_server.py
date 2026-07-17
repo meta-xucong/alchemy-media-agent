@@ -204,8 +204,15 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
 def main() -> int:
     parser = argparse.ArgumentParser(description="Doc130/131 canonical-prompt stdio MCP bridge")
     parser.add_argument("--enable-native-imagegen", action="store_true")
+    parser.add_argument(
+        "--professional-asset-catalog-root",
+        help="Explicit metadata-only People Asset catalog root for Professional planning; never an MCP field.",
+    )
     arguments = parser.parse_args()
-    adapter = CodexNativeImageGenFacade(enabled=arguments.enable_native_imagegen)
+    adapter = CodexNativeImageGenFacade(
+        enabled=arguments.enable_native_imagegen,
+        professional_asset_catalog_root=arguments.professional_asset_catalog_root,
+    )
 
     # MCP JSON is UTF-8 regardless of the host console code page.  Without
     # this explicit stream contract, Windows decodes a user-authorized Chinese
