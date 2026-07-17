@@ -113,13 +113,15 @@ def reference_delivery_prompt_section(contract: dict[str, Any] | None) -> str:
             f"Preserve its source-owned fields: {source_fields or 'declared visual evidence'}."
         )
     if evidence:
-        values = "; ".join(
-            f"{item.get('kind', 'copy')}: {item.get('value')}" for item in evidence if str(item.get("value") or "").strip()
+        # OCR stays private V2 evidence.  Do not turn a source poster/menu into
+        # a keyword pile in the image prompt: that changes the user's creative
+        # intent and makes the model overfit to an arbitrary extracted order.
+        # The native input image remains the visual source; exact copy is used
+        # only by the renderer/reviewer through the delivery contract.
+        parts.append(
+            "A private V2 source-evidence record exists for this reference. Preserve its visible business facts and source-to-item relationships; "
+            "use V2 deterministic typography when exact source copy must be rendered."
         )
-        if values:
-            parts.append(
-                "SOURCE FACTS: retain these source facts exactly where the active template provides compatible text slots: " + values
-            )
     if contract.get("information_dense"):
         parts.append(
             "For information-dense source material, do not invent, reorder, or garble dates, prices, offer rules, CTA, or source-to-item relationships. "
