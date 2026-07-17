@@ -52,7 +52,10 @@ evidence of faithful delivery.
 ## 4. Modular target design
 
 Add a V2-native `reference_delivery` capability package.  Each module consumes
-and returns small typed contracts; no module calls API routes outside V2.
+and returns small typed contracts; no module calls API routes outside V2.  The
+implemented first rollout uses `reference_delivery.py` as the canonical
+contract and leaves future extractor/reviewer implementations behind the same
+contract boundary.
 
 ```text
 request + assets
@@ -67,7 +70,7 @@ request + assets
   -> V2 output history
 ```
 
-### 4.1 `reference_intent.py`: canonical source authority
+### 4.1 `reference_delivery.py`: canonical source authority
 
 This pure module resolves one canonical `ReferenceIntentContract` per asset
 before prompt composition.  It removes conflicts between an upload's stored
@@ -101,11 +104,14 @@ Rules:
 Integration point: enrich the output of `asset_binding.py`; retain its current
 public data shape and add the contract under `asset_context`.
 
-### 4.2 `source_evidence.py`: extract facts before generation
+### 4.2 `source_text_evidence.py`: extract facts before generation
 
-This module turns a dense source into a `SourceEvidenceManifest`.  It should be
-provider-independent and pluggable: local OCR first, then an approved vision
-extractor only when needed.
+This module turns a dense source into a `SourceEvidenceManifest`.  The first
+implementation uses the locally installed Tesseract executable through an
+optional Python wrapper.  It records an explicit `unavailable`, `failed`,
+`no_text_detected`, or `extracted` receipt when that engine is absent or cannot
+read the source.  A future approved V2 vision extractor can use the same
+manifest shape.
 
 The manifest stores structured fields, confidence, bounding regions, and
 content hashes:
@@ -123,11 +129,11 @@ queued run is retained only in the V2 task's protected request state; logs,
 metrics, and review summaries contain field identifiers, hashes, and counts,
 never full user copy.
 
-Low-confidence extraction is not silently invented.  It produces
-`needs_confirmation` or a visible editable field list before chargeable
-generation.
+Low-confidence extraction is not silently invented.  V2 can still generate a
+candidate, but information-dense jobs with no source-text evidence are marked
+`needs_review` and blocked from automatic delivery.
 
-### 4.3 `template_authority_bridge.py`: map facts to template slots
+### 4.3 `reference_delivery.py`: map facts to template slots
 
 This module converts the intent contract and source evidence into a
 `DeliveryContract`:
@@ -158,7 +164,8 @@ but materializes only supported fidelity controls.
 - If the selected model supports an edit-fidelity parameter, materialize it
   only for hard identity/content contracts.  Do not send unsupported keys.
 - Persist a safe request receipt: operation type, model, input count,
-  capability profile, parameter names, prompt hash, and elapsed time.
+  capability profile, and parameter names. It contains no prompt, image,
+  header, or credential data.
 - If the model cannot meet a hard contract, fail before provider billing or
   route to a configured compatible provider; never quietly downgrade to
   text-only generation.
@@ -259,7 +266,9 @@ first rollout; a database migration is not required.
 
 ### Phase C — improve output fidelity
 
-- Enable capability-negotiated edit fidelity and one semantic retry.
+- Enable capability-negotiated edit fidelity and emit one bounded semantic
+  repair receipt; dispatch it only after a repairable pixel verdict and an
+  explicit billing policy are available.
 - Enable deterministic typography overlay for information-dense templates.
 - Compare candidate outputs and deliver only the highest passing result.
 
@@ -283,3 +292,40 @@ facts were required, which provider inputs were sent, which facts appeared in
 the final pixels, which candidate won, and why it was safe to deliver.  A
 visually plausible but fabricated menu must fail this contract rather than be
 mistaken for a successful generation.
+
+## 10. Implemented branch state and explicit limits
+
+The feature branch implements Phases A and B and the safe, non-chargeable
+parts of Phase C:
+
+- `reference_delivery.py` creates one canonical contract, preserves multiple
+  role-level intents while deduplicating provider inputs, separates
+  template-owned frame fields from source-owned facts, and emits a
+  persistence-safe audit summary.
+- `source_text_evidence.py` performs line-level local OCR only when Tesseract
+  is available. `uploaded_asset_vision.py` records a safe availability receipt
+  and keeps raw detected copy in the protected V2 asset brief for prompt
+  composition only.
+- `prompting.py` compiles required source facts as a required intent section;
+  the existing 12,000-character integrity compiler fails preflight instead of
+  cropping a required section.
+- `reference_provider.py` materializes only declared provider capabilities and
+  records whether a requested hard-reference fidelity control was intentionally
+  omitted for lack of model support.
+- `visual_evidence_review.py` proves local output-file readability, verifies
+  deterministic-overlay receipts when present, and blocks automatic delivery
+  when source text or reference adherence is unverified.
+- `semantic_retry.py` publishes a one-attempt repair receipt. It is not an
+  automatic re-dispatch loop: without a pixel verdict it would charge for a
+  blind second attempt. A later coordinator may consume the receipt only after
+  it has a repairable OCR/vision finding and an explicit billing policy.
+- `copy_safe_compositor.py` overlays text only into explicit, approved slots
+  with an explicit font. It intentionally refuses to guess geometry or
+  typography from a generated image.
+
+This is a deliberate delivery boundary, not a silent fallback. On a host
+without Tesseract (the current local development host has the Python wrapper
+but no executable), an information-dense upload remains eligible for visual
+generation but cannot be marked automatically deliverable. Enabling an OCR
+engine or an approved V2 pixel-review implementation is the remaining runtime
+dependency before a live menu/poster can pass the full content-fidelity gate.

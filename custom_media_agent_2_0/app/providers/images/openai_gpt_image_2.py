@@ -20,6 +20,7 @@ from app.providers.images.base import (
     V2ImageProviderRuntimeError,
 )
 from app.providers.images.response_payloads import outputs_from_image_response
+from app.services.reference_provider import materialize_openai_reference_request, provider_receipt_for_output
 from app.services.uploaded_assets import uploaded_asset_path
 
 
@@ -202,7 +203,13 @@ class V2OpenAIGPTImage2Provider:
                 model=settings.openai_image_model,
                 trace_id=request.run_id,
             )
-            kwargs = _openai_image_kwargs(plan)
+            kwargs, receipt = materialize_openai_reference_request(
+                plan=plan,
+                model=settings.openai_image_model,
+                operation="images.generate",
+                reference_image_count=0,
+                base_kwargs=_openai_image_kwargs(plan),
+            )
             response = await _call_openai_image_operation(
                 lambda: client.images.generate(
                     model=settings.openai_image_model,
@@ -236,7 +243,8 @@ class V2OpenAIGPTImage2Provider:
                     },
                 ) from exc
             raise _openai_error(exc, provider=self.name, operation="images.generate", index=index) from exc
-        return await _outputs_from_openai_response(response, plan, index=index, operation="images.generate", reference_count=0)
+        outputs = await _outputs_from_openai_response(response, plan, index=index, operation="images.generate", reference_count=0)
+        return _with_reference_delivery_receipt(outputs, receipt)
 
     async def _generate_one_with_references(
         self,
@@ -256,7 +264,13 @@ class V2OpenAIGPTImage2Provider:
             )
             with ExitStack() as stack:
                 image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
-                kwargs = _openai_image_kwargs(plan)
+                kwargs, receipt = materialize_openai_reference_request(
+                    plan=plan,
+                    model=settings.openai_image_model,
+                    operation="images.edit",
+                    reference_image_count=len(reference_paths),
+                    base_kwargs=_openai_image_kwargs(plan),
+                )
                 async def edit_operation():
                     for image_file in image_files:
                         image_file.seek(0)
@@ -297,13 +311,14 @@ class V2OpenAIGPTImage2Provider:
                     },
                 ) from exc
             raise _openai_error(exc, provider=self.name, operation="images.edit", index=index) from exc
-        return await _outputs_from_openai_response(
+        outputs = await _outputs_from_openai_response(
             response,
             plan,
             index=index,
             operation="images.edit",
             reference_count=len(reference_paths),
         )
+        return _with_reference_delivery_receipt(outputs, receipt)
 
 
 def _reference_paths(request: V2ImageProviderRequest) -> list:
@@ -341,6 +356,16 @@ async def _outputs_from_openai_response(response, plan, *, index: int, operation
         default_mime_type=f"image/{fmt}",
         url_timeout_seconds=settings.openai_image_timeout_seconds,
     )
+
+
+def _with_reference_delivery_receipt(
+    outputs: list[V2ImageProviderOutput],
+    receipt: dict[str, Any],
+) -> list[V2ImageProviderOutput]:
+    return [
+        output.model_copy(update={"metadata": provider_receipt_for_output(output.metadata, receipt)})
+        for output in outputs
+    ]
 
 
 def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):

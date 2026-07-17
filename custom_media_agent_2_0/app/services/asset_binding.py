@@ -18,6 +18,7 @@ from app.schemas import (
 )
 from app.services.case_intelligence import get_prompt_case
 from app.services.ids import new_id
+from app.services.reference_delivery import build_reference_delivery_contract
 from app.services.uploaded_assets import get_uploaded_asset
 
 
@@ -120,7 +121,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         template_locked=template_lock is not None,
         task_relationship_model=task_relationship_model,
     )
-    return {
+    context = {
         "user_prompt": request.user_prompt,
         "uploaded_assets": uploaded_asset_contexts,
         "task_relationship_model": task_relationship_model,
@@ -131,6 +132,8 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         "provider_input_plan": binding_plan.provider_input_plan,
         "warnings": _warnings(asset_inputs, uploaded_assets),
     }
+    context["reference_delivery"] = build_reference_delivery_contract(context)
+    return context
 
 
 def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_intent: Any) -> dict[str, Any] | None:
@@ -227,6 +230,7 @@ def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_in
         template_slot_replacement=template_slot_replacement,
         content_extraction=content_extraction,
     )
+    updated["reference_delivery"] = build_reference_delivery_contract(updated)
     return updated
 
 

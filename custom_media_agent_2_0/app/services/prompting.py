@@ -5,6 +5,7 @@ import re
 from app.schemas import CreativeOrchestratorDecision, ImagePromptPlan, PromptCase, PromptCaseSummary
 from app.services.intent_integrity import compile_prompt_artifact
 from app.services.ids import new_id
+from app.services.reference_delivery import build_reference_delivery_contract, reference_delivery_prompt_section
 from app.services.visual_signals import build_case_visual_signals
 from app.services.visual_grammar_lock import build_visual_grammar_contract
 
@@ -156,6 +157,22 @@ def compose_prompt_plan(
         language_lock=language_lock,
         aspect_lock=aspect_lock,
     )
+    reference_delivery = (
+        (asset_context or {}).get("reference_delivery")
+        if isinstance((asset_context or {}).get("reference_delivery"), dict)
+        else build_reference_delivery_contract(asset_context)
+    )
+    reference_delivery_section = reference_delivery_prompt_section(reference_delivery)
+    if reference_delivery_section:
+        control_sections.append(
+            {
+                "intent_id": "intent_reference_delivery_contract",
+                "source": "v2_reference_delivery",
+                "priority": "required",
+                "title": "REFERENCE DELIVERY CONTRACT",
+                "text": reference_delivery_section,
+            }
+        )
     prompt, prompt_integrity = compile_prompt_artifact(
         user_prompt=user_prompt,
         creative_prompt=creative_prompt,
@@ -185,6 +202,8 @@ def compose_prompt_plan(
     ]
     if mode == "template_customize" and primary:
         risk_notes.insert(0, "The hand-selected template is the highest-priority visual anchor.")
+    if reference_delivery.get("acceptance", {}).get("requires_pixel_review"):
+        risk_notes.append("Reference delivery requires V2 pixel evidence before automatic delivery.")
     if orchestrator_decision:
         risk_notes.extend(orchestrator_decision.prompt_directives.safety_notes[:6])
     explanation = _build_explanation(mode, reference_cases)
@@ -226,6 +245,7 @@ def compose_prompt_plan(
             "prompt_transform_profile": prompt_transform_request,
             "asset_binding_plan": (asset_context or {}).get("asset_binding_plan"),
             "provider_input_plan": (asset_context or {}).get("provider_input_plan"),
+            "reference_delivery": reference_delivery,
             "uploaded_assets": (asset_context or {}).get("uploaded_assets", []),
             "provider_input_asset_ids": [
                 item.get("asset_id")
