@@ -71,11 +71,16 @@ repository, then restart Codex. The launcher validates that path before it
 imports anything. If it cannot find the repository, the MCP stays unavailable;
 it never falls back to a Web route or Platform API.
 
-If the checked-out main worktree does not itself contain the already configured
-remote Central Brain environment, set `ALCHEMY_CODEX_LOCAL_ENV_FILE` to that
-existing local `.env` file. This configuration value is only a path; the
-launcher loads it before V3 imports without copying keys into the plugin or
-returning them through MCP. Existing process environment values take priority.
+If the checked-out main worktree contains its already configured remote
+Central Brain environment, the launcher discovers `.env` (and the legacy
+`src_skeleton/.env`) inside that checkout automatically. If the environment
+intentionally lives in another user-owned checkout, set
+`ALCHEMY_CODEX_LOCAL_ENV_FILE` to that existing local `.env` file. This
+configuration value is only a path; the launcher loads it before V3 imports
+without copying keys into the plugin or returning them through MCP. Existing
+process environment values take priority. A worktree may also contain the
+ignored `.codex-local-env-path` pointer file with that path; it must contain a
+path only, never credentials.
 
 ## Provenance
 

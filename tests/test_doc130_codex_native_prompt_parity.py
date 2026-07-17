@@ -608,3 +608,36 @@ def test_plugin_launcher_loads_only_an_explicit_existing_environment_file(tmp_pa
     monkeypatch.setenv("ALCHEMY_CODEX_LOCAL_ENV_FILE", str(tmp_path / "missing.env"))
     with pytest.raises(RuntimeError, match="ALCHEMY_CODEX_LOCAL_ENV_FILE"):
         launcher.load_runtime_environment()
+
+
+def test_plugin_launcher_discovers_environment_inside_selected_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = _load_plugin_launcher()
+    env_file = tmp_path / ".env"
+    env_file.write_text("V3_LLM_BRAIN_REMOTE_ENABLED=true\n", encoding="utf-8")
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.delenv("ALCHEMY_CODEX_LOCAL_ENV_FILE", raising=False)
+
+    launcher.load_runtime_environment(repository_root=tmp_path, environ=dict(os.environ))
+
+    assert os.environ["V3_LLM_BRAIN_REMOTE_ENABLED"] == "true"
+
+
+def test_plugin_launcher_accepts_an_ignored_external_environment_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = _load_plugin_launcher()
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    env_file = external_root / ".env"
+    env_file.write_text("V3_LLM_BRAIN_REMOTE_ENABLED=true\n", encoding="utf-8")
+    (tmp_path / ".codex-local-env-path").write_text(str(env_file), encoding="utf-8")
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.delenv("ALCHEMY_CODEX_LOCAL_ENV_FILE", raising=False)
+
+    launcher.load_runtime_environment(repository_root=tmp_path, environ=dict(os.environ))
+
+    assert os.environ["V3_LLM_BRAIN_REMOTE_ENABLED"] == "true"

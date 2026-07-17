@@ -10,6 +10,7 @@ import sys
 
 _ROOT_ENV = "ALCHEMY_CODEX_LOCAL_REPO_ROOT"
 _ENV_FILE_ENV = "ALCHEMY_CODEX_LOCAL_ENV_FILE"
+_LOCAL_ENV_PATH_FILE = ".codex-local-env-path"
 
 
 def _is_alchemy_root(path: Path) -> bool:
@@ -42,27 +43,71 @@ def resolve_repository_root(*, environ: dict[str, str] | None = None, cwd: Path 
     )
 
 
-def load_runtime_environment(*, environ: dict[str, str] | None = None) -> None:
-    """Load an explicitly configured existing environment file before V3 imports.
+def _resolve_runtime_environment_file(
+    *,
+    repository_root: Path,
+    environ: dict[str, str],
+) -> Path | None:
+    """Resolve the one existing runtime environment file Local Mode may use.
+
+    The explicit environment-file variable remains authoritative.  When it is
+    absent, only the selected checkout's own ``.env`` (or its legacy
+    ``src_skeleton/.env`` location) is considered.  A tiny ignored pointer file
+    is supported for a worktree whose secrets intentionally live in a separate
+    user-owned checkout; it contains a path, never credentials.  We do not
+    scan sibling directories or search Codex/application state.
+    """
+
+    configured = str(environ.get(_ENV_FILE_ENV) or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    else:
+        pointer = repository_root / _LOCAL_ENV_PATH_FILE
+        if pointer.is_file():
+            try:
+                pointer_value = pointer.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError(f"Could not read {pointer}: {exc}") from exc
+            if pointer_value:
+                candidates.append(Path(pointer_value).expanduser())
+        candidates.extend((repository_root / ".env", repository_root / "src_skeleton" / ".env"))
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved
+
+    if configured:
+        raise RuntimeError(
+            f"Configured {_ENV_FILE_ENV} is not an available local environment file."
+        )
+    return None
+
+
+def load_runtime_environment(
+    *,
+    repository_root: Path | None = None,
+    environ: dict[str, str] | None = None,
+) -> None:
+    """Load the selected checkout's existing environment before V3 imports.
 
     The Local Mode configuration stores only this file path, never an API key.
     This lets a checked-out main worktree use the user's already configured
     remote Central Brain without copying credentials into a plugin or Codex
-    configuration.  Existing process variables keep precedence.
+    configuration.  Existing process variables keep precedence.  If the
+    checkout has no environment file, the MCP remains safely blocked and the
+    caller can set ``ALCHEMY_CODEX_LOCAL_ENV_FILE`` explicitly.
     """
 
     values = environ if environ is not None else os.environ
-    configured = str(values.get(_ENV_FILE_ENV) or "").strip()
-    if not configured:
+    root = repository_root or resolve_repository_root(environ=values)
+    env_file = _resolve_runtime_environment_file(repository_root=root, environ=values)
+    if env_file is None:
         return
-    try:
-        env_file = Path(configured).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError, ValueError):
-        raise RuntimeError(
-            f"Configured {_ENV_FILE_ENV} is not an available local environment file."
-        ) from None
-    if not env_file.is_file():
-        raise RuntimeError(f"Configured {_ENV_FILE_ENV} is not an available local environment file.")
     try:
         from dotenv import load_dotenv
     except ModuleNotFoundError as exc:
@@ -94,8 +139,8 @@ def configure_import_paths(root: Path) -> None:
 
 
 def main() -> int:
-    load_runtime_environment()
     root = resolve_repository_root()
+    load_runtime_environment(repository_root=root)
     configure_import_paths(root)
     runpy.run_module("services.alchemy_codex_local_adapter.mcp_server", run_name="__main__")
     return 0

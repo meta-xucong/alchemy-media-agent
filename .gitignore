@@ -4,6 +4,7 @@
 **/.env
 **/.env.*
 !**/.env.example
+.codex-local-env-path
 
 # Runtime-generated media, history, and logs
 .media_storage/
