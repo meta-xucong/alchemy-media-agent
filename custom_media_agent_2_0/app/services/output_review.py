@@ -3,14 +3,30 @@ from __future__ import annotations
 from app.repositories.memory import utc_now
 from app.schemas import ImageJob, ImageOutput, ImageReviewDecision
 from app.services.ids import new_id
+from app.services.semantic_retry import build_semantic_retry_directive
+from app.services.visual_evidence_review import apply_reference_delivery_review
 from app.services.visual_review_agent import apply_visual_review_agent
 
 
 def review_image_job(job: ImageJob) -> ImageJob:
-    reviewed_outputs = [
-        output.model_copy(update={"review": review_output(output, job)})
-        for output in job.outputs
-    ]
+    reviewed_outputs: list[ImageOutput] = []
+    for output in job.outputs:
+        review = review_output(output, job)
+        delivery_contract = (
+            job.prompt_plan.user_variables.get("reference_delivery")
+            if isinstance(job.prompt_plan.user_variables, dict)
+            and isinstance(job.prompt_plan.user_variables.get("reference_delivery"), dict)
+            else {}
+        )
+        retry_receipt = build_semantic_retry_directive(review, delivery_contract)
+        reviewed_outputs.append(
+            output.model_copy(
+                update={
+                    "review": review,
+                    "metadata": {**output.metadata, "reference_delivery_retry": retry_receipt},
+                }
+            )
+        )
     return job.model_copy(update={"outputs": reviewed_outputs, "updated_at": utc_now()})
 
 
@@ -82,6 +98,16 @@ def review_output(output: ImageOutput, job: ImageJob) -> ImageReviewDecision:
     if provider_input_plan.get("requires_image_reference"):
         reference_count = int(provider_input_plan.get("reference_image_count") or 0)
         notes.append(f"Provider input image plan requires {reference_count} uploaded reference image(s).")
+        if output.metadata.get("live"):
+            # A transport success proves only that the provider accepted the
+            # references.  Without a pixel-capable reviewer it cannot prove
+            # that the generated image actually followed them.
+            score = min(score, 0.78)
+            decision = "needs_review"
+            risks.append("reference_adherence_unverified")
+            directives.append(
+                "Verify visible reference adherence against the declared asset roles, placement targets, and preserve/replace intent before marking this result as passed."
+            )
         output_input_count = len(output.metadata.get("input_images") or [])
         if output_input_count < reference_count:
             score = min(score, 0.55)
@@ -115,6 +141,20 @@ def review_output(output: ImageOutput, job: ImageJob) -> ImageReviewDecision:
         revision_directives=_dedupe(directives),
         created_at=utc_now(),
     )
+    baseline = apply_reference_delivery_review(output, job, baseline)
+    delivery_contract = user_variables.get("reference_delivery") if isinstance(user_variables.get("reference_delivery"), dict) else {}
+    retry_directive = build_semantic_retry_directive(baseline, delivery_contract)
+    if retry_directive.get("eligible"):
+        baseline = baseline.model_copy(
+            update={
+                "revision_directives": _dedupe(
+                    [
+                        *baseline.revision_directives,
+                        "One bounded V2 semantic repair is eligible; keep the same declared reference inputs and repair only the reported delivery-contract gaps.",
+                    ]
+                ),
+            }
+        )
     return apply_visual_review_agent(output, job, baseline)
 
 

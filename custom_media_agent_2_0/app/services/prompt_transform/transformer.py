@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.schemas import ImagePromptPlan
+from app.services.intent_integrity import PROMPT_BUDGET_CHARS
 from app.services.prompt_transform.guard import (
     build_guard_instructions,
     extract_constraints,
@@ -20,11 +21,19 @@ def transform_prompt_plan(plan: ImagePromptPlan) -> ImagePromptPlan:
     constraints: list[str] = []
     final_prompt = base_prompt
     applied = False
+    skipped_for_budget = False
 
     if fidelity == "strict":
         constraints = extract_constraints(base_prompt)
-        final_prompt = wrap_guarded_prompt(base_prompt, build_guard_instructions(constraints))
-        applied = final_prompt != base_prompt
+        guarded_prompt = wrap_guarded_prompt(base_prompt, build_guard_instructions(constraints))
+        if len(guarded_prompt) <= PROMPT_BUDGET_CHARS:
+            final_prompt = guarded_prompt
+            applied = final_prompt != base_prompt
+        else:
+            # The base artifact already carries the complete intent manifest.
+            # Drop only the added guard wrapper instead of pushing a valid
+            # request over the provider budget or clipping user content.
+            skipped_for_budget = True
     elif fidelity in {"original", "off"}:
         final_prompt = base_prompt
         applied = False
@@ -38,6 +47,7 @@ def transform_prompt_plan(plan: ImagePromptPlan) -> ImagePromptPlan:
         mode_info=mode_info,
         constraints=constraints,
         applied=applied,
+        skipped_for_budget=skipped_for_budget,
     )
     return plan.model_copy(update={"user_variables": user_variables})
 

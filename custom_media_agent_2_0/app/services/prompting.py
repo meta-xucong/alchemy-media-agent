@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 
 from app.schemas import CreativeOrchestratorDecision, ImagePromptPlan, PromptCase, PromptCaseSummary
-from app.services.asset_binding import prompt_asset_context_block
+from app.services.intent_integrity import compile_prompt_artifact
 from app.services.ids import new_id
+from app.services.reference_delivery import build_reference_delivery_contract, reference_delivery_prompt_section
 from app.services.visual_signals import build_case_visual_signals
-from app.services.visual_grammar_lock import apply_visual_grammar_lock, build_visual_grammar_contract
+from app.services.visual_grammar_lock import build_visual_grammar_contract
 
 
 _BASE_NEGATIVE_TERMS = [
@@ -68,21 +69,18 @@ def compose_prompt_plan(
         orchestrator_decision=orchestrator_decision,
     )
     prompt_source = "local_prompt_composer"
-    prompt = ""
+    creative_prompt = ""
     if _should_use_claude_final_prompt(orchestrator_decision):
-        prompt = _clean_prompt_text(orchestrator_decision.final_prompt, limit=2400)
+        creative_prompt = _normalise_prompt_text(orchestrator_decision.final_prompt)
         prompt_source = "claude_final_prompt"
-    if not prompt:
-        prompt = _build_prompt(user_prompt, primary, reusable, orchestrator_decision=orchestrator_decision)
-    if mode == "template_customize" and primary:
-        prompt = _apply_template_anchor(prompt, user_prompt=user_prompt, template=primary)
-    prompt = _apply_asset_context_guard(prompt, asset_context=asset_context)
-    prompt = apply_visual_grammar_lock(prompt, contract=visual_grammar_contract, user_prompt=user_prompt)
+    if not creative_prompt:
+        creative_prompt = _build_prompt(user_prompt, primary, reusable, orchestrator_decision=orchestrator_decision)
+    template_section = _template_frame_section(primary) if mode == "template_customize" and primary else ""
+    asset_sections = _asset_sections_for_compiler(asset_context)
+    visual_grammar_section = _visual_grammar_section_for_compiler(visual_grammar_contract)
     qr_excluded = _qr_explicitly_excluded(user_prompt)
-    prompt = _append_qr_exclusion_instruction(prompt, qr_excluded=qr_excluded)
     task_intent_payload = _task_intent_payload(orchestrator_decision)
     language_lock = _language_lock_from_task_intent(task_intent_payload)
-    prompt = _append_language_lock_instruction(prompt, language_lock=language_lock)
     information_integrity = (
         visual_grammar_contract.get("information_integrity")
         if isinstance(visual_grammar_contract, dict) and isinstance(visual_grammar_contract.get("information_integrity"), dict)
@@ -154,7 +152,39 @@ def compose_prompt_plan(
         aspect_lock = _aspect_lock_from_value(inferred_prompt_size, source="user_prompt.size")
     prompt_transform_request = _prompt_transform_request_from_output(requested_output or {})
     provider_parameters = _apply_aspect_lock(provider_parameters, aspect_lock)
-    prompt = _append_aspect_lock_instruction(prompt, aspect_lock)
+    control_sections = _prompt_control_sections(
+        qr_excluded=qr_excluded,
+        language_lock=language_lock,
+        aspect_lock=aspect_lock,
+    )
+    reference_delivery = (
+        (asset_context or {}).get("reference_delivery")
+        if isinstance((asset_context or {}).get("reference_delivery"), dict)
+        else build_reference_delivery_contract(asset_context)
+    )
+    reference_delivery_section = reference_delivery_prompt_section(reference_delivery)
+    if reference_delivery_section:
+        control_sections.append(
+            {
+                "intent_id": "intent_reference_delivery_contract",
+                "source": "v2_reference_delivery",
+                "priority": "required",
+                "title": "REFERENCE DELIVERY CONTRACT",
+                "text": reference_delivery_section,
+            }
+        )
+    prompt, prompt_integrity = compile_prompt_artifact(
+        user_prompt=user_prompt,
+        creative_prompt=creative_prompt,
+        creative_source=prompt_source,
+        template_section=template_section,
+        asset_sections=asset_sections,
+        visual_grammar_section=visual_grammar_section,
+        control_sections=control_sections,
+        semantic_user_compaction=creative_prompt if prompt_source == "claude_final_prompt" else "",
+    )
+    if prompt_source == "claude_final_prompt":
+        prompt_source = "compiled_from_claude_and_manifest"
     count = int(provider_parameters.get("count", 1))
     count = max(1, min(count, 8))
     provider_parameters["count"] = count
@@ -173,6 +203,8 @@ def compose_prompt_plan(
     ]
     if mode == "template_customize" and primary:
         risk_notes.insert(0, "The hand-selected template is the highest-priority visual anchor.")
+    if reference_delivery.get("acceptance", {}).get("requires_pixel_review"):
+        risk_notes.append("Reference delivery requires V2 pixel evidence before automatic delivery.")
     if orchestrator_decision:
         risk_notes.extend(orchestrator_decision.prompt_directives.safety_notes[:6])
     explanation = _build_explanation(mode, reference_cases)
@@ -196,7 +228,8 @@ def compose_prompt_plan(
             "orchestrator_provider": orchestrator_decision.provider if orchestrator_decision else None,
             "orchestrator_task_intent": task_intent_payload,
             "prompt_source": prompt_source,
-            "claude_final_prompt_used": prompt_source == "claude_final_prompt",
+            "claude_final_prompt_used": bool(orchestrator_decision and _should_use_claude_final_prompt(orchestrator_decision)),
+            "prompt_integrity": prompt_integrity,
             "revision_source": output.get("revision_source"),
             "template_lock_enabled": bool((asset_context or {}).get("template_lock_contract")),
             "template_lock_contract": (asset_context or {}).get("template_lock_contract"),
@@ -213,6 +246,7 @@ def compose_prompt_plan(
             "prompt_transform_profile": prompt_transform_request,
             "asset_binding_plan": (asset_context or {}).get("asset_binding_plan"),
             "provider_input_plan": (asset_context or {}).get("provider_input_plan"),
+            "reference_delivery": reference_delivery,
             "uploaded_assets": (asset_context or {}).get("uploaded_assets", []),
             "provider_input_asset_ids": [
                 item.get("asset_id")
@@ -248,15 +282,285 @@ def _should_use_claude_final_prompt(orchestrator_decision: CreativeOrchestratorD
         return False
     if orchestrator_decision.provider != "claude-code" or orchestrator_decision.fallback_reason:
         return False
-    return bool(_clean_prompt_text(orchestrator_decision.final_prompt, limit=2400))
+    # This is only an availability check.  Do not crop the Claude decision here:
+    # the compiler owns capacity management and will use this decision for
+    # semantic compression when the complete provider artifact is too large.
+    return bool(_normalise_prompt_text(orchestrator_decision.final_prompt))
 
 
 def _clean_prompt_text(value: str, *, limit: int) -> str:
-    clean = " ".join(str(value or "").strip().split())
-    clean = _sanitize_downstream_prompt(clean)
+    clean = _normalise_prompt_text(value)
     if len(clean) <= limit:
         return clean
     return clean[: limit - 3].rstrip() + "..."
+
+
+def _normalise_prompt_text(value: str) -> str:
+    clean = " ".join(str(value or "").strip().split())
+    return _sanitize_downstream_prompt(clean)
+
+
+def _template_frame_section(template: PromptCase) -> str:
+    anchor = _template_anchor_directive(template)
+    if not anchor:
+        return ""
+    return (
+        f"TEMPLATE LOCK: use the hand-selected template '{template.title}' as the visual frame. "
+        f"Preserve its composition discipline, spatial hierarchy, lighting logic, background density, layout rhythm, "
+        f"mood, and typography treatment. Reusable visual grammar from the anchor: visual skeleton: {anchor}. "
+        "The template controls the frame only: user-requested subjects, products, faces, logos, copy, and required "
+        "reference assets replace compatible template slots instead of being silently downgraded."
+    )
+
+
+def _visual_grammar_section_for_compiler(contract: dict | None) -> str:
+    if not isinstance(contract, dict):
+        return ""
+    mode = str(contract.get("mode") or "")
+    title = str(contract.get("primary_anchor_title") or "selected visual reference")
+    anchor = str(contract.get("anchor_directive") or contract.get("visual_signal_brief") or "").strip()
+    if not mode and not anchor:
+        return ""
+    parts = [
+        f"V2 visual grammar mode: {mode or 'active'}.",
+        "Visual Grammar Lock is active.",
+        f"Frame anchor: {title}.",
+        "Preserve the frame's composition discipline, spatial hierarchy, lighting logic, background density, mood, layout rhythm, and typography treatment.",
+        "User semantic content controls the actual subject, product, face, logo, copy, offer, and business meaning; required uploaded references remain binding evidence. Adapt compatible template slots instead of deleting those facts.",
+    ]
+    if anchor:
+        parts.append(f"Anchor evidence: {anchor}")
+    if mode == "template_visual_grammar_lock":
+        parts.append(
+            "TEMPLATE LOCK is active: the selected template is the highest-priority visual frame; "
+            "when a subordinate creative preference conflicts with that frame, let the template win."
+        )
+    elif mode == "auto_visual_grammar_lock":
+        parts.append(
+            "AUTO VISUAL GRAMMAR LOCK is active: use one primary curated case as the main visual grammar anchor. "
+            "Do not average multiple cases into a vague hybrid."
+        )
+    elif mode == "uploaded_frame_visual_grammar":
+        parts.append(
+            "UPLOADED FRAME VISUAL GRAMMAR is active: the requested uploaded frame owns composition and layout. "
+            "Retrieved case supplies polish only, is not the frame owner, and the uploaded layout/composition wins."
+        )
+    relationship = contract.get("task_relationship_model")
+    if isinstance(relationship, dict):
+        relationship_name = str(relationship.get("primary_relationship") or "").strip()
+        directive = str(relationship.get("prompt_directive") or "").strip()
+        if relationship_name:
+            parts.append(f"Resolved asset relationship: {relationship_name}.")
+        if directive:
+            parts.append(f"Relationship directive: {directive}")
+        uploaded_count = relationship.get("uploaded_asset_count")
+        if relationship_name in {"replace_template_subject", "replace_template_food_subject"} and isinstance(uploaded_count, int) and uploaded_count > 1:
+            parts.append(
+                f"All {uploaded_count} uploaded replacement images must be accounted for as distinct food/product intentions inside the active template hierarchy."
+            )
+    visual_plan = contract.get("template_visual_grammar_plan")
+    if isinstance(visual_plan, dict) and visual_plan:
+        transfer_parts = []
+        for key, label in (
+            ("template_frame_directive", "Template frame"),
+            ("visual_hierarchy_directive", "Visual hierarchy"),
+            ("asset_distribution_directive", "Asset distribution"),
+            ("asset_materialization_directive", "Asset materialization"),
+            ("virtual_content_directive", "Virtual content"),
+            ("typography_directive", "Typography"),
+            ("module_narrative_directive", "Module narrative"),
+            ("layout_completion_directive", "Module completion"),
+        ):
+            value = str(visual_plan.get(key) or "").strip()
+            if value:
+                transfer_parts.append(f"{label}: {value}")
+        if transfer_parts:
+            parts.append("TEMPLATE VISUAL GRAMMAR TRANSFER: " + " ".join(transfer_parts))
+        fidelity_gates = [str(item).strip() for item in (visual_plan.get("template_fidelity_gates") or []) if str(item).strip()]
+        if fidelity_gates:
+            parts.append("Template fidelity gates: " + "; ".join(fidelity_gates))
+    information_integrity = contract.get("information_integrity")
+    source_layout_risk = contract.get("source_layout_risk")
+    if isinstance(source_layout_risk, dict) and source_layout_risk.get("detected"):
+        correspondence = (
+            "Food-to-copy, offer-to-product, and QR/CTA correspondence"
+            if isinstance(information_integrity, dict) and information_integrity.get("qr_intent")
+            else "Food-to-copy and offer-to-product correspondence"
+        )
+        parts.append(
+            "Source-layout risk detected. CONTENT EXTRACTION LOCK: preserve requested source facts inside the template's own "
+            "information hierarchy; do not copy its overall grid, full menu grid, or original information architecture. "
+            f"{correspondence} must remain semantic relationships and must not stretch the canvas."
+        )
+    if isinstance(information_integrity, dict) and information_integrity.get("active"):
+        parts.append(
+            "Information integrity is active: retain every explicitly requested source fact and relationship. "
+            "Food-to-copy and offer-to-product correspondence must remain correct; Do not invent QR codes, scan-code modules, empty scan cards, or placeholders."
+        )
+    frame_strategy = contract.get("asset_frame_strategy")
+    if isinstance(frame_strategy, dict) and frame_strategy.get("continuation_frame"):
+        parts.append(
+            "STARRED HISTORY CONTINUATION FRAME: preserve the selected history image's composition, lighting, palette, spatial hierarchy, and visual rhythm while applying the current user edit; replace the conflicting reference detail when it conflicts with that edit."
+        )
+    if isinstance(frame_strategy, dict) and frame_strategy.get("content_extraction"):
+        parts.append(
+            "CONTENT EXTRACTION LOCK: use the selected template for the new visual frame; never make the uploaded source frame dominant, and uploaded source content must not replace the selected template hierarchy."
+        )
+    return " ".join(part for part in parts if part)
+
+
+def _asset_sections_for_compiler(asset_context: dict | None) -> list[dict]:
+    if not isinstance(asset_context, dict):
+        return []
+    sections: list[dict] = []
+    reference_indexes: dict[str, int] = {}
+    for image in asset_context.get("provider_input_images") or []:
+        if not isinstance(image, dict):
+            continue
+        asset_id = str(image.get("asset_id") or "")
+        try:
+            reference_index = int(image.get("reference_index") or 0)
+        except (TypeError, ValueError):
+            reference_index = 0
+        if asset_id and reference_index > 0:
+            reference_indexes[asset_id] = reference_index
+    relationship = asset_context.get("task_relationship_model")
+    if isinstance(relationship, dict):
+        relationship_text = str(relationship.get("prompt_directive") or "").strip()
+        uploaded_count = relationship.get("uploaded_asset_count")
+        if (
+            str(relationship.get("primary_relationship") or "") in {"replace_template_subject", "replace_template_food_subject"}
+            and isinstance(uploaded_count, int)
+            and uploaded_count > 1
+        ):
+            relationship_text = (
+                relationship_text
+                + f" All {uploaded_count} uploaded replacement images must be accounted for as distinct food/product intentions inside the template hierarchy."
+            ).strip()
+        if reference_indexes:
+            relationship_text = (
+                relationship_text
+                + f" Provider input images required: {len(reference_indexes)} uploaded reference image(s)."
+            ).strip()
+        if relationship_text:
+            if str(relationship.get("primary_relationship") or "") == "extract_composite_content":
+                relationship_text = "UPLOADED CONTENT SOURCE: " + relationship_text
+            sections.append(
+                {
+                    "intent_id": "intent_asset_relationship",
+                    "title": "TASK RELATIONSHIP",
+                    "role": "asset_relationship",
+                    "constraint_strength": "strong",
+                    "role_source": str(relationship.get("source") or "asset_binding"),
+                    "prompt_instruction": relationship_text,
+                }
+            )
+    plan = asset_context.get("asset_binding_plan")
+    bindings = plan.get("bindings") if isinstance(plan, dict) else []
+    if not isinstance(bindings, list):
+        return sections
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        asset_id = str(binding.get("asset_id") or "")
+        role = str(binding.get("role") or "uploaded_reference")
+        strength = str(binding.get("constraint_strength") or "strong")
+        fusion_mode = str(binding.get("fusion_mode") or "reference")
+        target = str(binding.get("target_surface") or "").strip()
+        placement = binding.get("placement_intent") if isinstance(binding.get("placement_intent"), dict) else {}
+        target_label = str(placement.get("target_label") or target or "the compatible template slot").strip()
+        reference_index = reference_indexes.get(asset_id)
+        reference_label = f"Image {reference_index}" if reference_index else "the uploaded reference"
+        role_rule = _asset_role_compiler_rule(role=role, fusion_mode=fusion_mode, target_label=target_label)
+        user_note = str(binding.get("asset_notes") or "").strip()
+        note_clause = f" User asset note: {user_note}" if user_note else ""
+        sections.append(
+            {
+                "intent_id": f"intent_asset_{asset_id}" if asset_id else f"intent_asset_{len(sections) + 1}",
+                "asset_id": asset_id or None,
+                "role": role,
+                "role_source": str(binding.get("role_source") or "asset_binding"),
+                "constraint_strength": strength,
+                "provider_input_required": bool(binding.get("provider_input_required")),
+                "reference_index": reference_index,
+                "prompt_instruction": (
+                    f"{reference_label} is an uploaded reference image with role {role}, {strength} constraint, and fusion mode {fusion_mode}. "
+                    f"Fusion policy: {fusion_mode}. "
+                    f"{role_rule}{note_clause}"
+                ),
+            }
+        )
+    return sections
+
+
+def _asset_role_compiler_rule(*, role: str, fusion_mode: str, target_label: str) -> str:
+    if fusion_mode == "template_slot_replacement":
+        return (
+            f"Use it as a concrete replacement for {target_label}; preserve its visible identity, shape, proportions, "
+            "and complete contribution inside the selected template frame. Do not convert it into a generic style cue, "
+            "an arbitrary crop, pasted source frames, or a pasted source-photo panel."
+        )
+    if fusion_mode == "composite_content_source":
+        return (
+            f"Use it as semantic content evidence for {target_label}; preserve explicitly requested content while rebuilding "
+            "it inside the active frame, without copying the source layout."
+        )
+    if role == "logo_reference" and fusion_mode == "logo_product_surface":
+        return (
+            f"Use it as the actual logo reference on {target_label}; preserve logo shape, proportions, colors, and readable text. "
+            "Do not place it as a poster footer, corner badge, watermark, border decoration, or separate sticker."
+        )
+    rules = {
+        "subject_reference": "Use it as the concrete subject reference; preserve visible identity, shape, and key proportions.",
+        "face_reference": "Use it as the face-identity reference; preserve identity cues while the current prompt owns styling and scene.",
+        "logo_reference": "Use it as the logo reference; preserve logo shape and place it on the requested target surface.",
+        "background_reference": "Use it as the requested background reference when compatible with the active frame.",
+        "style_reference": "Use it only for the explicitly requested compatible style, light, material, color, or mood cues.",
+        "composition_reference": "Use it for the explicitly requested composition or camera relationship without overriding a selected template frame.",
+        "color_reference": "Use it for the requested palette and accent-color relationship.",
+        "negative_reference": "Avoid the visual traits represented by this reference.",
+    }
+    return rules.get(role, "Use it according to the resolved V2 asset intent.")
+
+
+def _prompt_control_sections(*, qr_excluded: bool, language_lock: dict, aspect_lock: dict) -> list[dict]:
+    sections: list[dict] = []
+    if qr_excluded:
+        sections.append(
+            {
+                "intent_id": "intent_qr_exclusion",
+                "source": "user_request",
+                "priority": "required",
+                "title": "REQUIRED EXCLUSION",
+                "text": (
+                    "Do not invent QR codes. Do not include QR codes, scan-code modules, QR placeholders, empty scan cards, or decorative square "
+                    "code areas. This overrides any selected-template or reference cue that contains a QR-safe area."
+                ),
+            }
+        )
+    language_instruction = str(language_lock.get("prompt_instruction") or "").strip()
+    if language_instruction:
+        sections.append(
+            {
+                "intent_id": "intent_visible_text_language",
+                "source": str(language_lock.get("source") or "orchestrator_task_intent"),
+                "priority": "required",
+                "title": "VISIBLE TEXT REQUIREMENT",
+                "text": language_instruction,
+            }
+        )
+    aspect_instruction = str(aspect_lock.get("prompt_instruction") or "").strip()
+    if aspect_instruction:
+        sections.append(
+            {
+                "intent_id": "intent_aspect_ratio",
+                "source": str(aspect_lock.get("source") or "requested_output"),
+                "priority": "required",
+                "title": "ASPECT RATIO REQUIREMENT",
+                "text": aspect_instruction,
+            }
+        )
+    return sections
 
 
 def _apply_asset_context_guard(prompt: str, *, asset_context: dict | None) -> str:

@@ -18,6 +18,7 @@ from app.schemas import (
 )
 from app.services.case_intelligence import get_prompt_case
 from app.services.ids import new_id
+from app.services.reference_delivery import build_reference_delivery_contract
 from app.services.uploaded_assets import get_uploaded_asset
 
 
@@ -92,6 +93,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         inputs_by_id.setdefault(item.asset_id, []).append(item)
     uploaded_assets = [_resolve_uploaded_asset(asset_id, veyra_user_id=request.veyra_user_id) for asset_id in inputs_by_id]
     uploaded_assets = [item for item in uploaded_assets if item is not None]
+    asset_by_id = {item.asset_id: item for item in uploaded_assets}
     brief_by_id = {item.asset_id: _brief_for(item) for item in uploaded_assets}
     template_lock = _template_lock_contract(request.template_case_id)
     uploaded_asset_contexts = [
@@ -108,6 +110,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         asset_inputs,
         brief_by_id,
         template_lock,
+        asset_by_id=asset_by_id,
         user_prompt=request.user_prompt,
         task_relationship_model=task_relationship_model,
     )
@@ -118,7 +121,7 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         template_locked=template_lock is not None,
         task_relationship_model=task_relationship_model,
     )
-    return {
+    context = {
         "user_prompt": request.user_prompt,
         "uploaded_assets": uploaded_asset_contexts,
         "task_relationship_model": task_relationship_model,
@@ -129,6 +132,8 @@ def build_asset_context(request: CreateCreativeRunRequest) -> dict[str, Any]:
         "provider_input_plan": binding_plan.provider_input_plan,
         "warnings": _warnings(asset_inputs, uploaded_assets),
     }
+    context["reference_delivery"] = build_reference_delivery_contract(context)
+    return context
 
 
 def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_intent: Any) -> dict[str, Any] | None:
@@ -225,6 +230,7 @@ def apply_orchestrator_task_intent(asset_context: dict[str, Any] | None, task_in
         template_slot_replacement=template_slot_replacement,
         content_extraction=content_extraction,
     )
+    updated["reference_delivery"] = build_reference_delivery_contract(updated)
     return updated
 
 
@@ -487,6 +493,8 @@ def provider_input_images(binding_plan: AssetBindingPlan, brief_by_id: dict[str,
             ProviderInputImage(
                 asset_id=binding.asset_id,
                 role=binding.role,
+                role_source=binding.role_source,
+                reference_mode=binding.reference_mode,
                 constraint_strength=binding.constraint_strength,
                 source_url=asset.source_url,
                 mime_type=asset.mime_type,
@@ -498,7 +506,10 @@ def provider_input_images(binding_plan: AssetBindingPlan, brief_by_id: dict[str,
                 review_expectations=binding.review_expectations,
             )
         )
-    return list(images_by_asset_id.values())
+    return [
+        image.model_copy(update={"reference_index": index})
+        for index, image in enumerate(images_by_asset_id.values(), start=1)
+    ]
 
 
 def _task_relationship_model(
@@ -1358,6 +1369,7 @@ def _binding_plan(
     brief_by_id: dict[str, AssetBrief],
     template_lock: TemplateLockContract | None,
     *,
+    asset_by_id: dict[str, UploadedAsset] | None = None,
     user_prompt: str = "",
     task_relationship_model: dict[str, Any] | None = None,
 ) -> AssetBindingPlan:
@@ -1369,6 +1381,9 @@ def _binding_plan(
             conflicts.append({"type": "asset_missing", "asset_id": item.asset_id, "resolution": "ignore_missing_asset"})
             continue
         requested_role = item.role or brief.role
+        asset = (asset_by_id or {}).get(item.asset_id)
+        role_source = "user_explicit" if item.role else (asset.role_source if asset else "system_suggestion")
+        reference_mode = item.reference_mode or (asset.reference_mode if asset else "preserve")
         strength: ConstraintStrength = item.constraint_strength or brief.constraint_strength
         role, strength, intent_upgrade = _role_for_prompt_intent(
             role=requested_role,
@@ -1424,6 +1439,9 @@ def _binding_plan(
             AssetBinding(
                 asset_id=item.asset_id,
                 role=role,
+                requested_role=requested_role,
+                role_source=role_source,
+                reference_mode=reference_mode,
                 constraint_strength=strength,
                 binding_slot=str(fusion_policy.get("binding_slot") or ROLE_TO_SLOT.get(role, "minor_props")),
                 fusion_mode=str(fusion_policy.get("fusion_mode") or "reference"),
@@ -1442,6 +1460,7 @@ def _binding_plan(
                 ),
                 conflict_resolution=conflict_resolution,
                 review_expectations=list(fusion_policy.get("review_expectations") or []),
+                asset_notes=item.notes,
             )
         )
     provider_plan = _provider_input_plan(bindings, task_relationship_model=task_relationship_model)
@@ -1534,6 +1553,8 @@ def _provider_input_plan(
         {
             "asset_id": item.asset_id,
             "role": item.role,
+            "role_source": item.role_source,
+            "reference_mode": item.reference_mode,
             "fusion_mode": item.fusion_mode,
             "mode": (item.placement_intent or {}).get("mode"),
             "target_surface": item.target_surface,
@@ -1630,6 +1651,8 @@ def _asset_for_context(asset: UploadedAsset, brief: AssetBrief | None, requested
     requested_inputs = requested_inputs or []
     primary_input = _primary_asset_input(requested_inputs)
     role = primary_input.role if primary_input and primary_input.role else asset.role or (brief.role if brief else None)
+    role_source = "user_explicit" if primary_input and primary_input.role else asset.role_source
+    reference_mode = primary_input.reference_mode if primary_input and primary_input.reference_mode else asset.reference_mode
     strength = _strongest_requested_strength(requested_inputs) or asset.constraint_strength
     display_brief = _brief_for_binding(brief, primary_input) if brief and primary_input else brief
     return {
@@ -1638,6 +1661,8 @@ def _asset_for_context(asset: UploadedAsset, brief: AssetBrief | None, requested
         "mime_type": asset.mime_type,
         "status": asset.status,
         "role": role,
+        "role_source": role_source,
+        "reference_mode": reference_mode,
         "roles": _dedupe([item.role for item in requested_inputs if item.role] or ([role] if role else [])),
         "constraint_strength": strength,
         "intended_use": asset.intended_use,

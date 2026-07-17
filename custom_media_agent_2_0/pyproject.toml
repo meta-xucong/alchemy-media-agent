@@ -11,6 +11,7 @@ dependencies = [
   "openai-agents>=0.17.4",
   "Pillow>=10.4",
   "opencv-python-headless>=4.10,<5",
+  "rapidocr-onnxruntime>=1.4,<2",
   "sse-starlette==3.0.3",
 ]
 
