@@ -30,12 +30,23 @@ the user brief or a clearly declared target-market presentation context. For
 the user's East Asian commercial audience, this allows the expected bright,
 clean product-image aesthetic without turning ethnicity into a runtime rule.
 
+This is a semantic understanding of a commercial reference and preference, not
+an instruction to reuse the adult sample as a global skin template. A supplied
+reference may guide complexion, white balance, and skin material only when the
+user explicitly assigns that role. It must not transfer the reference person's
+identity, age, face, hair, wardrobe, scene, or mood.
+
 The Brain must resolve the preference as a whole photographic decision:
 
 - neutral-to-slightly-warm white balance rather than a yellow/amber cast;
 - a modestly brighter, clean, naturally light complexion with believable tonal variation;
 - fine-grained, irregular real skin texture and restrained matte highlights;
 - preserved facial identity, age, expression, and scene lighting logic.
+
+The decision applies only when a visible person or model is part of a
+commercial presentation, or when the user explicitly asks for this complexion
+direction. Product-only images, unrelated creative work, documentary scenes,
+and low-key work must not receive a hidden commercial complexion treatment.
 
 “Modestly brighter” means a small aesthetic lift within the Brain's whole-image
 judgement, not a numeric exposure or skin-lightness target. The requirement is intentionally semantic. The local runtime does not classify
@@ -76,7 +87,9 @@ The focused contract must prove that:
    local skin repair;
 3. the frozen Human Realism contract remains demographic-neutral;
 4. Brain-owned execution carries no local complexion prompt fragments;
-5. General, E-Commerce, Photography, adult, young-person, and low-key scenes
+5. A complexion reference is limited to complexion/white-balance/material
+   semantics and cannot transfer identity or other reference-owned channels;
+6. General, E-Commerce, Photography, adult, young-person, and low-key scenes
    continue using the same shared capability without leakage.
 
 The blue-dress commercial sample is a controlled visual comparison, not a new

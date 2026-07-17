@@ -8,14 +8,14 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.human_pho
 )
 
 
-def _guidance(user_input: str):
+def _guidance(user_input: str, *, subject_type: str = "person"):
     return HumanPhotorealismLayer().build(
         project_id="project_doc159",
         job_id="job_doc159",
         scenario_id="general_creative",
         template_id="general_template",
         user_input=user_input,
-        subject_type="person",
+        subject_type=subject_type,
         variation_mode="single_hero",
         has_identity_reference=False,
         metadata={
@@ -31,7 +31,7 @@ def _guidance(user_input: str):
 
 
 def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -> None:
-    assert "target-market presentation preference" in SYSTEM_PROMPT
+    assert "declared target-market context" in SYSTEM_PROMPT
     assert "brighter and fairer complexion" in SYSTEM_PROMPT
     assert "Do not infer a preferred complexion from ethnicity alone" in SYSTEM_PROMPT
     assert "Do not bleach" in SYSTEM_PROMPT
@@ -41,6 +41,10 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "modestly brighter" in SYSTEM_PROMPT
     assert "fine-grained and irregular real skin microtexture" in SYSTEM_PROMPT
     assert "airbrush or wax" in SYSTEM_PROMPT
+    assert "visibly includes a person or model" in SYSTEM_PROMPT
+    assert "do not invent a hidden bright-complexion treatment" in SYSTEM_PROMPT
+    assert "never inherit that reference's identity, age, face, hair, wardrobe, scene, or mood" in SYSTEM_PROMPT
+    assert "historical adult or child sample" in SYSTEM_PROMPT
 
 
 def test_doc159_keeps_frozen_contract_demographic_neutral_and_brain_owned() -> None:
@@ -75,3 +79,18 @@ def test_doc159_does_not_force_commercial_brightness_into_low_key_work() -> None
     assert guidance.semantic_contract["complexion_rendering_requirement"] == (
         "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
     )
+
+
+def test_doc159_product_only_work_has_no_hidden_complexion_treatment() -> None:
+    guidance = _guidance(
+        "Clean commercial product photograph of a light-blue ceramic bowl on a white table.",
+        subject_type="product",
+    )
+    serialized = json.dumps(guidance.semantic_contract, ensure_ascii=False).lower()
+
+    assert serialized.count("complexion") == 2
+    assert guidance.semantic_contract["complexion_rendering_requirement"] == (
+        "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
+    )
+    assert guidance.positive_prompt_fragments == []
+    assert guidance.negative_prompt_fragments == []
