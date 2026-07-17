@@ -7,7 +7,7 @@ M0-M4 IMPLEMENTED AND MAINLINE BACKEND SEAM INTEGRATED
 M2 SERIAL THREE-VIEW CANDIDATE CONTRACT IMPLEMENTED
 M6 ASSET-CHANNEL AUTHORITY/ADMISSION CONTRACT IMPLEMENTED
 PRODUCT API / SCENARIO RUNTIME PROFESSIONAL MODE WIRING COMPLETE
-M5 REAL-PIXEL ACCEPTANCE BLOCKED BY SHARED REVIEW EVIDENCE
+M5 REAL-PIXEL ACCEPTANCE BLOCKED BY THREE-VIEW / RETRY EVIDENCE
 NO PRODUCTION CLAIM
 STANDARD MODE UNCHANGED
 ```
@@ -47,10 +47,13 @@ shared review evidence, bounded retry/final-winner evidence, and a human visual
 acceptance across the front, three-quarter, and profile views. The user then
 explicitly authorized the existing V3 settings-backed default Provider. That
 route returned one real `openai_gpt_image` / `gpt-image-2` artifact with the
-supplied portrait's derived feature-detail and head-geometry references. The
-shared Vision review process did not return a bounded terminal receipt in the
-local proxy environment, so no review/retry/final-winner evidence was counted.
-Therefore M5 remains **blocked**, not passed. See
+supplied portrait's derived feature-detail and head-geometry references. A
+normal-budget shared Vision inspection returned a real `hybrid`/`verified`
+`fail_retryable` result for the first output, with identity and composition
+issues. A second controlled run then exercised one bounded shared retry and
+persisted a preferred retry output (`doc95_reviewed_best_attempt`), but only
+for a single front-like output. The complete three-view retry/final-winner
+package is still missing. Therefore M5 remains **blocked**, not passed. See
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_PROVIDER_RUN_20260717.md` for the safe
 fingerprints and boundary record. The typed generation request still rejects
 any missing, duplicated, reordered, or extra evidence in the serial

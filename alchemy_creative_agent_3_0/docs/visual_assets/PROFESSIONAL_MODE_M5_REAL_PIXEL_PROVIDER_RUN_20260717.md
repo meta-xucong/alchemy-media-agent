@@ -6,7 +6,8 @@
 V3 DEFAULT PROVIDER AUTHORIZED BY USER: YES
 REMOTE BRAIN: USED, FALLBACK: FALSE
 GPT IMAGE 2 PIXELS: RECEIVED
-SHARED VISION REVIEW / RETRY / FINAL WINNER: BLOCKED (NO TERMINAL REVIEW)
+SHARED VISION REVIEW: REAL HYBRID RESULT RECEIVED
+ONE BOUNDED RETRY / DELIVERY PREFERENCE: COMPLETED
 THREE-VIEW FACE PACK: NOT COMPLETED
 M5: BLOCKED, NON-COUNTING EVIDENCE
 NO PRODUCTION / GATE C-D / P10 CLAIM
@@ -61,14 +62,49 @@ retained, and `required_unavailable=[]`, `unresolved=[]`, and
 
 ## Review and acceptance boundary
 
-The Product API entered the shared post-generation review path after the real
-pixels were written. The local process did not receive a terminal Vision
-review result through the configured proxy and was stopped after a bounded
-wait. Consequently:
+The shared `VisionOutputInspector` was then run against the same materialized
+output with the existing V3 settings-backed review route. A short 15-second
+probe timed out, but the normal bounded review budget returned a real
+`hybrid`/`verified` inspection. The review result was:
 
-- no `vision_model`/`hybrid` review receipt is counted;
-- no identity score or semantic review pass is claimed;
-- no bounded repair/retry winner was selected;
+```text
+review_mode: hybrid
+verification_state: verified
+review_status: fail_retryable
+issue_codes: identity_drift, face_shape_drift,
+  eye_shape_or_spacing_identity_drift, human_skin_or_retouch,
+  human_rendering_artifact, composition_mismatch
+```
+
+This confirms the review path is reachable but slow through the configured
+upstream. A second controlled Product API run then exercised exactly one
+shared visual retry. The initial candidate failed the frozen prompt-owned
+channel gate; the retry candidate became the preferred delivery output.
+
+```text
+job_id: job_0970cc7a64
+initial_output_id: v3_output_b47b68ddaf7642b1b3f3
+initial_attempt: 0
+initial_score: 0.6216
+initial_hard_gate: false
+initial_hard_gate_failure: prompt_owned_channel_not_respected
+retry_output_id: v3_output_527ab53537484abf912b
+retry_attempt: 1
+retry_score: 0.767
+retry_hard_gate: true
+delivery_preferred_output: true
+delivery_preference_policy: doc95_reviewed_best_attempt
+retry_reason_codes: source_hair_overinherited, prompt_owned_channel_ignored, overexposed_washout
+```
+
+The Product API harness ended while formatting an internal diagnostic field
+that does not exist on `PlanningResult`; this did not undo the materialized
+outputs or their append-only delivery preference. Consequently:
+
+- the first diagnostic review receipt is non-persisted, while the controlled
+  Product API retry preference is persisted in both output records;
+- the retry output is the preferred one-output delivery for this smoke job;
+- this is not an activated Face Identity anchor view;
 - no output was activated as an anchor-pack view;
 - no final delivery is certified.
 
@@ -90,16 +126,19 @@ each stage -> shared pixel review -> bounded retry -> final winner
 all three winners -> human comparison and activation evidence
 ```
 
-This run proves only that the existing V3 default Brain/Provider can receive
-the supplied portrait and return one real GPT Image 2 artifact through the
-Professional binding. It does not prove the three-view quality contract,
-shared review closure, Provider Gate C/D, General Gate D, Photography P10,
-E-Commerce Gate C/D, or production readiness.
+This run proves that the existing V3 default Brain/Provider can receive the
+supplied portrait, return one real GPT Image 2 artifact, and exercise one
+shared Vision review -> bounded retry -> best-attempt preference loop through
+the Professional binding. It does not prove the complete three-view quality
+contract, all-stage retry/final-winner closure, Provider Gate C/D, General
+Gate D, Photography P10, E-Commerce Gate C/D, or production readiness.
 
 ## Follow-up
 
-Before another real call, the mainline maintainer should first make the shared
-Vision review transport return a bounded terminal receipt in this environment,
-then run the serial three-view contract with a strict request budget and save
-the review/retry/final-winner evidence for each view. Until that happens,
-Professional Mode remains blocked and non-production.
+The next run must start the full serial three-view contract: three front
+candidates, then three three-quarter candidates conditioned on the root plus
+the selected front winner, then three profile candidates conditioned on all
+prior winners. Each stage needs persisted shared review/retry/final-winner
+evidence, followed by human comparison and explicit Face Identity activation.
+Until that chain is complete, Professional Mode remains blocked and
+non-production.
