@@ -61,7 +61,16 @@ class PhotographyRemoteBrainTestProvider:
         canonical_context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
         preflight = canonical_context.get("final_prompt_semantic_preflight") if isinstance(canonical_context, dict) else {}
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
-        requires_human_naturalness_decision = request.stage == "provider_prompt_human_naturalness_resign"
+        decision_requirement = canonical_context.get("human_naturalness_decision") if isinstance(canonical_context, dict) else None
+        requires_human_naturalness_decision = bool(
+            request.stage == "provider_prompt_human_naturalness_resign"
+            or (
+                isinstance(decision_requirement, dict)
+                and decision_requirement.get("required") is True
+                and decision_requirement.get("contract_version") == "v3_human_naturalness_decision_v1"
+                and decision_requirement.get("owner") == "remote_v3_llm_brain"
+            )
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,

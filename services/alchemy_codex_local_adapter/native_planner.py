@@ -307,8 +307,10 @@ class CodexNativeImageGenPlanner:
             for item in raw_decisions
             if isinstance(item, dict) and str(item.get("status") or "") in {"approved", "rewritten"}
         ] if isinstance(raw_decisions, list) else []
+        historical_two_pass = ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+        combined_finalizer = ["provider_prompt_finalize"]
         if human_active and (
-            stages != ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+            tuple(stages) not in {tuple(combined_finalizer), tuple(historical_two_pass)}
             or not human_resigned
             or not human_decision_signed
             or not decision_statuses

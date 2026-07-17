@@ -66,10 +66,11 @@ def test_remote_brain_keeps_safe_activation_contract_when_structured_sections_ar
 
     assert result.llm_used is True
     assert result.prompt_guidance.optimized_direction == "remote refined ancient portrait direction"
-    assert result.visual_task_profile.preservation_targets
-    assert all(target.target_id for target in result.visual_task_profile.preservation_targets)
+    assert result.visual_task_profile is not None
+    assert result.visual_task_profile.preservation_targets == []
     requested = {item.capability_id for item in result.capability_activation_intent.requested_capabilities}
-    assert {"human_realism", "portrait_identity"} <= requested
+    assert requested == set()
+    assert result.audit["creative_fallback_executed"] is False
     assert result.audit["remote_contract_partial_fallback"] is True
     assert result.audit["remote_contract_rejected_sections"] == [
         "image_set_plan",

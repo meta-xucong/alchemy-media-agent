@@ -1,4 +1,4 @@
-"""Doc142: the existing Human Realism re-signer returns an auditable decision."""
+"""Doc142: the converged Human Realism finalizer returns an auditable decision."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class _DecisionResigner(EcommerceRemoteBrainTestProvider):
 
     def run(self, request):  # noqa: ANN001
         payload = super().run(request)
-        if request.stage == "provider_prompt_human_naturalness_resign":
+        if request.stage == "provider_prompt_finalize":
             payload["canonical_provider_prompts"][0]["prompt"] = (
                 "A candid real-camera photograph of an adult ceramic artist absorbed in shaping clay at a worktable "
                 "in a sunlit studio, preserving the ordinary working moment and the requested mood."
@@ -45,19 +45,19 @@ class _DecisionResigner(EcommerceRemoteBrainTestProvider):
 class _MissingDecisionResigner(EcommerceRemoteBrainTestProvider):
     def run(self, request):  # noqa: ANN001
         payload = super().run(request)
-        if request.stage == "provider_prompt_human_naturalness_resign":
+        if request.stage == "provider_prompt_finalize":
             for prompt in payload["canonical_provider_prompts"]:
                 prompt.pop("human_naturalness_decision", None)
         return payload
 
 
-def test_doc142_active_human_resigner_requires_one_safe_decision_receipt() -> None:
+def test_doc142_active_human_finalizer_requires_one_safe_decision_receipt() -> None:
     provider = _DecisionResigner()
     result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(copy.deepcopy(_HUMAN_REQUEST))
 
     assert result.status.value == "planned"
     stages = [item["stage"] for item in provider.requests]
-    assert stages == ["plan", "provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+    assert stages == ["plan", "provider_prompt_finalize"]
     audit = result.metadata["llm_brain"]["audit"]
     assert audit["human_realism_natural_presence_decision_required"] is True
     assert audit["human_realism_natural_presence_decision_signed"] is True
@@ -69,8 +69,8 @@ def test_doc142_active_human_resigner_requires_one_safe_decision_receipt() -> No
         }
     ]
 
-    resign_request = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign_request)))
+    finalizer_request = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer_request)))
     schema = payload["return_schema"]["canonical_provider_prompts"][0]
     assert schema["human_naturalness_decision"] == {
         "contract_version": "v3_human_naturalness_decision_v1",
@@ -143,7 +143,7 @@ def test_doc142_enforced_human_review_keeps_only_normalized_evidence_for_brain()
     assert review.metadata["retry_evidence_only"] is True
 
 
-def test_doc142_retry_normalizes_human_evidence_before_finalizer_and_hides_it_from_resigner() -> None:
+def test_doc142_retry_keeps_normalized_human_evidence_in_the_combined_finalizer() -> None:
     provider = _DecisionResigner()
     request = copy.deepcopy(_HUMAN_REQUEST)
     request["metadata"].update(
@@ -157,7 +157,6 @@ def test_doc142_retry_normalizes_human_evidence_before_finalizer_and_hides_it_fr
 
     assert result.status.value == "planned"
     finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
-    resigner = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
     assert finalizer["metadata"]["canonical_prompt_context"]["retry_evidence"] == {
         "active": True,
         "issue_codes": [
@@ -166,7 +165,7 @@ def test_doc142_retry_normalizes_human_evidence_before_finalizer_and_hides_it_fr
             "product_identity_drift",
         ],
     }
-    assert "retry_evidence" not in resigner["metadata"]["canonical_prompt_context"]
+    assert finalizer["metadata"]["canonical_prompt_context"]["human_naturalness_decision"]["required"] is True
 
 
 @pytest.mark.parametrize(
@@ -192,4 +191,4 @@ def test_doc142_shared_contract_covers_distinct_real_person_contexts(user_input:
     audit = result.metadata["llm_brain"]["audit"]
     assert audit["human_realism_natural_presence_decision_signed"] is True
     assert audit["human_realism_natural_presence_decisions"][0]["owner"] == "remote_v3_llm_brain"
-    assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 1
+    assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 0

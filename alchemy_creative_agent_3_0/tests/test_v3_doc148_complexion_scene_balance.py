@@ -49,10 +49,6 @@ class _SceneBalancedResigner(EcommerceRemoteBrainTestProvider):
         payload = super().run(request)
         if request.stage == "provider_prompt_finalize":
             payload["canonical_provider_prompts"][0]["prompt"] = (
-                "A polished commercial portrait of a person in a sunlit room."
-            )
-        elif request.stage == "provider_prompt_human_naturalness_resign":
-            payload["canonical_provider_prompts"][0]["prompt"] = (
                 "A real-camera photograph of a person in their ordinary sunlit room, "
                 "with their natural complexion reading clearly within the scene's balanced daylight "
                 "and the requested calm domestic mood."
@@ -219,14 +215,15 @@ def test_doc148_remote_brain_rewrites_the_whole_direction_for_scene_balance() ->
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
     frozen_contract = payload["frozen_render_context"]["active_semantic_capability_contracts"][0]
     assert frozen_contract["complexion_rendering_requirement"] == (
         "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
     )
     assert "complexion_rendering_requirement" in SYSTEM_PROMPT
     assert "prompt_additions" not in json.dumps(payload, ensure_ascii=False)
+    assert "candidate_canonical_provider_prompts" not in payload
     assert result.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"].startswith(
         "A real-camera photograph of a person in their ordinary sunlit room"
     )

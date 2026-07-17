@@ -53,9 +53,25 @@ class _SituationOwnedResigner(EcommerceRemoteBrainTestProvider):
         payload = super().run(request)
         if request.stage == "provider_prompt_finalize":
             payload["canonical_provider_prompts"][0]["prompt"] = (
-                "A polished presentation portrait of a person in a bright room."
+                "A real-camera photograph of a person pausing to listen beside an open window at home, "
+                "their expression belonging to the quiet moment and requested daylight."
             )
+            payload["canonical_provider_prompts"][0]["human_naturalness_decision"] = {
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "rewritten",
+                "owner": "remote_v3_llm_brain",
+            }
         elif request.stage == "provider_prompt_human_naturalness_resign":
+            payload["canonical_provider_prompts"][0]["prompt"] = (
+                "A real-camera photograph of a person pausing to listen beside an open window at home, "
+                "their expression belonging to the quiet moment and requested daylight."
+            )
+            payload["canonical_provider_prompts"][0]["human_naturalness_decision"] = {
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "rewritten",
+                "owner": "remote_v3_llm_brain",
+            }
+        else:
             payload["canonical_provider_prompts"][0]["prompt"] = (
                 "A real-camera photograph of a person pausing to listen beside an open window at home, "
                 "their expression belonging to the quiet moment and requested daylight."
@@ -222,8 +238,8 @@ def test_doc147_remote_brain_rewrites_the_whole_prompt_without_a_local_expressio
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
     assert payload["frozen_render_context"]["active_semantic_capability_contracts"][0][
         "expression_ownership_requirement"
     ] == "situation_owned_unless_explicit_user_direction"

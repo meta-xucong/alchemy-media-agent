@@ -43,8 +43,8 @@ def test_doc153_brain_separates_affect_intent_from_physical_smile_control() -> N
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
     assert HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS in SYSTEM_PROMPT
     assert payload["human_expression_authenticity_instructions"] == HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS
     assert "generic affect request" in payload["human_expression_authenticity_instructions"]

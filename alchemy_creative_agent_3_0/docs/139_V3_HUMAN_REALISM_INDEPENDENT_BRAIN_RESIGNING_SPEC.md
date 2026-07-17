@@ -1,17 +1,26 @@
 # Doc139 - V3 Human Realism Independent Brain Re-signing
 
-Status: **active shared-foundation implementation authority.**
+Status: **historical semantic authority; forward invocation shape superseded by Doc158.**
 
-This document extends Docs 128 and 134-138. It introduces a second remote
-Brain pass only for an already active shared `human_realism` contract. It does
-not create an age, apparel, template, Provider, review, retry or prompt-fragment
-branch.
+Doc158 keeps the Human Realism natural-presence decision and its
+`approved|rewritten` receipt, but converges canonical prompt authoring and
+naturalness signing into one `provider_prompt_finalize` request for new jobs.
+Historical two-stage records remain readable.
+
+This document extends Docs 128 and 134-138. It records why an additional
+Brain-owned natural-presence decision was required for an already active
+shared `human_realism` contract. For new jobs, Doc158 carries that decision in
+the single finalizer response; this document's two-pass request sequence is
+historical rationale and compatibility evidence only. It does not create an
+age, apparel, template, Provider, review, retry or prompt-fragment branch.
 
 > **Current implementation note:** Doc142 adds a safe `approved|rewritten`
-> Human Naturalness decision receipt for this same second pass. It does not add
-> a third Remote Brain call, a local evaluator, or renderer-facing prose.
+> Human Naturalness decision receipt for this semantic gate. Doc158 returns the
+> receipt from the combined finalizer for new jobs; historical records may still
+> show the dedicated second pass. Neither shape adds a local evaluator or
+> renderer-facing prose.
 
-## 1. Why a second Brain pass
+## 1. Why the Brain-owned naturalness decision exists
 
 Doc138 showed that a text-only finalizer can return a formally valid preflight
 receipt while leaving a generic beauty-archetype direction nearly unchanged.
@@ -20,16 +29,17 @@ revision remains the remote Brain.
 
 ```text
 Brain plan
--> Brain canonical-prompt finalization
--> independent Brain natural-presence re-signing (active Human Realism only)
+-> Brain canonical-prompt finalization with the natural-presence decision
+   (historically recorded as a separate re-signing pass)
 -> exact signed prompt relay
 -> shared pixel review / bounded Brain retry when pixels exist
 ```
 
-The second pass sees the first complete candidate prompt, the same frozen
+The historical second pass saw the first complete candidate prompt, the same frozen
 envelope, ledger, reference boundary and Human Realism semantic contract. It
-may keep or replace the candidate only by returning a new complete canonical
-prompt. Runtime code never edits either version.
+could keep or replace the candidate only by returning a new complete canonical
+prompt. The forward combined finalizer has the same authority and inputs;
+runtime code never edits either version.
 
 ## 2. Strict boundary
 
@@ -37,9 +47,9 @@ prompt. Runtime code never edits either version.
   real visible person.
 - It is not invoked for product-only, animal-only, no-person or stylized
   whole-image tasks.
-- The second Brain cannot select a pose, face, crop, garment recipe, local
+- The Brain decision cannot select a pose, face, crop, garment recipe, local
   negative prompt, safety workaround or specialized deliverable map.
-- It receives only the original Brain candidate plus frozen semantic facts.
+- It receives only Brain-authored directions plus frozen semantic facts.
   It cannot read mutable cluster prose or raw reviewer code.
 - It returns the same exact-count canonical-provider-prompt contract and the
   required Doc137 receipt. Missing, malformed or unavailable re-signing blocks
@@ -66,13 +76,18 @@ it never applies a local repair phrase.
 
 ## 5. Verification
 
-1. Active Human Realism creates exactly one canonical finalization and one
-   independent re-signing request before materialization.
-2. Non-human and product-only tasks do not create the extra call.
-3. The re-signer receives no local prompt fragments, negative list, recipe or
-   review-code text; it only sees frozen context and the prior Brain candidate.
-4. Failure to re-sign blocks before Provider/MCP prompt projection.
-5. Web Provider and Local MCP continue to materialize the same final re-signed
+1. Historical Active Human Realism records contain exactly one canonical
+   finalization and one independent re-signing request; new jobs contain one
+   combined `provider_prompt_finalize` request before materialization. New
+   implementations must not add a second serial request.
+2. Non-human and product-only tasks do not receive the Human Naturalness
+   receipt requirement.
+3. The combined finalizer receives no local prompt fragments, negative list,
+   recipe or review-code text; it only sees frozen context and Brain-owned
+   directions.
+4. Failure to return the naturalness decision blocks before Provider/MCP prompt
+   projection.
+5. Web Provider and Local MCP continue to materialize the same final Brain
    string and admitted reference hashes.
 6. Full V3, Local MCP parity and cross-template isolation regressions pass.
 7. The Doc142 decision receipt has valid owner, version, cardinality and frozen
@@ -80,7 +95,7 @@ it never applies a local repair phrase.
 
 ## 6. Acceptance interpretation
 
-The re-sign is a creative-quality safeguard, not pixel certification. Only the
+The Brain-owned naturalness decision is a creative-quality safeguard, not pixel certification. Only the
 shared `vision_model` or `hybrid` review path can accept or withhold rendered
 pixels. Local MCP may demonstrate exact prompt/reference parity and controlled
 visual improvement, but remains `conversation_only_not_certified`.

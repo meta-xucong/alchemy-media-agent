@@ -13,6 +13,8 @@ from .contracts import (
     BrainRunRequest,
     BrainRunResult,
     BrainUserVisibleSummary,
+    CapabilityActivationIntent,
+    VisualTaskProfile,
 )
 from ..creative_core.prompt_language import (
     product_language_allowed,
@@ -344,6 +346,73 @@ def build_skipped_result(request: BrainRunRequest, reason: str) -> BrainRunResul
     result.provider = "disabled"
     result.audit = {**result.audit, "skip_reason": reason}
     return result
+
+
+def build_remote_required_result(request: BrainRunRequest, reason: str) -> BrainRunResult:
+    """Return a non-creative shape for a strict remote-Brain boundary.
+
+    Real-image requests cannot use the deterministic compatibility planner.
+    This result exists only so the existing runtime can persist a safe blocked
+    outcome with the normal contract shape; it contains no local scene,
+    expression, realism, reference, or renderer prompt direction.
+    """
+
+    profile_id = stable_id(
+        "remote_required_profile",
+        request.job_id,
+        request.project_id,
+        request.stage,
+    )
+    intent_id = stable_id("remote_required_intent", profile_id)
+    # These are contract identities only. They deliberately contain no local
+    # subject, age, scene, style, expression, or renderer decision. A complete
+    # remote response may replace the semantic fields while retaining these
+    # binding identifiers for the normal BrainRunResult shape.
+    task_profile = VisualTaskProfile(
+        profile_id=profile_id,
+        project_id=request.project_id,
+        job_id=request.job_id or stable_id("remote_required_job", request.user_input, request.stage),
+        template_id=request.template_id or "general_template",
+        scenario_id=request.scenario_id or "general_creative",
+        confidence=0.0,
+        unknown_requirements=["remote_brain_required"],
+    )
+    activation_intent = CapabilityActivationIntent(
+        intent_id=intent_id,
+        task_profile_id=profile_id,
+        confidence=0.0,
+        unresolved_signals=["remote_brain_required"],
+    )
+    return BrainRunResult(
+        enabled=True,
+        skipped=False,
+        llm_used=False,
+        fallback_used=True,
+        provider="remote_required",
+        model=None,
+        intent_summary=BrainIntentSummary(user_goal=clean_text(request.user_input, 260)),
+        project_memory_digest=BrainProjectMemoryDigest(
+            has_project_context=bool(request.project_context),
+            selected_reference_count=len(request.selected_output_assets),
+            uploaded_reference_count=len(request.uploaded_assets) + len(request.reference_assets),
+        ),
+        image_set_plan=BrainImageSetPlan(
+            set_goal="remote_brain_required",
+            image_count=request.requested_image_count,
+            size=request.requested_image_size,
+        ),
+        prompt_guidance=BrainPromptGuidance(optimized_direction=""),
+        prompt_review=BrainPromptReview(status="blocked"),
+        visual_task_profile=task_profile,
+        capability_activation_intent=activation_intent,
+        user_visible_summary=BrainUserVisibleSummary(headline="V3 等待远端 Brain 完成可信规划。"),
+        warnings=[reason],
+        audit={
+            "source": "v3_remote_brain_required",
+            "remote_reasoning_visible": False,
+            "creative_fallback_executed": False,
+        },
+    )
 
 
 def _visual_cluster_from_request(request: BrainRunRequest) -> dict:

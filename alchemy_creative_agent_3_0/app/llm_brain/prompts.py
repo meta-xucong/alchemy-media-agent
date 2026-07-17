@@ -22,7 +22,7 @@ For the same real-image response, return a complete capability_activation_intent
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 When the Human Realism contract gives `natural_presence_priority=individual_human_presence`, do not let a generic commercial-beauty archetype substitute for the requested person. If its personhood or photographic-material obligations are present, resolve them as a whole-image judgement: the person must read as specifically present in the requested situation and photographic human material must remain camera-observed within the requested mood. A generic assertion such as photorealistic detail is not material resolution: in the whole direction you author, reconcile how the person is physically observed through the scene's light, depth and natural surface response without adding a face/skin micro-detail or beauty checklist. When `complexion_rendering_requirement=preserve_reference_or_user_owned_complexion_with_scene_balanced_color`, preserve the complexion owned by the reference or user while resolving it naturally with the photographic scene's light, tonal separation and color relationship. Scene treatment must not substitute for the person's own complexion; retain legitimate mood and aesthetics, and make the decision in the complete image direction you author. This is neither a request for a preferred complexion nor a color formula. When `expression_ownership_requirement=situation_owned_unless_explicit_user_direction`, an explicitly requested expression remains user-owned; otherwise choose a response that belongs to the person, action, attention and mood you author, never an unrequested default display or advertising smile. When `expression_resolution_requirement=individual_situation_not_stock_geometry`, a generic request such as gentle, natural, joyful or friendly is an affect intention, not permission to infer the same open-mouth or tooth-showing geometry used by a commercial presenter. Preserve warmth when it belongs to the person's moment, but resolve the complete expression through that individual's attention, action, timing and relationship to the scene. Do not force neutrality and do not ban smiling; simply refuse to manufacture a repeated showroom smile when the situation does not require it. A smile is allowed when it is user-owned or emerges from that individual's situation; it must not become a uniform camera-presentational default merely because the image is pleasant or commercially polished. Treat an absent expression as intentional creative latitude, not a blank to fill with positive affect: setting pleasantness or commercial polish alone never justifies a display smile, and do not invent a decorative action merely to make one seem justified. Before approving the complete direction, ask whether replacing the person with the same generic presentational smile would leave the situation unchanged; if it would, resolve a more individual, situation-grounded presence yourself. This is not a prohibition on smiling and not an instruction to force a neutral face. When no independently useful moment calls for a particular affect, keep the person ordinarily present without manufacturing one. A generic adjective such as natural, candid or photorealistic plus a static pose is not an expression decision: in the one complete direction you author, make the person's ordinary attention, awareness or response legible as part of the situation, without selecting from a fixed expression vocabulary. Do not make this decision with an expression vocabulary, face-detail checklist or fixed alternate-expression catalogue. For candid, ordinary or lifestyle photography, make the whole direction describe that individual naturally present in the situation; for an explicitly glamorous or editorial request, retain its aesthetic while avoiding synthetic beautification. A direction that merely repeats generic adjectives such as natural, candid or photorealistic is incomplete: resolve the natural presence materially in your own complete sentence. Never expose a checklist or a local repair phrase.
 For any child, teen or other age-sensitive person request, keep the semantic plan age-appropriate, fully clothed, non-sexual and appropriate to the stated ordinary setting. When the user request is already within that safe boundary, return the required JSON planning contract rather than a prose refusal. This is a remote safety interpretation boundary only: do not turn it into a local branch, an age-specific capability, or a renderer prompt checklist.
-When the stage is `provider_prompt_human_naturalness_resign`, independently reconsider the already Brain-authored candidate prompt against the frozen Human Realism contract. Keep it only if it already describes a particular person with a user-authorized or situation-owned expression in the user-owned situation and resolves their photographic material as observed in the scene; an invented pleasant display affect is not situation-owned merely because the scene is attractive, a smile may remain when it is user-owned or situation-grounded but a generic presentational smile is not approved merely because it looks friendly, a generic natural/candid label with a static pose does not resolve the person's attention or ordinary response, and a generic photorealistic-detail label does not resolve materiality. Otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase. Return the required schema-only Human Naturalness decision receipt as `approved` or `rewritten`; it is audit data, never renderer wording or hidden reasoning.
+When the finalization context requires `human_naturalness_decision` (historical `provider_prompt_human_naturalness_resign` records remain readable), independently reconsider the complete Brain-authored direction against the frozen Human Realism contract before returning the final prompt. Keep it only if it already describes a particular person with a user-authorized or situation-owned expression in the user-owned situation and resolves their photographic material as observed in the scene; an invented pleasant display affect is not situation-owned merely because the scene is attractive, a smile may remain when it is user-owned or situation-grounded but a generic presentational smile is not approved merely because it looks friendly, a generic natural/candid label with a static pose does not resolve the person's attention or ordinary response, and a generic photorealistic-detail label does not resolve materiality. Otherwise rewrite the whole prompt yourself. Preserve user-owned style, facts, reference truth and legitimate editorial intent. Do not return a diff, commentary, issue code, checklist, or an appended local repair phrase. Return the required schema-only Human Naturalness decision receipt as `approved` or `rewritten`; it is audit data, never renderer wording or hidden reasoning.
 Keep every list concise: 2-5 short items. Do not wrap the JSON in markdown fences."""
 HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS = """Expression authenticity is a shared semantic hard gate. Treat a generic affect request such as a smile, pleasant, joyful, friendly, or natural expression as the user's emotional intention, not as a fixed mouth, teeth, or camera-facing presentation geometry. Only an explicit physical expression direction, such as a broad open-mouth or tooth-showing smile, is a hard user-owned rendering control. Otherwise decide the visible response from the person's attention, action, timing, and situation. A straight-on commercial frame must not automatically become a stock presenter grin with the same open-mouth or tooth geometry across unrelated people. A genuine smile may pass when it belongs to the person's visible moment, but do not turn a polite commercial mood into a standardized showroom smile merely because the frame is attractive or catalog-like. If the complete direction would remain unchanged after replacing the person with a generic smiling model, resolve a more individual presence in the complete Brain-authored direction. This is a semantic judgement, not a keyword list, fixed expression vocabulary, renderer exclusion wording, or local repair phrase. The shared pixel reviewer must treat a physically correct but interchangeable presenter smile as retryable human_expression_context evidence."""
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n{HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS}"
@@ -354,6 +354,40 @@ def _requires_remote_creative_contract(request: BrainRunRequest) -> bool:
 def build_remote_payload(request: BrainRunRequest) -> str:
     if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
         return json.dumps(_canonical_provider_prompt_finalization_payload(request), ensure_ascii=False, sort_keys=True)
+    requires_remote_creative_contract = _requires_remote_creative_contract(request)
+    if requires_remote_creative_contract:
+        # Real-image requests never need the broad compatibility payload. Build
+        # the compact contract directly so the discarded broad structure does
+        # not add local work or make the transport path look like it has two
+        # competing prompt contracts.
+        ecommerce_context = request.metadata.get("ecommerce_creative_context")
+        photography_context = request.metadata.get("photography_creative_context")
+        ecommerce_context = ecommerce_context if isinstance(ecommerce_context, dict) else None
+        photography_context = photography_context if isinstance(photography_context, dict) else None
+        payload = _compact_remote_creative_payload(
+            request,
+            ecommerce_context=ecommerce_context,
+            photography_context=photography_context,
+        )
+        requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
+            ecommerce_context,
+            requested_image_count=request.requested_image_count,
+        )
+        compact_schema = _compact_required_remote_creative_schema()
+        if requires_apparel_evidence_dimensions:
+            compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = [
+                {"output_index": "integer", "evidence_dimensions": ["allowed profile values only"]}
+            ]
+        payload["return_schema"] = compact_schema
+        payload["remote_response_contract"] = (
+            "Return only this compact schema as strictly valid JSON. Every "
+            "image_set_plan field and every listed visual_task_profile and "
+            "capability_activation_intent semantic field are required; use explicit empty lists when there is no such "
+            "subject, evidence, tag, unknown, capability request, rejection, or unresolved signal. Escape quotation marks inside JSON strings. Do not "
+            "add hidden reasoning, project-history summaries, UI copy, or any "
+            "additional top-level sections."
+        )
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
     payload = {
         "task": "prepare_pre_generation_image_reasoning",
         "stage": request.stage,
@@ -484,7 +518,6 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ],
         },
     }
-    requires_remote_creative_contract = _requires_remote_creative_contract(request)
     ecommerce_context = request.metadata.get("ecommerce_creative_context")
     requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
         ecommerce_context if isinstance(ecommerce_context, dict) else None,
@@ -502,38 +535,13 @@ def build_remote_payload(request: BrainRunRequest) -> str:
     if isinstance(photography_context, dict) and photography_context:
         payload["photography_creative_context"] = photography_context
         payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
-    if requires_remote_creative_contract:
-        payload = _compact_remote_creative_payload(
-            request,
-            ecommerce_context=ecommerce_context if isinstance(ecommerce_context, dict) else None,
-            photography_context=photography_context if isinstance(photography_context, dict) else None,
-        )
-    # LLM-first real-image runs replace the broad payload with their compact
-    # contract above.  That compact envelope deliberately has no
-    # ``return_schema`` until the specialized schema is installed below, so
-    # the generic catalog-pruning branch must not index it first.
-    if not request.capability_catalog and not requires_remote_creative_contract:
+    if not request.capability_catalog:
         payload.pop("capability_catalog", None)
         payload.pop("pre_activation_capabilities", None)
         payload.pop("template_capability_policy", None)
         payload.pop("capability_activation_instructions", None)
         payload["return_schema"].pop("visual_task_profile", None)
         payload["return_schema"].pop("capability_activation_intent", None)
-    if requires_remote_creative_contract:
-        compact_schema = _compact_required_remote_creative_schema()
-        if requires_apparel_evidence_dimensions:
-            compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = [
-                {"output_index": "integer", "evidence_dimensions": ["allowed profile values only"]}
-            ]
-        payload["return_schema"] = compact_schema
-        payload["remote_response_contract"] = (
-            "Return only this compact schema as strictly valid JSON. Every "
-            "image_set_plan field and every listed visual_task_profile and "
-            "capability_activation_intent semantic field are required; use explicit empty lists when there is no such "
-            "subject, evidence, tag, unknown, capability request, rejection, or unresolved signal. Escape quotation marks inside JSON strings. Do not "
-            "add hidden reasoning, project-history summaries, UI copy, or any "
-            "additional top-level sections."
-        )
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -566,7 +574,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     preflight = context.get("final_prompt_semantic_preflight")
     preflight_required = isinstance(preflight, dict) and bool(preflight.get("required"))
     decision_requirement = context.get("human_naturalness_decision")
-    decision_required = is_human_naturalness_resign
+    decision_required = (
+        is_human_naturalness_resign
+        or (
+            isinstance(decision_requirement, dict)
+            and decision_requirement.get("required") is True
+            and decision_requirement.get("contract_version") == "v3_human_naturalness_decision_v1"
+            and decision_requirement.get("owner") == "remote_v3_llm_brain"
+            and isinstance(decision_requirement.get("frozen_binding"), dict)
+        )
+    )
     if decision_required and not (
         isinstance(decision_requirement, dict)
         and decision_requirement.get("required") is True
@@ -603,9 +620,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "semantic preflight before writing the prompt and explicitly set "
             "semantic_preflight_status to approved."
         )
-    if is_human_naturalness_resign:
+    if decision_required:
         response_contract += (
-            " Independently re-sign the supplied Brain candidate for every output. "
+            " Independently review the complete Brain-authored direction for every output before final approval. "
             "Treat approval as a high bar: use it only when the candidate already resolves a particular person in the user-owned situation, "
             "rather than replacing missing person detail with a default commercial-presentational or universally beautified portrait. "
             "A generic natural/candid label plus a static pose does not by itself resolve the person's attention or ordinary response. "

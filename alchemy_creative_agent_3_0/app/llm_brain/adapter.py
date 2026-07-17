@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from json import JSONDecodeError
 from typing import Any
 
@@ -18,7 +19,7 @@ from .context_digest import (
     selected_references_from_context,
 )
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
-from .fallback import build_fallback_result, build_skipped_result
+from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .providers import (
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
@@ -50,21 +51,41 @@ class V3LLMBrainAdapter:
                 "No trusted capability policy is active; the compatibility scope remains the general template.",
             )
 
-        fallback = build_fallback_result(request)
+        strict_remote_contract = _requires_complete_remote_image_set(request)
         if request.reasoning_depth == "off":
+            if strict_remote_contract:
+                return build_remote_required_result(
+                    request,
+                    "Remote Brain reasoning is required for this real-image request.",
+                )
             return build_skipped_result(request, "Reasoning depth is off for this request.")
+        fallback = (
+            build_remote_required_result(request, "Remote Brain is required for this real-image request.")
+            if strict_remote_contract
+            else build_fallback_result(request)
+        )
         remote_for_request = _remote_allowed_for_request(request)
         if not self.provider.available(force=remote_for_request):
-            fallback.warnings.append("远程创意脑暂不可用，已自动使用本地 V3 规划继续。")
+            fallback.warnings.append(
+                "远程 Brain 暂不可用；真实图片任务已阻断，不使用本地创意 fallback。"
+                if strict_remote_contract
+                else "远程创意脑暂不可用，已自动使用本地 V3 规划继续。"
+            )
             fallback.audit = {**fallback.audit, "remote_provider_available": False}
             return fallback
+        started = time.perf_counter()
         try:
             data = self.provider.run(request)
             transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
+            transport_receipt = _with_elapsed_transport_receipt(
+                transport_receipt,
+                stage=request.stage,
+                elapsed_ms=_elapsed_ms(started),
+            )
             result = self._merge_remote_result(
                 fallback,
                 data,
-                requires_complete_image_set=_requires_complete_remote_image_set(request),
+                requires_complete_image_set=strict_remote_contract,
             )
             result.llm_used = True
             result.fallback_used = False
@@ -90,6 +111,8 @@ class V3LLMBrainAdapter:
                     if remote_http_status_code is not None
                     else {}
                 ),
+                "remote_brain_elapsed_ms": _elapsed_ms(started),
+                "remote_brain_stage": request.stage,
             }
             return fallback
 
@@ -111,6 +134,7 @@ class V3LLMBrainAdapter:
             raise BrainProviderUnavailable("No trusted capability policy is active for canonical prompt signing.")
         if not self.provider.available(force=True):
             raise BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
+        started = time.perf_counter()
         try:
             data = self.provider.run(request)
         except (BrainProviderError, BrainProviderUnavailable):
@@ -118,6 +142,11 @@ class V3LLMBrainAdapter:
         except Exception as exc:  # pragma: no cover - defensive provider boundary
             raise BrainProviderError("Remote Brain failed while signing the canonical provider prompt.") from exc
         transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
+        transport_receipt = _with_elapsed_transport_receipt(
+            transport_receipt,
+            stage=request.stage,
+            elapsed_ms=_elapsed_ms(started),
+        )
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
@@ -384,7 +413,12 @@ class V3LLMBrainAdapter:
         if rejected_sections:
             payload["warnings"] = [
                 *list(payload.get("warnings") or []),
-                "Remote Brain returned incompatible structured fields; V3 kept deterministic safe values for those sections.",
+                (
+                    "Remote Brain returned incompatible structured fields; strict real-image execution kept only "
+                    "non-creative contract identities and remains blocked."
+                    if requires_complete_image_set
+                    else "Remote Brain returned incompatible structured fields; V3 kept deterministic safe values for those sections."
+                ),
             ]
             payload["audit"] = {
                 **dict(payload.get("audit") or {}),
@@ -527,6 +561,25 @@ def _requires_complete_remote_image_set(request: BrainRunRequest) -> bool:
         or metadata.get("require_real_images")
         or metadata.get("real_image_generation")
     )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int(round((time.perf_counter() - started) * 1000)))
+
+
+def _with_elapsed_transport_receipt(
+    receipt: dict[str, Any],
+    *,
+    stage: str,
+    elapsed_ms: int,
+) -> dict[str, Any]:
+    """Add safe phase timing without exposing request bodies or provider data."""
+
+    return {
+        **dict(receipt or {}),
+        "stage": str(stage),
+        "elapsed_ms": max(0, int(elapsed_ms)),
+    }
 
 
 def _remote_provider_error_class(exc: Exception) -> str:
@@ -674,13 +727,33 @@ def _matches_human_semantic_preflight_receipts(candidate: Any, *, expected_count
 
 
 def _requires_human_naturalness_decision(request: BrainRunRequest) -> bool:
-    """Require a schema receipt only on the existing Human Realism re-sign.
+    """Require a schema receipt for the Brain-owned Human Realism sign-off.
 
-    This checks a frozen execution stage and contract boundary; it does not
-    inspect creative language or classify people from prompt keywords.
+    The forward path combines canonical prompt authoring and naturalness
+    signing in one finalizer request. The old dedicated re-sign stage remains
+    readable for historical requests, but new requests declare the same typed
+    receipt in their frozen context. This checks only that contract boundary;
+    it does not inspect creative language or classify people from prompt
+    keywords.
     """
 
-    return request.stage == "provider_prompt_human_naturalness_resign" and _requires_human_semantic_preflight(request)
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("human_naturalness_decision")
+    return bool(
+        _requires_human_semantic_preflight(request)
+        and (
+            request.stage == "provider_prompt_human_naturalness_resign"
+            or (
+                isinstance(decision, dict)
+                and decision.get("required") is True
+                and decision.get("contract_version") == "v3_human_naturalness_decision_v1"
+                and decision.get("owner") == "remote_v3_llm_brain"
+                and isinstance(decision.get("frozen_binding"), dict)
+            )
+        )
+    )
 
 
 def _matches_human_naturalness_decision_receipts(candidate: Any, *, expected_count: int) -> bool:

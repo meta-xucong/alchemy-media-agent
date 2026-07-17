@@ -18,10 +18,6 @@ class _SituationOwnedResigner(EcommerceRemoteBrainTestProvider):
         payload = super().run(request)
         if request.stage == "provider_prompt_finalize":
             payload["canonical_provider_prompts"][0]["prompt"] = (
-                "A polished commercial portrait of a person in a bright room."
-            )
-        elif request.stage == "provider_prompt_human_naturalness_resign":
-            payload["canonical_provider_prompts"][0]["prompt"] = (
                 "A candid real-camera photograph of a person pausing over a book by a window in their ordinary home, "
                 "with the quiet, unperformed moment and requested daylight preserved."
             )
@@ -44,11 +40,10 @@ def test_doc144_resigner_gets_the_nondefault_approval_standard_without_local_pro
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
-    assert payload["candidate_canonical_provider_prompts"][0]["prompt"] == (
-        "A polished commercial portrait of a person in a bright room."
-    )
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
+    assert "candidate_canonical_provider_prompts" not in payload
+    assert payload["return_schema"]["canonical_provider_prompts"][0]["human_naturalness_decision"]
     assert "default commercial-presentational" in payload["remote_response_contract"]
     assert "universally beautified portrait" in payload["remote_response_contract"]
     assert "child" not in payload["remote_response_contract"].lower()

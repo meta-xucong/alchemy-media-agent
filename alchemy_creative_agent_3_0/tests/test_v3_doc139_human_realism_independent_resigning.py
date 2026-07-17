@@ -1,4 +1,4 @@
-"""Doc139: Human Realism receives an independent remote Brain re-sign."""
+"""Doc139 compatibility coverage for the converged Human Realism sign-off."""
 
 from __future__ import annotations
 
@@ -26,14 +26,20 @@ _HUMAN_REQUEST = {
 
 
 class _DistinctReSigningProvider(EcommerceRemoteBrainTestProvider):
-    """Fixture that proves the last Brain pass, not a local patch, reaches output."""
+    """Fixture that proves the combined Brain finalizer owns the output."""
 
     def run(self, request):  # noqa: ANN001
         payload = super().run(request)
         if request.stage == "provider_prompt_finalize":
             payload["canonical_provider_prompts"][0]["prompt"] = (
-                "A polished commercial portrait of an adult ceramic artist in a sunlit studio."
+                "A candid real-camera photograph of an adult ceramic artist absorbed in shaping clay at a worktable "
+                "in their sunlit studio, preserving the ordinary working moment and the user's requested mood."
             )
+            payload["canonical_provider_prompts"][0]["human_naturalness_decision"] = {
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "rewritten",
+                "owner": "remote_v3_llm_brain",
+            }
         elif request.stage == "provider_prompt_human_naturalness_resign":
             payload["canonical_provider_prompts"][0]["prompt"] = (
                 "A candid real-camera photograph of an adult ceramic artist absorbed in shaping clay at a worktable "
@@ -42,49 +48,27 @@ class _DistinctReSigningProvider(EcommerceRemoteBrainTestProvider):
         return payload
 
 
-def test_doc139_active_human_jobs_use_one_finalizer_and_one_independent_resigner() -> None:
+def test_doc139_active_human_jobs_use_one_combined_finalizer() -> None:
     provider = _DistinctReSigningProvider()
     result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(copy.deepcopy(_HUMAN_REQUEST))
 
     assert result.status.value == "planned"
     stages = [item["stage"] for item in provider.requests]
     assert stages.count("provider_prompt_finalize") == 1
-    assert stages.count("provider_prompt_human_naturalness_resign") == 1
-    first = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    assert resign["metadata"]["candidate_canonical_provider_prompts"] == [
-        {
-            "output_index": 1,
-            "prompt": "A polished commercial portrait of an adult ceramic artist in a sunlit studio.",
-            "review_status": "approved",
-            "semantic_preflight_status": "approved",
-        }
-    ]
-    assert resign["metadata"]["canonical_prompt_context"] == {
-        **{
-            key: value
-            for key, value in first["metadata"]["canonical_prompt_context"].items()
-            if key != "retry_evidence"
-        },
-        "human_naturalness_decision": {
-            "required": True,
-            "contract_version": "v3_human_naturalness_decision_v1",
-            "owner": "remote_v3_llm_brain",
-            "frozen_binding": first["metadata"]["canonical_prompt_context"]["frozen_binding"],
-        },
+    assert stages == ["plan", "provider_prompt_finalize"]
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    assert finalizer["metadata"]["canonical_prompt_context"]["human_naturalness_decision"] == {
+        "required": True,
+        "contract_version": "v3_human_naturalness_decision_v1",
+        "owner": "remote_v3_llm_brain",
+        "frozen_binding": finalizer["metadata"]["canonical_prompt_context"]["frozen_binding"],
     }
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
-    assert payload["candidate_canonical_provider_prompts"] == [
-        {
-            "output_index": 1,
-            "prompt": "A polished commercial portrait of an adult ceramic artist in a sunlit studio.",
-            "review_status": "approved",
-        }
-    ]
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
+    assert "candidate_canonical_provider_prompts" not in payload
+    assert "human_naturalness_decision" in payload["return_schema"]["canonical_provider_prompts"][0]
     serialized = json.dumps(
         {
-            "candidate_canonical_provider_prompts": payload["candidate_canonical_provider_prompts"],
-            "frozen_render_context": payload["frozen_render_context"],
+            "return_schema": payload["return_schema"],
         },
         ensure_ascii=False,
     )
@@ -96,10 +80,10 @@ def test_doc139_active_human_jobs_use_one_finalizer_and_one_independent_resigner
     )
     audit = result.metadata["llm_brain"]["audit"]
     assert audit["human_realism_natural_presence_resigned"] is True
-    assert audit["canonical_provider_prompt_stages"] == [
-        "provider_prompt_finalize",
-        "provider_prompt_human_naturalness_resign",
-    ]
+    assert audit["canonical_provider_prompt_stages"] == ["provider_prompt_finalize"]
+    assert audit["human_realism_natural_presence_signoff_mode"] == "combined_finalizer"
+    assert audit["remote_brain_call_count"] == 2
+    assert [item["stage"] for item in audit["remote_brain_transports"]] == ["plan", "provider_prompt_finalize"]
 
 
 def test_doc139_product_only_jobs_do_not_invoke_an_extra_resigning_call() -> None:
@@ -118,26 +102,24 @@ def test_doc139_product_only_jobs_do_not_invoke_an_extra_resigning_call() -> Non
     assert result.metadata["llm_brain"]["audit"]["canonical_provider_prompt_stages"] == ["provider_prompt_finalize"]
 
 
-def test_doc139_malformed_resigning_response_blocks_before_a_plan_can_materialize() -> None:
-    class _MalformedResigner(EcommerceRemoteBrainTestProvider):
+def test_doc139_malformed_combined_signoff_blocks_before_a_plan_can_materialize() -> None:
+    class _MalformedFinalizer(EcommerceRemoteBrainTestProvider):
         def run(self, request):  # noqa: ANN001
-            if request.stage == "provider_prompt_human_naturalness_resign":
+            if request.stage == "provider_prompt_finalize":
                 self.requests.append(copy.deepcopy(request.model_dump(mode="json")))
                 return {"canonical_provider_prompts": []}
             return super().run(request)
 
-    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_MalformedResigner())).plan_job(
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_MalformedFinalizer())).plan_job(
         copy.deepcopy(_HUMAN_REQUEST)
     )
 
     assert result.status.value == "blocked"
     assert result.planning_result is None
-    assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == (
-        "human_realism_natural_presence_resigning_unavailable"
-    )
+    assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == "remote_creative_brain_prompt_signoff_unavailable"
 
 
-def test_doc139_local_mcp_relays_the_re_signed_string_without_a_second_prompt_path(monkeypatch) -> None:
+def test_doc139_local_mcp_relays_the_combined_signed_string_without_a_second_prompt_path(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     provider = _DistinctReSigningProvider()
@@ -162,9 +144,9 @@ def test_doc139_local_mcp_relays_the_re_signed_string_without_a_second_prompt_pa
         "A candid real-camera photograph of an adult ceramic artist absorbed in shaping clay at a worktable "
         "in their sunlit studio, preserving the ordinary working moment and the user's requested mood."
     )
-    assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 1
+    assert [item["stage"] for item in provider.requests] == ["plan", "provider_prompt_finalize"]
     assert result["provenance"]["canonical_prompt_signing"] == {
-        "stages": ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"],
+        "stages": ["provider_prompt_finalize"],
         "human_realism_natural_presence_resigned": True,
-        "human_realism_natural_presence_decision_statuses": ["approved"],
+        "human_realism_natural_presence_decision_statuses": ["rewritten"],
     }

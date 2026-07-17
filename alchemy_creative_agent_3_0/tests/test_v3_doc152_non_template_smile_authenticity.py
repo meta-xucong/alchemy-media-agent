@@ -36,8 +36,8 @@ def test_doc152_brain_preserves_situation_owned_smiles_without_a_local_expressio
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
 
     assert "A smile is allowed when it is user-owned or emerges from that individual's situation" in SYSTEM_PROMPT
     assert "not a prohibition on smiling and not an instruction to force a neutral face" in SYSTEM_PROMPT
