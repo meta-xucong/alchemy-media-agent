@@ -34,6 +34,7 @@ _PROFESSIONAL_ALLOWED_TOP_LEVEL_FIELDS = {
     "project_id",
     "people_asset_id",
     "professional_identity_view_ids",
+    "professional_reference_stage",
     "platform_profile",
     "photography_mode",
     "photographer_profile_id",
@@ -357,6 +358,7 @@ class NativeProfessionalImageGenPlanRequest:
     project_id: str
     people_asset_id: str
     professional_identity_view_ids: tuple[str, ...]
+    professional_reference_stage: str | None = None
     platform_profile: str | None = None
     photography_mode: str | None = None
     photographer_profile_id: str | None = None
@@ -383,6 +385,42 @@ class NativeProfessionalImageGenPlanRequest:
         common = NativeImageGenPlanRequest.from_mcp_arguments(
             {key: value[key] for key in _ALLOWED_TOP_LEVEL_FIELDS}
         )
+
+        stage_value = value.get("professional_reference_stage")
+        if stage_value is None:
+            professional_reference_stage = {
+                1: "standard_front",
+                2: "three_quarter",
+                3: "profile",
+            }.get(len(common.reference_inputs))
+        elif isinstance(stage_value, str) and stage_value.strip() in {"standard_front", "three_quarter", "profile"}:
+            professional_reference_stage = stage_value.strip()
+        else:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_professional_input_invalid",
+                "professional_reference_stage must be standard_front, three_quarter, profile, or null.",
+            )
+        if professional_reference_stage is not None:
+            expected_reference_count = {
+                "standard_front": 1,
+                "three_quarter": 2,
+                "profile": 3,
+            }[professional_reference_stage]
+            if len(common.reference_inputs) != expected_reference_count:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    f"{professional_reference_stage} requires exactly {expected_reference_count} serial identity references.",
+                )
+            if common.reference_inputs[0].channel != "portrait_identity":
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    "Professional serial identity references must start with the immutable root portrait reference.",
+                )
+            if any(item.channel != "selected_identity_reference" for item in common.reference_inputs[1:]):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    "Professional serial identity references after the root must be reviewed generated winners.",
+                )
 
         def identifier(field: str) -> str:
             raw = value.get(field)
@@ -481,6 +519,7 @@ class NativeProfessionalImageGenPlanRequest:
             project_id=identifier("project_id"),
             people_asset_id=identifier("people_asset_id"),
             professional_identity_view_ids=tuple(view_ids),
+            professional_reference_stage=professional_reference_stage,
             platform_profile=platform_profile,
             photography_mode=photography_mode,
             photographer_profile_id=photographer_profile_id,

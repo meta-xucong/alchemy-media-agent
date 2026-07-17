@@ -245,6 +245,12 @@ class CodexNativeImageGenPlanner:
                 "project_id": request.project_id,
                 "professional_mode_binding_record": binding.model_dump(mode="json"),
                 "local_mcp_professional_relay": True,
+                "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                **(
+                    {"professional_reference_stage": request.professional_reference_stage}
+                    if request.professional_reference_stage
+                    else {}
+                ),
             }
         )
         result = self._prepare_frozen_plan(
@@ -259,6 +265,8 @@ class CodexNativeImageGenPlanner:
                     "professional_mode": True,
                     "professional_binding": binding.to_brain_evidence(),
                     "professional_identity_view_ids": list(binding.identity_view_ids),
+                    "professional_reference_stage": request.professional_reference_stage,
+                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
                     "professional_binding_evidence_sha256": self._binding_evidence_sha256(binding),
                 }
             )

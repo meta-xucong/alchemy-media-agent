@@ -125,6 +125,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "maxItems": 3,
                     "items": {"type": "string"},
                 },
+                "professional_reference_stage": {
+                    "type": ["string", "null"],
+                    "enum": ["standard_front", "three_quarter", "profile", None],
+                },
                 "platform_profile": {"type": ["string", "null"]},
                 "photography_mode": {"type": ["string", "null"]},
                 "photographer_profile_id": {"type": ["string", "null"]},

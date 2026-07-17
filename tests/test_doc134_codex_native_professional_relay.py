@@ -132,6 +132,8 @@ def test_professional_relay_requires_server_owned_binding_and_projects_existing_
     assert result["requested_output_count"] == 1
     assert result["provenance"]["professional_mode"] is True
     assert result["provenance"]["professional_binding"]["pack_version_id"] == "pack_1"
+    assert result["provenance"]["professional_reference_stage"] == "standard_front"
+    assert result["provenance"]["professional_identity_reference_strategy"] == "serial_anchor_pack_root_reuse_v1"
     assert result["provenance"]["delivery_state"] == "conversation_only_not_certified"
     frozen = capturing.last_result.metadata["capability_activation_plan"]
     assert frozen["metadata"]["professional_mode"] is True
@@ -182,6 +184,35 @@ def test_professional_relay_without_resolver_and_mcp_unknown_fields_fail_closed(
             _arguments(reference, professional_mode_binding_record={"mode": "professional"})
         )
     assert exc.value.code == "codex_native_imagegen_invalid_input"
+
+
+def test_professional_serial_reference_stage_requires_root_then_reviewed_winners(tmp_path: Path) -> None:
+    root = _write_png(tmp_path / "root.png")
+    winner = _write_png(tmp_path / "front-winner.png")
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            root,
+            reference_inputs=[
+                {"channel": "portrait_identity", "file_path": str(root)},
+                {"channel": "selected_identity_reference", "file_path": str(winner)},
+            ],
+            professional_reference_stage="three_quarter",
+        )
+    )
+    assert request.professional_reference_stage == "three_quarter"
+
+    with pytest.raises(CodexNativeImageGenError) as exc:
+        NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+            _arguments(
+                root,
+                reference_inputs=[
+                    {"channel": "portrait_identity", "file_path": str(root)},
+                    {"channel": "portrait_identity", "file_path": str(winner)},
+                ],
+                professional_reference_stage="three_quarter",
+            )
+        )
+    assert exc.value.code == "codex_native_imagegen_professional_reference_chain_invalid"
 
 
 def test_professional_mcp_schema_and_dispatch_are_explicit_and_safe(tmp_path: Path) -> None:

@@ -42,6 +42,7 @@ class AnchorGenerationRequest(V3BaseModel):
     reference_evidence_ids: list[str] = Field(default_factory=list)
     brain_plan_id: str
     canonical_prompt_hash: str
+    reference_strategy: Literal["serial_anchor_pack_root_reuse_v1"] = "serial_anchor_pack_root_reuse_v1"
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "root_source_asset_id")
     @classmethod
@@ -288,6 +289,7 @@ class AnchorPackPreparationService:
             reference_evidence_ids=reference_evidence_ids,
             brain_plan_id=request.brain_plan_id,
             canonical_prompt_hash=request.canonical_prompt_hash,
+            reference_strategy="serial_anchor_pack_root_reuse_v1",
         )
 
     def _generate_and_review(

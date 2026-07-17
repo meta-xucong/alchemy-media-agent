@@ -31,6 +31,10 @@ or Provider request failed.
    a static role, suite, shot family, camera distance, angle, crop rule, or
    local recipe. For E-Commerce, an opaque internal output binding is not a
    user-visible role and must not be expanded into a suite/slot/recipe. The
+   Professional serial anchor-pack relay may return an existing shared root
+   identity derivative plus reviewed generated-winner derivatives; treat that
+   bounded reference list as authoritative and do not reconstruct or expand
+   it in Codex. The
    accompanying `provider_prompt_sha256` is a parity receipt:
    it identifies the same UTF-8 final prompt that V3 Web Provider materializes
    for GPT Image 2 from the same frozen plan.

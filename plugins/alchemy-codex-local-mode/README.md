@@ -61,6 +61,15 @@ prompt, or storage handle. `selected_identity_reference` is an adapter-only
 hard channel for the serial M5 chain and maps to the existing shared
 face-reference role; it does not add a public capability.
 
+For the Professional serial anchor-pack stages, the server-owned strategy
+`serial_anchor_pack_root_reuse_v1` reuses one already-prepared root identity
+anchor after the front stage. Three-quarter therefore receives root geometry
+plus the front winner's two identity derivatives; profile receives root
+geometry plus the front and three-quarter winners' two derivatives each. This
+is the shared Provider's bounded five-reference contract, not an extra image
+generation or a caller-selected crop. Standard Mode and ordinary non-serial
+reference requests retain their existing derivative behavior.
+
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the
 same final Unicode prompt and rendering parameters that Web Mode's Provider

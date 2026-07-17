@@ -3,7 +3,7 @@
 Date: 2026-07-17  
 Feature branch: `codex/professional-m5-three-view-acceptance`  
 Baseline: `origin/main@ad62882`  
-Status: **non-counting / blocked for strict M5 certification**
+Status: **non-counting / blocked for strict M5 certification; reference-budget fix awaiting a fresh pixel rerun**
 
 ## Scope and boundary
 
@@ -46,6 +46,47 @@ structured role failure or admitted only root/front, which the relay now
 blocks with `codex_native_imagegen_professional_reference_parity_mismatch`.
 The controlled profile prompt hash was
 `37e5664e7500555917d0401a0307defb47ff5d5d0e5e49d41486135a8da3ce0d`.
+
+## Reference-budget comparison
+
+The original M5 attempt expanded root, front, and three-quarter into two
+provider-only identity derivatives each (six paths), which exceeded Codex's
+five-reference handoff cap before profile pixels could be counted. The branch
+now implements `serial_anchor_pack_root_reuse_v1`:
+
+```text
+front: root detail + root geometry                            = 2
+three-quarter: root geometry + front detail + front geometry  = 3
+profile: root geometry + front detail + front geometry
+         + three-quarter detail + three-quarter geometry       = 5
+```
+
+Focused tests cover root reuse without a second AI generation, exactly five
+Professional profile references in declared order, and unchanged ordinary
+two-derivative behavior. No new live profile pixels have been counted after
+this change; the next run must use the five-reference list and repeat shared
+review.
+
+## Controlled five-reference effect comparison
+
+To test the changed transport independently of the unavailable live
+Professional relay, three new right-profile candidates were generated with
+the exact five-reference bundle above and the same natural-language profile
+direction. The files are external, non-certified comparison evidence:
+
+| Candidate | File | SHA-256 | Qualitative observation |
+| --- | --- | --- | --- |
+| 1 | `D:\\AI\\m5_professional_acceptance_20260717\\profile-five-ref-candidate-1.png` | `728f94e25f162202381594616304d11633a2a47b1c2ce2320f8b5a048df17c3a` | Preserves the root's forehead-to-nose transition and natural asymmetry; the green hair cue remains visible. |
+| 2 | `D:\\AI\\m5_professional_acceptance_20260717\\profile-five-ref-candidate-2.png` | `cbc4044619f6bf223870c53ecbb8a7347613d8009ac23d1dd72380a66aa6af67` | Cleanest silhouette and mouth/chin contour in this small comparison, while retaining the root hair cue; not a shared-review winner. |
+| 3 | `D:\\AI\\m5_professional_acceptance_20260717\\profile-five-ref-candidate-3.png` | `a5b8d0b722e361f03ac75e51fef5c8a8ea207fcd8d0f447a28f0d78e7957ee38` | Strong nose-bridge and jaw continuity; slightly more stylized hair edge than candidate 2; not a shared-review winner. |
+
+The previous controlled profile winner used the six-derivative-era route. The
+new candidates are at least as structurally coherent in this visual spot check
+and avoid the transport failure, but this is not an apples-to-apples quality
+certificate: the new images were produced through the image-generation tool
+with the five references, not through the Alchemy frozen-plan relay and shared
+Vision review. Therefore no candidate is promoted to the append-only final
+winner record from this comparison alone.
 
 ## Shared review evidence
 
@@ -90,18 +131,14 @@ non-counting.
 1. The live remote profile plan did not reliably admit all three serial-chain
    winners; the new relay fails closed instead of silently dropping the
    three-quarter reference.
-2. The Codex built-in ImageGen handoff accepts at most five reference paths,
-   while the strict profile chain contains six derived reference files (two
-   crops per source view). The profile image therefore cannot be called strict
-   parity evidence until that handoff limitation is resolved by the supported
-   host surface.
+2. The previous six-reference transport blocker is addressed in this branch,
+   but the new five-reference profile path has not yet completed a fresh live
+   pixel run and parity receipt.
 3. Only the front winner has an explicit verified shared Vision review record;
    the three-quarter/profile outputs are visual comparison evidence, not
    certified final delivery.
 
 Accordingly, M5 remains blocked and all production gates remain closed. The
-next permitted step is to make the supported Codex handoff admit the complete
-profile reference set (or obtain an explicitly approved equivalent) and rerun
-the three-stage append-only candidate/review/final-winner evidence through the
-same shared runtime.
-
+next permitted step is to rerun the three-stage append-only
+candidate/review/final-winner evidence with the new five-reference list through
+the same shared runtime.

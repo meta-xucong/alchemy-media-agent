@@ -2338,10 +2338,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
                 reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
+            portrait_identity_derivative_kinds = self._professional_identity_derivative_kinds(request, asset)
             derivatives = self._reference_truth_derivatives(
                 asset,
                 truth_layers,
                 reference_policy=reference_policy,
+                portrait_identity_derivative_kinds=portrait_identity_derivative_kinds,
             )
             for derivative in derivatives:
                 assets.append(
@@ -2399,6 +2401,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 truth_layers=truth_layers,
                 reference_policy=reference_policy,
             )
+            if portrait_identity_derivative_kinds == ("portrait_identity_geometry_crop",):
+                reference_sanitization = {
+                    "applies": True,
+                    "reason_codes": ["professional_root_identity_anchor_reused"],
+                }
             if not reference_sanitization.get("applies") and self._should_include_original_reference(
                 truth_layers=truth_layers,
                 derivatives=derivatives,
@@ -2835,6 +2842,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         truth_layers: list[str],
         *,
         reference_policy: dict[str, Any] | None = None,
+        portrait_identity_derivative_kinds: tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         provider_layers = [layer for layer in truth_layers if layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"}]
         if not provider_layers:
@@ -2847,9 +2855,34 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 asset_id=str(asset.get("asset_id") or ""),
                 truth_layers=provider_layers,
                 reference_policy=reference_policy,
+                portrait_identity_derivative_kinds=portrait_identity_derivative_kinds,
             )
         except Exception:
             return []
+
+    def _professional_identity_derivative_kinds(
+        self,
+        request: GenerationRequest,
+        asset: dict[str, Any],
+    ) -> tuple[str, ...] | None:
+        """Reuse one prepared root anchor in later serial identity stages.
+
+        The Professional anchor-pack contract keeps the immutable root truth
+        as a single geometry-preserving anchor after the front stage. Reviewed
+        generated winners retain the complementary feature/geometry pair. The
+        strategy is opt-in and therefore cannot change Standard Mode or an
+        ordinary uploaded-portrait job.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
+            return None
+        stage = str(metadata.get("professional_reference_stage") or "").strip()
+        if stage not in {"three_quarter", "profile"}:
+            return None
+        if not self._is_uploaded_truth_source(asset) or asset.get("output_id"):
+            return None
+        return ("portrait_identity_geometry_crop",)
 
     def _is_uploaded_truth_source(self, asset: dict[str, Any]) -> bool:
         source_type = str(asset.get("source_type") or "").lower()

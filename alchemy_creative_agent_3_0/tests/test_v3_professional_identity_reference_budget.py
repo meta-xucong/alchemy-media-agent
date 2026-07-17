@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PIL import Image
+
+from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationRequest,
+    ProductionImageGenerationProvider,
+)
+from alchemy_creative_agent_3_0.app.schemas import (
+    AssetSpec,
+    AssetType,
+    ConditionPlan,
+    GenerationPlan,
+    Platform,
+    PromptCompilationResult,
+    ProviderStrategy,
+)
+from app.services.provider_reference import prepare_reference_truth_derivatives
+
+
+def _image(path: Path, color: tuple[int, int, int]) -> Path:
+    Image.new("RGB", (720, 720), color=color).save(path, format="PNG")
+    return path
+
+
+def _request(root: Path, front: Path, three_quarter: Path) -> GenerationRequest:
+    policy = [
+        {
+            "source_asset_id": source_id,
+            "source_role": "portrait_identity_reference",
+            "identity_geometry": "hard",
+            "prompt_owned_channels": ["hair_direction", "lighting_color", "scene_background"],
+        }
+        for source_id in ("root_asset", "front_output", "three_quarter_output")
+    ]
+    asset = AssetSpec(
+        asset_id="profile_asset",
+        asset_type=AssetType.SOCIAL_COVER,
+        platform=Platform.GENERIC_SOCIAL,
+        aspect_ratio="3:4",
+        purpose="Professional profile anchor candidate",
+    )
+    uploaded_assets = [
+        {
+            "asset_id": "root_asset",
+            "file_path": str(root),
+            "source_type": "uploaded",
+            "role": "face_reference",
+            "use_policy": "identity",
+            "strength": "hard",
+            "provider_input_required": True,
+            "metadata": {
+                "reference_sanitization": {
+                    "suppress_full_frame_provider_reference": True,
+                    "reason_codes": ["professional_identity_only"],
+                }
+            },
+        },
+    ]
+    for asset_id, path in (("front_output", front), ("three_quarter_output", three_quarter)):
+        uploaded_assets.append(
+            {
+                "asset_id": asset_id,
+                "output_id": asset_id,
+                "file_path": str(path),
+                "source_type": "selected_output",
+                "role": "face_reference",
+                "use_policy": "identity",
+                "strength": "hard",
+                "provider_input_required": True,
+                "source_integrity_id": f"sha256:{asset_id}",
+                "metadata": {"canonical_output_binding": True},
+            }
+        )
+    return GenerationRequest(
+        asset_spec=asset,
+        prompt_compilation=PromptCompilationResult(
+            prompt_compilation_id="prompt_professional_budget",
+            asset_id=asset.asset_id,
+            visual_prompt="Create a faithful right-facing profile portrait with natural human realism.",
+            negative_prompt="generic face, beauty filter, identity drift",
+            text_policy="do_not_render_final_text_in_image_model",
+            style_notes=["plain white studio"],
+            layout_notes=["profile portrait"],
+        ),
+        condition_plan=ConditionPlan(condition_plan_id="condition_professional_budget", asset_id=asset.asset_id),
+        generation_plan=GenerationPlan(
+            generation_plan_id="generation_professional_budget",
+            asset_id=asset.asset_id,
+            provider_strategy=ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER,
+            candidate_count=1,
+            max_refine_rounds=0,
+        ),
+        metadata={
+            "job_id": "job_professional_budget",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "user_input": "Create a faithful right-facing profile portrait with natural human realism.",
+            "professional_mode": "professional",
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_reference_stage": "profile",
+            "uploaded_assets": uploaded_assets,
+            "visual_cluster": {
+                "resolved_reference_policy_package": {
+                    "applies": True,
+                    "policies": policy,
+                }
+            },
+        },
+    )
+
+
+def test_root_identity_derivative_can_be_reused_without_second_ai_generation(tmp_path: Path) -> None:
+    root = _image(tmp_path / "root.png", (220, 180, 160))
+    derivatives = prepare_reference_truth_derivatives(
+        root,
+        asset_id="root_asset",
+        truth_layers=["portrait_identity_truth"],
+        portrait_identity_derivative_kinds=("portrait_identity_geometry_crop",),
+    )
+
+    assert len(derivatives) == 1
+    assert derivatives[0]["derivative_kind"] == "portrait_identity_geometry_crop"
+
+
+def test_professional_profile_uses_five_references_root_once_and_winners_twice(tmp_path: Path) -> None:
+    request = _request(
+        _image(tmp_path / "root.png", (220, 180, 160)),
+        _image(tmp_path / "front.png", (220, 181, 160)),
+        _image(tmp_path / "three-quarter.png", (220, 182, 160)),
+    )
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    plan = provider._asset_plan(request, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 5
+    assert [item["source_asset_id"] for item in plan["assets"]] == [
+        "root_asset",
+        "front_output",
+        "front_output",
+        "three_quarter_output",
+        "three_quarter_output",
+    ]
+    assert [item["derivative_kind"] for item in plan["assets"]] == [
+        "portrait_identity_geometry_crop",
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+    ]
+
+    legacy_metadata = dict(request.metadata)
+    legacy_metadata.pop("professional_identity_reference_strategy", None)
+    legacy_request = request.model_copy(update={"metadata": legacy_metadata})
+    legacy_provider = ProductionImageGenerationProvider()
+    legacy_references = legacy_provider._reference_assets(legacy_request)
+    legacy_plan = legacy_provider._asset_plan(legacy_request, legacy_references)  # noqa: SLF001
+    assert legacy_plan["provider_input_plan"]["reference_image_count"] == 6
+
+
+def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:
+    source = _image(tmp_path / "portrait.png", (220, 180, 160))
+    derivatives = prepare_reference_truth_derivatives(
+        source,
+        asset_id="ordinary_portrait",
+        truth_layers=["portrait_identity_truth"],
+    )
+
+    assert [item["derivative_kind"] for item in derivatives] == [
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+    ]

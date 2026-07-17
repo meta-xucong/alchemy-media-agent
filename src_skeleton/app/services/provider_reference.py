@@ -81,8 +81,16 @@ def prepare_reference_truth_derivatives(
     asset_id: str = "",
     truth_layers: list[str] | tuple[str, ...] | None = None,
     reference_policy: dict[str, Any] | None = None,
+    portrait_identity_derivative_kinds: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    """Create provider-only focused references without changing the user's upload."""
+    """Create provider-only focused references without changing the user's upload.
+
+    Professional serial anchor stages may provide a bounded derivative list for
+    an already-prepared root identity anchor.  The default remains the legacy
+    complementary feature-detail plus head-geometry pair for every portrait
+    source, so Standard Mode and ordinary reference-conditioned jobs are
+    unchanged.
+    """
     try:
         source = Path(str(path))
         if not source.exists() or not source.is_file():
@@ -92,21 +100,22 @@ def prepare_reference_truth_derivatives(
             return []
         derivatives: list[dict[str, Any]] = []
         if "portrait_identity_truth" in layers:
-            derivatives.append(
-                _truth_derivative(
-                    source,
-                    asset_id=asset_id,
-                    kind="portrait_identity_crop",
-                    reference_policy=reference_policy,
-                )
+            allowed_kinds = {"portrait_identity_crop", "portrait_identity_geometry_crop"}
+            requested_kinds = (
+                tuple(portrait_identity_derivative_kinds)
+                if portrait_identity_derivative_kinds is not None
+                else ("portrait_identity_crop", "portrait_identity_geometry_crop")
             )
-            derivatives.append(
+            if any(kind not in allowed_kinds for kind in requested_kinds):
+                return []
+            derivatives.extend(
                 _truth_derivative(
                     source,
                     asset_id=asset_id,
-                    kind="portrait_identity_geometry_crop",
+                    kind=kind,
                     reference_policy=reference_policy,
                 )
+                for kind in requested_kinds
             )
         if "product_identity_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="product_truth_crop"))
