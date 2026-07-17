@@ -90,6 +90,20 @@ It is the backend authority for keeping Professional Mode invisible during
 normal use while preventing non-selected references from overriding an active
 Visual Asset's owned channels.
 
+### M5 Real-Pixel Acceptance Record
+
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
+
+Records the superseded non-counting Provider pre-flight. It does not certify
+pixels or open a production gate.
+
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_PROVIDER_RUN_20260717.md`
+
+Records the later user-authorized V3 default-Provider run: one real GPT Image 2
+artifact and its reference/output fingerprints, followed by a bounded shared
+review timeout. It remains non-counting M5 evidence and does not open a
+production gate.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:

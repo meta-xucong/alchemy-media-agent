@@ -442,7 +442,18 @@ class ScenarioRuntime:
         """Admit explicit Professional Mode before the shared plan freezes."""
 
         metadata = dict(request.metadata or {})
-        raw_mode = str(metadata.get("professional_mode") or "standard").strip().lower()
+        # Product API persists the server-owned planning provenance as a
+        # boolean (``True``) while the public request contract uses the
+        # explicit string ``"professional"``.  Normalize that internal
+        # representation before validating the mode so a planned
+        # Professional job can be generated through the same frozen path.
+        raw_mode_value = metadata.get("professional_mode")
+        if raw_mode_value is True:
+            raw_mode = "professional"
+        elif raw_mode_value is False or raw_mode_value is None:
+            raw_mode = "standard"
+        else:
+            raw_mode = str(raw_mode_value).strip().lower()
         has_professional_binding = any(
             key in metadata
             for key in (
