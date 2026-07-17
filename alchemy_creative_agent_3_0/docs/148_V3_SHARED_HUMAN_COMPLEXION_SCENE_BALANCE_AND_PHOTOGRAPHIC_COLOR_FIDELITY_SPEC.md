@@ -11,6 +11,12 @@ truncation from this Human Realism semantic contract.  A truncated plan is a
 fail-closed transport event, not a complexion, reference, or pixel-quality
 verdict.
 
+Doc159 refines the commercial-aesthetic boundary below. Doc148 remains the
+authority against bleaching, identity replacement, and accidental scene color
+casts; Doc159 clarifies that an explicit user or target-market preference for a
+brighter/fairer commercial presentation is valid visual intent and must not be
+neutralized as if it were an unwanted whitening filter.
+
 ## Observed gap
 
 The Doc143–147 chain now makes a person read as situation-specific, naturally
@@ -47,9 +53,13 @@ The requirement means:
 - keep the image's requested aesthetic rather than forcing a high-key or
   commercial look.
 
-It does **not** mean whitening, a preferred skin color, a brightness target,
-a demographic classifier, a color-code palette, a beauty filter, or a local
-postprocess correction.
+It does **not** infer a preferred complexion from ethnicity, impose a universal
+brightness target, use a demographic classifier, define a color-code palette,
+apply a beauty filter, or perform a local postprocess correction. When the
+user's commercial brief or declared target-market presentation explicitly owns
+a brighter/fairer aesthetic, that preference is part of the user-owned visual
+direction and may be honoured by the Brain through complete-scene exposure and
+white-balance judgement while preserving natural texture and identity.
 
 ## Authoritative execution path
 
