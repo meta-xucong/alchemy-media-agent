@@ -94,9 +94,14 @@ Visual Asset's owned channels.
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
 
-Records the current non-counting M5 Provider pre-flight, supplied-portrait
-fingerprint, blocked reason, and the evidence still required for a real
-front/three-quarter/profile acceptance. It does not certify pixels or open a
+Records the superseded non-counting Provider pre-flight. It does not certify
+pixels or open a production gate.
+
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_PROVIDER_RUN_20260717.md`
+
+Records the later user-authorized V3 default-Provider run: one real GPT Image 2
+artifact and its reference/output fingerprints, followed by a bounded shared
+review timeout. It remains non-counting M5 evidence and does not open a
 production gate.
 
 ## Compatibility Authority

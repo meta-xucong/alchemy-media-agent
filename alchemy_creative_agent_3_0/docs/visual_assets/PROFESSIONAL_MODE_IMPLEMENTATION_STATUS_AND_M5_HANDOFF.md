@@ -7,7 +7,7 @@ M0-M4 IMPLEMENTED AND MAINLINE BACKEND SEAM INTEGRATED
 M2 SERIAL THREE-VIEW CANDIDATE CONTRACT IMPLEMENTED
 M6 ASSET-CHANNEL AUTHORITY/ADMISSION CONTRACT IMPLEMENTED
 PRODUCT API / SCENARIO RUNTIME PROFESSIONAL MODE WIRING COMPLETE
-M5 REAL-PIXEL ACCEPTANCE BLOCKED BY EXTERNAL EVIDENCE
+M5 REAL-PIXEL ACCEPTANCE BLOCKED BY SHARED REVIEW EVIDENCE
 NO PRODUCTION CLAIM
 STANDARD MODE UNCHANGED
 ```
@@ -44,20 +44,17 @@ configuration, UI path, or production switch was changed by this branch.
 
 M5 requires real pixels from the existing authorized GPT Image 2 Provider,
 shared review evidence, bounded retry/final-winner evidence, and a human visual
-acceptance across the front, three-quarter, and profile views. Those artifacts
-are not available in this isolated implementation run. The M5 pre-flight found
-no explicit `OPENAI_API_KEY` process credential; the settings layer's key
-presence came through a Codex-auth fallback and was intentionally not used.
-The observed base host was `aiself.vip`, with no independently verified
-authorized GPT Image 2 route. No external Provider call was attempted.
-
-Therefore M5 is **blocked**, not passed. Mock contracts, lifecycle tests, and
-source-boundary tests prove the shape of the implementation only; they cannot
-certify identity quality, Provider Gate status, Gate C/D, P10, or production
-readiness. There is no production claim for Professional Mode or for the Face
-Identity anchor pack. The typed generation request now rejects any missing,
-duplicated, reordered, or extra evidence in the serial root/front/three-quarter
-chain before a candidate can be generated.
+acceptance across the front, three-quarter, and profile views. The user then
+explicitly authorized the existing V3 settings-backed default Provider. That
+route returned one real `openai_gpt_image` / `gpt-image-2` artifact with the
+supplied portrait's derived feature-detail and head-geometry references. The
+shared Vision review process did not return a bounded terminal receipt in the
+local proxy environment, so no review/retry/final-winner evidence was counted.
+Therefore M5 remains **blocked**, not passed. See
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_PROVIDER_RUN_20260717.md` for the safe
+fingerprints and boundary record. The typed generation request still rejects
+any missing, duplicated, reordered, or extra evidence in the serial
+root/front/three-quarter chain before a candidate can be generated.
 
 The asset-authority backend contracts are now wired into the mainline Product
 API and ScenarioRuntime seam. An explicit `professional_mode=professional`

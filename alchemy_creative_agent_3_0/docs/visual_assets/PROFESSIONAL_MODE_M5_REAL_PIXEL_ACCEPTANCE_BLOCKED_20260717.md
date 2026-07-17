@@ -3,10 +3,9 @@
 ## Status
 
 ```text
-M5 BLOCKED
+M5 BLOCKED (SUPERSEDED PRE-FLIGHT RECORD)
 NON-COUNTING PRE-FLIGHT EVIDENCE ONLY
-NO REAL PROVIDER REQUEST MADE
-NO IMAGE OUTPUT OR REVIEW RESULT CLAIMED
+THIS RECORD PREDATES THE USER-AUTHORIZED V3 DEFAULT-PROVIDER RUN
 NO PRODUCTION/GATE C/D/P10 CLAIM
 ```
 
@@ -34,7 +33,7 @@ sha256: 19A7F099245086B4310299F18A9972CBA0703523E581DBEA71255D35C1032917
 
 The source filename/path is intentionally not persisted in this handoff.
 
-## Provider authorization pre-flight
+## Provider authorization pre-flight (historical)
 
 The attempt did not start a network request because no independently verified
 authorized GPT Image 2 Provider route was available:
@@ -54,7 +53,7 @@ material. No key value is recorded here.
 
 ## Non-counting result
 
-Because the Provider pre-flight was blocked:
+At the time of this first attempt, the Provider pre-flight was blocked:
 
 - no Brain-to-GPT-Image-2 real materialization was attempted;
 - no front / three-quarter / profile pixels were produced;
@@ -63,8 +62,9 @@ Because the Provider pre-flight was blocked:
 - no real Provider provenance, output hashes, review scores, or human visual
   acceptance can be claimed.
 
-The M5 result is therefore **blocked**, not failed and not passed. The supplied
-portrait remains valid source evidence for a later authorized run.
+This record remains **blocked**, not failed and not passed. The later
+user-authorized default-Provider attempt is recorded separately in
+`PROFESSIONAL_MODE_M5_REAL_PIXEL_PROVIDER_RUN_20260717.md`.
 
 ## Contract verification performed
 
@@ -78,10 +78,8 @@ acceptance.
 
 ## Required next step
 
-An operator must provide or configure an independently authorized GPT Image 2
-Provider route through the existing shared Provider configuration, with its
-authorization and endpoint provenance recorded outside this document. The
-future run must then execute the existing front → three-quarter → profile
-chain, shared review/retry/final-winner path, and preserve the source/output
-hashes and human comparison evidence. Until then, Professional Mode remains
-non-production and the browser entry remains closed.
+The historical pre-flight is superseded by the later user-authorized V3
+default-Provider run. That later run still did not close M5 because shared
+pixel review/final-winner evidence and the complete three-view chain remain
+missing. Professional Mode remains non-production and the browser entry
+remains closed.
