@@ -45,6 +45,10 @@ The Brain must resolve the preference as a whole photographic decision:
 - brightness coming from clean scene light rather than lifted exposure;
 - fine-grained, irregular real skin texture and restrained matte highlights
   that follow facial planes instead of diffusing across the whole face;
+- the person's complexion remaining visually stable when the set, backdrop, or
+  practical light carries a blue, yellow, green, or other color cast;
+- subtle camera-resolved, nonuniform skin variation remaining visible at the
+  delivered scale instead of a uniformly airbrushed surface;
 - preserved facial identity, age, expression, and scene lighting logic.
 
 The decision applies only when a visible person or model is part of a
@@ -106,7 +110,9 @@ The focused contract must prove that:
 5. A complexion reference is limited to complexion/white-balance/material
    semantics and cannot transfer identity or other reference-owned channels;
 6. commercial complexion direction prefers neutral hue before additional
-   brightness and preserves face-plane highlights rather than a global sheen;
+   brightness, separates complexion material from scene color cast, keeps
+   camera-resolved microvariation, and preserves face-plane highlights rather
+   than a global sheen;
 7. General, E-Commerce, Photography, adult, young-person, and low-key scenes
    continue using the same shared capability without leakage.
 

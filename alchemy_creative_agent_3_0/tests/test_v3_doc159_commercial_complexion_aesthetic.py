@@ -50,6 +50,10 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "softly neutral and light with restrained peach-pink warmth" in SYSTEM_PROMPT
     assert "brightness come from clean scene light, not lifted exposure" in SYSTEM_PROMPT
     assert "follow the face's planes instead of diffusing across the whole face" in SYSTEM_PROMPT
+    assert "Keep the person's complexion as its own material judgement" in SYSTEM_PROMPT
+    assert "separation from scene color cast" in SYSTEM_PROMPT
+    assert "camera-resolved, nonuniform skin microvariation" in SYSTEM_PROMPT
+    assert "do not approve it until" in SYSTEM_PROMPT
     assert "Before returning the final provider prompt" in SYSTEM_PROMPT
     assert "generic word such as natural or fair" in SYSTEM_PROMPT
     assert "This is neither a request for a preferred complexion" not in SYSTEM_PROMPT
