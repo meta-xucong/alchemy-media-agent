@@ -969,6 +969,55 @@ def test_product_api_hides_planning_only_review_warning_after_live_pixel_review(
     assert not any("output_review_metadata_only" in warning for warning in generated.warnings)
 
 
+def test_product_api_review_context_preserves_exact_user_direction(tmp_path) -> None:
+    """The shared pixel reviewer must receive prompt-owned channels explicitly.
+
+    A generated output can legitimately change wardrobe, background, hair
+    styling, or lighting relative to an identity reference.  The reviewer
+    needs the original request to distinguish those prompt-owned changes from
+    identity/reference leakage; the public review payload remains unchanged.
+    """
+
+    provider = _StaticVisionProvider(
+        {
+            "status": "pass",
+            "confidence": 0.96,
+            "issue_codes": [],
+            "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
+        }
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    user_input = (
+        "Create a natural real-camera portrait of the same person in a "
+        "plain white studio with a soft gray top and neutral lighting."
+    )
+    created = service.create_job(
+        {
+            "user_input": user_input,
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1},
+        }
+    )
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0},
+        },
+    )
+
+    assert generated.metadata["post_generation_review"]["inspections"][0]["status"] == "pass"
+    assert provider.metadata_calls
+    review_metadata = provider.metadata_calls[0]
+    assert review_metadata["user_input"] == user_input
+    assert review_metadata["original_user_input"] == user_input
+
+
 def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_failure(tmp_path) -> None:
     provider = _SequencedVisionProvider(
         [

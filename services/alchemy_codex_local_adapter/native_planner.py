@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
+import json
 from typing import Any
 
 from alchemy_creative_agent_3_0.app.generation_router import (
@@ -11,7 +13,9 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from app.providers.base import ProviderRuntimeError
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
+from alchemy_creative_agent_3_0.app.visual_assets import ProfessionalModeBinding
 from alchemy_creative_agent_3_0.app.photography_profiles import (
     GENERAL_PHOTOGRAPHY_PROFILE_ID,
     default_photographer_profile_catalog,
@@ -20,6 +24,7 @@ from alchemy_creative_agent_3_0.app.photography_profiles import (
 from .contracts import (
     NATIVE_EXECUTION_CHANNEL,
     NativeImageGenPlanRequest,
+    NativeProfessionalImageGenPlanRequest,
     NativeSpecializedImageGenPlanRequest,
     reference_mime_type,
     reference_role_for_channel,
@@ -32,6 +37,8 @@ _SPECIALIZED_TEMPLATE_SCENARIOS = {
     "ecommerce_template": "ecommerce",
     "photographer_template": "photography",
 }
+
+ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | None]
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
@@ -42,8 +49,13 @@ class PlanningOnlyGenerationRouter:
 class CodexNativeImageGenPlanner:
     """Freeze and expose V3's canonical final provider prompts, never pixels."""
 
-    def __init__(self, runtime_factory: Callable[[], ScenarioRuntime] | None = None) -> None:
+    def __init__(
+        self,
+        runtime_factory: Callable[[], ScenarioRuntime] | None = None,
+        professional_binding_resolver: ProfessionalBindingResolver | None = None,
+    ) -> None:
         self._runtime_factory = runtime_factory or self._default_runtime
+        self._professional_binding_resolver = professional_binding_resolver
 
     @staticmethod
     def _default_runtime() -> ScenarioRuntime:
@@ -147,9 +159,132 @@ class CodexNativeImageGenPlanner:
             },
         )
 
+    def prepare_frozen_professional_native_imagegen_plan(
+        self,
+        request: NativeProfessionalImageGenPlanRequest,
+    ) -> dict[str, Any]:
+        """Project one server-bound Professional plan without owning pixels.
+
+        The resolver is intentionally injected by the embedding host.  It is
+        the only place allowed to look up the active People Asset/Face pack;
+        the MCP payload contains selectors, never a binding or pack record.
+        Without a resolver this conversation-only adapter fails closed.
+        """
+
+        scenario_id = {
+            "general_template": "general_creative",
+            **_SPECIALIZED_TEMPLATE_SCENARIOS,
+        }.get(request.template_id)
+        if scenario_id is None:
+            return self._blocked(
+                "codex_native_imagegen_template_invalid",
+                "The selected template is unavailable for Professional Native ImageGen planning.",
+            )
+        if self._professional_binding_resolver is None:
+            return self._blocked(
+                "codex_native_imagegen_professional_binding_unavailable",
+                "Professional Native ImageGen requires a server-owned People Asset binding resolver.",
+            )
+
+        job_id = self._professional_job_id(request)
+        try:
+            binding = self._professional_binding_resolver(
+                project_id=request.project_id,
+                people_asset_id=request.people_asset_id,
+                job_id=job_id,
+                reference_view_ids=list(request.professional_identity_view_ids),
+            )
+        except Exception:
+            return self._blocked(
+                "codex_native_imagegen_professional_binding_invalid",
+                "The server-owned Professional binding could not be resolved.",
+            )
+        if not isinstance(binding, ProfessionalModeBinding):
+            return self._blocked(
+                "codex_native_imagegen_professional_binding_unavailable",
+                "The server-owned Professional binding resolver returned no valid binding.",
+            )
+        if (
+            binding.job_id != job_id
+            or binding.project_id != request.project_id
+            or binding.people_asset_id != request.people_asset_id
+            or binding.identity_view_ids != list(request.professional_identity_view_ids)
+        ):
+            return self._blocked(
+                "codex_native_imagegen_professional_binding_invalid",
+                "The server-owned Professional binding does not match the requested job selectors.",
+            )
+
+        scenario_selection: dict[str, Any] = {
+            "scenario_id": scenario_id,
+            "parameters": {
+                "requested_image_count": request.requested_image_count,
+                **({"requested_image_size": request.requested_image_size} if request.requested_image_size else {}),
+            },
+        }
+        metadata: dict[str, Any] = {}
+        if request.template_id == "ecommerce_template":
+            scenario_selection["platform_profile"] = request.platform_profile
+        elif request.template_id == "photographer_template":
+            scenario_selection.update(
+                {
+                    "mode_id": request.photography_mode,
+                }
+            )
+            profile_binding = default_photographer_profile_catalog().resolve_binding(
+                scenario_id="photography",
+                profile_id=GENERAL_PHOTOGRAPHY_PROFILE_ID,
+                selection_source=None,
+            )
+            metadata = {
+                "photographer_profile_binding": profile_binding.model_dump(mode="json"),
+            }
+        metadata.update(
+            {
+                "professional_mode": "professional",
+                "project_id": request.project_id,
+                "professional_mode_binding_record": binding.model_dump(mode="json"),
+                "local_mcp_professional_relay": True,
+                "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                **(
+                    {"professional_reference_stage": request.professional_reference_stage}
+                    if request.professional_reference_stage
+                    else {}
+                ),
+            }
+        )
+        result = self._prepare_frozen_plan(
+            request,
+            scenario_id=scenario_id,
+            scenario_selection=scenario_selection,
+            metadata=metadata,
+        )
+        if result.get("status") == "planned_for_codex_native_imagegen":
+            result["provenance"].update(
+                {
+                    "professional_mode": True,
+                    "professional_binding": binding.to_brain_evidence(),
+                    "professional_identity_view_ids": list(binding.identity_view_ids),
+                    "professional_reference_stage": request.professional_reference_stage,
+                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_binding_evidence_sha256": self._binding_evidence_sha256(binding),
+                }
+            )
+        return result
+
+    @staticmethod
+    def _professional_job_id(request: NativeProfessionalImageGenPlanRequest) -> str:
+        job_scope = f"{request.project_id}::{request.template_id}"
+        return stable_id("job", request.user_input, None, job_scope, None)
+
+    @staticmethod
+    def _binding_evidence_sha256(binding: ProfessionalModeBinding) -> str:
+        payload = json.dumps(binding.to_brain_evidence(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def _prepare_frozen_plan(
         self,
-        request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest,
+        request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest | NativeProfessionalImageGenPlanRequest,
         *,
         scenario_id: str,
         scenario_selection: dict[str, Any],
@@ -208,12 +343,36 @@ class CodexNativeImageGenPlanner:
         if not envelope_id:
             return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
         try:
-            materializations = self._canonical_materializations(result.planning_result)
+            materialization_metadata: dict[str, Any] = {}
+            if isinstance(request, NativeProfessionalImageGenPlanRequest):
+                materialization_metadata = {
+                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_reference_stage": request.professional_reference_stage,
+                }
+            materializations = self._canonical_materializations(
+                result.planning_result,
+                metadata_overrides=materialization_metadata,
+            )
         except (ProviderRuntimeError, ValueError):
             return self._blocked(
                 "codex_native_imagegen_canonical_prompt_unavailable",
                 "V3 could not materialize one canonical Provider prompt for every requested output.",
             )
+        if isinstance(request, NativeProfessionalImageGenPlanRequest):
+            for materialization in materializations:
+                admitted_source_ids = {
+                    str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
+                    for item in materialization.reference_assets
+                    if isinstance(item, dict)
+                }
+                missing_source_ids = [
+                    item.asset_id for item in request.reference_inputs if item.asset_id not in admitted_source_ids
+                ]
+                if missing_source_ids:
+                    return self._blocked(
+                        "codex_native_imagegen_professional_reference_parity_mismatch",
+                        "The shared Provider materializer did not admit every Professional serial-chain reference; no image was created.",
+                    )
         if len(materializations) != request.requested_image_count:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
         canonical_prompt_signing = self._canonical_prompt_signing_provenance(
@@ -253,6 +412,15 @@ class CodexNativeImageGenPlanner:
                         "source_sha256": [item.source_sha256 for item in request.reference_inputs],
                     },
                 }
+                # Keep the legacy NativeImageGenPlanRequest contract stable;
+                # Professional relay callers additionally receive the exact
+                # admitted source lineage needed for serial-chain parity.
+                if isinstance(request, NativeProfessionalImageGenPlanRequest):
+                    output["reference_input_contract"]["admitted_reference_source_asset_ids"] = [
+                        str(item.get("source_asset_id") or item.get("asset_id") or "")
+                        for item in materialization.reference_assets
+                        if isinstance(item, dict)
+                    ]
                 output.update(self._specialized_lineage_projection(request.template_id, deliverables[index - 1]))
             except ValueError:
                 return self._blocked(
@@ -342,7 +510,9 @@ class CodexNativeImageGenPlanner:
         return {"photography_lineage_role": role}
 
     @staticmethod
-    def _uploaded_assets(request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest) -> list[UploadedAssetInfo]:
+    def _uploaded_assets(
+        request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest | NativeProfessionalImageGenPlanRequest,
+    ) -> list[UploadedAssetInfo]:
         """Translate explicit local files into the ordinary V3 upload shape.
 
         No copy, upload store, or alternate reference resolver is created
@@ -360,7 +530,17 @@ class CodexNativeImageGenPlanner:
                 metadata={
                     "provider_input_required": True,
                     "source_integrity_id": item.source_sha256,
-                    "codex_native_reference_channel": item.channel,
+                    # Keep the shared Brain's existing public channel vocabulary
+                    # stable; the adapter-only source label remains separate.
+                    "codex_native_reference_channel": (
+                        "portrait_identity" if item.channel == "selected_identity_reference" else item.channel
+                    ),
+                    "codex_native_selected_identity_reference": item.channel == "selected_identity_reference",
+                    "selected_generated_output": item.channel == "selected_identity_reference",
+                    "source_type": (
+                        "selected_generated_output" if item.channel == "selected_identity_reference" else "uploaded"
+                    ),
+                    "output_id": item.asset_id if item.channel == "selected_identity_reference" else None,
                     "v3_owned_upload": True,
                 },
             )
@@ -368,7 +548,11 @@ class CodexNativeImageGenPlanner:
         ]
 
     @staticmethod
-    def _canonical_materializations(planning_result: Any) -> list[Any]:
+    def _canonical_materializations(
+        planning_result: Any,
+        *,
+        metadata_overrides: dict[str, Any] | None = None,
+    ) -> list[Any]:
         """Materialize every output through the exact Web Provider boundary.
 
         This creates no Web client, does not select an upstream account, and
@@ -386,12 +570,26 @@ class CodexNativeImageGenPlanner:
         materializer = ProductionImageGenerationProvider(output_store=object())
         materializations: list[Any] = []
         for asset in planning_result.series_plan.assets:
+            generation_plan = generation_plans[asset.asset_id]
+            if metadata_overrides:
+                generation_plan = generation_plan.model_copy(
+                    update={
+                        "metadata": {
+                            **(
+                                generation_plan.metadata
+                                if isinstance(generation_plan.metadata, dict)
+                                else {}
+                            ),
+                            **metadata_overrides,
+                        }
+                    }
+                )
             request = build_provider_generation_request(
                 asset_spec=asset,
                 layout_plan=layouts[asset.asset_id],
                 prompt_compilation=prompts[asset.asset_id],
                 condition_plan=conditions[asset.asset_id],
-                generation_plan=generation_plans[asset.asset_id],
+                generation_plan=generation_plan,
                 job_id=planning_result.creative_job.job_id,
             )
             materializations.append(materializer.materialize_final_prompt(request))

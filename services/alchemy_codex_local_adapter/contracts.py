@@ -29,10 +29,22 @@ _SPECIALIZED_ALLOWED_TOP_LEVEL_FIELDS = {
     "photography_mode",
     "photographer_profile_id",
 }
+_PROFESSIONAL_ALLOWED_TOP_LEVEL_FIELDS = {
+    *_ALLOWED_TOP_LEVEL_FIELDS,
+    "project_id",
+    "people_asset_id",
+    "professional_identity_view_ids",
+    "professional_reference_stage",
+    "platform_profile",
+    "photography_mode",
+    "photographer_profile_id",
+}
 _ALLOWED_REFERENCE_FIELDS = {"channel", "file_path"}
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
-_HARD_REFERENCE_CHANNELS = frozenset({"portrait_identity", "product_truth", "nonhuman_identity"})
+_HARD_REFERENCE_CHANNELS = frozenset(
+    {"portrait_identity", "selected_identity_reference", "product_truth", "nonhuman_identity"}
+)
 
 
 class CodexNativeImageGenError(RuntimeError):
@@ -328,11 +340,201 @@ class NativeSpecializedImageGenPlanRequest:
         return request
 
 
+@dataclass(frozen=True)
+class NativeProfessionalImageGenPlanRequest:
+    """Public Professional Mode selectors for one frozen canonical plan.
+
+    ``project_id`` and ``people_asset_id`` are selectors only.  The MCP
+    caller cannot provide the binding, pack version, job id, prompt, provider
+    metadata, or any storage handle; an embedding host must resolve those
+    server-owned records through the planner's trusted resolver seam.
+    """
+
+    user_input: str
+    template_id: str
+    requested_image_count: int
+    requested_image_size: str | None
+    reference_inputs: tuple[NativeReferenceInput, ...]
+    project_id: str
+    people_asset_id: str
+    professional_identity_view_ids: tuple[str, ...]
+    professional_reference_stage: str | None = None
+    platform_profile: str | None = None
+    photography_mode: str | None = None
+    photographer_profile_id: str | None = None
+
+    @classmethod
+    def from_mcp_arguments(cls, value: Any) -> "NativeProfessionalImageGenPlanRequest":
+        if not isinstance(value, dict) or set(value) - _PROFESSIONAL_ALLOWED_TOP_LEVEL_FIELDS:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_invalid_input",
+                "Only the documented Professional frozen-plan fields are accepted.",
+            )
+        required = {
+            *_ALLOWED_TOP_LEVEL_FIELDS,
+            "project_id",
+            "people_asset_id",
+            "professional_identity_view_ids",
+        }
+        if missing := (required - set(value)):
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_invalid_input",
+                f"Missing required Professional planning fields: {', '.join(sorted(missing))}.",
+            )
+        _reject_sensitive_structured_keys(value)
+        common = NativeImageGenPlanRequest.from_mcp_arguments(
+            {key: value[key] for key in _ALLOWED_TOP_LEVEL_FIELDS}
+        )
+
+        stage_value = value.get("professional_reference_stage")
+        if stage_value is None:
+            professional_reference_stage = {
+                1: "standard_front",
+                2: "three_quarter",
+                3: "profile",
+            }.get(len(common.reference_inputs))
+        elif isinstance(stage_value, str) and stage_value.strip() in {"standard_front", "three_quarter", "profile"}:
+            professional_reference_stage = stage_value.strip()
+        else:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_professional_input_invalid",
+                "professional_reference_stage must be standard_front, three_quarter, profile, or null.",
+            )
+        if professional_reference_stage is not None:
+            expected_reference_count = {
+                "standard_front": 1,
+                "three_quarter": 2,
+                "profile": 3,
+            }[professional_reference_stage]
+            if len(common.reference_inputs) != expected_reference_count:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    f"{professional_reference_stage} requires exactly {expected_reference_count} serial identity references.",
+                )
+            if common.reference_inputs[0].channel != "portrait_identity":
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    "Professional serial identity references must start with the immutable root portrait reference.",
+                )
+            if any(item.channel != "selected_identity_reference" for item in common.reference_inputs[1:]):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_reference_chain_invalid",
+                    "Professional serial identity references after the root must be reviewed generated winners.",
+                )
+
+        def identifier(field: str) -> str:
+            raw = value.get(field)
+            if not isinstance(raw, str) or not _IDENTIFIER.fullmatch(raw.strip()):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_input_invalid",
+                    f"{field} must be a valid identifier.",
+                )
+            return raw.strip()
+
+        raw_view_ids = value.get("professional_identity_view_ids")
+        if not isinstance(raw_view_ids, list) or not 1 <= len(raw_view_ids) <= 3:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_professional_views_invalid",
+                "Professional Mode requires one to three selected active identity view IDs.",
+            )
+        view_ids: list[str] = []
+        for raw_view_id in raw_view_ids:
+            if not isinstance(raw_view_id, str) or not _IDENTIFIER.fullmatch(raw_view_id.strip()):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_views_invalid",
+                    "Professional identity view IDs must be valid identifiers.",
+                )
+            view_id = raw_view_id.strip()
+            if view_id in view_ids:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_views_invalid",
+                    "Professional identity view IDs must be unique.",
+                )
+            view_ids.append(view_id)
+
+        def optional_identifier(field: str) -> str | None:
+            raw = value.get(field)
+            if raw is None:
+                return None
+            if not isinstance(raw, str) or not _IDENTIFIER.fullmatch(raw.strip()):
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_input_invalid",
+                    f"{field} must be a valid identifier or null.",
+                )
+            return raw.strip()
+
+        platform_profile = optional_identifier("platform_profile")
+        photography_mode = optional_identifier("photography_mode")
+        photographer_profile_id = optional_identifier("photographer_profile_id")
+        if common.template_id == "ecommerce_template":
+            if platform_profile is None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_platform_profile_required",
+                    "Professional E-Commerce planning requires an explicit platform profile.",
+                )
+            if photography_mode is not None or photographer_profile_id is not None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_input_invalid",
+                    "Photography controls are not accepted for E-Commerce Professional planning.",
+                )
+        elif common.template_id == "photographer_template":
+            if platform_profile is not None:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_professional_input_invalid",
+                    "Platform controls are not accepted for Photography Professional planning.",
+                )
+            if photography_mode not in {"single_hero", "reference_reshoot", "professional_set"}:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_photography_mode_required",
+                    "Professional Photography planning requires an explicit photography mode.",
+                )
+            expected_count = 3 if photography_mode == "professional_set" else 1
+            if common.requested_image_count != expected_count:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_count_mismatch",
+                    "The requested Photography output count does not match its frozen structural mode.",
+                )
+            if photographer_profile_id not in {None, "general_photography"}:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_named_profile_project_binding_required",
+                    "A named Photography profile requires the existing Project/API immutable binding.",
+                )
+        elif common.template_id != "general_template":
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_template_invalid",
+                "Professional frozen planning supports only the existing General, E-Commerce, or Photography templates.",
+            )
+        elif any(item is not None for item in (platform_profile, photography_mode, photographer_profile_id)):
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_professional_input_invalid",
+                "Specialized controls are not accepted for General Professional planning.",
+            )
+
+        return cls(
+            user_input=common.user_input,
+            template_id=common.template_id,
+            requested_image_count=common.requested_image_count,
+            requested_image_size=common.requested_image_size,
+            reference_inputs=common.reference_inputs,
+            project_id=identifier("project_id"),
+            people_asset_id=identifier("people_asset_id"),
+            professional_identity_view_ids=tuple(view_ids),
+            professional_reference_stage=professional_reference_stage,
+            platform_profile=platform_profile,
+            photography_mode=photography_mode,
+            photographer_profile_id=photographer_profile_id,
+        )
+
+
 def reference_role_for_channel(channel: str) -> str:
     """Map only input provenance channels to existing V3 asset roles."""
 
     return {
         "portrait_identity": "face_reference",
+        # Professional M5 serial stages use this existing face-reference role
+        # for reviewed generated winners.  The channel name keeps the source
+        # ownership explicit without inventing a new shared asset enum.
+        "selected_identity_reference": "face_reference",
         "product_truth": "product_reference",
         "nonhuman_identity": "nonhuman_identity_reference",
         "style_reference": "style_reference",

@@ -1,8 +1,9 @@
 # Alchemy Codex Native ImageGen Mode
 
 This isolated Docs130/131/133 plugin gives an interactive Codex agent two local
-stdio MCP canonical-prompt tools: `prepare_native_imagegen_plan` and
-`prepare_frozen_specialized_native_imagegen_plan`. It does not create
+stdio MCP canonical-prompt tools: `prepare_native_imagegen_plan`,
+`prepare_frozen_specialized_native_imagegen_plan`, and
+`prepare_frozen_professional_native_imagegen_plan`. It does not create
 images, open a listener, start a background worker, control Codex, call an
 image Provider, or change Web Mode. It does use the configured remote Central
 Brain because an exact final Provider prompt cannot be created from a local
@@ -50,6 +51,28 @@ original path; it does not collapse them into a local recipe or substitute a
 crop. Byte-identical files are one source and are transparently coalesced by
 the shared Provider boundary, with declared/admitted counts retained.
 
+The Professional relay is a separate explicit entry point. It accepts only
+the existing template selectors, `project_id`, `people_asset_id`, bounded
+active identity-view selectors, and the same reference declarations. The
+embedding host must resolve those selectors to its server-owned active People
+Asset/Face Identity binding; without that resolver the plugin fails closed.
+Callers cannot provide a binding, pack version, job ID, provider metadata,
+prompt, or storage handle. `selected_identity_reference` is an adapter-only
+hard channel for the serial M5 chain and maps to the existing shared
+face-reference role; it does not add a public capability.
+
+For the Professional serial anchor-pack stages, the server-owned strategy
+`serial_anchor_pack_root_reuse_v1` reuses one already-prepared root identity
+anchor after the front stage. Three-quarter therefore receives root
+view-conditioned geometry plus the front winner's feature-detail and
+view-conditioned geometry; profile receives root view-conditioned geometry plus
+the front and three-quarter winners' two derivatives each. This is the shared
+Provider's bounded five-reference contract, not an extra image generation or a
+caller-selected crop. Standard Mode and ordinary non-serial reference
+requests retain their existing derivative behavior. A supplementary stage is
+blocked before Provider dispatch if any required feature/pose evidence scope is
+missing.
+
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the
 same final Unicode prompt and rendering parameters that Web Mode's Provider
@@ -60,7 +83,16 @@ the built-in tool is unavailable, stop without a fallback.
 
 Reference/image-to-image parity is described in Doc131. Codex must pass each
 returned `reference_image_paths` list unchanged with the returned
-`imagegen_prompt`. Text-to-image returns an empty list.
+`imagegen_prompt`. Text-to-image returns an empty list. The host must also
+record an exact renderer parity receipt (renderer, model, size, quality, and
+format); a missing or mismatched field is blocked/non-counting evidence.
+
+For a real Professional relay, the embedding host may start the MCP with an
+explicit metadata-only catalog root, for example
+`--professional-asset-catalog-root <catalog-root>`. This is process
+configuration, never a request field, and it reads only the existing
+People-Asset/Face-Identity metadata. Without it, the Professional relay
+correctly fails closed.
 
 ## Local repository setup
 
@@ -92,8 +124,8 @@ renderer=codex_builtin_imagegen
 delivery_state=conversation_only_not_certified
 ```
 
-It cannot support a Provider Gate, General Gate D, Photography P10, or an
-E-Commerce production gate.
+It cannot support a Provider Gate, General Gate D, Photography P10,
+E-Commerce production gate, or Professional M5 pixel certification.
 
 Validate the plugin after manifest changes:
 

@@ -81,8 +81,16 @@ def prepare_reference_truth_derivatives(
     asset_id: str = "",
     truth_layers: list[str] | tuple[str, ...] | None = None,
     reference_policy: dict[str, Any] | None = None,
+    portrait_identity_derivative_kinds: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    """Create provider-only focused references without changing the user's upload."""
+    """Create provider-only focused references without changing the user's upload.
+
+    Professional serial anchor stages may provide a bounded derivative list for
+    an already-prepared root identity anchor.  The default remains the legacy
+    complementary feature-detail plus head-geometry pair for every portrait
+    source, so Standard Mode and ordinary reference-conditioned jobs are
+    unchanged.
+    """
     try:
         source = Path(str(path))
         if not source.exists() or not source.is_file():
@@ -92,21 +100,26 @@ def prepare_reference_truth_derivatives(
             return []
         derivatives: list[dict[str, Any]] = []
         if "portrait_identity_truth" in layers:
-            derivatives.append(
-                _truth_derivative(
-                    source,
-                    asset_id=asset_id,
-                    kind="portrait_identity_crop",
-                    reference_policy=reference_policy,
-                )
+            allowed_kinds = {
+                "portrait_identity_crop",
+                "portrait_identity_geometry_crop",
+                "portrait_identity_pose_geometry_crop",
+            }
+            requested_kinds = (
+                tuple(portrait_identity_derivative_kinds)
+                if portrait_identity_derivative_kinds is not None
+                else ("portrait_identity_crop", "portrait_identity_geometry_crop")
             )
-            derivatives.append(
+            if any(kind not in allowed_kinds for kind in requested_kinds):
+                return []
+            derivatives.extend(
                 _truth_derivative(
                     source,
                     asset_id=asset_id,
-                    kind="portrait_identity_geometry_crop",
+                    kind=kind,
                     reference_policy=reference_policy,
                 )
+                for kind in requested_kinds
             )
         if "product_identity_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="product_truth_crop"))
@@ -175,6 +188,7 @@ def _truth_derivative(
     truth_layer = {
         "portrait_identity_crop": "portrait_identity_truth",
         "portrait_identity_geometry_crop": "portrait_identity_truth",
+        "portrait_identity_pose_geometry_crop": "portrait_identity_truth",
         "product_truth_crop": "product_identity_truth",
         "appearance_truth_crop": "structured_appearance_truth",
     }.get(kind, "style_context_truth")
@@ -185,9 +199,19 @@ def _truth_derivative(
         "path": str(target),
         "path_name": Path(str(target)).name,
         "fallback_to_original": bool(fallback),
-        "identity_color_neutralized": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
+        "identity_color_neutralized": kind in {
+            "portrait_identity_crop",
+            "portrait_identity_geometry_crop",
+            "portrait_identity_pose_geometry_crop",
+        } and not fallback,
         "identity_color_retention": (
-            0.90 if kind == "portrait_identity_crop" else 0.65 if kind == "portrait_identity_geometry_crop" else None
+            0.90
+            if kind == "portrait_identity_crop"
+            else 0.65
+            if kind == "portrait_identity_geometry_crop"
+            else 0.58
+            if kind == "portrait_identity_pose_geometry_crop"
+            else None
         ),
         "identity_outer_color_retention": isolation.get("outer_color_retention") if not fallback else None,
         "identity_channel_isolation_applied": bool(isolation.get("applies")) and not fallback,
@@ -195,11 +219,25 @@ def _truth_derivative(
         "identity_prompt_owned_channels": list(isolation.get("prompt_owned_channels") or []) if not fallback else [],
         "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
         "identity_background_neutralized": False,
-        "identity_context_reduced_by_tight_crop": kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback,
+        "identity_context_reduced_by_tight_crop": kind in {
+            "portrait_identity_crop",
+            "portrait_identity_geometry_crop",
+            "portrait_identity_pose_geometry_crop",
+        } and not fallback,
         "identity_evidence_scope": (
-            "feature_detail" if kind == "portrait_identity_crop" else "head_geometry" if kind == "portrait_identity_geometry_crop" else None
+            "feature_detail"
+            if kind == "portrait_identity_crop"
+            else "head_geometry"
+            if kind == "portrait_identity_geometry_crop"
+            else "pose_geometry"
+            if kind == "portrait_identity_pose_geometry_crop"
+            else None
         ),
-        "identity_gateway_min_edge_px": 512 if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"} and not fallback else None,
+        "identity_gateway_min_edge_px": 512 if kind in {
+            "portrait_identity_crop",
+            "portrait_identity_geometry_crop",
+            "portrait_identity_pose_geometry_crop",
+        } and not fallback else None,
         "provider_only": True,
     }
 
@@ -216,7 +254,11 @@ def _cropped_reference_path(
         return source
 
     max_bytes = max(128_000, int(settings.openai_image_reference_max_upload_bytes))
-    if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
+    if kind in {
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
+    }:
         max_bytes = min(max_bytes, 480_000)
     max_edge = max(512, int(settings.openai_image_reference_max_edge))
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
@@ -237,10 +279,20 @@ def _cropped_reference_path(
         image = _to_rgb_on_white(image, Image)
         box = _truth_crop_box(image.size, kind)
         cropped = image.crop(box)
-        if kind in {"portrait_identity_crop", "portrait_identity_geometry_crop"}:
+        if kind in {
+            "portrait_identity_crop",
+            "portrait_identity_geometry_crop",
+            "portrait_identity_pose_geometry_crop",
+        }:
             from PIL import ImageEnhance
 
-            color_retention = 0.90 if kind == "portrait_identity_crop" else 0.65
+            color_retention = (
+                0.90
+                if kind == "portrait_identity_crop"
+                else 0.65
+                if kind == "portrait_identity_geometry_crop"
+                else 0.58
+            )
             if isolation.get("applies"):
                 cropped = _isolate_prompt_owned_identity_channels(
                     cropped,
@@ -284,7 +336,11 @@ def _identity_channel_isolation_profile(
     kind: str,
 ) -> dict[str, Any]:
     policy = dict(reference_policy or {})
-    if kind not in {"portrait_identity_crop", "portrait_identity_geometry_crop"} or not policy:
+    if kind not in {
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
+    } or not policy:
         return {"applies": False, "profile_id": "legacy_identity_evidence", "cache_key": "legacy"}
     prompt_owned = {
         str(item)
@@ -324,7 +380,13 @@ def _identity_channel_isolation_profile(
         and str(policy.get("source_role") or "") == "portrait_identity_reference"
         and not hair_is_assigned
     )
-    outer_retention = 0.12 if kind == "portrait_identity_crop" else 0.06
+    outer_retention = (
+        0.12
+        if kind == "portrait_identity_crop"
+        else 0.10
+        if kind == "portrait_identity_pose_geometry_crop"
+        else 0.06
+    )
     return {
         "applies": applies,
         "profile_id": "prompt_owned_channel_isolation_v1" if applies else "assigned_channel_preservation_v1",
@@ -357,6 +419,11 @@ def _isolate_prompt_owned_identity_channels(
     width, height = image.size
     if kind == "portrait_identity_crop":
         box = (width * 0.23, height * 0.19, width * 0.77, height * 0.98)
+    elif kind == "portrait_identity_pose_geometry_crop":
+        # Keep the contour and view cues (ears, neck and shoulder direction)
+        # available for a supplementary stage, while still fading prompt-owned
+        # hair/wardrobe/light/scene channels outside the face region.
+        box = (width * 0.14, height * 0.10, width * 0.86, height * 0.97)
     else:
         box = (width * 0.20, height * 0.16, width * 0.80, height * 0.95)
     draw.ellipse(tuple(int(round(value)) for value in box), fill=255)
@@ -401,6 +468,22 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
             crop_h = int(height * 0.58)
             center_x = width * 0.5
             center_y = height * 0.29
+    elif kind == "portrait_identity_pose_geometry_crop":
+        if height > width * 1.15:
+            crop_w = int(width * 0.94)
+            crop_h = int(height * 0.76)
+            center_x = width * 0.5
+            center_y = height * 0.40
+        elif width > height * 1.15:
+            crop_w = int(width * 0.68)
+            crop_h = int(height * 0.96)
+            center_x = width * 0.5
+            center_y = height * 0.46
+        else:
+            crop_w = int(width * 0.84)
+            crop_h = int(height * 0.70)
+            center_x = width * 0.5
+            center_y = height * 0.38
     elif kind == "appearance_truth_crop":
         crop_w = int(width * 0.88)
         crop_h = int(height * 0.92)

@@ -253,6 +253,7 @@ def test_specialized_mcp_tool_is_explicit_and_general_contract_remains_compatibl
     assert [tool["name"] for tool in TOOL_SCHEMAS] == [
         "prepare_native_imagegen_plan",
         "prepare_frozen_specialized_native_imagegen_plan",
+        "prepare_frozen_professional_native_imagegen_plan",
     ]
     unavailable_runtime = _CapturingRuntime(
         ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider(fault="unavailable")))
