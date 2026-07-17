@@ -106,12 +106,12 @@ public data shape and add the contract under `asset_context`.
 
 ### 4.2 `source_text_evidence.py`: extract facts before generation
 
-This module turns a dense source into a `SourceEvidenceManifest`.  The first
-implementation uses the locally installed Tesseract executable through an
-optional Python wrapper.  It records an explicit `unavailable`, `failed`,
-`no_text_detected`, or `extracted` receipt when that engine is absent or cannot
-read the source.  A future approved V2 vision extractor can use the same
-manifest shape.
+This module turns a dense source into a `SourceEvidenceManifest`. The first
+implementation uses RapidOCR/ONNX Runtime for local Chinese/English OCR and
+falls back to an installed Tesseract executable. It records an explicit
+`unavailable`, `failed`, `no_text_detected`, or `extracted` receipt when no
+engine can read the source. A future approved V2 vision extractor can use the
+same manifest shape.
 
 The manifest stores structured fields, confidence, bounding regions, and
 content hashes:
@@ -302,13 +302,13 @@ parts of Phase C:
   role-level intents while deduplicating provider inputs, separates
   template-owned frame fields from source-owned facts, and emits a
   persistence-safe audit summary.
-- `source_text_evidence.py` performs line-level local OCR only when Tesseract
-  is available. `uploaded_asset_vision.py` records a safe availability receipt
-  and keeps raw detected copy in the protected V2 asset brief for prompt
-  composition only.
-- `prompting.py` compiles required source facts as a required intent section;
-  the existing 12,000-character integrity compiler fails preflight instead of
-  cropping a required section.
+- `source_text_evidence.py` performs line-level local OCR through RapidOCR,
+  with Tesseract as a fallback. `uploaded_asset_vision.py` records a safe
+  availability receipt and keeps raw detected copy in protected V2 evidence
+  only; it is never expanded into a keyword list in the provider prompt.
+- `prompting.py` compiles one short source-authority instruction, while the
+  existing 12,000-character integrity compiler continues to fail preflight
+  instead of cropping the user's required intent.
 - `reference_provider.py` materializes only declared provider capabilities and
   records whether a requested hard-reference fidelity control was intentionally
   omitted for lack of model support.
@@ -324,8 +324,7 @@ parts of Phase C:
   typography from a generated image.
 
 This is a deliberate delivery boundary, not a silent fallback. On a host
-without Tesseract (the current local development host has the Python wrapper
-but no executable), an information-dense upload remains eligible for visual
-generation but cannot be marked automatically deliverable. Enabling an OCR
-engine or an approved V2 pixel-review implementation is the remaining runtime
+without RapidOCR or Tesseract, an information-dense upload remains eligible for
+visual generation but cannot be marked automatically deliverable. Enabling one
+of those engines and an approved V2 pixel-review implementation is the runtime
 dependency before a live menu/poster can pass the full content-fidelity gate.

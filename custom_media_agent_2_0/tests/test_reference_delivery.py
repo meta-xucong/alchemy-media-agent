@@ -9,6 +9,7 @@ from app.schemas import ImageJob, ImageOutput, ImagePromptPlan, ImageReviewDecis
 from app.services.copy_safe_compositor import apply_deterministic_text_overlay
 from app.services.intent_integrity import compile_prompt_artifact, preflight_prompt_integrity
 from app.services.output_review import review_image_job
+from app.services.prompting import compose_prompt_plan
 from app.services.reference_delivery import (
     build_reference_delivery_contract,
     reference_delivery_audit,
@@ -72,11 +73,29 @@ def test_delivery_prompt_and_audit_separate_source_copy() -> None:
     prompt_section = reference_delivery_prompt_section(contract)
     audit = reference_delivery_audit(contract)
 
-    assert "Lunch set ¥38" in prompt_section
+    assert "private V2 source-evidence record" in prompt_section
+    assert "Lunch set ¥38" not in prompt_section
     assert "Lunch set ¥38" not in repr(audit)
     assert audit["source_evidence"][0]["value_hash"]
     assert audit["source_evidence"][0]["value_length"] > 0
     assert audit["evidence_capture"] == {"status": "available", "field_count": 2}
+
+
+def test_full_provider_prompt_does_not_become_an_ocr_keyword_list() -> None:
+    context = _composite_context()
+    context["reference_delivery"] = build_reference_delivery_contract(context)
+
+    plan = compose_prompt_plan(
+        mode="smart_enhance",
+        user_prompt="Create a clean restaurant promotion using this uploaded source.",
+        cases=[],
+        output={"count": 1},
+        asset_context=context,
+    )
+
+    assert "private V2 source-evidence record" in plan.prompt
+    assert "Lunch set ¥38" not in plan.prompt
+    assert "Monday 7/20" not in plan.prompt
 
 
 def test_information_dense_source_without_text_evidence_blocks_auto_delivery() -> None:
@@ -238,31 +257,22 @@ def test_pixel_review_blocks_dense_source_when_ocr_evidence_is_unavailable(tmp_p
     assert "source_text_evidence_unavailable" in reviewed.detected_risks
 
 
-def test_source_text_evidence_groups_confident_ocr_words(monkeypatch) -> None:
-    class FakeOutput:
-        DICT = object()
+def test_source_text_evidence_keeps_recognized_lines_outside_prompt(monkeypatch) -> None:
+    class FakeRapidOCR:
+        def __call__(self, _image):
+            return [
+                [None, "Lunch set", 0.94],
+                [None, "¥38", 0.91],
+                [None, "noise", 0.12],
+            ], 0.01
 
-    class FakeTesseract:
-        @staticmethod
-        def image_to_data(*_args, **_kwargs):
-            return {
-                "text": ["Lunch", "set", "", "¥38"],
-                "conf": [94, 90, -1, 91],
-                "block_num": [1, 1, 1, 1],
-                "par_num": [1, 1, 1, 1],
-                "line_num": [1, 1, 1, 2],
-                "page_num": [1, 1, 1, 1],
-            }
+    monkeypatch.setattr("app.services.source_text_evidence._rapidocr_backend", lambda: FakeRapidOCR())
 
-    monkeypatch.setattr(
-        "app.services.source_text_evidence._tesseract_backend",
-        lambda: (FakeTesseract, FakeOutput, "eng"),
-    )
-
-    evidence, receipt = extract_source_text_evidence(object())
+    evidence, receipt = extract_source_text_evidence(Image.new("RGB", (8, 8), "white"))
 
     assert [item["text"] for item in evidence] == ["Lunch set", "¥38"]
     assert receipt["status"] == "extracted"
+    assert receipt["engine"] == "rapidocr_onnxruntime"
 
 
 def test_overlay_receipt_can_verify_explicit_source_fields_without_modifying_unknown_layout() -> None:
