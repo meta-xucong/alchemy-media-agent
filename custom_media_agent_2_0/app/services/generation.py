@@ -19,6 +19,7 @@ from app.services.intent_integrity import preflight_prompt_integrity
 from app.services.output_review import review_image_job
 from app.services.output_storage import save_provider_output
 from app.services.prompt_transform.transformer import fallback_prompt_plan, transform_prompt_plan
+from app.services.reference_delivery import reference_delivery_audit
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
 from app.services.veyra_billing_settings import get_billing_rule
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
@@ -219,6 +220,12 @@ def _job_from_result(
                 "prompt_transform": request.prompt_plan.user_variables.get("prompt_transform"),
                 "prompt_integrity": request.prompt_plan.user_variables.get("prompt_integrity"),
                 "provider_input_plan": request.prompt_plan.user_variables.get("provider_input_plan"),
+                "reference_delivery_audit": reference_delivery_audit(
+                    request.prompt_plan.user_variables.get("reference_delivery")
+                    if isinstance(request.prompt_plan.user_variables.get("reference_delivery"), dict)
+                    else None
+                ),
+                "_reference_delivery_private": request.prompt_plan.user_variables.get("reference_delivery"),
                 "visual_grammar_contract": request.prompt_plan.user_variables.get("visual_grammar_contract"),
                 "information_integrity_lock_enabled": request.prompt_plan.user_variables.get(
                     "information_integrity_lock_enabled"
@@ -294,11 +301,13 @@ def _with_prompt_integrity_preflight(request: CreateImageJobRequest) -> tuple[Cr
     effective_prompt = str(variables.get("generation_prompt") or request.prompt_plan.prompt)
     trace = variables.get("prompt_integrity") if isinstance(variables.get("prompt_integrity"), dict) else None
     provider_plan = variables.get("provider_input_plan") if isinstance(variables.get("provider_input_plan"), dict) else {}
+    reference_delivery = variables.get("reference_delivery") if isinstance(variables.get("reference_delivery"), dict) else {}
     enriched_trace = preflight_prompt_integrity(
         trace=trace,
         effective_prompt=effective_prompt,
         input_images=request.input_images,
         provider_input_plan=provider_plan,
+        reference_delivery=reference_delivery,
     )
     variables["prompt_integrity"] = enriched_trace
     prompt_plan = request.prompt_plan.model_copy(update={"user_variables": variables})

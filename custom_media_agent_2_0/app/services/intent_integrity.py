@@ -150,6 +150,7 @@ def preflight_prompt_integrity(
     effective_prompt: str,
     input_images: Iterable[Any],
     provider_input_plan: dict[str, Any] | None,
+    reference_delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a provider-safe preflight result without exposing prompt text."""
 
@@ -195,6 +196,19 @@ def preflight_prompt_integrity(
         }
     provider_plan = provider_input_plan if isinstance(provider_input_plan, dict) else {}
     expected_ids = _string_list(provider_plan.get("reference_image_asset_ids"))
+    delivery_contract = reference_delivery if isinstance(reference_delivery, dict) else {}
+    contract_ids = _string_list(delivery_contract.get("required_reference_asset_ids"))
+    if contract_ids and expected_ids != contract_ids:
+        return {
+            **result,
+            "preflight": {
+                "status": "failed",
+                "code": "reference_delivery_contract_drift",
+                "message": "The V2 reference-delivery contract does not match the provider input plan.",
+                "contract_asset_ids": contract_ids,
+                "provider_plan_asset_ids": expected_ids,
+            },
+        }
     actual_ids = _provider_input_asset_ids(provider_images)
     missing_assets = [asset_id for asset_id in expected_ids if asset_id not in actual_ids]
     if missing_assets:

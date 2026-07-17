@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageOutput
+from app.services.copy_safe_compositor import apply_deterministic_text_overlay
 from app.services.qr_preservation import preserve_requested_qr_code
 
 
@@ -22,6 +23,12 @@ PREVIEW_QUALITY = 84
 
 def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str) -> ImageOutput:
     content = base64.b64decode(encoded)
+    private_delivery_contract = output.metadata.get("_reference_delivery_private") if isinstance(output.metadata, dict) else None
+    content, overlay_receipt = apply_deterministic_text_overlay(
+        content,
+        delivery_contract=private_delivery_contract if isinstance(private_delivery_contract, dict) else None,
+        output_format=output_format,
+    )
     fmt = _normalize_format(output_format, mime_type)
     qr_result = preserve_requested_qr_code(
         content=content,
@@ -37,7 +44,7 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
     thumbnail_path = _write_thumbnail(output.output_id, content)
     preview_path = _write_preview(output.output_id, content)
     metadata = {
-        **output.metadata,
+        **{key: value for key, value in output.metadata.items() if key != "_reference_delivery_private"},
         "native_v2_storage": True,
         "storage_path": str(output_path),
         "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
@@ -46,6 +53,7 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
         "preview_url": _preview_url(output.output_id) if preview_path else None,
         "mime_type": mime_type,
         "format": fmt,
+        "deterministic_text_overlay": overlay_receipt,
     }
     if qr_result.metadata:
         metadata["pixel_preservation"] = {

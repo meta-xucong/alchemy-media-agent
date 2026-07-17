@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas import AssetBrief, ConstraintStrength, UploadedAsset
+from app.services.source_text_evidence import extract_source_text_evidence
 
 
 HARD_INPUT_ROLES = {"subject_reference", "logo_reference", "face_reference", "background_reference"}
@@ -52,6 +53,7 @@ def analyze_uploaded_asset(asset: UploadedAsset, path: Path | None) -> AssetBrie
                 accent_colors=accent_colors,
                 role=role,
             )
+            detected_text, text_evidence = extract_source_text_evidence(rgb)
             return AssetBrief(
                 asset_id=asset.asset_id,
                 role=role,
@@ -65,9 +67,11 @@ def analyze_uploaded_asset(asset: UploadedAsset, path: Path | None) -> AssetBrie
                     "width": width,
                     "height": height,
                     "stored": True,
+                    "text_evidence": text_evidence,
                 },
                 palette=palette[:8],
                 composition=composition,
+                detected_text=detected_text,
                 usable_as_input_image=True,
                 provider_input_required=_provider_input_required(role, strength),
             )
