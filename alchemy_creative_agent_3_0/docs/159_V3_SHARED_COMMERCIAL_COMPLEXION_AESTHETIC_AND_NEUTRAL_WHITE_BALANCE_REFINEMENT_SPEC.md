@@ -125,3 +125,28 @@ Doc148 remains authoritative for scene-balanced complexion and generic review
 evidence. Doc159 only resolves the boundary between natural realism and an
 explicit commercial brightness preference. Doc72 remains historical and cannot
 activate this behaviour through ethnicity or East Asian keywords.
+
+## Final acceptance closure
+
+The final controlled comparison establishes the accepted commercial form for
+this foundation capability:
+
+- complexion reads bright and neutral with restrained peach-pink warmth, not
+  yellow, orange, muddy, or artificially bleached;
+- skin retains age-appropriate, camera-resolved variation and restrained
+  face-plane highlights without oily shine, waxiness, or uniform airbrushing;
+- the person's complexion remains stable when the set or practical light is
+  strongly colored, while the scene itself keeps its requested color;
+- an adult reference may guide complexion and skin finish only when the user
+  explicitly assigns that channel; it never transfers adult identity, age,
+  facial structure, hair, wardrobe, pose, scene, or mood;
+- a full-body child commercial image is compared against the adult close-up
+  for complexion direction and material principles, not literal pixel identity
+  or identical texture scale.
+
+The controlled blue-dress MCP comparison scored approximately 8.8/10 against
+the adult standard sample's 9.2/10. The remaining difference was attributable
+to framing, age, and scene lighting rather than a material yellow cast,
+plastic skin, or an AI-specific complexion defect. This closes the current
+commercial complexion refinement; future work should open a new evidence-based
+document rather than silently changing this accepted standard.
