@@ -834,7 +834,25 @@ class HumanPhotorealismLayer:
                     evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
                 )
             forced_kind = str(metadata.get("human_subject_kind") or "person")
-            rendering_profile = _universal_rendering_profile("", metadata=metadata)
+            # The age signal is an admission fact, not a creative decision.
+            # The Brain still decides whether the request is same-age
+            # continuation or an explicit age transition and authors the
+            # complete renderer prompt. Keeping this existing typed
+            # ``age_fidelity`` value in the enforced path prevents the
+            # frozen executor from silently reverting to source-age
+            # inheritance before that Brain decision is signed.
+            explicit_age_signal = _has_explicit_age_direction(text)
+            rendering_profile = _universal_rendering_profile(
+                "",
+                metadata={
+                    **metadata,
+                    "age_fidelity": (
+                        "follow_explicit_prompt"
+                        if explicit_age_signal
+                        else metadata.get("age_fidelity")
+                    ),
+                },
+            )
             return _activation_payload(
                 applies=True,
                 primary_reason="frozen_human_realism_execution",
@@ -844,7 +862,10 @@ class HumanPhotorealismLayer:
                 strictness=str(metadata.get("human_realism_strictness") or "commercial_strict"),
                 style_profile=str(metadata.get("human_realism_style_profile") or rendering_profile["profile_id"]),
                 universal_rendering_profile=rendering_profile,
-                evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
+                evidence={
+                    "frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {}),
+                    "explicit_age_fidelity_signal": explicit_age_signal,
+                },
                 safety_sensitive_person=safety_sensitive_person,
             )
         if _truthy(metadata.get("disable_human_photorealism")):

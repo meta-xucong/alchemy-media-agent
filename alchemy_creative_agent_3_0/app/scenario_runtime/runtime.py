@@ -908,6 +908,7 @@ class ScenarioRuntime:
 
         projection = dict(ledger.provider_projection or {})
         semantic_contracts = ScenarioRuntime._active_semantic_capability_contracts(plan, ledger)
+        age_resolution = ScenarioRuntime._human_realism_age_resolution(projection)
         references = []
         for asset in request.uploaded_assets:
             role = asset.role.value if hasattr(asset.role, "value") else asset.role
@@ -918,7 +919,7 @@ class ScenarioRuntime:
                     "declared_provider_input": bool(asset.metadata.get("provider_input_required")),
                 }
             )
-        return {
+        context = {
             "protected_user_intent": projection.get("protected_user_intent"),
             "rendering_semantics": projection.get("rendering_semantics"),
             "requested_image_size": projection.get("requested_image_size"),
@@ -959,6 +960,45 @@ class ScenarioRuntime:
                 "ledger_id": ledger.ledger_id,
                 "execution_fingerprint": envelope.execution_fingerprint,
             },
+        }
+        if age_resolution:
+            context["human_realism_age_resolution"] = age_resolution
+        return context
+
+    @staticmethod
+    def _human_realism_age_resolution(provider_projection: dict[str, Any]) -> dict[str, Any]:
+        """Project the existing age policy as Brain-owned semantic context.
+
+        The runtime does not decide whether a request is an age transition. It
+        only carries the typed Human Realism policy into the canonical Brain
+        sign-off context. The Brain sees the user request, reference channels,
+        and this boundary together, then authors the complete prompt.
+        """
+
+        capabilities = provider_projection.get("capability_projection")
+        guidance = capabilities.get("human_photorealism_guidance") if isinstance(capabilities, dict) else None
+        if not isinstance(guidance, dict):
+            return {}
+        metadata = guidance.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        plugin = metadata.get("human_realism_plugin")
+        plugin = plugin if isinstance(plugin, dict) else {}
+        profile = plugin.get("universal_rendering_profile")
+        if not isinstance(profile, dict):
+            profile = metadata.get("universal_rendering_profile")
+        age_fidelity = str(profile.get("age_fidelity") or "").strip().lower() if isinstance(profile, dict) else ""
+        if age_fidelity not in {"preserve_reference", "follow_explicit_prompt", "neutral"}:
+            return {}
+        return {
+            "age_fidelity": age_fidelity,
+            "identity_continuity": "identity_critical_feature_relationships",
+            "source_age_inheritance": (
+                "not_automatic_when_current_prompt_assigns_age"
+                if age_fidelity == "follow_explicit_prompt"
+                else "preserve_for_same_age_continuation"
+            ),
+            "decision_owner": "remote_v3_llm_brain",
+            "creative_prompt_owner": "remote_v3_llm_brain",
         }
 
     @staticmethod

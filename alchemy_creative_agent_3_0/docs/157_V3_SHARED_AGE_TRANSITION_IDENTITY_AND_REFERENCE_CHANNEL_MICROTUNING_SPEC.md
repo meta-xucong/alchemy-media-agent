@@ -1,6 +1,6 @@
 # Doc157 — V3 Shared Age-Transition Identity and Reference-Channel Micro-Tuning
 
-Status: design and implementation handoff; no runtime code is changed by this document
+Status: implemented in the mainline age-transition micro-tuning milestone; visual acceptance remains separate
 
 ## 1. Purpose
 
@@ -269,3 +269,25 @@ reference ownership and user intent
 
 The central protection against overfitting is that age transition is a semantic
 ownership decision, not a new collection of age-related prompt words.
+
+## 11. Mainline implementation record
+
+The implementation keeps the existing Human Realism v6 contract and makes
+three narrow changes inside the existing foundation path:
+
+1. The enforced Human Realism executor preserves the existing typed
+   `age_fidelity` admission value instead of dropping it before canonical Brain
+   sign-off. This is evidence propagation only; it does not decide an age
+   transition locally.
+2. The canonical Brain sign-off context carries the existing age-fidelity and
+   reference-age ownership boundary. The remote Brain remains responsible for
+   distinguishing same-age continuation from explicit same-person age change
+   and for authoring the complete renderer prompt.
+3. The legacy reference-truth materializer no longer states that source age
+   and body direction are always locked when the resolved age policy assigns
+   the age to the current prompt. Brain-signed enforced prompts still bypass
+   this compatibility materializer as before.
+
+Focused Doc157/reference/age regressions pass, and the complete V3 suite passes
+with the existing two FastAPI deprecation warnings. No child, kidswear,
+template, provider, review, retry, MCP, or public-state module was added.

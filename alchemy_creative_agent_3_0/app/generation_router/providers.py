@@ -3544,8 +3544,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "Uploaded truth sources remain identity-critical for their assigned channels; selected generated references never override uploaded truth or a new explicit prompt.",
         ]
         if any("portrait_identity_truth" in self._string_list(item.get("truth_layers")) for item in sources.values()):
+            age_fidelity = self._human_realism_age_fidelity(request)
             lines.append(
-                "Portrait identity truth: preserve the same person's face geometry, feature relationships, age and body direction; the current prompt still owns hair, makeup, wardrobe, camera, scene, light, mood, and style unless explicitly locked."
+                (
+                    "Portrait identity truth: preserve the same person's identity-critical face geometry and feature relationships; when the current prompt explicitly owns an age direction, do not inherit the source person's apparent age or body maturity as an additional lock. The current prompt owns the requested age, hair, makeup, wardrobe, camera, scene, light, mood, and style unless another frozen channel explicitly locks them."
+                    if age_fidelity == "follow_explicit_prompt"
+                    else
+                    "Portrait identity truth: preserve the same person's face geometry, feature relationships, and age continuity; the current prompt still owns hair, makeup, wardrobe, camera, scene, light, mood, and style unless explicitly locked."
+                )
             )
             lines.append(
                 "Same-person identity is stricter than same archetype; same archetype is not enough."
@@ -3569,6 +3575,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "Structured appearance truth: preserve silhouette, layer order, neckline, sleeve/cuff, closure, material, pattern/trim, and accessory placement while pose, camera, scene, and fabric motion may vary."
             )
         return "\n".join(lines)
+
+    def _human_realism_age_fidelity(self, request: GenerationRequest) -> str:
+        """Read the existing typed age policy for legacy prompt compatibility.
+
+        This is not a local age classifier and it never authors a creative
+        transition. Modern enforced requests use the Brain-signed canonical
+        prompt before this compatibility materializer; this helper only keeps
+        the historical reference-truth line from contradicting an already
+        resolved ``age_fidelity`` value.
+        """
+
+        guidance = self._human_photorealism_guidance(request)
+        metadata = guidance.get("metadata") if isinstance(guidance, dict) else {}
+        if not isinstance(metadata, dict):
+            return ""
+        plugin = metadata.get("human_realism_plugin")
+        plugin = plugin if isinstance(plugin, dict) else {}
+        profile = plugin.get("universal_rendering_profile")
+        if not isinstance(profile, dict):
+            profile = metadata.get("universal_rendering_profile")
+        return str(profile.get("age_fidelity") or "").strip().lower() if isinstance(profile, dict) else ""
 
     def _provider_prompt_for_delivery(self, raw_prompt: str, *, protected_user_direction: str = "") -> str:
         raw_prompt = str(raw_prompt or "").strip()
