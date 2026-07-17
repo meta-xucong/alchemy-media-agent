@@ -33,6 +33,7 @@ def create_uploaded_asset(request: CreateUploadedAssetRequest, *, veyra_user_id:
         veyra_user_id=veyra_user_id,
         status="upload_requested" if upload_url else "rejected",
         role=request.role,
+        role_source="user_explicit" if request.role else "system_suggestion",
         constraint_strength=request.constraint_strength,
         intended_use=request.intended_use,
         upload_url=upload_url or None,
@@ -175,11 +176,14 @@ def complete_uploaded_asset(asset_id: str) -> UploadedAsset | None:
             }
         )
         return _save_uploaded_asset(failed)
+    resolved_role_source = asset.role_source if asset.role else "system_suggestion"
+    resolved_brief = brief.model_copy(update={"role_source": resolved_role_source})
     ready = asset.model_copy(
         update={
             "status": "ready",
             "role": asset.role or brief.role,
-            "brief": brief,
+            "role_source": resolved_role_source,
+            "brief": resolved_brief,
             "updated_at": utc_now(),
         }
     )
@@ -205,6 +209,7 @@ def create_uploaded_asset_from_bytes(
         veyra_user_id=veyra_user_id,
         status="stored",
         role=role,
+        role_source="user_explicit" if role else "system_suggestion",
         constraint_strength=constraint_strength,
         intended_use=intended_use,
         created_at=now,
@@ -222,11 +227,14 @@ def create_uploaded_asset_from_bytes(
         }
     )
     brief = analyze_uploaded_asset(stored, path)
+    resolved_role_source = stored.role_source if stored.role else "system_suggestion"
+    resolved_brief = brief.model_copy(update={"role_source": resolved_role_source})
     ready = stored.model_copy(
         update={
             "status": "ready",
             "role": stored.role or brief.role,
-            "brief": brief,
+            "role_source": resolved_role_source,
+            "brief": resolved_brief,
             "updated_at": utc_now(),
         }
     )
@@ -325,6 +333,7 @@ def _recover_uploaded_asset_from_file(asset_id: str) -> UploadedAsset | None:
         size_bytes=stat.st_size,
         status="ready",
         role="subject_reference",
+        role_source="system_suggestion",
         constraint_strength="strong",
         veyra_user_id=None,
         source_url=f"/api/v2/uploads/{asset_id}/content",

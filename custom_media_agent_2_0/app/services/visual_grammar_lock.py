@@ -130,6 +130,11 @@ def build_visual_grammar_contract(
         "source_layout_risk": source_layout_risk,
         "information_integrity": information_integrity,
         "asset_frame_strategy": asset_frame_strategy,
+        "template_visual_grammar_plan": (
+            (asset_context or {}).get("template_visual_grammar_plan")
+            if isinstance((asset_context or {}).get("template_visual_grammar_plan"), dict)
+            else {}
+        ),
         "critical_asset_rules": _critical_asset_rules(asset_context),
         "conflict_policy": (
             "Preserve the uploaded layout/composition frame; use retrieved cases only for compatible polish, lighting, materials, and finish. "

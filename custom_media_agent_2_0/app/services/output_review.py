@@ -82,6 +82,16 @@ def review_output(output: ImageOutput, job: ImageJob) -> ImageReviewDecision:
     if provider_input_plan.get("requires_image_reference"):
         reference_count = int(provider_input_plan.get("reference_image_count") or 0)
         notes.append(f"Provider input image plan requires {reference_count} uploaded reference image(s).")
+        if output.metadata.get("live"):
+            # A transport success proves only that the provider accepted the
+            # references.  Without a pixel-capable reviewer it cannot prove
+            # that the generated image actually followed them.
+            score = min(score, 0.78)
+            decision = "needs_review"
+            risks.append("reference_adherence_unverified")
+            directives.append(
+                "Verify visible reference adherence against the declared asset roles, placement targets, and preserve/replace intent before marking this result as passed."
+            )
         output_input_count = len(output.metadata.get("input_images") or [])
         if output_input_count < reference_count:
             score = min(score, 0.55)
