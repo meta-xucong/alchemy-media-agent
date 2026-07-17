@@ -33,11 +33,12 @@ clean product-image aesthetic without turning ethnicity into a runtime rule.
 The Brain must resolve the preference as a whole photographic decision:
 
 - neutral-to-slightly-warm white balance rather than a yellow/amber cast;
-- a bright, clean, naturally light complexion with believable tonal variation;
-- visible real skin texture and restrained matte highlights;
+- a modestly brighter, clean, naturally light complexion with believable tonal variation;
+- fine-grained, irregular real skin texture and restrained matte highlights;
 - preserved facial identity, age, expression, and scene lighting logic.
 
-The requirement is intentionally semantic. The local runtime does not classify
+“Modestly brighter” means a small aesthetic lift within the Brain's whole-image
+judgement, not a numeric exposure or skin-lightness target. The requirement is intentionally semantic. The local runtime does not classify
 ethnicity, add complexion words, choose a palette, alter pixels, or create a
 skin-specific retry.
 

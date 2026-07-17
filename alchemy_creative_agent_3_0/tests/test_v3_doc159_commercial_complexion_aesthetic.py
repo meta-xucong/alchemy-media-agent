@@ -38,6 +38,9 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "restrained matte highlights" in SYSTEM_PROMPT
     assert "neutral-to-slightly-warm scene white balance" in SYSTEM_PROMPT
     assert "muddy yellow or green cast" in SYSTEM_PROMPT
+    assert "modestly brighter" in SYSTEM_PROMPT
+    assert "fine-grained and irregular real skin microtexture" in SYSTEM_PROMPT
+    assert "airbrush or wax" in SYSTEM_PROMPT
 
 
 def test_doc159_keeps_frozen_contract_demographic_neutral_and_brain_owned() -> None:
