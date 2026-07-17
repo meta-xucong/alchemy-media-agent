@@ -1206,6 +1206,11 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                     if isinstance(canonical_context, dict)
                     else None
                 )
+                decision_requirement = (
+                    canonical_context.get("human_naturalness_decision")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
                 receipt = (
                     {"semantic_preflight_status": "approved"}
                     if isinstance(preflight, dict) and preflight.get("required")
@@ -1219,7 +1224,7 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                             "owner": "remote_v3_llm_brain",
                         }
                     }
-                    if request.stage == "provider_prompt_human_naturalness_resign"
+                    if isinstance(decision_requirement, dict) and decision_requirement.get("required") is True
                     else {}
                 )
                 return {
@@ -1359,6 +1364,11 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                     if isinstance(canonical_context, dict)
                     else None
                 )
+                decision_requirement = (
+                    canonical_context.get("human_naturalness_decision")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
                 receipt = (
                     {"semantic_preflight_status": "approved"}
                     if isinstance(preflight, dict) and preflight.get("required")
@@ -1372,7 +1382,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                             "owner": "remote_v3_llm_brain",
                         }
                     }
-                    if request.stage == "provider_prompt_human_naturalness_resign"
+                    if isinstance(decision_requirement, dict) and decision_requirement.get("required") is True
                     else {}
                 )
                 return {

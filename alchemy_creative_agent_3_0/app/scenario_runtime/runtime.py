@@ -661,11 +661,12 @@ class ScenarioRuntime:
     ) -> BrainRunResult:
         """Obtain the only renderer-facing language after shared validation.
 
-        This deliberately makes a second *sign-off* call rather than a second
-        creative-planning call.  It consumes the already-frozen Brain-owned
-        directions plus resolved facts and capability obligations.  Existing
-        frozen jobs reuse their prior sign-off unless a bounded visual retry
-        carries new resolved review evidence.
+        Planning and final sign-off remain separate because the latter needs
+        the frozen envelope and resolved constraint ledger. Human Realism's
+        semantic preflight and natural-presence decision are part of this same
+        final sign-off request. They remain Brain-owned decisions, but a
+        second serial Brain request is unnecessary duplication: the finalizer
+        can author and review the complete prompt in one response.
         """
 
         if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
@@ -697,6 +698,15 @@ class ScenarioRuntime:
                 "human_realism_semantic_contract_missing",
                 brain_result,
             ) from exc
+        if "human_realism" in plan.dependency_order:
+            # This typed receipt requirement travels with the same frozen
+            # context as the final prompt. It is not a prompt fragment.
+            canonical_prompt_context["human_naturalness_decision"] = {
+                "required": True,
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "owner": "remote_v3_llm_brain",
+                "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
+            }
 
         signing_request = BrainRunRequest(
             user_input=request.user_input,
@@ -720,59 +730,39 @@ class ScenarioRuntime:
                 (
                     "human_realism_semantic_preflight_missing"
                     if isinstance(exc, BrainSemanticPreflightMissing)
+                    else "human_realism_natural_presence_decision_missing"
+                    if isinstance(exc, BrainHumanNaturalnessDecisionMissing)
                     else "remote_creative_brain_prompt_signoff_unavailable"
                 ),
                 brain_result,
             ) from exc
         final_stage = "provider_prompt_finalize"
         if "human_realism" in plan.dependency_order:
-            # The second request receives only a Brain-authored complete
-            # candidate and frozen semantic facts.  It is not a local prompt
-            # patch, and reviewer issue codes stay with the first Brain
-            # revision pass rather than becoming renderer prose.
-            resigning_context = self._human_naturalness_resigning_context(canonical_prompt_context)
-            resigning_request = BrainRunRequest(
-                user_input=request.user_input,
-                job_id=self._runtime_job_id(request, resolution),
-                stage="provider_prompt_human_naturalness_resign",
-                scenario_id=resolution.manifest.scenario_id,
-                template_id=self._template_id(request, resolution),
-                project_id=str(request.metadata.get("project_id") or "") or None,
-                requested_image_count=expected,
-                requested_image_size=ledger.provider_projection.get("requested_image_size"),
-                reasoning_depth="balanced",
-                metadata={
-                    "canonical_prompt_context": resigning_context,
-                    "candidate_canonical_provider_prompts": [
-                        item.model_dump(mode="json", exclude_none=True) for item in prompts
-                    ],
-                },
-                template_capability_policy=policy,
-            )
-            try:
-                prompts, resigning_audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(resigning_request)
-            except Exception as exc:
-                raise self._remote_creative_brain_block(
-                    (
-                        "human_realism_natural_presence_decision_missing"
-                        if isinstance(exc, BrainHumanNaturalnessDecisionMissing)
-                        else "human_realism_natural_presence_resigning_unavailable"
-                    ),
-                    brain_result,
-                ) from exc
+            # Keep retry evidence in the same final sign-off context. The
+            # Brain revises the whole direction when evidence exists, then
+            # approves or rewrites its complete prompt under the same
+            # naturalness contract. This is one remote decision, not a local
+            # prompt patch and not a second serial creative pass.
             audit = {
                 **audit,
-                **resigning_audit,
                 "human_realism_natural_presence_resigning_required": True,
                 "human_realism_natural_presence_resigned": True,
-                "human_realism_natural_presence_resigning_provider": resigning_audit.get(
+                "human_realism_natural_presence_signoff_mode": "combined_finalizer",
+                "human_realism_natural_presence_resigning_provider": audit.get(
                     "canonical_provider_prompt_provider"
                 ),
-                "human_realism_natural_presence_resigning_model": resigning_audit.get(
+                "human_realism_natural_presence_resigning_model": audit.get(
                     "canonical_provider_prompt_model"
                 ),
             }
-            final_stage = "provider_prompt_human_naturalness_resign"
+        transport_history = list(brain_result.audit.get("remote_brain_transports") or [])
+        if not transport_history and isinstance(brain_result.audit.get("remote_brain_transport"), dict):
+            transport_history.append(dict(brain_result.audit["remote_brain_transport"]))
+        current_transport = audit.get("remote_brain_transport")
+        if isinstance(current_transport, dict):
+            transport_history.append(dict(current_transport))
+        audit["remote_brain_transports"] = transport_history
+        audit["remote_brain_call_count"] = len(transport_history)
         return brain_result.model_copy(
             update={
                 "canonical_provider_prompts": prompts,
@@ -780,11 +770,7 @@ class ScenarioRuntime:
                     **dict(brain_result.audit or {}),
                     **audit,
                     "canonical_provider_prompt_stage": final_stage,
-                    "canonical_provider_prompt_stages": (
-                        ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
-                        if final_stage == "provider_prompt_human_naturalness_resign"
-                        else ["provider_prompt_finalize"]
-                    ),
+                    "canonical_provider_prompt_stages": [final_stage],
                     "canonical_provider_prompt_binding": {
                         "activation_plan_id": plan.plan_id,
                         "execution_envelope_id": envelope.envelope_id,

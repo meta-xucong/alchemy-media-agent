@@ -21,8 +21,8 @@ The forward path remains unchanged:
 protected user and admitted-reference truth
   -> Remote Brain semantic task profile and activation intent
   -> frozen CapabilityActivationPlan / envelope / constraint ledger
-  -> Remote Brain complete canonical prompt finalization
-  -> Remote Brain Human Realism natural-presence deliberation and re-signing
+  -> one Remote Brain complete canonical prompt finalization plus Human Realism
+     natural-presence deliberation and decision receipt
   -> exact GPT Image 2 materialization
   -> shared vision_model or hybrid pixel review
   -> bounded Remote Brain whole-prompt revision when review warrants it
@@ -50,7 +50,8 @@ Doc136-140 Human Realism sign-off, natural presence, and complete Brain input
 Doc141  accepted planning/parity baseline and quality follow-up evidence
 ```
 
-Doc142 is shared foundation work. It applies only when the frozen plan
+Doc158 supersedes Doc139's separate forward re-sign invocation while retaining
+its semantic gate and receipt. Doc142 is shared foundation work. It applies only when the frozen plan
 activates `human_realism` for a photoreal visible person. It must not create a
 child, teen, kidswear, East Asian, fashion, e-commerce, photography, or
 social-media capability, route, template rule, review profile, or prompt
@@ -62,9 +63,10 @@ Doc136 records the v1 typed-contract baseline and its historical implementation
 evidence. Doc138 records the former forward v2 Human Realism semantic-contract
 authority: it retains the v1 boundary and adds only the generic
 natural-presence and aesthetic-boundary decisions. Doc137 preflight remains
-mandatory. Doc139 remains the one independent re-signing pass. Doc142 extends
-that same pass with a schema-only `approved|rewritten` receipt; it neither adds
-a third Brain call nor creates a local decision, prompt, retry or review path.
+mandatory. Doc158 is now the forward invocation authority: the canonical
+finalizer emits the complete prompt and the schema-only `approved|rewritten`
+naturalness receipt in one Brain request. The semantic gate remains the same;
+this neither creates a local decision, prompt, retry or review path.
 
 Where an older document describes a retry repair intent, it means normalized
 semantic review evidence supplied to the Brain, never literal runtime prose.
@@ -143,13 +145,15 @@ evidence, rendering intent, and shared semantic contract. It keeps or rewrites
 the whole prompt. It must not expose hidden reasoning, issue codes, checklists,
 or fragments for local concatenation.
 
-## 6. Phase A: upgrade the existing re-signer
+## 6. Phase A: preserve the semantic gate while converging its invocation
 
-The first implementation does **not** add a third Remote Brain round trip. It
-upgrades the existing `provider_prompt_human_naturalness_resign` request into
-a mandatory natural-presence deliberation plus whole-prompt re-signing.
+The first implementation did **not** add a third Remote Brain round trip. The
+forward implementation now carries the same mandatory natural-presence
+deliberation and whole-prompt decision inside the single
+`provider_prompt_finalize` request. Historical
+`provider_prompt_human_naturalness_resign` records remain readable only.
 
-The re-signer may receive only:
+The combined finalizer may receive only:
 
 ```text
 protected user direction

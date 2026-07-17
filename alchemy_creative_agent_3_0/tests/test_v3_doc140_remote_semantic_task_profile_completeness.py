@@ -161,11 +161,9 @@ def test_doc140_remote_adult_profile_activates_shared_human_realism_without_loca
     assert "human_realism" in plan["dependency_order"]
     audit = result.metadata["llm_brain"]["audit"]
     assert audit["remote_visual_task_profile_received"] is True
-    assert audit["canonical_provider_prompt_stages"] == [
-        "provider_prompt_finalize",
-        "provider_prompt_human_naturalness_resign",
-    ]
-    assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 1
+    assert audit["canonical_provider_prompt_stages"] == ["provider_prompt_finalize"]
+    assert [item["stage"] for item in provider.requests].count("provider_prompt_human_naturalness_resign") == 0
+    assert audit["remote_brain_call_count"] == 2
 
 
 def test_doc140_complete_product_only_profile_stays_human_inactive() -> None:

@@ -113,6 +113,26 @@ def test_llm_brain_adapter_skips_non_general_scope(monkeypatch) -> None:
     assert "general template" in result.audit["skip_reason"]
 
 
+def test_real_image_request_with_reasoning_off_still_blocks_without_local_creative_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
+    request = BrainRunRequest(
+        user_input="Create one real-camera portrait of a person.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        reasoning_depth="off",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+
+    result = V3LLMBrainAdapter().run(request)
+
+    assert result.fallback_used is True
+    assert result.prompt_guidance.optimized_direction == ""
+    assert result.audit["creative_fallback_executed"] is False
+    assert result.audit["source"] == "v3_remote_brain_required"
+
+
 def test_required_remote_photography_contract_uses_compact_schema() -> None:
     from alchemy_creative_agent_3_0.app.shared_capabilities.activation import photography_capability_policy
 
@@ -477,22 +497,15 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
     assert result.llm_used is True
     assert result.fallback_used is False
     assert result.provider == "openai"
-    assert result.audit["remote_brain_transport"] == {
-        "attempts": 2,
-        "json_serialization_recovery_attempted": True,
-        "json_serialization_recovery_succeeded": True,
-    }
+    assert result.audit["remote_brain_transport"]["attempts"] == 2
+    assert result.audit["remote_brain_transport"]["json_serialization_recovery_attempted"] is True
+    assert result.audit["remote_brain_transport"]["json_serialization_recovery_succeeded"] is True
+    assert result.audit["remote_brain_transport"]["stage"] == "generate"
+    assert result.audit["remote_brain_transport"]["elapsed_ms"] >= 0
     assert result.prompt_guidance.optimized_direction == "remote refined summer portrait direction"
-    assert len(result.checkpoints) >= 6
+    assert len(result.checkpoints) == 1
     assert result.checkpoints[0].stage == "remote_intent"
-    assert {checkpoint.checkpoint_id for checkpoint in result.checkpoints} >= {
-        "intent",
-        "context",
-        "visual_strategy",
-        "prompt_guidance",
-        "pre_generation_review",
-        "post_generation_review",
-    }
+    assert result.checkpoints[0].checkpoint_id == "intent"
 
 
 def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None:
@@ -812,7 +825,7 @@ def test_remote_brain_rejects_internally_inconsistent_image_set_plan(monkeypatch
     assert result.llm_used is True
     assert result.fallback_used is False
     assert result.image_set_plan.image_count == 1
-    assert len(result.image_set_plan.shot_plan) == 1
+    assert result.image_set_plan.shot_plan == []
     assert result.audit["remote_contract_partial_fallback"] is True
     assert result.audit["remote_contract_rejected_sections"] == [
         "image_set_plan",

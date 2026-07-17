@@ -10,7 +10,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
-def test_doc151_resign_receives_shared_materiality_duty_without_local_recipe() -> None:
+def test_doc151_finalizer_receives_shared_materiality_duty_without_local_recipe() -> None:
     provider = EcommerceRemoteBrainTestProvider()
     result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(
         {
@@ -21,8 +21,8 @@ def test_doc151_resign_receives_shared_materiality_duty_without_local_recipe() -
     )
 
     assert result.status.value == "planned"
-    resign = next(item for item in provider.requests if item["stage"] == "provider_prompt_human_naturalness_resign")
-    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(resign)))
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    payload = json.loads(build_remote_payload(BrainRunRequest.model_validate(finalizer)))
     contract = payload["frozen_render_context"]["active_semantic_capability_contracts"][0]
 
     assert contract["photographic_material_requirement"] == "camera_observed_human_materiality"
