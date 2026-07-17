@@ -116,6 +116,25 @@ def test_product_api_wires_explicit_professional_mode_into_shared_planning() -> 
     assert all("professional_reference_channel_plans" not in request["metadata"] for request in provider.requests)
 
 
+def test_professional_planning_provenance_boolean_is_accepted_on_generation() -> None:
+    service, _ = _service()
+    status = service.create_job(_request())
+
+    assert status.status == ProductJobStatusValue.PLANNED
+    record = service.get_job_record(status.job_id)
+    assert record is not None
+    assert record.request.metadata["professional_mode"] is True
+
+    # The Product API stores planning provenance as a boolean, then reuses
+    # that record for generation.  Scenario Runtime must normalize it back to
+    # the explicit Professional Mode semantic instead of rejecting the job.
+    runtime_payload = service._runtime_request_payload(record.request)  # noqa: SLF001
+    planned = service.scenario_runtime.plan_job(runtime_payload)
+    assert planned.status.value == "planned"
+    assert "professional_mode_selection_invalid" not in " ".join(planned.warnings)
+    assert planned.metadata["professional_mode"] is True
+
+
 def test_professional_mode_missing_people_asset_is_a_structured_block() -> None:
     service, _ = _service()
     request = _request()
