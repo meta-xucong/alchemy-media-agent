@@ -397,11 +397,13 @@ class CreativeManagerRuntime:
                 progress_events=progress_events,
                 progress_summary=progress_summary,
             )
-            job = await create_image_job(
-                image_request,
-                job_id=running_job.job_id,
-                created_at=running_job.created_at,
-            )
+            job = running_job
+            if running_job.status != "failed":
+                job = await create_image_job(
+                    image_request,
+                    job_id=running_job.job_id,
+                    created_at=running_job.created_at,
+                )
             generation_jobs = [job]
             if job.status == "failed":
                 status = "failed"
@@ -425,6 +427,7 @@ class CreativeManagerRuntime:
                     progress_summary=progress_summary,
                 )
 
+        final_prompt_plan = generation_jobs[0].prompt_plan if generation_jobs else prompt_plan
         run = CreativeRun(
             run_id=run_id,
             status=status,  # type: ignore[arg-type]
@@ -432,7 +435,7 @@ class CreativeManagerRuntime:
             intent_summary=summarize_intent(request.user_prompt),
             case_retrieval_plan=retrieval_plan,
             selected_cases=selected_cases,
-            prompt_plan=prompt_plan,
+            prompt_plan=final_prompt_plan,
             safety_decision=safety_decision,
             orchestrator_decision=orchestrator_decision,
             generation_jobs=generation_jobs,

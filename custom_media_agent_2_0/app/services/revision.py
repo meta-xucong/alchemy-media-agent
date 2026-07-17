@@ -20,6 +20,9 @@ def build_revision_request(output_id: str, body: CreateRevisionRunRequest) -> Cr
     directives = list(review.revision_directives if review else [])
     feedback = body.feedback.strip()
     reason = "; ".join([*directives, feedback] or ["Improve the previous result while preserving the original client goal."])
+    original_user_prompt = str((job.prompt_plan.user_variables or {}).get("user_prompt") or "").strip()
+    if not original_user_prompt:
+        original_user_prompt = job.prompt_plan.prompt
     revision_source = {
         "source_output_id": output.output_id,
         "source_job_id": job.job_id,
@@ -43,7 +46,7 @@ def build_revision_request(output_id: str, body: CreateRevisionRunRequest) -> Cr
                 "Create a revised image generation plan based on a previous Custom Media Agent 2.0 output.",
                 f"Revision reason: {reason}",
                 "Preserve the original client intent and selected-case strategy unless the review reason requires changing it.",
-                f"Original prompt: {job.prompt_plan.prompt}",
+                f"Original client request: {original_user_prompt}",
             ]
         ),
         mode_hint="revision",

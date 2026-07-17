@@ -1,12 +1,24 @@
 # V2 参考图与原始意图完整性修复方案
 
 - 日期：2026-07-17
-- 状态：实施前设计，未改变运行时代码、配置或服务
+- 状态：V2 独立分支已完成第一阶段实现，待主线评审/合并；未改动 V3、上游路由或运行配置
 - 适用范围：`custom_media_agent_2_0`（以下简称 V2）
 
 ## 1. 结论与目标
 
 V2 当前的“手选模板优先、上传素材填充模板、Claude 负责创意”方向是正确的，但实现把多个局部规则写成了可截断的 prompt 字符串。其结果是：模板锚点、资产 guard、视觉语法锁在后续层以前缀形式不断叠加，用户原始意图和 Claude 最终决策位于尾部，可能被静默硬裁剪。
+
+## 实施状态（2026-07-17）
+
+本分支已将本方案的第一阶段接入 V2 运行时：
+
+- `intent_integrity.py` 将用户请求、Claude 创意决定、资产关系、模板框架与控制项编译为可追踪的 intent manifest；不再对 provider payload 做前缀硬裁剪。
+- 普通模板与参考图任务的安全预算为 12,000 字符。超过预算时保留完整语义并在 provider 前以 `constraint_budget_unsatisfied` 失败，而不是丢弃尾部意图。
+- 上传资产、运行时资产绑定和 provider 输入均记录 `role_source`、`reference_mode`、`reference_index`；明确角色优先于系统建议，参考图顺序会在 preflight 中核对。
+- 最终 `CreativeRun`、`ImageJob` 与输出元数据引用经 transform/preflight 后的有效 prompt trace，并保存脱敏 hash、长度、manifest 与 preflight 结果。
+- 有参考图的 live 返回只证明传输完成；在未接入像素级审查前，结果会标记为 `needs_review` 和 `reference_adherence_unverified`，不再因 metadata 成功而声称已经遵循参考图。
+
+仍待后续阶段接入的是可配置的像素级参考遵循审查与前端的角色确认交互；两者均不应通过改写、截断或降级原始意图来规避。
 
 这不是单纯的提示词质量问题，而是意图数据模型、冲突解析、预算控制、实际请求追踪和结果验收共同缺失造成的架构问题。
 
@@ -629,4 +641,3 @@ v2_provider_edit_with_reference_success_rate
 建议严格按 Phase 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 推进。不要跳过 trace 和影子比较直接改 prompt 文案；否则仍无法区分“意图没被编译”“图没被传入”“上游没有遵循”“审核没有发现”四种不同问题。
 
 本文件是 V2 独立优化规格。它可与现有 V2 的中央意图模型、模板视觉语法转移设计协同实施，但不引入其他版本的治理、运行时、存储或 provider 路径。
-

@@ -45,6 +45,8 @@ AssetRole = Literal[
     "negative_reference",
 ]
 ConstraintStrength = Literal["required", "strong", "soft"]
+AssetRoleSource = Literal["user_explicit", "client_default", "system_suggestion", "claude_validated"]
+ReferenceMode = Literal["preserve", "replace_slot", "style_only", "extract_content", "avoid"]
 
 
 class AssetContentUploadRequest(BaseModel):
@@ -70,6 +72,7 @@ class CreateUploadedAssetResponse(BaseModel):
 class AssetBrief(BaseModel):
     asset_id: str
     role: AssetRole
+    role_source: AssetRoleSource = "system_suggestion"
     constraint_strength: ConstraintStrength = "strong"
     visual_summary: str = ""
     identity_requirements: list[str] = Field(default_factory=list)
@@ -91,8 +94,10 @@ class UploadedAsset(BaseModel):
     veyra_user_id: int | None = None
     status: Literal["upload_requested", "stored", "ready", "rejected", "failed"] = "upload_requested"
     role: AssetRole | None = None
+    role_source: AssetRoleSource = "system_suggestion"
     constraint_strength: ConstraintStrength = "strong"
     intended_use: str | None = None
+    reference_mode: ReferenceMode = "preserve"
     upload_url: str | None = None
     source_url: str | None = None
     thumbnail_url: str | None = None
@@ -107,6 +112,7 @@ class CreativeRunAssetInput(BaseModel):
     asset_id: str
     role: AssetRole | None = None
     constraint_strength: ConstraintStrength | None = None
+    reference_mode: ReferenceMode | None = None
     notes: str | None = None
 
 
@@ -123,6 +129,9 @@ class TemplateLockContract(BaseModel):
 class AssetBinding(BaseModel):
     asset_id: str
     role: AssetRole
+    requested_role: AssetRole | None = None
+    role_source: AssetRoleSource = "system_suggestion"
+    reference_mode: ReferenceMode = "preserve"
     constraint_strength: ConstraintStrength = "strong"
     binding_slot: str
     fusion_mode: str = "reference"
@@ -134,6 +143,7 @@ class AssetBinding(BaseModel):
     prompt_instruction: str = ""
     conflict_resolution: str | None = None
     review_expectations: list[str] = Field(default_factory=list)
+    asset_notes: str | None = None
 
 
 class AssetBindingPlan(BaseModel):
@@ -148,6 +158,8 @@ class AssetBindingPlan(BaseModel):
 class ProviderInputImage(BaseModel):
     asset_id: str
     role: AssetRole
+    role_source: AssetRoleSource = "system_suggestion"
+    reference_mode: ReferenceMode = "preserve"
     constraint_strength: ConstraintStrength = "strong"
     source_url: str | None = None
     mime_type: str | None = None
@@ -157,6 +169,7 @@ class ProviderInputImage(BaseModel):
     placement_intent: dict[str, Any] = Field(default_factory=dict)
     target_surface: str | None = None
     review_expectations: list[str] = Field(default_factory=list)
+    reference_index: int | None = Field(default=None, ge=1)
 
 
 class HealthIsolation(BaseModel):

@@ -181,7 +181,7 @@ def upload_image_asset(
     client: TestClient,
     image_content: bytes,
     *,
-    role: str,
+    role: str | None,
     filename: str = "uploaded.png",
     intended_use: str | None = None,
 ) -> str:
@@ -189,9 +189,10 @@ def upload_image_asset(
         "filename": filename,
         "mime_type": "image/png",
         "size_bytes": len(image_content),
-        "role": role,
         "constraint_strength": "required",
     }
+    if role:
+        upload_payload["role"] = role
     if intended_use:
         upload_payload["intended_use"] = intended_use
     upload = client.post(
@@ -560,10 +561,26 @@ def test_v2_upload_image_completes_with_asset_brief() -> None:
     body = asset.json()
     assert body["status"] == "ready"
     assert body["brief"]["role"] == "subject_reference"
+    assert body["role_source"] == "user_explicit"
+    assert body["brief"]["role_source"] == "user_explicit"
     assert body["brief"]["provider_input_required"] is True
     assert body["brief"]["image"]["width"] == 320
     assert content.status_code == 200
     assert content.headers["content-type"].startswith("image/png")
+
+
+def test_v2_upload_marks_unselected_role_as_system_suggestion() -> None:
+    client = fresh_client()
+    image_bytes = BytesIO()
+    Image.new("RGB", (48, 48), (40, 120, 200)).save(image_bytes, format="PNG")
+    asset_id = upload_image_asset(client, image_bytes.getvalue(), role=None, filename="unselected-role.png")
+
+    body = client.get(f"/api/v2/uploads/{asset_id}").json()
+
+    assert body["status"] == "ready"
+    assert body["role"]
+    assert body["role_source"] == "system_suggestion"
+    assert body["brief"]["role_source"] == "system_suggestion"
 
 
 def test_v2_upload_rejects_oversized_declared_and_actual_content() -> None:
@@ -1370,7 +1387,10 @@ def test_checkpoint_orchestrator_runs_all_stages_and_compresses_output(monkeypat
     assert len(decision["final_prompt"]) <= 240
     assert len(decision["negative_prompt"]) <= 90
     assert len(decision["prompt_rationale"]) <= 60
-    assert run["prompt_plan"]["user_variables"]["prompt_source"] == "claude_final_prompt"
+    variables = run["prompt_plan"]["user_variables"]
+    assert variables["prompt_source"] == "compiled_from_claude_and_manifest"
+    assert variables["claude_final_prompt_used"] is True
+    assert variables["prompt_integrity"]["preflight"]["status"] == "passed"
     assert run["generation_jobs"][0]["provider_id"] == "mock_image"
 
 
@@ -3124,6 +3144,8 @@ def test_creative_run_template_lock_binds_uploaded_subject_asset() -> None:
     binding = variables["asset_binding_plan"]["bindings"][0]
     assert binding["asset_id"] == asset_id
     assert binding["binding_slot"] == "main_subject"
+    assert binding["role_source"] == "user_explicit"
+    assert binding["reference_mode"] == "preserve"
     assert "composition" in binding["not_allowed_to_override"]
     assert variables["provider_input_plan"]["reference_image_count"] == 1
     assert variables["provider_input_asset_ids"] == [asset_id]
@@ -3131,9 +3153,37 @@ def test_creative_run_template_lock_binds_uploaded_subject_asset() -> None:
     assert "uploaded reference image" in prompt_plan["prompt"]
     output_metadata = run["generation_jobs"][0]["outputs"][0]["metadata"]
     assert output_metadata["input_images"][0]["asset_id"] == asset_id
+    assert output_metadata["input_images"][0]["role_source"] == "user_explicit"
+    assert output_metadata["input_images"][0]["reference_index"] == 1
     assert output_metadata["provider_input_plan"]["reference_image_count"] == 1
+    assert output_metadata["prompt_integrity"]["preflight"]["status"] == "passed"
     review = run["generation_jobs"][0]["outputs"][0]["review"]
     assert any("Template Lock" in note for note in review["notes"])
+
+
+def test_creative_run_blocks_over_budget_intent_before_provider_resolution(monkeypatch) -> None:
+    client = fresh_client()
+
+    async def provider_must_not_be_resolved(*_args, **_kwargs):
+        raise AssertionError("provider resolution must not happen after integrity preflight failure")
+
+    monkeypatch.setattr("app.services.generation.get_v2_image_provider", provider_must_not_be_resolved)
+    response = client.post(
+        "/api/v2/creative/runs",
+        json={
+            "user_prompt": "Preserve this complete client requirement: " + ("semantic-detail " * 1000),
+            "output": {"count": 1, "provider_hint": "mock_image"},
+        },
+    )
+
+    assert response.status_code == 202
+    run = response.json()
+    assert run["status"] == "failed"
+    job = run["generation_jobs"][0]
+    assert job["provider_id"] == "v2_intent_preflight"
+    assert job["error"]["error_code"] == "constraint_budget_unsatisfied"
+    assert job["outputs"] == []
+    assert run["prompt_plan"]["user_variables"]["prompt_integrity"]["preflight"]["status"] == "failed"
 
 
 def test_creative_run_without_template_uses_free_agent_asset_binding() -> None:
@@ -3910,7 +3960,8 @@ def test_template_customize_forces_hand_selected_case_through_claude(monkeypatch
     assert run["prompt_plan"]["style_basis"][0]["case_id"] == template_id
     assert run["prompt_plan"]["user_variables"]["primary_case_id"] == template_id
     prompt = run["prompt_plan"]["prompt"]
-    assert prompt.startswith("TEMPLATE LOCK: the selected case is the highest-priority visual template.")
+    assert prompt.startswith("USER REQUEST:")
+    assert "TEMPLATE LOCK: use the hand-selected template" in prompt
     assert "Visual Grammar Lock" in prompt
     assert "User semantic content controls" in prompt
     assert "TEMPLATE LOCK: use the hand-selected template 'Pastel Jellyfish Room Goods Poster'" in prompt
@@ -4101,7 +4152,8 @@ def test_smart_enhance_uses_auto_visual_grammar_anchor() -> None:
     assert grammar["lock_strength"] == "medium_strong"
     assert grammar["primary_anchor_case_id"] == run["selected_cases"][0]["case_id"]
     prompt = run["prompt_plan"]["prompt"]
-    assert prompt.startswith("AUTO VISUAL GRAMMAR LOCK:")
+    assert prompt.startswith("USER REQUEST:")
+    assert "AUTO VISUAL GRAMMAR LOCK is active" in prompt
     assert "one primary curated case as the main visual grammar anchor" in prompt
     assert "Do not average multiple cases into a vague hybrid" in prompt
 
@@ -4144,7 +4196,8 @@ def test_no_template_uploaded_layout_reference_becomes_frame_primary() -> None:
     assert run["case_retrieval_plan"]["query_text"]
     assert run["selected_cases"]
     prompt = run["prompt_plan"]["prompt"]
-    assert prompt.startswith("UPLOADED FRAME VISUAL GRAMMAR:")
+    assert prompt.startswith("USER REQUEST:")
+    assert "UPLOADED FRAME VISUAL GRAMMAR is active" in prompt
     assert "Retrieved case" in prompt
     assert "not the frame owner" in prompt
     assert "uploaded layout/composition wins" in prompt
@@ -5002,9 +5055,10 @@ def test_creative_run_consumes_claude_orchestrator_decision(monkeypatch) -> None
     assert [item["case_id"] for item in run["prompt_plan"]["style_basis"]] == run["orchestrator_decision"]["selected_case_ids"]
     assert run["orchestrator_decision"]["final_prompt"].startswith("Claude final prompt")
     assert run["orchestrator_decision"]["final_prompt"] in run["prompt_plan"]["prompt"]
-    assert run["prompt_plan"]["prompt"].startswith("AUTO VISUAL GRAMMAR LOCK:")
+    assert run["prompt_plan"]["prompt"].startswith("USER REQUEST:")
+    assert "AUTO VISUAL GRAMMAR LOCK is active" in run["prompt_plan"]["prompt"]
     assert run["prompt_plan"]["user_variables"]["visual_grammar_contract"]["mode"] == "auto_visual_grammar_lock"
-    assert run["prompt_plan"]["user_variables"]["prompt_source"] == "claude_final_prompt"
+    assert run["prompt_plan"]["user_variables"]["prompt_source"] == "compiled_from_claude_and_manifest"
     assert run["prompt_plan"]["provider_parameters"]["aspect_ratio"] == "4:5"
     assert run["prompt_plan"]["provider_parameters"]["provider_hint"] == "mock_image"
     assert "avoid crowded background" in run["prompt_plan"]["negative_prompt"]
@@ -5295,7 +5349,9 @@ def test_creative_run_uses_semantic_cache_for_near_duplicate_prompt(monkeypatch)
     assert second["orchestrator_decision"]["invocation_status"] == "semantic_cache_hit"
     assert second["orchestrator_decision"]["cache_hit"] is True
     assert second["orchestrator_decision"]["attempts"] == 0
-    assert second["prompt_plan"]["prompt"] == first["prompt_plan"]["prompt"]
+    assert second["prompt_plan"]["prompt"] != first["prompt_plan"]["prompt"]
+    assert first_payload["user_prompt"] in first["prompt_plan"]["prompt"]
+    assert second_payload["user_prompt"] in second["prompt_plan"]["prompt"]
 
 
 def test_creative_run_retries_transient_kimi_context_cancel(monkeypatch) -> None:
