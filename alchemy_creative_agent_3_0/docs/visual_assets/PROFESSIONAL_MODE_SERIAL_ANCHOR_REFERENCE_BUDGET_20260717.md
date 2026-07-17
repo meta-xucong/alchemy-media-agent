@@ -73,4 +73,3 @@ Future expression, body, or pose evidence must use the same bounded budget
 manager. Task-specific evidence may replace an optional derivative only when
 the shared review contract records the substitution; no module may silently
 increase the provider reference count or create a private generation path.
-

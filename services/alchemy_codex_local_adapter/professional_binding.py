@@ -48,4 +48,3 @@ def persistent_professional_binding_resolver(
         )
 
     return resolve
-

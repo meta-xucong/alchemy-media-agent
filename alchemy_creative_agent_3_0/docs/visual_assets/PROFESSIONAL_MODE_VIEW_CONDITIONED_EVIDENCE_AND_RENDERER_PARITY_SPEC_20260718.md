@@ -81,4 +81,3 @@ reaching a counted stage. It does not by itself pass M5: a real active pack,
 real GPT Image 2 output, shared Vision `pass` for each winner, exact parity,
 and human comparison evidence are still required. Gate C/D, browser entry, and
 production availability remain closed until those evidences exist.
-

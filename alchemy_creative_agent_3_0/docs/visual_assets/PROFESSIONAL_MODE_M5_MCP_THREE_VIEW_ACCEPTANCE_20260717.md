@@ -1,8 +1,8 @@
 # Professional Mode M5 — MCP Three-View Anchor-Pack Acceptance Record
 
-Date: 2026-07-17  
-Feature branch: `codex/professional-m5-three-view-acceptance`  
-Baseline: `origin/main@ad62882`  
+Date: 2026-07-17
+Feature branch: `codex/professional-m5-three-view-acceptance`
+Baseline: `origin/main@ad62882`
 Status: **non-counting / blocked for strict M5 certification; reference-budget fix awaiting a fresh pixel rerun**
 
 ## Scope and boundary
