@@ -1845,6 +1845,16 @@ class V3ProductApiService:
         review_metadata = {
             **dict(record.request.metadata or {}),
             **dict(generate_request.metadata or {}),
+            # The reviewer must see the exact user-owned direction that was
+            # frozen for this Job.  It is not safe to rely on the planning
+            # result or GenerateJobRequest metadata to carry it: both are
+            # intentionally compact projections and may omit the raw request
+            # text.  Without this field, a prompt-owned wardrobe/background
+            # change can be misclassified as reference-style leakage during
+            # real pixel review.  Keep this internal review context only; the
+            # public review projection never exposes the full prompt.
+            "user_input": record.request.user_input,
+            "original_user_input": record.request.user_input,
             "quality_mode": generate_request.quality_mode,
             "scenario_id": generation_result.metadata.get("scenario_id"),
             "template_id": record.request.metadata.get("template_id") or generation_result.metadata.get("scenario_id"),
