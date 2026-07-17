@@ -5,6 +5,7 @@ from __future__ import annotations
 from .contracts import (
     CodexNativeImageGenDisabledError,
     NativeImageGenPlanRequest,
+    NativeProfessionalImageGenPlanRequest,
     NativeSpecializedImageGenPlanRequest,
 )
 from .native_planner import CodexNativeImageGenPlanner
@@ -31,3 +32,13 @@ class CodexNativeImageGenFacade:
         if not self.enabled:
             raise CodexNativeImageGenDisabledError()
         return self._planner.prepare_frozen_specialized_native_imagegen_plan(request)
+
+    def prepare_frozen_professional_native_imagegen_plan(
+        self,
+        request: NativeProfessionalImageGenPlanRequest,
+    ) -> dict:
+        """Explicit Professional relay; no Standard/General fallback."""
+
+        if not self.enabled:
+            raise CodexNativeImageGenDisabledError()
+        return self._planner.prepare_frozen_professional_native_imagegen_plan(request)

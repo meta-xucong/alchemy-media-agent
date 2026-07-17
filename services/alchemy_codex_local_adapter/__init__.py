@@ -9,6 +9,7 @@ from .contracts import (
     CodexNativeImageGenDisabledError,
     CodexNativeImageGenError,
     NativeImageGenPlanRequest,
+    NativeProfessionalImageGenPlanRequest,
     NativeSpecializedImageGenPlanRequest,
     NativeReferenceInput,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "CodexNativeImageGenFacade",
     "CodexNativeImageGenPlanner",
     "NativeImageGenPlanRequest",
+    "NativeProfessionalImageGenPlanRequest",
     "NativeSpecializedImageGenPlanRequest",
     "NativeReferenceInput",
     "PlanningOnlyGenerationRouter",

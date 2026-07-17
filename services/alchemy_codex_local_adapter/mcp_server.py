@@ -10,6 +10,7 @@ from typing import Any, Callable
 from .contracts import (
     CodexNativeImageGenError,
     NativeImageGenPlanRequest,
+    NativeProfessionalImageGenPlanRequest,
     NativeSpecializedImageGenPlanRequest,
 )
 from .facade import CodexNativeImageGenFacade
@@ -83,6 +84,53 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "prepare_frozen_professional_native_imagegen_plan",
+        "description": "Resolve an explicit server-owned People Asset binding and freeze the existing V3 Professional Mode plan, then return only the exact canonical provider prompt and admitted reference paths for conversation-only Codex ImageGen. The MCP never accepts a binding/pack record and never creates a project, artifact, candidate, review, retry, or delivery.",
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "user_input",
+                "template_id",
+                "requested_image_count",
+                "requested_image_size",
+                "reference_inputs",
+                "project_id",
+                "people_asset_id",
+                "professional_identity_view_ids",
+            ],
+            "properties": {
+                "user_input": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "template_id": {"enum": ["general_template", "ecommerce_template", "photographer_template"]},
+                "requested_image_count": {"type": "integer", "minimum": 1, "maximum": 16},
+                "requested_image_size": {"type": ["string", "null"]},
+                "reference_inputs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["channel", "file_path"],
+                        "properties": {
+                            "channel": {"type": "string"},
+                            "file_path": {"type": "string"},
+                        },
+                    },
+                },
+                "project_id": {"type": "string"},
+                "people_asset_id": {"type": "string"},
+                "professional_identity_view_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {"type": "string"},
+                },
+                "platform_profile": {"type": ["string", "null"]},
+                "photography_mode": {"type": ["string", "null"]},
+                "photographer_profile_id": {"type": ["string", "null"]},
+            },
+        },
+    },
 ]
 
 
@@ -107,6 +155,14 @@ def _prepare_frozen_specialized_native_imagegen_plan(
     return adapter.prepare_frozen_specialized_native_imagegen_plan(request)
 
 
+def _prepare_frozen_professional_native_imagegen_plan(
+    adapter: CodexNativeImageGenFacade,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(args)
+    return adapter.prepare_frozen_professional_native_imagegen_plan(request)
+
+
 def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dict[str, Any] | None:
     method = request.get("method")
     request_id = request.get("id")
@@ -116,7 +172,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.7.0-doc133-specialized-relay"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.8.0-doc134-professional-relay"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -127,6 +183,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         handlers: dict[str, Callable[[CodexNativeImageGenFacade, dict[str, Any]], dict[str, Any]]] = {
             "prepare_native_imagegen_plan": _prepare_native_imagegen_plan,
             "prepare_frozen_specialized_native_imagegen_plan": _prepare_frozen_specialized_native_imagegen_plan,
+            "prepare_frozen_professional_native_imagegen_plan": _prepare_frozen_professional_native_imagegen_plan,
         }
         if name not in handlers:
             result = {"content": [{"type": "text", "text": '{"code":"codex_native_imagegen_unknown_tool"}'}], "isError": True}

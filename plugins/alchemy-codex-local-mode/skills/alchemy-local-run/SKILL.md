@@ -12,6 +12,10 @@ or Provider request failed.
 1. For `general_template`, call `prepare_native_imagegen_plan` exactly once.
    For explicit `ecommerce_template` or `photographer_template`, call
    `prepare_frozen_specialized_native_imagegen_plan` exactly once instead. The
+   Professional entry point is separate: for an explicitly selected
+   Professional Mode job with server-owned People Asset selectors, call
+   `prepare_frozen_professional_native_imagegen_plan` exactly once; never
+   downgrade that request to General or a specialist fallback.
    specialist tool requires its documented factual/platform or structural
    profile/mode fields; never call the General tool to downgrade a specialist.
    For each image-to-image input, provide its user-authorized readable local
