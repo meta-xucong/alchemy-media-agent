@@ -157,6 +157,14 @@ def build_provider_generation_request(
             "project_id": metadata.get("project_id"),
             "template_id": metadata.get("template_id"),
             "scenario_id": metadata.get("scenario_id"),
+            # Professional serial anchor stages are an explicit opt-in
+            # materialization policy.  Preserve the server-owned strategy and
+            # stage when the canonical planning result is projected into the
+            # provider request; otherwise the provider cannot distinguish the
+            # root anchor from a reviewed winner and silently falls back to
+            # the ordinary two-derivative pair.
+            "professional_identity_reference_strategy": metadata.get("professional_identity_reference_strategy"),
+            "professional_reference_stage": metadata.get("professional_reference_stage"),
             "visual_auto_retry_active": metadata.get("visual_auto_retry_active", False),
             "visual_auto_retry_attempt": metadata.get("visual_auto_retry_attempt"),
             "retry_attempt": metadata.get("retry_attempt"),
@@ -1881,7 +1889,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             *(raw_project_refs if isinstance(raw_project_refs, list) else []),
             *(raw_assets if isinstance(raw_assets, list) else []),
         ]
-        combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
+        # Professional serial anchor stages carry an explicit, server-owned
+        # ordered chain.  The generic adaptive selector may intentionally
+        # reduce identity sources for ordinary jobs, but it must not trim a
+        # frozen root/winner chain before the bounded 2/3/5 derivative policy
+        # is materialized.
+        if request.metadata.get("professional_identity_reference_strategy") == "serial_anchor_pack_root_reuse_v1":
+            combined_assets = [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+                for item in combined_assets
+            ]
+        else:
+            combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
         assets: list[dict[str, Any]] = []
         seen_evidence: dict[tuple[str, str], int] = {}
         resolution_audit: dict[str, Any] = {
@@ -1895,7 +1914,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
             path = data.get("file_path")
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             provider_input_required = bool(data.get("provider_input_required") or metadata.get("provider_input_required"))
-            source_type = str(data.get("source_type") or metadata.get("source_type") or "")
+            # UploadedAssetInfo carries a compatibility default of
+            # ``source_type=uploaded`` at the top level.  Prefer the
+            # adapter's explicit metadata marker when present so a reviewed
+            # generated winner is not misclassified as a second uploaded root
+            # and incorrectly reduced to the root-anchor derivative policy.
+            source_type = str(metadata.get("source_type") or data.get("source_type") or "")
             source_id = str(
                 data.get("output_id")
                 or data.get("asset_id")
@@ -1999,7 +2023,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "role": role,
                     "source_type": str(data.get("source_type") or (data.get("metadata") or {}).get("source_type") or ""),
                     "asset_ref_id": data.get("asset_ref_id") or data.get("reference_id"),
-                    "output_id": data.get("output_id"),
+                    "output_id": data.get("output_id") or metadata.get("output_id"),
                     "filename": data.get("filename") or file_path.name,
                     "mime_type": data.get("mime_type"),
                     "file_path": str(file_path),

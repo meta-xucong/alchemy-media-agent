@@ -343,7 +343,16 @@ class CodexNativeImageGenPlanner:
         if not envelope_id:
             return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
         try:
-            materializations = self._canonical_materializations(result.planning_result)
+            materialization_metadata: dict[str, Any] = {}
+            if isinstance(request, NativeProfessionalImageGenPlanRequest):
+                materialization_metadata = {
+                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_reference_stage": request.professional_reference_stage,
+                }
+            materializations = self._canonical_materializations(
+                result.planning_result,
+                metadata_overrides=materialization_metadata,
+            )
         except (ProviderRuntimeError, ValueError):
             return self._blocked(
                 "codex_native_imagegen_canonical_prompt_unavailable",
@@ -539,7 +548,11 @@ class CodexNativeImageGenPlanner:
         ]
 
     @staticmethod
-    def _canonical_materializations(planning_result: Any) -> list[Any]:
+    def _canonical_materializations(
+        planning_result: Any,
+        *,
+        metadata_overrides: dict[str, Any] | None = None,
+    ) -> list[Any]:
         """Materialize every output through the exact Web Provider boundary.
 
         This creates no Web client, does not select an upstream account, and
@@ -557,12 +570,26 @@ class CodexNativeImageGenPlanner:
         materializer = ProductionImageGenerationProvider(output_store=object())
         materializations: list[Any] = []
         for asset in planning_result.series_plan.assets:
+            generation_plan = generation_plans[asset.asset_id]
+            if metadata_overrides:
+                generation_plan = generation_plan.model_copy(
+                    update={
+                        "metadata": {
+                            **(
+                                generation_plan.metadata
+                                if isinstance(generation_plan.metadata, dict)
+                                else {}
+                            ),
+                            **metadata_overrides,
+                        }
+                    }
+                )
             request = build_provider_generation_request(
                 asset_spec=asset,
                 layout_plan=layouts[asset.asset_id],
                 prompt_compilation=prompts[asset.asset_id],
                 condition_plan=conditions[asset.asset_id],
-                generation_plan=generation_plans[asset.asset_id],
+                generation_plan=generation_plan,
                 job_id=planning_result.creative_job.job_id,
             )
             materializations.append(materializer.materialize_final_prompt(request))

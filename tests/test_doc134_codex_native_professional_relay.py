@@ -215,6 +215,41 @@ def test_professional_serial_reference_stage_requires_root_then_reviewed_winners
     assert exc.value.code == "codex_native_imagegen_professional_reference_chain_invalid"
 
 
+def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_reference_count(tmp_path: Path) -> None:
+    from PIL import Image
+
+    root = _write_png(tmp_path / "root.png")
+    front = tmp_path / "front-winner.png"
+    three_quarter = tmp_path / "three-quarter-winner.png"
+    Image.new("RGB", (32, 32), color=(120, 92, 80)).save(front, format="PNG")
+    Image.new("RGB", (32, 32), color=(121, 92, 80)).save(three_quarter, format="PNG")
+    catalog = _catalog()
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=_resolver(catalog),
+    )
+
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            root,
+            reference_inputs=[
+                {"channel": "portrait_identity", "file_path": str(root)},
+                {"channel": "selected_identity_reference", "file_path": str(front)},
+                {"channel": "selected_identity_reference", "file_path": str(three_quarter)},
+            ],
+            professional_reference_stage="profile",
+        )
+    )
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    output = result["outputs"][0]
+    assert len(output["reference_image_paths"]) == 5
+    assert output["reference_input_contract"]["admitted_reference_count"] == 5
+
+
 def test_professional_mcp_schema_and_dispatch_are_explicit_and_safe(tmp_path: Path) -> None:
     names = [tool["name"] for tool in TOOL_SCHEMAS]
     assert names == [
