@@ -39,8 +39,12 @@ identity, age, face, hair, wardrobe, scene, or mood.
 The Brain must resolve the preference as a whole photographic decision:
 
 - neutral-to-slightly-warm white balance rather than a yellow/amber cast;
-- a modestly brighter, clean, naturally light complexion with believable tonal variation;
-- fine-grained, irregular real skin texture and restrained matte highlights;
+- a modestly brighter, clean, naturally light complexion whose overall reading
+  is softly neutral and light, with restrained peach-pink warmth rather than a
+  golden or orange cast;
+- brightness coming from clean scene light rather than lifted exposure;
+- fine-grained, irregular real skin texture and restrained matte highlights
+  that follow facial planes instead of diffusing across the whole face;
 - preserved facial identity, age, expression, and scene lighting logic.
 
 The decision applies only when a visible person or model is part of a
@@ -52,6 +56,18 @@ and low-key work must not receive a hidden commercial complexion treatment.
 judgement, not a numeric exposure or skin-lightness target. The requirement is intentionally semantic. The local runtime does not classify
 ethnicity, add complexion words, choose a palette, alter pixels, or create a
 skin-specific retry.
+
+The adult standard sample that motivated this refinement is evidence of the
+desired commercial finish—neutral lightness, low yellow/orange saturation,
+controlled highlights, and believable micro-variation—not a runtime reference,
+identity anchor, fixed palette, or universal treatment.
+
+When the commercial complexion decision is active, the Brain must perform a
+silent completeness check before returning its final provider prompt. The
+complete natural-language direction must carry the resolved neutral hue,
+restrained warmth, and face-plane highlight behavior; a generic word such as
+“natural” or “fair” alone is not sufficient. This is a Brain self-check, not a
+local string validator or a prompt suffix.
 
 ## Authoritative path
 
@@ -89,7 +105,9 @@ The focused contract must prove that:
 4. Brain-owned execution carries no local complexion prompt fragments;
 5. A complexion reference is limited to complexion/white-balance/material
    semantics and cannot transfer identity or other reference-owned channels;
-6. General, E-Commerce, Photography, adult, young-person, and low-key scenes
+6. commercial complexion direction prefers neutral hue before additional
+   brightness and preserves face-plane highlights rather than a global sheen;
+7. General, E-Commerce, Photography, adult, young-person, and low-key scenes
    continue using the same shared capability without leakage.
 
 The blue-dress commercial sample is a controlled visual comparison, not a new

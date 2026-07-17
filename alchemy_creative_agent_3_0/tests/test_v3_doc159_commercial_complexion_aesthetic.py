@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+from alchemy_creative_agent_3_0.app.llm_brain import prompts as brain_prompts
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import SYSTEM_PROMPT
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.human_photorealism import (
     HumanPhotorealismLayer,
@@ -45,6 +47,14 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "do not invent a hidden bright-complexion treatment" in SYSTEM_PROMPT
     assert "never inherit that reference's identity, age, face, hair, wardrobe, scene, or mood" in SYSTEM_PROMPT
     assert "historical adult or child sample" in SYSTEM_PROMPT
+    assert "softly neutral and light with restrained peach-pink warmth" in SYSTEM_PROMPT
+    assert "brightness come from clean scene light, not lifted exposure" in SYSTEM_PROMPT
+    assert "follow the face's planes instead of diffusing across the whole face" in SYSTEM_PROMPT
+    assert "Before returning the final provider prompt" in SYSTEM_PROMPT
+    assert "generic word such as natural or fair" in SYSTEM_PROMPT
+    assert "This is neither a request for a preferred complexion" not in SYSTEM_PROMPT
+    source = Path(brain_prompts.__file__).read_text(encoding="utf-8")
+    assert source.count("HUMAN_COMPLEXION_COMMERCIAL_AESTHETIC_INSTRUCTIONS =") == 1
 
 
 def test_doc159_keeps_frozen_contract_demographic_neutral_and_brain_owned() -> None:
