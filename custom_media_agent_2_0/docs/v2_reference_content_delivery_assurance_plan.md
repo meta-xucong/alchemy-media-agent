@@ -328,3 +328,12 @@ without RapidOCR or Tesseract, an information-dense upload remains eligible for
 visual generation but cannot be marked automatically deliverable. Enabling one
 of those engines and an approved V2 pixel-review implementation is the runtime
 dependency before a live menu/poster can pass the full content-fidelity gate.
+
+### 10.1 Runtime provisioning
+
+`rapidocr-onnxruntime` is the supported V2 runtime package. On a Debian host
+using its normal `opencv-python` wheel, provision `libgl1` and
+`libglib2.0-0` before starting the V2 API or worker. These are local runtime
+libraries only: they do not add an external OCR service, modify a provider
+request, or place recognized text in the creative prompt. Verify the host
+through the V2 asset path and the V2 health endpoint after service restart.
