@@ -147,6 +147,7 @@ def test_doc166_finalizer_requires_exact_neutral_capture_receipt() -> None:
     assert "whole-person developmental stage" in payload["remote_response_contract"]
     assert "neutral identity-evidence capture" in payload["remote_response_contract"]
     assert "prior-view winner as evidence of the approved capture presentation" in payload["remote_response_contract"]
+    assert "one unambiguous frozen viewpoint" in payload["remote_response_contract"]
     assert "append a correction" in payload["remote_response_contract"]
 
 
@@ -196,6 +197,7 @@ def test_doc166_runtime_carries_age_capture_and_view_to_one_brain_signoff(
     assert result.status.value == "planned"
     finalizer = [request for request in brain.requests if request["stage"] == "provider_prompt_finalize"][-1]
     context = finalizer["metadata"]["canonical_prompt_context"]
+    assert context["reference_bindings"][0]["professional_anchor_lineage_role"] == "identity_root"
     assert context["human_realism_age_resolution"]["developmental_age_coherence"] == (
         "whole_person_requested_stage"
     )

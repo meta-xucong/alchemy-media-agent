@@ -550,6 +550,11 @@ class CodexNativeImageGenPlanner:
                     ),
                     "codex_native_selected_identity_reference": item.channel == "selected_identity_reference",
                     "selected_generated_output": item.channel == "selected_identity_reference",
+                    "professional_anchor_lineage_role": (
+                        "prior_view_winner"
+                        if item.channel == "selected_identity_reference"
+                        else "identity_root"
+                    ),
                     "source_type": (
                         "selected_generated_output" if item.channel == "selected_identity_reference" else "uploaded"
                     ),

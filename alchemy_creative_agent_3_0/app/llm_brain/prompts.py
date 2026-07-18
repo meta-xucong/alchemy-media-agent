@@ -754,7 +754,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "stage, treat an already selected prior-view winner as evidence of the approved capture presentation: "
                 "keep that presentation coherent and change only the frozen view unless the current request explicitly "
                 "owns another change. This continuity applies only inside anchor preparation and must not turn scene, "
-                "wardrobe, light, camera, or styling into reusable identity channels."
+                "wardrobe, light, camera, or styling into reusable identity channels. The reference_bindings identify "
+                "identity_root separately from prior_view_winner: the root remains identity evidence, while prior-view "
+                "winners carry the approved in-pack capture presentation and developmental-stage continuity. Reconcile "
+                "those roles rather than claiming that visibly different references share the same styling. The final "
+                "prompt must contain one unambiguous frozen viewpoint and no competing viewpoint description."
             )
     anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
     if isinstance(anchor_view_recovery, dict):

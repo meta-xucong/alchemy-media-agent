@@ -1036,13 +1036,22 @@ class ScenarioRuntime:
         references = []
         for asset in request.uploaded_assets:
             role = asset.role.value if hasattr(asset.role, "value") else asset.role
-            references.append(
-                {
-                    "asset_id": asset.asset_id,
-                    "role": str(role or "reference"),
-                    "declared_provider_input": bool(asset.metadata.get("provider_input_required")),
-                }
-            )
+            binding = {
+                "asset_id": asset.asset_id,
+                "role": str(role or "reference"),
+                "declared_provider_input": bool(asset.metadata.get("provider_input_required")),
+            }
+            if request.metadata.get("professional_anchor_pack_preparation") is True:
+                lineage_role = str(asset.metadata.get("professional_anchor_lineage_role") or "").strip()
+                if lineage_role not in {"identity_root", "prior_view_winner"}:
+                    lineage_role = (
+                        "prior_view_winner"
+                        if asset.metadata.get("selected_generated_output") is True
+                        or str(asset.metadata.get("source_type") or "") == "selected_output"
+                        else "identity_root"
+                    )
+                binding["professional_anchor_lineage_role"] = lineage_role
+            references.append(binding)
         context = {
             "protected_user_intent": projection.get("protected_user_intent"),
             "rendering_semantics": projection.get("rendering_semantics"),

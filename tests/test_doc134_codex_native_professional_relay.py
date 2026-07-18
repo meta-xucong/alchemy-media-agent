@@ -262,6 +262,13 @@ def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_r
     output = result["outputs"][0]
     assert len(output["reference_image_paths"]) == 5
     assert output["reference_input_contract"]["admitted_reference_count"] == 5
+    finalizer = [request for request in brain.requests if request["stage"] == "provider_prompt_finalize"][-1]
+    reference_bindings = finalizer["metadata"]["canonical_prompt_context"]["reference_bindings"]
+    assert [item["professional_anchor_lineage_role"] for item in reference_bindings] == [
+        "identity_root",
+        "prior_view_winner",
+        "prior_view_winner",
+    ]
 
 
 def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_contract(tmp_path: Path) -> None:
