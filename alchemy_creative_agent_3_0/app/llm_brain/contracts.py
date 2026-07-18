@@ -81,6 +81,20 @@ class BrainHumanNaturalnessDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class BrainReferenceChannelOwnershipDecision(V3BaseModel):
+    """Safe receipt for the Brain's final reference-ownership reconciliation.
+
+    The frozen reference policy remains a typed, non-creative contract.  This
+    receipt only proves that the remote Brain kept or rewrote the one complete
+    renderer prompt after comparing it with that contract; it never exposes a
+    rationale or turns channel names into local renderer prose.
+    """
+
+    contract_version: Literal["v3_reference_channel_ownership_decision_v1"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -100,6 +114,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # Added by Doc142 only on the existing independent Human Realism re-sign.
     # Historical/finalizer records remain readable without this receipt.
     human_naturalness_decision: BrainHumanNaturalnessDecision | None = None
+    # Historical records remain readable. New reference-conditioned enforced
+    # jobs require this receipt when a frozen Doc93 ownership package applies.
+    reference_channel_ownership_decision: BrainReferenceChannelOwnershipDecision | None = None
 
     @field_validator("prompt")
     @classmethod

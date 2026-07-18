@@ -2406,6 +2406,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "identity_outer_context_softened": bool(
                             derivative.get("identity_outer_context_softened")
                         ),
+                        "identity_outer_context_neutralized": bool(
+                            derivative.get("identity_outer_context_neutralized")
+                        ),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                         "identity_context_reduced_by_tight_crop": bool(
                             derivative.get("identity_context_reduced_by_tight_crop")
@@ -3207,6 +3210,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "identity_channel_isolation_profile": item.get("identity_channel_isolation_profile"),
                     "identity_prompt_owned_channels": item.get("identity_prompt_owned_channels") or [],
                     "identity_outer_context_softened": bool(item.get("identity_outer_context_softened")),
+                    "identity_outer_context_neutralized": bool(
+                        item.get("identity_outer_context_neutralized")
+                    ),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "identity_context_reduced_by_tight_crop": bool(
                         item.get("identity_context_reduced_by_tight_crop")

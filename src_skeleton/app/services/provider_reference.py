@@ -218,6 +218,7 @@ def _truth_derivative(
         "identity_channel_isolation_profile": isolation.get("profile_id") if not fallback else None,
         "identity_prompt_owned_channels": list(isolation.get("prompt_owned_channels") or []) if not fallback else [],
         "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
+        "identity_outer_context_neutralized": bool(isolation.get("neutralize_outer_context")) and not fallback,
         "identity_background_neutralized": False,
         "identity_context_reduced_by_tight_crop": kind in {
             "portrait_identity_crop",
@@ -266,7 +267,7 @@ def _cropped_reference_path(
     isolation = dict(identity_isolation or {})
     isolation_key = str(isolation.get("cache_key") or "legacy")
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc103-identity-evidence-v1:{isolation_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc161-identity-evidence-v2:{isolation_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -389,15 +390,16 @@ def _identity_channel_isolation_profile(
     )
     return {
         "applies": applies,
-        "profile_id": "prompt_owned_channel_isolation_v1" if applies else "assigned_channel_preservation_v1",
+        "profile_id": "prompt_owned_channel_isolation_v2" if applies else "assigned_channel_preservation_v1",
         "cache_key": (
-            "prompt-owned-v1:" + ",".join(isolation_channels)
+            "prompt-owned-v2:" + ",".join(isolation_channels)
             if applies
             else "assigned-v1"
         ),
         "prompt_owned_channels": isolation_channels,
         "outer_color_retention": outer_retention if applies else None,
         "soften_outer_context": applies,
+        "neutralize_outer_context": applies,
     }
 
 
@@ -412,20 +414,23 @@ def _isolate_prompt_owned_identity_channels(
 
     face = ImageEnhance.Color(image).enhance(face_color_retention)
     outer = ImageEnhance.Color(image).enhance(outer_color_retention)
-    blur_radius = max(1.0, min(image.size) * (0.009 if kind == "portrait_identity_crop" else 0.013))
+    outer = ImageEnhance.Contrast(outer).enhance(0.34)
+    neutral = Image.new("RGB", image.size, color=(232, 232, 232))
+    outer = Image.blend(outer, neutral, 0.72)
+    blur_radius = max(1.0, min(image.size) * (0.015 if kind == "portrait_identity_crop" else 0.019))
     outer = outer.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     mask = Image.new("L", image.size, color=0)
     draw = ImageDraw.Draw(mask)
     width, height = image.size
     if kind == "portrait_identity_crop":
-        box = (width * 0.23, height * 0.19, width * 0.77, height * 0.98)
+        box = (width * 0.24, height * 0.15, width * 0.76, height * 0.76)
     elif kind == "portrait_identity_pose_geometry_crop":
         # Keep the contour and view cues (ears, neck and shoulder direction)
         # available for a supplementary stage, while still fading prompt-owned
         # hair/wardrobe/light/scene channels outside the face region.
-        box = (width * 0.14, height * 0.10, width * 0.86, height * 0.97)
+        box = (width * 0.15, height * 0.11, width * 0.85, height * 0.88)
     else:
-        box = (width * 0.20, height * 0.16, width * 0.80, height * 0.95)
+        box = (width * 0.18, height * 0.12, width * 0.82, height * 0.78)
     draw.ellipse(tuple(int(round(value)) for value in box), fill=255)
     feather = max(4.0, min(image.size) * 0.045)
     mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))

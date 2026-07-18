@@ -80,6 +80,48 @@ class ProfessionalModeRuntimeBridge:
         return profile.model_copy(update={"explicit_user_controls": controls, "evidence": [*existing, evidence]})
 
     @staticmethod
+    def _face_identity_quality_contract() -> dict[str, object]:
+        return {
+            "contract_version": "professional_face_identity_quality_v1",
+            "scope": "face_identity_anchor_pack",
+            "priority_order": [
+                "same_person_likeness",
+                "natural_human_presence",
+                "age_fidelity",
+                "camera_observed_skin_materiality",
+                "prompt_owned_view_and_styling",
+            ],
+            "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+            "owner": "remote_v3_llm_brain",
+            "review_owner": "v3_shared_vision",
+        }
+
+    @staticmethod
+    def anchor_pack_preparation_metadata(
+        *,
+        view_role: Literal["front", "three_quarter", "profile"],
+    ) -> dict[str, object]:
+        """Return the formal shared-planning context for pack preparation.
+
+        Preparing the first pack cannot require an already-active binding.
+        This helper carries only the non-secret quality and stage contracts;
+        root provenance and candidate lineage remain owned by the injected
+        preparation host and the shared execution path.
+        """
+
+        return {
+            "professional_mode": True,
+            "professional_anchor_pack_preparation": True,
+            "professional_reference_stage": view_role,
+            "professional_identity_reference_strategy": "shared_serial_anchor_evidence",
+            "creative_direction_owner": "remote_v3_llm_brain",
+            "reference_channel_owner": "shared_v3_reference_policy",
+            "professional_face_identity_quality_contract": (
+                ProfessionalModeRuntimeBridge._face_identity_quality_contract()
+            ),
+        }
+
+    @staticmethod
     def planning_metadata(
         binding: ProfessionalModeBinding,
         *,
@@ -99,20 +141,9 @@ class ProfessionalModeRuntimeBridge:
             # anchor-pack workflow, not renderer prose.  It makes the
             # professional identity objective explicit to the Brain while
             # keeping prompt authorship and pixel review in the shared path.
-            "professional_face_identity_quality_contract": {
-                "contract_version": "professional_face_identity_quality_v1",
-                "scope": "face_identity_anchor_pack",
-                "priority_order": [
-                    "same_person_likeness",
-                    "natural_human_presence",
-                    "age_fidelity",
-                    "camera_observed_skin_materiality",
-                    "prompt_owned_view_and_styling",
-                ],
-                "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
-                "owner": "remote_v3_llm_brain",
-                "review_owner": "v3_shared_vision",
-            },
+            "professional_face_identity_quality_contract": (
+                ProfessionalModeRuntimeBridge._face_identity_quality_contract()
+            ),
         }
         if canonical_prompt_hash is not None:
             if not canonical_prompt_hash.strip():

@@ -25,6 +25,7 @@ from .providers import (
     BrainHumanNaturalnessDecisionMissing,
     BrainProviderError,
     BrainProviderUnavailable,
+    BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
     V3LLMBrainProvider,
     pop_transport_receipt,
@@ -167,6 +168,14 @@ class V3LLMBrainAdapter:
             raise BrainHumanNaturalnessDecisionMissing(
                 "Remote Brain did not return the required Human Realism naturalness decision receipt."
             )
+        reference_ownership_decision_required = _requires_reference_channel_ownership_decision(request)
+        if reference_ownership_decision_required and not _matches_reference_channel_ownership_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+        ):
+            raise BrainReferenceChannelOwnershipDecisionMissing(
+                "Remote Brain did not return the required reference-channel ownership decision receipt."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -189,6 +198,17 @@ class V3LLMBrainAdapter:
                         if prompt.human_naturalness_decision is not None
                     ]
                     if naturalness_decision_required
+                    else []
+                ),
+                "reference_channel_ownership_decision_required": reference_ownership_decision_required,
+                "reference_channel_ownership_decision_signed": reference_ownership_decision_required,
+                "reference_channel_ownership_decisions": (
+                    [
+                        prompt.reference_channel_ownership_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.reference_channel_ownership_decision is not None
+                    ]
+                    if reference_ownership_decision_required
                     else []
                 ),
             },
@@ -770,6 +790,43 @@ def _matches_human_naturalness_decision_receipts(candidate: Any, *, expected_cou
         and item["human_naturalness_decision"].get("contract_version") == "v3_human_naturalness_decision_v1"
         and item["human_naturalness_decision"].get("status") in {"approved", "rewritten"}
         and item["human_naturalness_decision"].get("owner") == "remote_v3_llm_brain"
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _requires_reference_channel_ownership_decision(request: BrainRunRequest) -> bool:
+    """Require Brain reconciliation only for an applicable frozen Doc93 package."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("reference_channel_ownership_decision")
+    return bool(
+        isinstance(decision, dict)
+        and decision.get("required") is True
+        and decision.get("contract_version") == "v3_reference_channel_ownership_decision_v1"
+        and decision.get("owner") == "remote_v3_llm_brain"
+        and isinstance(decision.get("frozen_binding"), dict)
+        and isinstance(decision.get("reference_owned_channels"), list)
+        and isinstance(decision.get("current_request_owned_channels"), list)
+    )
+
+
+def _matches_reference_channel_ownership_receipts(candidate: Any, *, expected_count: int) -> bool:
+    """Validate only the schema receipt; creative interpretation remains remote."""
+
+    expected_keys = {"contract_version", "status", "owner"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("reference_channel_ownership_decision"), dict)
+        and set(item["reference_channel_ownership_decision"]) == expected_keys
+        and item["reference_channel_ownership_decision"].get("contract_version")
+        == "v3_reference_channel_ownership_decision_v1"
+        and item["reference_channel_ownership_decision"].get("status") in {"approved", "rewritten"}
+        and item["reference_channel_ownership_decision"].get("owner") == "remote_v3_llm_brain"
         for index, item in enumerate(candidate, start=1)
     )
 

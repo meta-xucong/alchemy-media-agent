@@ -82,7 +82,8 @@ def test_prompt_owned_portrait_evidence_reduces_outer_color_without_flattening_f
     assert package.effective_channel_owners["hair_direction"] == "current_prompt"
     assert len(derivatives) == 2
     assert all(item["identity_channel_isolation_applied"] is True for item in derivatives)
-    assert all(item["identity_channel_isolation_profile"] == "prompt_owned_channel_isolation_v1" for item in derivatives)
+    assert all(item["identity_channel_isolation_profile"] == "prompt_owned_channel_isolation_v2" for item in derivatives)
+    assert all(item["identity_outer_context_neutralized"] is True for item in derivatives)
     assert all("hair_direction" in item["identity_prompt_owned_channels"] for item in derivatives)
     for item in derivatives:
         with Image.open(item["path"]).convert("RGB") as evidence:
@@ -225,7 +226,8 @@ def test_provider_receives_isolated_identity_evidence_and_prompt_owned_rules(tmp
     assert input_plan["reference_image_count"] == 2
     assert input_plan["suppressed_full_frame_identity_asset_ids"] == ["uploaded_doc103"]
     assert all(item["identity_channel_isolation_applied"] for item in asset_plan["assets"])
-    assert all(item["identity_channel_isolation_profile"] == "prompt_owned_channel_isolation_v1" for item in asset_plan["assets"])
+    assert all(item["identity_channel_isolation_profile"] == "prompt_owned_channel_isolation_v2" for item in asset_plan["assets"])
+    assert all(item["identity_outer_context_neutralized"] for item in asset_plan["assets"])
     assert all("hair_direction" in item["identity_prompt_owned_channels"] for item in asset_plan["assets"])
     assert "Hair is current-prompt-owned" in final_prompt
     assert "Lighting and color are current-prompt-owned" in final_prompt

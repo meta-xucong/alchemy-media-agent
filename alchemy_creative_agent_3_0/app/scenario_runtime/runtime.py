@@ -11,7 +11,11 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
-from ..llm_brain.providers import BrainHumanNaturalnessDecisionMissing, BrainSemanticPreflightMissing
+from ..llm_brain.providers import (
+    BrainHumanNaturalnessDecisionMissing,
+    BrainReferenceChannelOwnershipDecisionMissing,
+    BrainSemanticPreflightMissing,
+)
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -705,8 +709,16 @@ class ScenarioRuntime:
                 brain_result,
             )
         except CapabilityActivationError as exc:
+            reason = str(exc)
             raise self._remote_creative_brain_block(
-                "human_realism_semantic_contract_missing",
+                reason
+                if reason
+                in {
+                    "human_realism_semantic_contract_missing",
+                    "professional_face_identity_quality_contract_missing",
+                    "reference_channel_ownership_contract_missing",
+                }
+                else "human_realism_semantic_contract_missing",
                 brain_result,
             ) from exc
         if "human_realism" in plan.dependency_order:
@@ -743,6 +755,8 @@ class ScenarioRuntime:
                     if isinstance(exc, BrainSemanticPreflightMissing)
                     else "human_realism_natural_presence_decision_missing"
                     if isinstance(exc, BrainHumanNaturalnessDecisionMissing)
+                    else "reference_channel_ownership_decision_missing"
+                    if isinstance(exc, BrainReferenceChannelOwnershipDecisionMissing)
                     else "remote_creative_brain_prompt_signoff_unavailable"
                 ),
                 brain_result,
@@ -765,6 +779,12 @@ class ScenarioRuntime:
                 "human_realism_natural_presence_resigning_model": audit.get(
                     "canonical_provider_prompt_model"
                 ),
+            }
+        if canonical_prompt_context.get("reference_channel_ownership_decision"):
+            audit = {
+                **audit,
+                "reference_channel_ownership_resigned": True,
+                "reference_channel_ownership_signoff_mode": "combined_finalizer",
             }
         transport_history = list(brain_result.audit.get("remote_brain_transports") or [])
         if not transport_history and isinstance(brain_result.audit.get("remote_brain_transport"), dict):
@@ -971,6 +991,12 @@ class ScenarioRuntime:
                 "execution_fingerprint": envelope.execution_fingerprint,
             },
         }
+        reference_ownership = ScenarioRuntime._reference_channel_ownership_decision(
+            projection,
+            frozen_binding=dict(context["frozen_binding"]),
+        )
+        if reference_ownership:
+            context["reference_channel_ownership_decision"] = reference_ownership
         if age_resolution:
             context["human_realism_age_resolution"] = age_resolution
         if ScenarioRuntime._is_professional_mode_selected(request):
@@ -982,7 +1008,73 @@ class ScenarioRuntime:
                 quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
                 if isinstance(quality_contract, dict):
                     context["professional_face_identity_quality_contract"] = dict(quality_contract)
+            if not isinstance(context.get("professional_face_identity_quality_contract"), dict):
+                raise CapabilityActivationError("professional_face_identity_quality_contract_missing")
         return context
+
+    @staticmethod
+    def _reference_channel_ownership_decision(
+        provider_projection: dict[str, Any],
+        *,
+        frozen_binding: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project Doc93 ownership as a typed Brain decision boundary.
+
+        The package contains legacy renderer rules, but those strings are not
+        forwarded.  The finalizer receives only channel ownership facts and
+        must author or rewrite one complete prompt itself.
+        """
+
+        capabilities = provider_projection.get("capability_projection")
+        package = capabilities.get("resolved_reference_policy_package") if isinstance(capabilities, dict) else None
+        if not isinstance(package, dict) or package.get("applies") is not True:
+            return {}
+        owners = package.get("effective_channel_owners")
+        if not isinstance(owners, dict) or not owners:
+            raise CapabilityActivationError("reference_channel_ownership_contract_missing")
+        normalized_owners = {
+            str(channel): str(owner)
+            for channel, owner in owners.items()
+            if str(channel).strip() and str(owner).strip()
+        }
+        if not normalized_owners:
+            raise CapabilityActivationError("reference_channel_ownership_contract_missing")
+        reference_owned = sorted(
+            channel
+            for channel, owner in normalized_owners.items()
+            if owner.startswith("reference:")
+        )
+        current_request_owned = sorted(
+            channel
+            for channel, owner in normalized_owners.items()
+            if owner in {"current_prompt", "current_prompt_or_defaults"}
+        )
+        explicit_locks: list[str] = []
+        blocked_inheritance: list[str] = []
+        for policy in package.get("policies", []):
+            if not isinstance(policy, dict):
+                continue
+            explicit_locks.extend(
+                str(item).strip()
+                for item in policy.get("explicit_user_locks", [])
+                if str(item).strip()
+            )
+            blocked_inheritance.extend(
+                str(item).strip()
+                for item in policy.get("blocked_inheritance_channels", [])
+                if str(item).strip()
+            )
+        return {
+            "required": True,
+            "contract_version": "v3_reference_channel_ownership_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": dict(frozen_binding),
+            "reference_owned_channels": reference_owned,
+            "current_request_owned_channels": current_request_owned,
+            "explicit_user_locked_channels": list(dict.fromkeys(explicit_locks)),
+            "blocked_reference_inheritance_channels": list(dict.fromkeys(blocked_inheritance)),
+            "resolution_mode": "rewrite_complete_canonical_prompt",
+        }
 
     @staticmethod
     def _human_realism_age_resolution(provider_projection: dict[str, Any]) -> dict[str, Any]:
@@ -1094,6 +1186,17 @@ class ScenarioRuntime:
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),
             )
+        if (
+            bool(brain_result.audit.get("reference_channel_ownership_decision_required"))
+            and not bool(brain_result.audit.get("frozen_execution_reuse"))
+            and not bool(brain_result.audit.get("reference_channel_ownership_decision_signed"))
+        ):
+            raise self._remote_creative_brain_block(
+                "reference_channel_ownership_decision_missing",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
 
     @staticmethod
     def _requires_remote_creative_brain_for_real_images(request: ScenarioRuntimeRequest) -> bool:
@@ -1157,6 +1260,11 @@ class ScenarioRuntime:
             "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
             "human_realism_semantic_preflight_missing",
+            "human_realism_natural_presence_decision_missing",
+            "human_realism_natural_presence_resigning_missing",
+            "reference_channel_ownership_decision_missing",
+            "reference_channel_ownership_contract_missing",
+            "professional_face_identity_quality_contract_missing",
         }:
             outcome_class = "remote_prompt_signoff_unavailable"
         elif brain_result.skipped:

@@ -34,6 +34,10 @@ class BrainHumanNaturalnessDecisionMissing(BrainProviderError):
     """The independent Human Realism re-sign lacked its required safe receipt."""
 
 
+class BrainReferenceChannelOwnershipDecisionMissing(BrainProviderError):
+    """The final Brain sign-off omitted the frozen reference-ownership receipt."""
+
+
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 

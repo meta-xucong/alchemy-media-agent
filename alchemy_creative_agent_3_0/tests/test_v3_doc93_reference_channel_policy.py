@@ -318,6 +318,8 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
     assert provider_assets[0]["derivative_kind"] == "portrait_identity_crop"
     assert provider_assets[1]["derivative_kind"] == "portrait_identity_geometry_crop"
     assert provider_assets[0]["identity_color_neutralized"] is True
+    assert provider_assets[0]["identity_channel_isolation_profile"] == "prompt_owned_channel_isolation_v2"
+    assert provider_assets[0]["identity_outer_context_neutralized"] is True
     assert provider_assets[0]["identity_background_neutralized"] is False
     assert provider_assets[0]["identity_context_reduced_by_tight_crop"] is True
     assert provider_assets[0]["identity_gateway_min_edge_px"] == 512
@@ -338,7 +340,7 @@ def test_doc93_identity_only_provider_input_is_deduplicated_focused_and_color_ne
         corner = focused.getpixel((0, 0))
         red, green, blue = focused.getpixel((focused.width // 2, focused.height // 2))
     assert corner != (128, 128, 128)
-    assert 20 < max(corner) - min(corner) < 180
+    assert max(corner) - min(corner) <= 12
     assert 20 < max(red, green, blue) - min(red, green, blue) < 180
 
     prompt_with_evidence = provider._generation_prompt(  # noqa: SLF001

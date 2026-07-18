@@ -71,6 +71,18 @@ class PhotographyRemoteBrainTestProvider:
                 and decision_requirement.get("owner") == "remote_v3_llm_brain"
             )
         )
+        ownership_requirement = (
+            canonical_context.get("reference_channel_ownership_decision")
+            if isinstance(canonical_context, dict)
+            else None
+        )
+        requires_reference_ownership_decision = bool(
+            isinstance(ownership_requirement, dict)
+            and ownership_requirement.get("required") is True
+            and ownership_requirement.get("contract_version")
+            == "v3_reference_channel_ownership_decision_v1"
+            and ownership_requirement.get("owner") == "remote_v3_llm_brain"
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -89,6 +101,17 @@ class PhotographyRemoteBrainTestProvider:
                         }
                     }
                     if requires_human_naturalness_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "reference_channel_ownership_decision": {
+                            "contract_version": "v3_reference_channel_ownership_decision_v1",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_reference_ownership_decision
                     else {}
                 ),
             }
