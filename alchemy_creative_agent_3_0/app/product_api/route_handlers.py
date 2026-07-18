@@ -29,7 +29,10 @@ class V3ProductRouteHandlers:
             project_store=project_store,
             template_registry=template_registry,
         )
-        self.people_asset_service = PeopleAssetLifecycleService(self.service.visual_asset_catalog)
+        self.people_asset_service = PeopleAssetLifecycleService(
+            self.service.visual_asset_catalog,
+            root_source_resolver=self.service.asset_store.get_upload,
+        )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.service.create_job(payload).model_dump(mode="json")

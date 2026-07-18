@@ -29,7 +29,7 @@ The additive Product API seam is:
 ```text
 POST /api/v3/creative-agent/projects/{project_id}/people-assets
   -> create a project-scoped draft People Asset
-  -> requires root_source_asset_id and explicit consent_reference
+  -> requires a V3 uploaded image whose status is `ready`, plus explicit consent_reference
 
 GET /api/v3/creative-agent/projects/{project_id}/people-assets
 GET /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}
@@ -46,6 +46,11 @@ contract. It must produce all nine bounded candidates, shared review decisions,
 serial root/front/three-quarter/profile evidence, and a `review` pack before
 `activate()` can make the pack active. No route accepts arbitrary candidate
 metadata as a substitute for that service.
+
+The route resolves `root_source_asset_id` through the existing Product API upload
+store and fails closed unless the upload has completed image validation. A raw
+path, temporary pytest catalog record, historical image, or caller-claimed
+provenance cannot create a draft binding.
 
 ## Persistence and binding
 
