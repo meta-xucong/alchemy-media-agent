@@ -112,12 +112,21 @@ def prepare_reference_truth_derivatives(
             )
             if any(kind not in allowed_kinds for kind in requested_kinds):
                 return []
+            face_box = (
+                _detect_primary_face_box(source)
+                if any(
+                    _identity_channel_isolation_profile(reference_policy, kind=kind).get("applies")
+                    for kind in requested_kinds
+                )
+                else None
+            )
             derivatives.extend(
                 _truth_derivative(
                     source,
                     asset_id=asset_id,
                     kind=kind,
                     reference_policy=reference_policy,
+                    normalized_face_box=face_box,
                 )
                 for kind in requested_kinds
             )
@@ -174,8 +183,12 @@ def _truth_derivative(
     asset_id: str,
     kind: str,
     reference_policy: dict[str, Any] | None = None,
+    normalized_face_box: tuple[float, float, float, float] | None = None,
 ) -> dict[str, Any]:
     isolation = _identity_channel_isolation_profile(reference_policy, kind=kind)
+    face_localized = bool(isolation.get("applies") and normalized_face_box)
+    if face_localized:
+        isolation["normalized_face_box"] = normalized_face_box
     try:
         target = _cropped_reference_path(source, kind=kind, identity_isolation=isolation)
         fallback = target.resolve() == source.resolve()
@@ -215,7 +228,28 @@ def _truth_derivative(
         ),
         "identity_outer_color_retention": isolation.get("outer_color_retention") if not fallback else None,
         "identity_channel_isolation_applied": bool(isolation.get("applies")) and not fallback,
-        "identity_channel_isolation_profile": isolation.get("profile_id") if not fallback else None,
+        "identity_channel_isolation_profile": (
+            "face_localized_prompt_owned_channel_isolation_v3"
+            if face_localized and not fallback
+            else isolation.get("profile_id")
+            if not fallback
+            else None
+        ),
+        "identity_face_localization_applied": face_localized and not fallback,
+        "identity_face_localization_status": (
+            "detected"
+            if face_localized and not fallback
+            else "heuristic_fallback"
+            if isolation.get("applies") and not fallback
+            else "not_applicable"
+        ),
+        "identity_nonidentity_pixel_suppression_profile": (
+            "face_localized_nonidentity_suppression_v1"
+            if face_localized and not fallback
+            else "exterior_context_isolation_v2"
+            if isolation.get("applies") and not fallback
+            else None
+        ),
         "identity_prompt_owned_channels": list(isolation.get("prompt_owned_channels") or []) if not fallback else [],
         "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
         "identity_outer_context_neutralized": bool(isolation.get("neutralize_outer_context")) and not fallback,
@@ -266,8 +300,10 @@ def _cropped_reference_path(
     stat = source.stat()
     isolation = dict(identity_isolation or {})
     isolation_key = str(isolation.get("cache_key") or "legacy")
+    normalized_face_box = _coerce_normalized_face_box(isolation.get("normalized_face_box"))
+    face_key = ",".join(f"{value:.6f}" for value in normalized_face_box) if normalized_face_box else "none"
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc161-identity-evidence-v2:{isolation_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc163-face-localized-evidence-v3:{isolation_key}:{face_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -278,7 +314,7 @@ def _cropped_reference_path(
     with Image.open(source) as raw:
         image = ImageOps.exif_transpose(raw)
         image = _to_rgb_on_white(image, Image)
-        box = _truth_crop_box(image.size, kind)
+        box = _truth_crop_box(image.size, kind, normalized_face_box=normalized_face_box)
         cropped = image.crop(box)
         if kind in {
             "portrait_identity_crop",
@@ -295,11 +331,17 @@ def _cropped_reference_path(
                 else 0.58
             )
             if isolation.get("applies"):
+                face_box_in_crop = _normalized_face_box_in_crop(
+                    normalized_face_box,
+                    source_size=image.size,
+                    crop_box=box,
+                )
                 cropped = _isolate_prompt_owned_identity_channels(
                     cropped,
                     kind=kind,
                     face_color_retention=color_retention,
                     outer_color_retention=float(isolation.get("outer_color_retention") or 0.0),
+                    normalized_face_box=face_box_in_crop,
                 )
             else:
                 cropped = ImageEnhance.Color(cropped).enhance(color_retention)
@@ -382,11 +424,11 @@ def _identity_channel_isolation_profile(
         and not hair_is_assigned
     )
     outer_retention = (
-        0.12
+        0.03
         if kind == "portrait_identity_crop"
-        else 0.10
+        else 0.01
         if kind == "portrait_identity_pose_geometry_crop"
-        else 0.06
+        else 0.015
     )
     return {
         "applies": applies,
@@ -409,21 +451,36 @@ def _isolate_prompt_owned_identity_channels(
     kind: str,
     face_color_retention: float,
     outer_color_retention: float,
+    normalized_face_box: tuple[float, float, float, float] | None = None,
 ):
     from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
     face = ImageEnhance.Color(image).enhance(face_color_retention)
     outer = ImageEnhance.Color(image).enhance(outer_color_retention)
-    outer = ImageEnhance.Contrast(outer).enhance(0.34)
-    neutral = Image.new("RGB", image.size, color=(232, 232, 232))
-    outer = Image.blend(outer, neutral, 0.72)
+    outer = ImageEnhance.Contrast(outer).enhance(0.20)
+    neutral = Image.new("RGB", image.size, color=(236, 236, 236))
+    outer = Image.blend(outer, neutral, 0.86)
     blur_radius = max(1.0, min(image.size) * (0.015 if kind == "portrait_identity_crop" else 0.019))
     outer = outer.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     mask = Image.new("L", image.size, color=0)
     draw = ImageDraw.Draw(mask)
     width, height = image.size
-    if kind == "portrait_identity_crop":
-        box = (width * 0.24, height * 0.15, width * 0.76, height * 0.76)
+    face_box = _coerce_normalized_face_box(normalized_face_box)
+    if face_box:
+        x, y, face_width, face_height = face_box
+        if kind == "portrait_identity_crop":
+            expansion = (0.12, 0.04, 0.12, 0.10)
+        elif kind == "portrait_identity_pose_geometry_crop":
+            expansion = (0.28, 0.08, 0.28, 0.16)
+        else:
+            expansion = (0.22, 0.06, 0.22, 0.12)
+        left = max(0.0, x - face_width * expansion[0])
+        top = max(0.0, y - face_height * expansion[1])
+        right = min(1.0, x + face_width * (1.0 + expansion[2]))
+        bottom = min(1.0, y + face_height * (1.0 + expansion[3]))
+        box = (width * left, height * top, width * right, height * bottom)
+    elif kind == "portrait_identity_crop":
+        box = (width * 0.24, height * 0.15, width * 0.76, height * 0.66)
     elif kind == "portrait_identity_pose_geometry_crop":
         # Keep the contour and view cues (ears, neck and shoulder direction)
         # available for a supplementary stage, while still fading prompt-owned
@@ -437,10 +494,37 @@ def _isolate_prompt_owned_identity_channels(
     return Image.composite(face, outer, mask)
 
 
-def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, int]:
+def _truth_crop_box(
+    size: tuple[int, int],
+    kind: str,
+    *,
+    normalized_face_box: tuple[float, float, float, float] | None = None,
+) -> tuple[int, int, int, int]:
     width, height = size
     if width <= 0 or height <= 0:
         return (0, 0, max(1, width), max(1, height))
+    face_box = _coerce_normalized_face_box(normalized_face_box)
+    if face_box and kind in {
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+        "portrait_identity_pose_geometry_crop",
+    }:
+        x, y, face_width, face_height = face_box
+        if kind == "portrait_identity_crop":
+            margins = (0.42, 0.35, 0.42, 0.28)
+        elif kind == "portrait_identity_pose_geometry_crop":
+            margins = (0.74, 0.52, 0.74, 0.48)
+        else:
+            margins = (0.62, 0.45, 0.62, 0.38)
+        return _clamp_crop_box(
+            (
+                int(round((x - face_width * margins[0]) * width)),
+                int(round((y - face_height * margins[1]) * height)),
+                int(round((x + face_width * (1.0 + margins[2])) * width)),
+                int(round((y + face_height * (1.0 + margins[3])) * height)),
+            ),
+            size,
+        )
     if kind == "portrait_identity_crop":
         if height > width * 1.15:
             crop_w = int(width * 0.76)
@@ -506,6 +590,91 @@ def _truth_crop_box(size: tuple[int, int], kind: str) -> tuple[int, int, int, in
     left = max(0, min(width - crop_w, left))
     top = max(0, min(height - crop_h, top))
     return (left, top, left + crop_w, top + crop_h)
+
+
+def _coerce_normalized_face_box(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        x, y, width, height = (float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    if width <= 0.0 or height <= 0.0:
+        return None
+    x = max(0.0, min(1.0, x))
+    y = max(0.0, min(1.0, y))
+    width = max(0.0, min(1.0 - x, width))
+    height = max(0.0, min(1.0 - y, height))
+    return (x, y, width, height) if width > 0.0 and height > 0.0 else None
+
+
+def _clamp_crop_box(
+    box: tuple[int, int, int, int],
+    size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    width, height = size
+    left, top, right, bottom = box
+    left = max(0, min(max(0, width - 1), left))
+    top = max(0, min(max(0, height - 1), top))
+    right = max(left + 1, min(width, right))
+    bottom = max(top + 1, min(height, bottom))
+    return (left, top, right, bottom)
+
+
+def _normalized_face_box_in_crop(
+    face_box: tuple[float, float, float, float] | None,
+    *,
+    source_size: tuple[int, int],
+    crop_box: tuple[int, int, int, int],
+) -> tuple[float, float, float, float] | None:
+    normalized = _coerce_normalized_face_box(face_box)
+    if not normalized:
+        return None
+    source_width, source_height = source_size
+    left, top, right, bottom = crop_box
+    crop_width = max(1, right - left)
+    crop_height = max(1, bottom - top)
+    x, y, width, height = normalized
+    return _coerce_normalized_face_box(
+        (
+            (x * source_width - left) / crop_width,
+            (y * source_height - top) / crop_height,
+            width * source_width / crop_width,
+            height * source_height / crop_height,
+        )
+    )
+
+
+def _detect_primary_face_box(source: Path) -> tuple[float, float, float, float] | None:
+    """Return one ephemeral normalized face box; never persist landmarks or vectors."""
+    try:
+        import cv2 as cv
+
+        model_path = Path(settings.v3_identity_model_dir) / "face_detection_yunet_2023mar.onnx"
+        if not model_path.is_file():
+            return None
+        image = cv.imread(str(source))
+        if image is None:
+            return None
+        height, width = image.shape[:2]
+        detector = cv.FaceDetectorYN.create(str(model_path), "", (width, height), 0.5, 0.3, 5000)
+        _status, faces = detector.detect(image)
+        if faces is None or len(faces) == 0:
+            return None
+        face = max(
+            faces,
+            key=lambda item: float(item[2] * item[3]) * max(0.1, float(item[-1])),
+        )
+        return _coerce_normalized_face_box(
+            (
+                float(face[0]) / max(1, width),
+                float(face[1]) / max(1, height),
+                float(face[2]) / max(1, width),
+                float(face[3]) / max(1, height),
+            )
+        )
+    except Exception:
+        return None
 
 
 def _to_rgb_on_white(image, Image):

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
@@ -18,6 +19,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     reference_channel_retry_patch,
 )
 from app.services.provider_reference import prepare_reference_truth_derivatives
+from app.services import provider_reference
 
 
 def _portrait_binding(path: Path) -> StrongReferenceBinding:
@@ -62,6 +64,68 @@ def _colored_portrait(path: Path) -> Path:
 
 def _channel_range(pixel: tuple[int, int, int]) -> int:
     return max(pixel) - min(pixel)
+
+
+@pytest.mark.parametrize(
+    ("size", "face_box", "garment_color"),
+    [
+        ((720, 1080), (0.34, 0.18, 0.30, 0.29), (32, 118, 224)),
+        ((1080, 720), (0.39, 0.20, 0.22, 0.42), (196, 42, 76)),
+        ((840, 840), (0.16, 0.16, 0.28, 0.34), (48, 168, 92)),
+    ],
+)
+def test_face_localized_identity_evidence_suppresses_nonidentity_pixels_across_scenes(
+    tmp_path,
+    monkeypatch,
+    size,
+    face_box,
+    garment_color,
+) -> None:
+    source = tmp_path / f"portrait-{size[0]}x{size[1]}.png"
+    image = Image.new("RGB", size, (35, 145, 205))
+    draw = ImageDraw.Draw(image)
+    width, height = size
+    x, y, face_width, face_height = face_box
+    face_pixels = (
+        int(x * width),
+        int(y * height),
+        int((x + face_width) * width),
+        int((y + face_height) * height),
+    )
+    draw.rectangle((0, int((y + face_height * 1.08) * height), width, height), fill=garment_color)
+    draw.ellipse(face_pixels, fill=(224, 176, 148))
+    image.save(source)
+    monkeypatch.setattr(provider_reference, "_detect_primary_face_box", lambda _source: face_box)
+    _, policy = _policy(
+        source,
+        "Keep the same person with a new hairstyle, neutral clothing, and a different photographic setting.",
+    )
+
+    derivatives = prepare_reference_truth_derivatives(
+        source,
+        asset_id="face_localized_identity",
+        truth_layers=["portrait_identity_truth"],
+        reference_policy=policy.model_dump(mode="json"),
+    )
+
+    assert len(derivatives) == 2
+    assert {item["derivative_kind"] for item in derivatives} == {
+        "portrait_identity_crop",
+        "portrait_identity_geometry_crop",
+    }
+    for item in derivatives:
+        assert item["identity_channel_isolation_profile"] == "face_localized_prompt_owned_channel_isolation_v3"
+        assert item["identity_face_localization_applied"] is True
+        assert item["identity_face_localization_status"] == "detected"
+        assert item["identity_nonidentity_pixel_suppression_profile"] == "face_localized_nonidentity_suppression_v1"
+        assert "normalized_face_box" not in item
+        with Image.open(item["path"]).convert("RGB") as evidence:
+            face_pixel = evidence.getpixel((evidence.width // 2, evidence.height // 2))
+            lower_context = evidence.getpixel((evidence.width // 2, int(evidence.height * 0.94)))
+        assert _channel_range(face_pixel) >= 35
+        # JPEG compression may leave a small residual channel delta, but the
+        # original saturated garment/background color must be gone.
+        assert _channel_range(lower_context) <= 20
 
 
 def test_prompt_owned_portrait_evidence_reduces_outer_color_without_flattening_face(tmp_path) -> None:

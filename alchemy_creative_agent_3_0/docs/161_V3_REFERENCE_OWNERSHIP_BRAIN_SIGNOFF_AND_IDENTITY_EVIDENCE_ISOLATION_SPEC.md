@@ -1,6 +1,10 @@
 # Doc161 — V3 Reference Ownership Brain Sign-off and Identity Evidence Isolation
 
-Status: implemented candidate; pending code regression and one bounded local Professional M5 front rerun.
+Status: implemented. The bounded Doc162 M5 rerun proved that the v2 exterior-context
+isolation profile was still too broad for a full-body identity source: source wardrobe
+and hairstyle pixels remained visible inside the retained center. Doc163 is the current
+authority for face-localized identity evidence; this document remains authoritative for
+Brain ownership sign-off and the prohibition on prompt-word stacking.
 
 ## 1. Problem statement
 

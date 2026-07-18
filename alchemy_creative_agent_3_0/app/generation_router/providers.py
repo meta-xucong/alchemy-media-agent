@@ -2404,6 +2404,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "identity_channel_isolation_profile": derivative.get(
                             "identity_channel_isolation_profile"
                         ),
+                        "identity_face_localization_applied": bool(
+                            derivative.get("identity_face_localization_applied")
+                        ),
+                        "identity_face_localization_status": derivative.get(
+                            "identity_face_localization_status"
+                        ),
+                        "identity_nonidentity_pixel_suppression_profile": derivative.get(
+                            "identity_nonidentity_pixel_suppression_profile"
+                        ),
                         "identity_prompt_owned_channels": derivative.get("identity_prompt_owned_channels") or [],
                         "identity_outer_context_softened": bool(
                             derivative.get("identity_outer_context_softened")
@@ -3210,6 +3219,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         item.get("identity_channel_isolation_applied")
                     ),
                     "identity_channel_isolation_profile": item.get("identity_channel_isolation_profile"),
+                    "identity_face_localization_applied": bool(
+                        item.get("identity_face_localization_applied")
+                    ),
+                    "identity_face_localization_status": item.get(
+                        "identity_face_localization_status"
+                    ),
+                    "identity_nonidentity_pixel_suppression_profile": item.get(
+                        "identity_nonidentity_pixel_suppression_profile"
+                    ),
                     "identity_prompt_owned_channels": item.get("identity_prompt_owned_channels") or [],
                     "identity_outer_context_softened": bool(item.get("identity_outer_context_softened")),
                     "identity_outer_context_neutralized": bool(

@@ -170,6 +170,21 @@ class ProductApiAnchorPackPreparationHost:
         output_metadata = dict(selected.metadata or {})
         expected_reference_count = self._EXPECTED_PROVIDER_REFERENCE_COUNTS[request.view_role]
         prompt_hash = str(output_metadata.get("provider_prompt_sha256") or "").strip()
+        provider_reference_assets = [
+            dict(item)
+            for item in output_metadata.get("provider_reference_assets", [])
+            if isinstance(item, dict) and item.get("provider_reference_derivative")
+        ]
+        face_localization_verified = bool(
+            len(provider_reference_assets) == expected_reference_count
+            and all(
+                item.get("identity_face_localization_applied") is True
+                and item.get("identity_face_localization_status") == "detected"
+                and item.get("identity_nonidentity_pixel_suppression_profile")
+                == "face_localized_nonidentity_suppression_v1"
+                for item in provider_reference_assets
+            )
+        )
         parity_verified = bool(
             prompt_hash
             and str(output_metadata.get("prompt_compilation_id") or "").strip()
@@ -189,7 +204,12 @@ class ProductApiAnchorPackPreparationHost:
             prompt_reference_parity_verified=parity_verified,
         )
         raw_status = str(inspection.get("status") or "").strip().lower()
-        passes = verified and raw_status in {"pass", "warning"} and not missing_dimensions
+        passes = (
+            verified
+            and raw_status in {"pass", "warning"}
+            and not missing_dimensions
+            and face_localization_verified
+        )
         raw_issues = inspection.get("issue_codes")
         if not isinstance(raw_issues, list):
             raw_issues = inspection.get("detected_issues")
@@ -200,6 +220,8 @@ class ProductApiAnchorPackPreparationHost:
                 issue_codes.append(str(code).strip())
         if missing_dimensions:
             issue_codes.append("professional_anchor_review_score_incomplete")
+        if not face_localization_verified:
+            issue_codes.append("professional_anchor_face_localization_unverified")
         decision = AnchorReviewDecision(
             status="pass" if passes else "fail",
             identity_scores=IdentityScoreSummary(
@@ -212,6 +234,11 @@ class ProductApiAnchorPackPreparationHost:
                 evidence_codes=[
                     "shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified",
                     "canonical_prompt_reference_parity_verified",
+                    *(
+                        ["face_localized_identity_evidence_verified"]
+                        if face_localization_verified
+                        else ["face_localized_identity_evidence_unverified"]
+                    ),
                 ] if parity_verified else ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),

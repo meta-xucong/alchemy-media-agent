@@ -73,6 +73,17 @@ class _SharedProductService:
                 "provider_prompt_sha256": f"sha256:{job_id}",
                 "prompt_compilation_id": f"prompt_{job_id}",
                 "provider_reference_image_count": expected_references,
+                "provider_reference_assets": [
+                    {
+                        "provider_reference_derivative": True,
+                        "identity_face_localization_applied": True,
+                        "identity_face_localization_status": "detected",
+                        "identity_nonidentity_pixel_suppression_profile": (
+                            "face_localized_nonidentity_suppression_v1"
+                        ),
+                    }
+                    for _ in range(expected_references)
+                ],
             },
         )
         self.output_store.by_job[job_id] = [output]
@@ -201,6 +212,37 @@ def test_doc162_product_host_fails_review_when_typed_score_is_incomplete() -> No
     assert len(service.requests) == 3
     assert all(
         "professional_anchor_review_score_incomplete" in attempt.review.issue_codes
+        for attempt in result.attempts
+    )
+
+
+def test_doc163_product_host_withholds_anchor_when_face_localization_falls_back() -> None:
+    service = _SharedProductService()
+    original_generate = service.generate_job
+
+    def unlocalized(job_id, request):  # noqa: ANN001, ANN202
+        status = original_generate(job_id, request)
+        output = service.output_store.by_job[job_id][0]
+        output.metadata["provider_reference_assets"][0]["identity_face_localization_applied"] = False
+        output.metadata["provider_reference_assets"][0]["identity_face_localization_status"] = (
+            "heuristic_fallback"
+        )
+        return status
+
+    service.generate_job = unlocalized  # type: ignore[method-assign]
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=_root(),
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["no_passing_front_candidate"]
+    assert len(service.requests) == 3
+    assert all(
+        "professional_anchor_face_localization_unverified" in attempt.review.issue_codes
         for attempt in result.attempts
     )
 
