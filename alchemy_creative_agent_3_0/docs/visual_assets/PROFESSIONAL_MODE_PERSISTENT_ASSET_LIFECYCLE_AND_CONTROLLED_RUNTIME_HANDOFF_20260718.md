@@ -29,7 +29,10 @@ The additive Product API seam is:
 ```text
 POST /api/v3/creative-agent/projects/{project_id}/people-assets
   -> create a project-scoped draft People Asset
-  -> requires a V3 uploaded image whose status is `ready`, plus explicit consent_reference
+  -> requires a V3 uploaded image whose status is `ready`, explicit
+     consent_reference, and one complete user-authored preparation_intent
+  -> freezes preparation_intent immutably; it is Remote Brain input, not a
+     locally authored renderer prompt or structured visual recipe
 
 GET /api/v3/creative-agent/projects/{project_id}/people-assets
 GET /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}
@@ -40,6 +43,8 @@ POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id
      Provider calls, and Vision review remain server-owned
   -> fails closed with `professional_anchor_pack_prepare_unavailable` when no
      shared host is configured
+  -> fails closed when a legacy People Asset has no frozen preparation_intent;
+     the empty payload cannot supply or replace one
 
 POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate
   -> requires an existing complete reviewed pack_version_id and an injected
@@ -54,6 +59,12 @@ contract. It must produce all nine bounded candidates, shared review decisions,
 serial root/front/three-quarter/profile evidence, and a `review` pack before
 `activate()` can make the pack active. No route accepts arbitrary candidate
 metadata as a substitute for that service.
+
+Every bounded view candidate receives the exact frozen preparation intent as
+its Product API `user_input`. The server-owned `view_role`, candidate ordinal
+and serial reference chain remain typed metadata. The host must not replace the
+intent with a generic front/three-quarter/profile sentence or append a local
+quality recipe; Remote Brain authors the complete final prompt for each view.
 
 The prepare/activation route is only a formal shared-service seam; it is not a
 local generator or a metadata switch. The

@@ -162,8 +162,24 @@ class PeopleAsset(_StrictVisualAssetModel):
     # restart can resume formal pack preparation without trusting raw request
     # metadata.  Pixel bytes remain in the existing uploaded-asset store.
     root_source_provenance: RootSourceProvenance | None = None
+    # A single immutable natural-language statement of what the user wants the
+    # anchor pack to represent.  It is not a renderer prompt or a structured
+    # visual recipe: Remote Brain remains the only final prompt author.  The
+    # optional type keeps historical catalog records readable; formal
+    # preparation fails closed when a legacy asset has no intent.
+    preparation_intent: str | None = None
     active_pack_version_id: str | None = None
     status: AssetStatus = "draft"
+
+    @field_validator("preparation_intent")
+    @classmethod
+    def normalize_preparation_intent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("People Asset preparation intent cannot be empty")
+        return value
 
     @model_validator(mode="after")
     def validate_active_asset(self) -> "PeopleAsset":

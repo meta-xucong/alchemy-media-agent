@@ -69,6 +69,7 @@ class ProductApiAnchorPackPreparationHost:
                 project_id=project_id,
                 asset=people_asset,
                 root_source_provenance=root_source_provenance,
+                preparation_intent=people_asset.preparation_intent,
             )
         )
 
@@ -86,7 +87,7 @@ class ProductApiAnchorPackPreparationHost:
         stage_key = (request.pack_version_id, request.view_role)
         status = self.product_service.create_professional_anchor_preparation_job(
             {
-                "user_input": self._structural_view_request(request.view_role),
+                "user_input": request.preparation_intent,
                 "scenario_selection": {"scenario_id": "general_creative"},
                 "uploaded_asset_ids": [request.root_source_asset_id],
                 "metadata": {
@@ -283,19 +284,5 @@ class ProductApiAnchorPackPreparationHost:
             float(scores.get("same_person_readability") or 0.0),
             float(scores.get("overall") or 0.0),
         )
-
-    @staticmethod
-    def _structural_view_request(view_role: str) -> str:
-        labels = {
-            "standard_front": "straight-on front identity anchor",
-            "three_quarter": "three-quarter identity anchor",
-            "profile": "profile identity anchor",
-        }
-        return (
-            "Prepare one " + labels[view_role] + " for the same person. "
-            "The frozen Professional identity and reference-channel contracts are authoritative; "
-            "Remote Brain must author the complete visual direction."
-        )
-
 
 __all__ = ["ProductApiAnchorPackPreparationHost"]

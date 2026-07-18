@@ -29,6 +29,7 @@ class PeopleAssetCreateRequest(V3BaseModel):
     subject_kind: Literal["human_person", "fictional_character"] = "human_person"
     root_source_asset_id: str
     consent_reference: str
+    preparation_intent: str
 
     @field_validator("root_source_asset_id", "consent_reference")
     @classmethod
@@ -36,6 +37,14 @@ class PeopleAssetCreateRequest(V3BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("root source and consent reference are required")
+        return value
+
+    @field_validator("preparation_intent")
+    @classmethod
+    def require_preparation_intent(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("preparation_intent is required")
         return value
 
 
@@ -113,9 +122,10 @@ class PeopleAssetLifecycleService:
         people_asset_id = (request.people_asset_id or "").strip() or self._new_asset_id()
         if self.catalog.get(project_id, people_asset_id) is not None:
             raise ValueError("people_asset_already_exists")
-        # Root source and consent are attached to the first pack provenance,
-        # not copied into a prompt or arbitrary metadata field.  The draft is
-        # intentionally not active until a complete pack is activated.
+        # Root source, consent, and the user's natural-language preparation
+        # intent are frozen on the People Asset.  The intent is not a local
+        # prompt recipe; it is forwarded unchanged to Remote Brain.  The draft
+        # is intentionally not active until a complete pack is activated.
         asset = PeopleAsset(
             people_asset_id=people_asset_id,
             project_id=project_id,
@@ -131,6 +141,7 @@ class PeopleAssetLifecycleService:
                 project_id=project_id,
                 consent_reference=request.consent_reference,
             ),
+            preparation_intent=request.preparation_intent,
             status="draft",
         )
         self.catalog.save(asset, project_id=project_id, event_type="create")
@@ -153,6 +164,8 @@ class PeopleAssetLifecycleService:
         asset = self.get(project_id, people_asset_id)
         if asset.root_source_provenance is None:
             raise ValueError("professional_people_asset_root_provenance_missing")
+        if asset.preparation_intent is None:
+            raise ValueError("professional_people_asset_preparation_intent_missing")
         result = self.anchor_pack_host.prepare(
             project_id=project_id,
             people_asset=asset,

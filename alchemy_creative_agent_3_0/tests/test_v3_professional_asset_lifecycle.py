@@ -13,8 +13,15 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
     FaceIdentityModule,
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
+    PeopleAsset,
     PersistentVisualAssetCatalog,
     RootSourceProvenance,
+)
+
+
+PREPARATION_INTENT = (
+    "Prepare a coherent professional identity anchor pack for the same person while "
+    "letting the current request own developmental stage, presentation, and capture treatment."
 )
 
 
@@ -84,7 +91,14 @@ class _PreparationHost:
         self.calls = []
 
     def prepare(self, *, project_id, people_asset, root_source_provenance):
-        self.calls.append((project_id, people_asset.people_asset_id, root_source_provenance.source_asset_id))
+        self.calls.append(
+            (
+                project_id,
+                people_asset.people_asset_id,
+                root_source_provenance.source_asset_id,
+                people_asset.preparation_intent,
+            )
+        )
         result = AnchorPackPreparationResult(
             status="review",
             pack=_pack(people_asset.people_asset_id, project_id, self.root_source_asset_id).model_copy(
@@ -112,6 +126,7 @@ def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> No
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
 
@@ -120,6 +135,7 @@ def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> No
     restored = PersistentVisualAssetCatalog(tmp_path / "visual-assets")
     assert restored.get(project_id, "child_asset").status == "draft"
     assert restored.get(project_id, "child_asset").root_source_provenance.source_asset_id == root_source_asset_id
+    assert restored.get(project_id, "child_asset").preparation_intent == PREPARATION_INTENT
     assert restored.list_history(project_id, "child_asset")[0].event_type == "create"
     assert catalog.list_assets(project_id)[0].people_asset_id == "child_asset"
 
@@ -133,6 +149,21 @@ def test_people_asset_formal_entry_rejects_non_ready_root_source(tmp_path) -> No
                 "people_asset_id": "child_asset",
                 "root_source_asset_id": "v3_asset_0000000000000000",
                 "consent_reference": "user-authorized-child-source-20260718",
+                "preparation_intent": PREPARATION_INTENT,
+            },
+        )
+
+
+def test_people_asset_formal_entry_requires_immutable_preparation_intent(tmp_path) -> None:
+    handlers, _, project_id, root_source_asset_id = _handlers(tmp_path)
+
+    with pytest.raises(ValueError):
+        handlers.post_project_people_asset(
+            project_id,
+            {
+                "people_asset_id": "child_asset",
+                "root_source_asset_id": root_source_asset_id,
+                "consent_reference": "user-authorized-child-source-20260718",
             },
         )
 
@@ -145,6 +176,7 @@ def test_people_asset_prepare_route_fails_closed_without_shared_host(tmp_path) -
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
     with pytest.raises(RuntimeError, match="professional_anchor_pack_prepare_unavailable"):
@@ -167,12 +199,19 @@ def test_people_asset_prepare_route_uses_injected_shared_host_and_preserves_bind
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
+    with pytest.raises(ValueError):
+        handlers.post_project_people_asset_prepare(
+            project_id,
+            "child_asset",
+            {"preparation_intent": "Caller attempt to replace the frozen intent."},
+        )
     prepared = handlers.post_project_people_asset_prepare(project_id, "child_asset", {})
     assert prepared["preparation"]["status"] == "review"
     assert prepared["preparation"]["pack"]["status"] == "review"
-    assert host.calls == [(project_id, "child_asset", root_source_asset_id)]
+    assert host.calls == [(project_id, "child_asset", root_source_asset_id, PREPARATION_INTENT)]
     activated = handlers.post_project_people_asset_activate(
         project_id,
         "child_asset",
@@ -180,6 +219,39 @@ def test_people_asset_prepare_route_uses_injected_shared_host_and_preserves_bind
     )
     assert activated["lifecycle_state"] == "active"
     assert activated["people_asset"]["active_pack_version_id"] == "pack_child_v1"
+
+
+def test_legacy_people_asset_without_preparation_intent_fails_closed_before_host(tmp_path) -> None:
+    handlers, catalog, project_id, root_source_asset_id = _handlers(tmp_path)
+    host = _PreparationHost(root_source_asset_id, catalog)
+    handlers = V3ProductRouteHandlers(
+        service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        anchor_pack_preparation_host=host,
+    )
+    catalog.save(
+        PeopleAsset(
+            people_asset_id="legacy_asset",
+            project_id=project_id,
+            subject_kind="human_person",
+            face_identity_module=FaceIdentityModule(
+                module_id="face_legacy_asset",
+                people_asset_id="legacy_asset",
+            ),
+            root_source_provenance=RootSourceProvenance(
+                source_type="uploaded_portrait",
+                source_asset_id=root_source_asset_id,
+                project_id=project_id,
+                consent_reference="legacy-consent",
+            ),
+        ),
+        project_id=project_id,
+        event_type="create",
+    )
+
+    with pytest.raises(ValueError, match="professional_people_asset_preparation_intent_missing"):
+        handlers.post_project_people_asset_prepare(project_id, "legacy_asset", {})
+    assert host.calls == []
 
 
 def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmation(tmp_path) -> None:
@@ -190,6 +262,7 @@ def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmat
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
     catalog.save_pack(_pack("child_asset", project_id, root_source_asset_id), project_id=project_id, event_type="activate")
@@ -223,6 +296,7 @@ def test_people_asset_activation_rejects_missing_or_unreviewed_pack(tmp_path) ->
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
 
@@ -242,6 +316,7 @@ def test_people_asset_activation_rejects_pack_with_different_root(tmp_path) -> N
             "people_asset_id": "child_asset",
             "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
+            "preparation_intent": PREPARATION_INTENT,
         },
     )
     wrong_root = _pack("child_asset", project_id, root_source_asset_id).model_copy(

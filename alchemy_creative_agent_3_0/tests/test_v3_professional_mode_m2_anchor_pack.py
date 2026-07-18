@@ -20,6 +20,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
 )
 
 
+PREPARATION_INTENT = (
+    "Prepare a coherent professional identity anchor pack for the same person while "
+    "letting the current request own presentation and capture treatment."
+)
+
+
 def _asset() -> PeopleAsset:
     return PeopleAsset(
         people_asset_id="person_1",
@@ -29,6 +35,7 @@ def _asset() -> PeopleAsset:
             module_id="face_module_1",
             people_asset_id="person_1",
         ),
+        preparation_intent=PREPARATION_INTENT,
     )
 
 
@@ -41,6 +48,7 @@ def _request() -> AnchorPackPreparationRequest:
             source_asset_id="asset_root_1",
             project_id="project_1",
         ),
+        preparation_intent=PREPARATION_INTENT,
         brain_plan_id="brain_plan_1",
         canonical_prompt_hash="sha256:prompt_1",
     )
@@ -228,6 +236,7 @@ def test_m2_generation_contract_rejects_non_serial_reference_chains(
             pack_version_id="pack_1",
             view_role=view_role,
             candidate_index=1,
+            preparation_intent=PREPARATION_INTENT,
             root_source_asset_id="asset_root_1",
             reference_evidence_ids=reference_evidence_ids,
             brain_plan_id="brain_plan_1",
@@ -242,6 +251,7 @@ def test_m2_generation_contract_accepts_the_serial_profile_chain() -> None:
         pack_version_id="pack_1",
         view_role="profile",
         candidate_index=3,
+        preparation_intent=PREPARATION_INTENT,
         root_source_asset_id="asset_root_1",
         reference_evidence_ids=["asset_root_1", "output_front_3", "output_three_quarter_2"],
         brain_plan_id="brain_plan_1",
@@ -274,8 +284,25 @@ def test_m2_requires_brain_plan_and_canonical_prompt_hash_before_generation() ->
                 source_asset_id="asset_root_1",
                 project_id="project_1",
             ),
+            preparation_intent=PREPARATION_INTENT,
             brain_plan_id="",
             canonical_prompt_hash="",
+        )
+
+
+def test_m2_rejects_preparation_intent_that_differs_from_frozen_people_asset() -> None:
+    with pytest.raises(ValidationError, match="immutable People Asset intent"):
+        AnchorPackPreparationRequest(
+            project_id="project_1",
+            asset=_asset(),
+            root_source_provenance=RootSourceProvenance(
+                source_type="uploaded_portrait",
+                source_asset_id="asset_root_1",
+                project_id="project_1",
+            ),
+            preparation_intent="A different late-bound direction.",
+            brain_plan_id="brain_plan_1",
+            canonical_prompt_hash="sha256:prompt_1",
         )
 
 

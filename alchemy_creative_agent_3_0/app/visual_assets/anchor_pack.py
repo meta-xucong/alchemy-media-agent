@@ -38,6 +38,7 @@ class AnchorGenerationRequest(V3BaseModel):
     pack_version_id: str
     view_role: Literal["standard_front", "three_quarter", "profile"]
     candidate_index: int = Field(ge=1, le=3)
+    preparation_intent: str
     root_source_asset_id: str
     reference_evidence_ids: list[str] = Field(default_factory=list)
     # The actual plan/hash do not exist until the Remote Brain and canonical
@@ -47,7 +48,12 @@ class AnchorGenerationRequest(V3BaseModel):
     canonical_prompt_hash: str | None = None
     reference_strategy: Literal["serial_anchor_pack_root_reuse_v1"] = "serial_anchor_pack_root_reuse_v1"
 
-    @field_validator("brain_plan_id", "canonical_prompt_hash", "root_source_asset_id")
+    @field_validator(
+        "brain_plan_id",
+        "canonical_prompt_hash",
+        "preparation_intent",
+        "root_source_asset_id",
+    )
     @classmethod
     def require_nonempty_evidence(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -83,10 +89,11 @@ class AnchorPackPreparationRequest(V3BaseModel):
     project_id: str
     asset: PeopleAsset
     root_source_provenance: RootSourceProvenance
+    preparation_intent: str
     brain_plan_id: str | None = None
     canonical_prompt_hash: str | None = None
 
-    @field_validator("brain_plan_id", "canonical_prompt_hash")
+    @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
     def require_brain_contract(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -97,6 +104,10 @@ class AnchorPackPreparationRequest(V3BaseModel):
     def same_project(self) -> "AnchorPackPreparationRequest":
         if self.project_id != self.asset.project_id or self.project_id != self.root_source_provenance.project_id:
             raise ValueError("asset, root evidence, and preparation request must belong to the same project")
+        if self.asset.preparation_intent is None:
+            raise ValueError("People Asset preparation intent is required")
+        if self.preparation_intent != self.asset.preparation_intent:
+            raise ValueError("preparation intent must match the immutable People Asset intent")
         return self
 
 
@@ -349,6 +360,7 @@ class AnchorPackPreparationService:
             pack_version_id=pack_version_id,
             view_role=view_role,
             candidate_index=candidate_index,
+            preparation_intent=request.preparation_intent,
             root_source_asset_id=request.root_source_provenance.source_asset_id,
             reference_evidence_ids=reference_evidence_ids,
             brain_plan_id=request.brain_plan_id,

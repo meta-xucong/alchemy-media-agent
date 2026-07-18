@@ -631,3 +631,38 @@ Doc166 quality redesign: if a persistent production-grade pack is required,
 run a fresh append-only Product API preparation using the same frozen contract,
 shared Vision certification and explicit activation. Do not reuse rejected MCP
 candidates or fabricate lifecycle records from this conversation-only run.
+
+## 17. Formal People Asset preparation-intent transport closure
+
+The first genuinely fresh Product API pixel after the MCP acceptance exposed a
+formal lifecycle defect before quality scoring. The new output used the correct
+Professional view role and reference budget, but its Brain receipt froze
+`preserve_reference_stage`: the People Asset API had never persisted the
+user-authored preparation intent, and the Product API host replaced it with a
+locally synthesized generic view sentence. The pixel is therefore retained as
+non-counting contract-gap evidence, not as a Human Realism or M5 quality result.
+
+The correction preserves the existing architecture:
+
+1. A new People Asset freezes one required `preparation_intent`: one complete
+   natural-language statement authored by the user, not a field collection or
+   renderer recipe.
+2. The intent is immutable with the project-scoped People Asset and survives
+   catalog restart. The empty `prepare` payload cannot replace it.
+3. Historical People Assets remain readable. A historical record without a
+   preparation intent is blocked before Brain/Provider rather than receiving a
+   guessed default.
+4. `AnchorPackPreparationRequest` and every `AnchorGenerationRequest` carry the
+   exact frozen intent. A mismatch with the People Asset is invalid.
+5. The Product API host sends that exact intent as `user_input` on every
+   candidate. View role, candidate ordinal and 2/3/5 reference evidence remain
+   typed server-owned contracts; the host no longer manufactures prompt prose.
+6. Remote Brain still owns each complete final prompt. No age classifier,
+   child branch, keyword/regex match, prompt suffix or local repair sentence is
+   introduced.
+
+Focused regression locks persistence, immutable prepare behavior, legacy
+fail-closed handling, exact nine-candidate transport, serial references and the
+Doc166 age/capture contracts. A new formal M5 run must use a new People Asset,
+new pack and new Job/output identifiers created after this closure. Only that
+run may be assessed for front winner, supplementary views and activation.

@@ -25,6 +25,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
 )
 
 
+PREPARATION_INTENT = (
+    "Prepare a coherent professional identity anchor pack for the same person while "
+    "letting the current request own developmental stage, presentation, and capture treatment."
+)
+
+
 class _OutputStore:
     def __init__(self) -> None:
         self.by_job: dict[str, list[SimpleNamespace]] = {}
@@ -134,6 +140,7 @@ def _asset() -> PeopleAsset:
             module_id="face_doc162",
             people_asset_id="person_doc162",
         ),
+        preparation_intent=PREPARATION_INTENT,
     )
 
 
@@ -184,8 +191,13 @@ def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service
     assert service.requests[2]["stage_plan_source_job_id"] == service.requests[0]["job_id"]
     assert service.requests[3]["stage_plan_source_job_id"] is None
     assert service.requests[6]["stage_plan_source_job_id"] is None
-    assert service.requests[0]["payload"]["user_input"].endswith(
-        "Remote Brain must author the complete visual direction."
+    assert all(
+        item["payload"]["user_input"] == PREPARATION_INTENT
+        for item in service.requests
+    )
+    assert all(
+        attempt.request.preparation_intent == PREPARATION_INTENT
+        for attempt in result.attempts
     )
     assert "prompt" not in service.requests[0]["payload"]["metadata"]
 
