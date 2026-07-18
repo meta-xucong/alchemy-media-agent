@@ -5,6 +5,7 @@ from .contracts import (
     BrainOutputEvidenceContract,
     BrainCheckpoint,
     BrainCanonicalProviderPrompt,
+    BrainProfessionalAnchorViewDecision,
     BrainReferenceChannelOwnershipDecision,
     BrainImageSetPlan,
     BrainIntentSummary,
@@ -19,6 +20,7 @@ from .contracts import (
 __all__ = [
     "BrainCheckpoint",
     "BrainCanonicalProviderPrompt",
+    "BrainProfessionalAnchorViewDecision",
     "BrainReferenceChannelOwnershipDecision",
     "BrainOutputEvidenceContract",
     "BrainImageSetPlan",

@@ -100,6 +100,22 @@ class EcommerceRemoteBrainTestProvider:
             == "v3_reference_channel_ownership_decision_v1"
             and ownership_requirement.get("owner") == "remote_v3_llm_brain"
         )
+        anchor_view_requirement = (
+            context.get("professional_anchor_view_decision") if isinstance(context, dict) else None
+        )
+        anchor_view_target = (
+            str(anchor_view_requirement.get("target_view_role") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        requires_anchor_view_decision = bool(
+            isinstance(anchor_view_requirement, dict)
+            and anchor_view_requirement.get("required") is True
+            and anchor_view_requirement.get("contract_version")
+            == "v3_professional_anchor_view_decision_v1"
+            and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
+            and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -129,6 +145,18 @@ class EcommerceRemoteBrainTestProvider:
                         }
                     }
                     if requires_reference_ownership_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "professional_anchor_view_decision": {
+                            "contract_version": "v3_professional_anchor_view_decision_v1",
+                            "target_view_role": anchor_view_target,
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_anchor_view_decision
                     else {}
                 ),
             }

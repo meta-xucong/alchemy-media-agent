@@ -170,9 +170,11 @@ three-quarter: root + front winner -> 3 candidates -> one winner
 profile: root + front + three-quarter winners -> 3 candidates -> one winner
 ```
 
-Candidate 1 may use the one existing shared bounded repair for its stage. Provider
-failures, rejected candidates and repairs remain append-only. A complete reviewed
-pack must be explicitly activated; no partial pack can pass M5.
+Doc165 supersedes the candidate-ordinal repair wording above: each stage owns one
+existing shared bounded repair, consumed only when shared runtime actually executes
+that repair after pixel review. A no-pixel Provider failure does not consume it.
+Provider failures, rejected candidates and repairs remain append-only. A complete
+reviewed pack must be explicitly activated; no partial pack can pass M5.
 
 ## 6. Stop conditions
 

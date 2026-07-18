@@ -13,6 +13,7 @@ from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.providers import (
     BrainHumanNaturalnessDecisionMissing,
+    BrainProfessionalAnchorViewDecisionMissing,
     BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
 )
@@ -762,6 +763,7 @@ class ScenarioRuntime:
                 in {
                     "human_realism_semantic_contract_missing",
                     "professional_face_identity_quality_contract_missing",
+                    "professional_anchor_view_contract_missing",
                     "reference_channel_ownership_contract_missing",
                 }
                 else "human_realism_semantic_contract_missing",
@@ -792,21 +794,55 @@ class ScenarioRuntime:
         )
         try:
             prompts, audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(signing_request)
-        except Exception as exc:
-            # Do not expose an upstream body or turn it into local text.  The
-            # activation boundary records the public-safe reason code only.
-            raise self._remote_creative_brain_block(
-                (
-                    "human_realism_semantic_preflight_missing"
-                    if isinstance(exc, BrainSemanticPreflightMissing)
-                    else "human_realism_natural_presence_decision_missing"
-                    if isinstance(exc, BrainHumanNaturalnessDecisionMissing)
-                    else "reference_channel_ownership_decision_missing"
-                    if isinstance(exc, BrainReferenceChannelOwnershipDecisionMissing)
-                    else "remote_creative_brain_prompt_signoff_unavailable"
-                ),
-                brain_result,
-            ) from exc
+        except Exception as first_exc:
+            failure: Exception | None = first_exc
+            if isinstance(first_exc, BrainProfessionalAnchorViewDecisionMissing):
+                view_contract = canonical_prompt_context.get("professional_anchor_view_decision")
+                view_contract = view_contract if isinstance(view_contract, dict) else {}
+                recovery_request = signing_request.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(signing_request.metadata or {}),
+                            "professional_anchor_view_contract_recovery": {
+                                "contract_version": "v3_professional_anchor_view_contract_recovery_v1",
+                                "attempt": 1,
+                                "same_frozen_context": True,
+                                "target_view_role": str(view_contract.get("target_view_role") or ""),
+                            },
+                        }
+                    },
+                    deep=True,
+                )
+                try:
+                    prompts, audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(
+                        recovery_request
+                    )
+                except Exception as recovery_exc:
+                    failure = recovery_exc
+                else:
+                    failure = None
+                    audit = {
+                        **audit,
+                        "professional_anchor_view_contract_recovery_attempted": True,
+                        "professional_anchor_view_contract_recovery_succeeded": True,
+                    }
+            if failure is not None:
+                # Do not expose an upstream body or turn it into local text.
+                # The activation boundary records the public-safe reason only.
+                raise self._remote_creative_brain_block(
+                    (
+                        "human_realism_semantic_preflight_missing"
+                        if isinstance(failure, BrainSemanticPreflightMissing)
+                        else "human_realism_natural_presence_decision_missing"
+                        if isinstance(failure, BrainHumanNaturalnessDecisionMissing)
+                        else "reference_channel_ownership_decision_missing"
+                        if isinstance(failure, BrainReferenceChannelOwnershipDecisionMissing)
+                        else "professional_anchor_view_decision_missing"
+                        if isinstance(failure, BrainProfessionalAnchorViewDecisionMissing)
+                        else "remote_creative_brain_prompt_signoff_unavailable"
+                    ),
+                    brain_result,
+                ) from failure
         final_stage = "provider_prompt_finalize"
         if "human_realism" in plan.dependency_order:
             # Keep retry evidence in the same final sign-off context. The
@@ -831,6 +867,12 @@ class ScenarioRuntime:
                 **audit,
                 "reference_channel_ownership_resigned": True,
                 "reference_channel_ownership_signoff_mode": "combined_finalizer",
+            }
+        if canonical_prompt_context.get("professional_anchor_view_decision"):
+            audit = {
+                **audit,
+                "professional_anchor_view_resigned": True,
+                "professional_anchor_view_signoff_mode": "combined_finalizer",
             }
         transport_history = list(brain_result.audit.get("remote_brain_transports") or [])
         if not transport_history and isinstance(brain_result.audit.get("remote_brain_transport"), dict):
@@ -1056,6 +1098,21 @@ class ScenarioRuntime:
                     context["professional_face_identity_quality_contract"] = dict(quality_contract)
             if not isinstance(context.get("professional_face_identity_quality_contract"), dict):
                 raise CapabilityActivationError("professional_face_identity_quality_contract_missing")
+            if request.metadata.get("professional_anchor_pack_preparation") is True:
+                target_view_role = str(
+                    (planning_metadata or {}).get("professional_reference_stage")
+                    if isinstance(planning_metadata, dict)
+                    else ""
+                ).strip()
+                if target_view_role not in {"standard_front", "three_quarter", "profile"}:
+                    raise CapabilityActivationError("professional_anchor_view_contract_missing")
+                context["professional_anchor_view_decision"] = {
+                    "required": True,
+                    "contract_version": "v3_professional_anchor_view_decision_v1",
+                    "owner": "remote_v3_llm_brain",
+                    "target_view_role": target_view_role,
+                    "frozen_binding": dict(context.get("frozen_binding") or {}),
+                }
         return context
 
     @staticmethod
@@ -1243,6 +1300,17 @@ class ScenarioRuntime:
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),
             )
+        if (
+            bool(brain_result.audit.get("professional_anchor_view_decision_required"))
+            and not bool(brain_result.audit.get("frozen_execution_reuse"))
+            and not bool(brain_result.audit.get("professional_anchor_view_decision_signed"))
+        ):
+            raise self._remote_creative_brain_block(
+                "professional_anchor_view_decision_missing",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
 
     @staticmethod
     def _requires_remote_creative_brain_for_real_images(request: ScenarioRuntimeRequest) -> bool:
@@ -1311,6 +1379,8 @@ class ScenarioRuntime:
             "reference_channel_ownership_decision_missing",
             "reference_channel_ownership_contract_missing",
             "professional_face_identity_quality_contract_missing",
+            "professional_anchor_view_contract_missing",
+            "professional_anchor_view_decision_missing",
         }:
             outcome_class = "remote_prompt_signoff_unavailable"
         elif brain_result.skipped:

@@ -617,6 +617,23 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         and ownership_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(ownership_requirement.get("frozen_binding"), dict)
     )
+    anchor_view_requirement = context.get("professional_anchor_view_decision")
+    anchor_view_target = (
+        str(anchor_view_requirement.get("target_view_role") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_view_decision_required = bool(
+        isinstance(anchor_view_requirement, dict)
+        and anchor_view_requirement.get("required") is True
+        and anchor_view_requirement.get("contract_version")
+        == "v3_professional_anchor_view_decision_v1"
+        and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(anchor_view_requirement.get("frozen_binding"), dict)
+        and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+    )
+    if isinstance(anchor_view_requirement, dict) and not anchor_view_decision_required:
+        raise ValueError("Professional anchor finalization requires one valid frozen view contract.")
     if decision_required and not (
         isinstance(decision_requirement, dict)
         and decision_requirement.get("required") is True
@@ -644,6 +661,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if ownership_decision_required:
         prompt_schema["reference_channel_ownership_decision"] = {
             "contract_version": "v3_reference_channel_ownership_decision_v1",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
+    if anchor_view_decision_required:
+        prompt_schema["professional_anchor_view_decision"] = {
+            "contract_version": "v3_professional_anchor_view_decision_v1",
+            "target_view_role": anchor_view_target,
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
@@ -687,6 +711,23 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "reference_channel_ownership_decision with contract_version "
             "v3_reference_channel_ownership_decision_v1, owner remote_v3_llm_brain, and status approved or rewritten."
         )
+    if anchor_view_decision_required:
+        response_contract += (
+            " Independently reconcile every complete prompt with the exact frozen Professional anchor view role "
+            f"{anchor_view_target}. The complete visual direction must materially produce that target view, while "
+            "the Remote Brain remains the sole author of the whole prompt. If the draft direction does not fulfill "
+            "the frozen role, rewrite the entire prompt before approval; do not append a correction, inspect a local "
+            "keyword list, or return a patch. For every output, return professional_anchor_view_decision with "
+            "contract_version v3_professional_anchor_view_decision_v1, the exact frozen target_view_role, owner "
+            "remote_v3_llm_brain, and status approved or rewritten."
+        )
+    anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
+    if isinstance(anchor_view_recovery, dict):
+        response_contract += (
+            " The prior answer omitted or changed the required typed Professional anchor-view receipt. Re-answer "
+            "the complete canonical prompt contract from the same frozen context exactly once; do not return a diff, "
+            "reuse an incomplete answer, or alter the frozen target role."
+        )
     professional_anchor_contract = context.get("professional_face_identity_quality_contract")
     if isinstance(professional_anchor_contract, dict):
         response_contract += (
@@ -712,6 +753,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         },
         "remote_response_contract": response_contract,
     }
+    if isinstance(anchor_view_recovery, dict):
+        payload["professional_anchor_view_contract_recovery"] = dict(anchor_view_recovery)
     if is_human_naturalness_resign:
         # These are complete prompts authored by the first remote Brain pass,
         # never local fragments or mutable visual-cluster prose.

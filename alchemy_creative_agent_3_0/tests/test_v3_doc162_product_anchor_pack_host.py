@@ -64,6 +64,7 @@ class _SharedProductService:
 
     def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
         frozen = next(item for item in self.requests if item["job_id"] == job_id)
+        frozen["generation_request"] = dict(request)
         role = frozen["view_role"]
         expected_references = {"standard_front": 2, "three_quarter": 3, "profile": 5}[role]
         output_id = f"output_{job_id}"
@@ -102,6 +103,7 @@ class _SharedProductService:
             generation_result=SimpleNamespace(
                 planning_result_id=f"planning_{job_id}",
                 metadata={
+                    "visual_auto_retry": {"executed_count": 0},
                     "post_generation_review_package": {
                         "inspections": [
                             {
@@ -186,6 +188,77 @@ def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service
         "Remote Brain must author the complete visual direction."
     )
     assert "prompt" not in service.requests[0]["payload"]["metadata"]
+
+
+def test_doc165_provider_failure_without_pixels_does_not_consume_stage_repair() -> None:
+    service = _SharedProductService()
+    original_generate = service.generate_job
+    call_count = 0
+
+    def fail_first_before_pixels(job_id, request):  # noqa: ANN001, ANN202
+        nonlocal call_count
+        call_count += 1
+        status = original_generate(job_id, request)
+        if call_count == 1:
+            service.output_store.by_job[job_id] = []
+            service.jobs[job_id].generation_result.metadata.pop(
+                "post_generation_review_package",
+                None,
+            )
+            return SimpleNamespace(status=ProductJobStatusValue.BLOCKED)
+        return status
+
+    service.generate_job = fail_first_before_pixels  # type: ignore[method-assign]
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=_root(),
+    )
+
+    assert result.status == "review"
+    assert service.requests[0]["generation_request"]["metadata"] == {
+        "max_visual_retry_attempts": 1
+    }
+    assert service.requests[1]["generation_request"]["metadata"] == {
+        "max_visual_retry_attempts": 1
+    }
+
+
+def test_doc165_executed_shared_repair_disables_later_stage_repairs() -> None:
+    service = _SharedProductService()
+    original_generate = service.generate_job
+
+    def consume_first_stage_repair(job_id, request):  # noqa: ANN001, ANN202
+        status = original_generate(job_id, request)
+        if len(service.requests) == 1:
+            service.jobs[job_id].generation_result.metadata["visual_auto_retry"] = {
+                "executed_count": 1
+            }
+        return status
+
+    service.generate_job = consume_first_stage_repair  # type: ignore[method-assign]
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=_root(),
+    )
+
+    assert result.status == "review"
+    assert service.requests[0]["generation_request"]["metadata"] == {
+        "max_visual_retry_attempts": 1
+    }
+    assert service.requests[1]["generation_request"]["metadata"] == {
+        "disable_visual_auto_retry": True,
+        "max_visual_retry_attempts": 0,
+    }
+    assert service.requests[2]["generation_request"]["metadata"] == {
+        "disable_visual_auto_retry": True,
+        "max_visual_retry_attempts": 0,
+    }
 
 
 def test_doc162_product_host_fails_review_when_typed_score_is_incomplete() -> None:

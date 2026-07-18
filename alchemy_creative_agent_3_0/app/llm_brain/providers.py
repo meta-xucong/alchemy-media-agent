@@ -38,6 +38,10 @@ class BrainReferenceChannelOwnershipDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted the frozen reference-ownership receipt."""
 
 
+class BrainProfessionalAnchorViewDecisionMissing(BrainProviderError):
+    """The final Brain sign-off omitted or changed the frozen anchor view."""
+
+
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 

@@ -23,6 +23,7 @@ from .fallback import build_fallback_result, build_remote_required_result, build
 from .providers import (
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
+    BrainProfessionalAnchorViewDecisionMissing,
     BrainProviderError,
     BrainProviderUnavailable,
     BrainReferenceChannelOwnershipDecisionMissing,
@@ -236,6 +237,15 @@ class V3LLMBrainAdapter:
             raise BrainReferenceChannelOwnershipDecisionMissing(
                 "Remote Brain did not return the required reference-channel ownership decision receipt."
             )
+        professional_anchor_view_role = _required_professional_anchor_view_role(request)
+        if professional_anchor_view_role and not _matches_professional_anchor_view_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_target_view_role=professional_anchor_view_role,
+        ):
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "Remote Brain did not return the required frozen Professional anchor-view receipt."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -269,6 +279,17 @@ class V3LLMBrainAdapter:
                         if prompt.reference_channel_ownership_decision is not None
                     ]
                     if reference_ownership_decision_required
+                    else []
+                ),
+                "professional_anchor_view_decision_required": bool(professional_anchor_view_role),
+                "professional_anchor_view_decision_signed": bool(professional_anchor_view_role),
+                "professional_anchor_view_decisions": (
+                    [
+                        prompt.professional_anchor_view_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.professional_anchor_view_decision is not None
+                    ]
+                    if professional_anchor_view_role
                     else []
                 ),
             },
@@ -911,6 +932,57 @@ def _matches_reference_channel_ownership_receipts(candidate: Any, *, expected_co
         == "v3_reference_channel_ownership_decision_v1"
         and item["reference_channel_ownership_decision"].get("status") in {"approved", "rewritten"}
         and item["reference_channel_ownership_decision"].get("owner") == "remote_v3_llm_brain"
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _required_professional_anchor_view_role(request: BrainRunRequest) -> str:
+    """Return the exact server-frozen anchor role, or no requirement.
+
+    This reads only a typed contract. It deliberately does not inspect the
+    user request or canonical prompt for view words.
+    """
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("professional_anchor_view_decision")
+    if not isinstance(decision, dict):
+        return ""
+    target = str(decision.get("target_view_role") or "").strip()
+    if not (
+        decision.get("required") is True
+        and decision.get("contract_version") == "v3_professional_anchor_view_decision_v1"
+        and decision.get("owner") == "remote_v3_llm_brain"
+        and isinstance(decision.get("frozen_binding"), dict)
+        and target in {"standard_front", "three_quarter", "profile"}
+    ):
+        return ""
+    return target
+
+
+def _matches_professional_anchor_view_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_target_view_role: str,
+) -> bool:
+    """Validate exact structural role parity without reading prompt prose."""
+
+    expected_keys = {"contract_version", "target_view_role", "status", "owner"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("professional_anchor_view_decision"), dict)
+        and set(item["professional_anchor_view_decision"]) == expected_keys
+        and item["professional_anchor_view_decision"].get("contract_version")
+        == "v3_professional_anchor_view_decision_v1"
+        and item["professional_anchor_view_decision"].get("target_view_role")
+        == expected_target_view_role
+        and item["professional_anchor_view_decision"].get("status") in {"approved", "rewritten"}
+        and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"
         for index, item in enumerate(candidate, start=1)
     )
 

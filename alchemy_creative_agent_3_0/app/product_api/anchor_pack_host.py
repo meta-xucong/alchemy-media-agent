@@ -50,6 +50,7 @@ class ProductApiAnchorPackPreparationHost:
         self.product_service = service
         self._review_by_candidate_id: dict[str, AnchorReviewDecision] = {}
         self._stage_plan_source_job_ids: dict[tuple[str, str], str] = {}
+        self._stage_visual_retry_consumed: set[tuple[str, str]] = set()
         self._orchestrator = AnchorPackPreparationService(
             generator=self,
             reviewer=self,
@@ -104,24 +105,47 @@ class ProductApiAnchorPackPreparationHost:
         if status.status != ProductJobStatusValue.PLANNED:
             raise AnchorCandidateUnavailable("professional_anchor_candidate_planning_blocked")
         self._stage_plan_source_job_ids.setdefault(stage_key, status.job_id)
-        # Candidate one owns the one shared bounded repair for the stage;
-        # candidates two and three remain independent first attempts.
+        # The stage owns one shared bounded repair. A Provider failure with no
+        # reviewed pixels must not consume it merely because it happened on
+        # candidate one; the first candidate that actually executes the
+        # shared visual retry consumes the budget for all later candidates.
+        retry_available = stage_key not in self._stage_visual_retry_consumed
         generation = self.product_service.generate_job(
             status.job_id,
             {
                 "quality_mode": "strict",
                 "metadata": (
                     {"max_visual_retry_attempts": 1}
-                    if request.candidate_index == 1
+                    if retry_available
                     else {"disable_visual_auto_retry": True, "max_visual_retry_attempts": 0}
                 ),
             },
         )
+        self._record_stage_visual_retry_usage(stage_key, status.job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
             raise AnchorCandidateUnavailable("professional_anchor_candidate_generation_failed")
         candidate, review = self._candidate_and_review(status.job_id, request)
         self._review_by_candidate_id[candidate.candidate_id] = review
         return candidate
+
+    def _record_stage_visual_retry_usage(
+        self,
+        stage_key: tuple[str, str],
+        job_id: str,
+    ) -> None:
+        """Consume the one stage repair only after shared runtime executed it."""
+
+        record = self.product_service.get_job_record(job_id)
+        result = record.generation_result if record is not None else None
+        metadata = result.metadata if result is not None and isinstance(result.metadata, dict) else {}
+        summary = metadata.get("visual_auto_retry")
+        summary = summary if isinstance(summary, dict) else {}
+        try:
+            executed_count = int(summary.get("executed_count") or 0)
+        except (TypeError, ValueError):
+            executed_count = 0
+        if executed_count > 0:
+            self._stage_visual_retry_consumed.add(stage_key)
 
     def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
         decision = self._review_by_candidate_id.get(candidate.candidate_id)

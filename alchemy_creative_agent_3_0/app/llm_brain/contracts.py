@@ -95,6 +95,21 @@ class BrainReferenceChannelOwnershipDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class BrainProfessionalAnchorViewDecision(V3BaseModel):
+    """Safe receipt for the frozen Professional anchor viewpoint.
+
+    The view role is a structural output contract, not renderer prose.  The
+    remote Brain must keep or rewrite the complete canonical prompt so it
+    fulfills this exact role, then return this receipt.  No local component
+    searches prompt keywords or appends a view instruction.
+    """
+
+    contract_version: Literal["v3_professional_anchor_view_decision_v1"]
+    target_view_role: Literal["standard_front", "three_quarter", "profile"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -117,6 +132,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # Historical records remain readable. New reference-conditioned enforced
     # jobs require this receipt when a frozen Doc93 ownership package applies.
     reference_channel_ownership_decision: BrainReferenceChannelOwnershipDecision | None = None
+    # Historical and non-anchor records remain readable without this field.
+    # Formal Professional anchor preparation requires the exact frozen role.
+    professional_anchor_view_decision: BrainProfessionalAnchorViewDecision | None = None
 
     @field_validator("prompt")
     @classmethod
