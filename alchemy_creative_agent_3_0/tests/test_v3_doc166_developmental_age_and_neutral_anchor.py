@@ -274,6 +274,16 @@ def test_doc166_runtime_carries_age_capture_and_view_to_one_brain_signoff(
     assert audit["human_developmental_age_decisions"][0]["developmental_age_coherence"] == (
         "whole_person_requested_stage"
     )
+    assert audit["human_developmental_age_resign_completed"] is True
+    assert audit["canonical_provider_prompt_stages"] == [
+        "provider_prompt_finalize",
+        "provider_prompt_human_naturalness_resign",
+    ]
+    assert [request["stage"] for request in brain.requests] == [
+        "plan",
+        "provider_prompt_finalize",
+        "provider_prompt_human_naturalness_resign",
+    ]
 
 
 def test_doc166_adapter_rejects_missing_developmental_age_receipt(

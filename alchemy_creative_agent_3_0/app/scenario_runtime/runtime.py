@@ -725,10 +725,11 @@ class ScenarioRuntime:
 
         Planning and final sign-off remain separate because the latter needs
         the frozen envelope and resolved constraint ledger. Human Realism's
-        semantic preflight and natural-presence decision are part of this same
-        final sign-off request. They remain Brain-owned decisions, but a
-        second serial Brain request is unnecessary duplication: the finalizer
-        can author and review the complete prompt in one response.
+        semantic preflight and natural-presence decision are part of the same
+        Brain-owned finalization path. A current-request-owned developmental
+        stage receives one additional bounded remote re-sign: the second pass
+        judges the first complete prompt, never reconstructs it locally, and
+        becomes the only renderer-facing result.
         """
 
         if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
@@ -844,6 +845,44 @@ class ScenarioRuntime:
                     brain_result,
                 ) from failure
         final_stage = "provider_prompt_finalize"
+        finalizer_stages = [final_stage]
+        finalizer_transport_history: list[dict[str, Any]] = []
+        if isinstance(audit.get("remote_brain_transport"), dict):
+            finalizer_transport_history.append(dict(audit["remote_brain_transport"]))
+        if canonical_prompt_context.get("human_developmental_age_decision"):
+            resign_context = self._human_naturalness_resigning_context(canonical_prompt_context)
+            resign_request = signing_request.model_copy(
+                update={
+                    "stage": "provider_prompt_human_naturalness_resign",
+                    "metadata": {
+                        "canonical_prompt_context": resign_context,
+                        "candidate_canonical_provider_prompts": [
+                            item.model_dump(mode="json") for item in prompts
+                        ],
+                    },
+                },
+                deep=True,
+            )
+            try:
+                prompts, resign_audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(
+                    resign_request
+                )
+            except Exception as exc:
+                raise self._remote_creative_brain_block(
+                    "human_developmental_age_resign_unavailable",
+                    brain_result,
+                ) from exc
+            if isinstance(resign_audit.get("remote_brain_transport"), dict):
+                finalizer_transport_history.append(dict(resign_audit["remote_brain_transport"]))
+            audit = {
+                **audit,
+                **resign_audit,
+                "human_developmental_age_resign_required": True,
+                "human_developmental_age_resign_completed": True,
+                "human_developmental_age_resign_mode": "bounded_remote_complete_prompt_recheck",
+            }
+            final_stage = "provider_prompt_human_naturalness_resign"
+            finalizer_stages.append(final_stage)
         if "human_realism" in plan.dependency_order:
             # Keep retry evidence in the same final sign-off context. The
             # Brain revises the whole direction when evidence exists, then
@@ -877,9 +916,7 @@ class ScenarioRuntime:
         transport_history = list(brain_result.audit.get("remote_brain_transports") or [])
         if not transport_history and isinstance(brain_result.audit.get("remote_brain_transport"), dict):
             transport_history.append(dict(brain_result.audit["remote_brain_transport"]))
-        current_transport = audit.get("remote_brain_transport")
-        if isinstance(current_transport, dict):
-            transport_history.append(dict(current_transport))
+        transport_history.extend(finalizer_transport_history)
         audit["remote_brain_transports"] = transport_history
         audit["remote_brain_call_count"] = len(transport_history)
         return brain_result.model_copy(
@@ -889,7 +926,7 @@ class ScenarioRuntime:
                     **dict(brain_result.audit or {}),
                     **audit,
                     "canonical_provider_prompt_stage": final_stage,
-                    "canonical_provider_prompt_stages": [final_stage],
+                    "canonical_provider_prompt_stages": finalizer_stages,
                     "canonical_provider_prompt_binding": {
                         "activation_plan_id": plan.plan_id,
                         "execution_envelope_id": envelope.envelope_id,
