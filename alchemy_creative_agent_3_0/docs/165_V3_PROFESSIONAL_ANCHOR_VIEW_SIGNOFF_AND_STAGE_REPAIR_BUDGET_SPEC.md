@@ -1,7 +1,7 @@
 # Doc165 — Professional Anchor View Sign-off and Stage Repair Budget
 
-Status: implementation and regression required; one fresh formal M5 run remains
-the pixel acceptance authority.
+Status: implementation, regression and local formal M5 pixel acceptance complete.
+Production/browser activation remains a separate release decision and stays off.
 
 ## 1. Live failure evidence
 
@@ -100,3 +100,38 @@ explicit reviewed pack activation
 If this sequence still fails, use the recorded failure category. Do not lower a gate
 or add prompt atoms. Provider/no-pixel failures, Brain contract failures, pose
 failures and identity/Human Realism failures remain distinct evidence classes.
+
+## 6. Formal local acceptance record
+
+The bounded run `doc165_20260718T133110Z` executed on `main@7e29596` from the
+authorized root portrait with SHA-256
+`93786216f2a33fbdd668b7b68e2b9b2fb8a5092de26e9173314a79021684e079`.
+It used a new ready upload, a new project-scoped People Asset and the formal Product
+API anchor host. No hand-written pack, candidate, review or activation record was
+injected.
+
+The selected and persisted winners were:
+
+| View | Output | Same person | Human realism | Visual quality | Pose |
+|---|---|---:|---:|---:|---:|
+| `standard_front` | `v3_output_8c61c64ee720490f8c65` | 0.8492 | 0.91 | 0.93 | 0.98 |
+| `three_quarter` | `v3_output_5cff6bd2d5f44c3fa532` | 0.9289 | 0.89 | 0.91 | 0.94 |
+| `profile` | `v3_output_21b11764830f4fa4b966` | 0.8620 | 0.90 | 0.91 | 0.93 |
+
+All three carry verified shared real-pixel review, canonical prompt/reference parity
+and face-localized identity evidence. The exact typed anchor-view receipt is present
+and signed in the persisted Brain audit. Two independent candidates ended as
+no-pixel generation failures and stayed append-only. The only executed shared
+visual repair was profile candidate three (`executed_count=1`); no other stage or
+candidate executed a repair, proving the stage budget remained bounded and followed
+actual use rather than ordinal position.
+
+The completed pack `pack_46ce1add284241b0aa2ccfc9b7d3a729` was explicitly
+activated. The unchanged `0.82` identity threshold and shared Vision/Human Realism
+gates decided every candidate. No local prompt patch, keyword gate, score override,
+private Provider path or production flag change was used.
+
+Sanitized local evidence is retained outside Git at
+`.codex-longrun/evidence/PROFESSIONAL_M5_DOC165_FORMAL_SANITIZED.json`; it contains
+IDs, hashes, scores, lineage and budget outcomes, but no source media, complete
+prompt, key, endpoint or raw provider response.
