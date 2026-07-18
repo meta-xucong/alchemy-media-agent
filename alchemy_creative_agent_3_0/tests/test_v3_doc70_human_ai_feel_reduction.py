@@ -14,6 +14,7 @@ def test_doc70_observations_are_represented_by_doc128_shared_dimensions() -> Non
         "human_rendering_artifact",
         "human_anatomy_or_proportion",
         "human_age_or_identity_fidelity",
+        "human_developmental_age_coherence",
         "human_expression_context",
         "human_skin_or_retouch",
         "human_scene_coherence",

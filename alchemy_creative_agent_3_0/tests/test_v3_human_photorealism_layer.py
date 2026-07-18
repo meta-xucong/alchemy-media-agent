@@ -94,7 +94,7 @@ def test_legacy_issue_codes_normalize_before_shared_retry() -> None:
         "human_anatomy_or_proportion",
     }
     retry = layer.retry_patch_for_issue_codes(["adultified_child_model"])
-    assert retry["review_dimensions"] == ["human_age_or_identity_fidelity"]
+    assert retry["review_dimensions"] == ["human_developmental_age_coherence"]
     assert len(retry["prompt_additions"]) == 1
 
 
