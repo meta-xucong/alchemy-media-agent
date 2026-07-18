@@ -80,6 +80,7 @@ class SFaceIdentityMetricProvider:
             reference_view_hint = _view_hint(reference_face)
             output_view_hint = _view_hint(output_face)
             viewpoint_relationship = _viewpoint_relationship(reference_view_hint, output_view_hint)
+            geometry_comparability = _geometry_comparability(reference_view_hint, output_view_hint)
             reason_codes: list[str] = []
             if len(output_faces) > 1:
                 reason_codes.append("multiple_output_faces_metric_subject_selected")
@@ -110,6 +111,7 @@ class SFaceIdentityMetricProvider:
                     "selected_reference_view_hint": reference_view_hint,
                     "output_view_hint": output_view_hint,
                     "viewpoint_relationship": viewpoint_relationship,
+                    "geometry_comparability": geometry_comparability,
                     "ephemeral_embedding": True,
                     "embedding_persisted": False,
                 },
@@ -311,6 +313,28 @@ def _viewpoint_relationship(reference_view: str, output_view: str) -> str:
     if not reference or not output or "unknown" in {reference, output}:
         return "unknown"
     return "same_view" if reference == output else "cross_view"
+
+
+def _geometry_comparability(reference_view: str, output_view: str) -> str:
+    """Classify whether pose-sensitive 2-D landmarks can corroborate identity.
+
+    A profile exposes a materially different subset and projection of facial
+    landmarks than a front or three-quarter capture. The resulting ratios are
+    therefore not negative identity evidence. This coarse classification is
+    derived only from ephemeral detector pose hints; it neither authors image
+    direction nor persists landmarks or biometric vectors.
+    """
+
+    relationship = _viewpoint_relationship(reference_view, output_view)
+    if relationship == "unknown":
+        return "unknown"
+    if relationship == "same_view":
+        return "comparable"
+    reference = str(reference_view or "").strip().lower()
+    output = str(output_view or "").strip().lower()
+    if "profile" in reference or "profile" in output:
+        return "not_comparable"
+    return "limited"
 
 
 def _framing_hint(face: Any, shape: Any) -> str:

@@ -15,7 +15,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     IdentityMetricResult,
     VisionOutputInspector,
 )
-from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import _calibrate_sface_cosine
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import (
+    _calibrate_sface_cosine,
+    _geometry_comparability,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.identity_metric import SFaceIdentityMetricProvider
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import VisionInspectionProviderError
 
@@ -92,10 +95,18 @@ class _StaticVisionProvider:
 
 
 class _StaticIdentityMetric:
-    def __init__(self, score: float, geometry: float, *, viewpoint_relationship: str = "unknown") -> None:
+    def __init__(
+        self,
+        score: float,
+        geometry: float,
+        *,
+        viewpoint_relationship: str = "unknown",
+        geometry_comparability: str = "unknown",
+    ) -> None:
         self.score = score
         self.geometry = geometry
         self.viewpoint_relationship = viewpoint_relationship
+        self.geometry_comparability = geometry_comparability
 
     def evaluate(self, output_path, reference_paths):
         return IdentityMetricResult(
@@ -113,6 +124,7 @@ class _StaticIdentityMetric:
             metadata={
                 "embedding_persisted": False,
                 "viewpoint_relationship": self.viewpoint_relationship,
+                "geometry_comparability": self.geometry_comparability,
             },
         )
 
@@ -205,6 +217,7 @@ def test_doc164_cross_view_geometry_is_advisory_without_lowering_identity_gate(t
             0.865,
             0.5688,
             viewpoint_relationship="cross_view",
+            geometry_comparability="limited",
         ),
     )
 
@@ -222,6 +235,70 @@ def test_doc164_cross_view_geometry_is_advisory_without_lowering_identity_gate(t
     assert report.score_card["same_person_readability"] >= 0.82
 
 
+def test_doc164_extreme_profile_transition_ignores_incomparable_geometry_without_lowering_gate(tmp_path) -> None:
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    inspector = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(same_person_score=0.87),
+        identity_metric_provider=_StaticIdentityMetric(
+            0.826,
+            0.179,
+            viewpoint_relationship="cross_view",
+            geometry_comparability="not_comparable",
+        ),
+    )
+
+    report = inspector.inspect(_resolution(output), metadata=_identity_review_metadata(reference))
+
+    fusion = report.evidence["identity_review_fusion"]
+    assert fusion["geometry_comparability"] == "not_comparable"
+    assert fusion["geometry_evidence_mode"] == "cross_view_not_comparable"
+    assert fusion["applied_weights"] == {
+        "objective_metric": 0.63,
+        "geometry": 0.0,
+        "multimodal": 0.37,
+    }
+    assert fusion["fused_identity_score"] == 0.8423
+    assert fusion["hard_gate_passed"] is True
+    assert report.score_card["same_person_readability"] >= 0.82
+
+
+def test_doc164_viewpoint_geometry_comparability_is_pose_evidence_not_prompt_classification() -> None:
+    assert _geometry_comparability("front", "front") == "comparable"
+    assert _geometry_comparability("front", "left_three_quarter") == "limited"
+    assert _geometry_comparability("left_three_quarter", "left_profile") == "not_comparable"
+    assert _geometry_comparability("right_profile", "front") == "not_comparable"
+    assert _geometry_comparability("unknown", "front") == "unknown"
+
+
+def test_doc164_extreme_profile_still_fails_when_pose_robust_identity_signals_disagree(tmp_path) -> None:
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    inspector = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(same_person_score=0.74),
+        identity_metric_provider=_StaticIdentityMetric(
+            0.79,
+            0.99,
+            viewpoint_relationship="cross_view",
+            geometry_comparability="not_comparable",
+        ),
+    )
+
+    report = inspector.inspect(_resolution(output), metadata=_identity_review_metadata(reference))
+
+    fusion = report.evidence["identity_review_fusion"]
+    assert fusion["fused_identity_score"] < 0.82
+    assert fusion["hard_gate_passed"] is False
+    assert "identity_metric_below_commercial_target" in {
+        str(issue.get("code") if isinstance(issue, dict) else issue.code)
+        for issue in report.detected_issues
+    }
+
+
 def test_doc164_same_view_geometry_keeps_strict_original_weight(tmp_path) -> None:
     reference = tmp_path / "reference.png"
     output = tmp_path / "output.png"
@@ -233,6 +310,7 @@ def test_doc164_same_view_geometry_keeps_strict_original_weight(tmp_path) -> Non
             0.865,
             0.5688,
             viewpoint_relationship="same_view",
+            geometry_comparability="comparable",
         ),
     )
 

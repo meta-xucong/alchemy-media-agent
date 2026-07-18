@@ -73,6 +73,17 @@ authority derived from the frozen strategy/stage. It does not add renderer
 language, suppress issue codes locally, relax identity/Human Realism thresholds,
 or change ordinary portrait review.
 
+The next complete 2/3/5 run passed front and three-quarter, then produced one
+visually valid strict profile candidate. Shared Vision verified its pose, Human
+Realism and visual quality, while SFace (`0.826`) and multimodal same-person
+evidence (`0.87`) agreed. The candidate nevertheless missed the `0.82` fused gate
+by `0.0021` because the three-quarter-to-profile comparison still assigned five
+percent to a `0.179` two-dimensional geometry score. A strict profile exposes
+only one side of the landmark structure; that geometry is not weak identity
+evidence, it is unavailable evidence. The remaining correction records this
+comparability distinction and reallocates only that inapplicable weight between
+the pose-robust signals. It does not lower the gate or suppress an issue.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation
@@ -107,20 +118,23 @@ When the selected reference and output are the same coarse view, the established
 Doc96 weights are unchanged. Two-dimensional facial geometry remains a direct
 identity signal and can block delivery.
 
-### 3.3 Cross-view geometry becomes advisory
+### 3.3 Cross-view geometry becomes advisory or unavailable
 
 When the detector establishes a cross-view comparison, two-dimensional geometry is
 pose-sensitive evidence. Perspective legitimately changes apparent eye spacing,
-nose offset, mouth width and jaw projection. The fusion therefore retains geometry
-at a small corroborating weight and reallocates the remaining weight to SFace and
-multimodal same-person evidence.
+nose offset, mouth width and jaw projection. Front-to-three-quarter comparisons
+therefore retain geometry at a small corroborating weight. If either side is an
+extreme profile and the views differ, only one side of the landmark structure is
+observable and geometry is marked `not_comparable`; its weight becomes zero and is
+redistributed to SFace and multimodal same-person evidence.
 
 The threshold remains exactly `0.82`. A candidate still fails when the pose-robust
 signals do not agree, or when Human Realism, age direction, pose compliance,
 distinctive features, prompt-owned channels or visual quality fail independently.
 
 `unknown` viewpoint keeps the legacy conservative weights; it never receives the
-cross-view treatment.
+cross-view treatment. Same-profile and all same-view comparisons remain directly
+comparable and keep the existing strict weights.
 
 ## 4. Separation from creative direction
 
@@ -139,7 +153,8 @@ Code acceptance requires:
 1. the internal metric emits coarse reference/output view evidence without vectors
    or landmarks;
 2. same-view weights and the `0.82` threshold are unchanged;
-3. confirmed cross-view geometry is advisory and the applied weights are auditable;
+3. mild cross-view geometry is advisory, extreme profile-transition geometry is
+   explicitly unavailable, and the applied weights are auditable;
 4. unknown view remains conservative;
 5. identity drift still fails when SFace and multimodal evidence are weak;
 6. no prompt, template or Provider routing behavior changes;

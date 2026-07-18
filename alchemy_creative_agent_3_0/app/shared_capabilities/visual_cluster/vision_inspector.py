@@ -566,7 +566,19 @@ class VisionOutputInspector:
         metric_confidence = _safe_float(payload.get("metric_confidence"), default=0.0)
         metric_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         viewpoint_relationship = str(metric_metadata.get("viewpoint_relationship") or "unknown").strip().lower()
-        if viewpoint_relationship == "cross_view" and metric_confidence >= 0.7:
+        geometry_comparability = str(metric_metadata.get("geometry_comparability") or "").strip().lower()
+        if viewpoint_relationship == "cross_view" and geometry_comparability == "not_comparable":
+            # An extreme profile transition exposes a different subset and
+            # projection of 2-D landmarks. Treating that geometry as negative
+            # evidence penalizes the requested viewpoint rather than identity.
+            # Preserve the 0.82 gate and require agreement between the two
+            # pose-robust signals instead of lowering the acceptance standard.
+            weights = (
+                {"objective_metric": 0.63, "geometry": 0.0, "multimodal": 0.37}
+                if metric_confidence >= 0.7
+                else {"objective_metric": 0.42, "geometry": 0.0, "multimodal": 0.58}
+            )
+        elif viewpoint_relationship == "cross_view" and metric_confidence >= 0.7:
             # SFace similarity and the multimodal reviewer remain useful
             # across an intentional viewpoint change.  Raw 2-D landmark
             # ratios do not: perspective changes eye spacing, nose offset and
@@ -592,8 +604,11 @@ class VisionOutputInspector:
             "fusion_confidence": round(max(0.0, min(1.0, (metric_confidence + 0.75) / 2.0)), 4),
             "applied_weights": weights,
             "viewpoint_relationship": viewpoint_relationship,
+            "geometry_comparability": geometry_comparability or "unknown",
             "geometry_evidence_mode": (
-                "cross_view_advisory"
+                "cross_view_not_comparable"
+                if viewpoint_relationship == "cross_view" and geometry_comparability == "not_comparable"
+                else "cross_view_advisory"
                 if viewpoint_relationship == "cross_view"
                 else "same_view_direct"
                 if viewpoint_relationship == "same_view"
