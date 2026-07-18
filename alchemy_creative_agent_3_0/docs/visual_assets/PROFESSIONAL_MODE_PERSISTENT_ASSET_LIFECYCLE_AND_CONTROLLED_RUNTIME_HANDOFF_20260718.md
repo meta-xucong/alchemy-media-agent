@@ -1,0 +1,76 @@
+# Professional Mode Persistent People Asset Lifecycle And Controlled Runtime Handoff
+
+## Status
+
+```text
+FORMAL_LIFECYCLE_ENTRY_ADDED
+PERSISTENT_CATALOG_INJECTED_IN_CONTROLLED_APP
+M5_PIXEL_ACCEPTANCE_STILL_BLOCKED
+NO_PRODUCTION_GATE_CHANGE
+```
+
+This document records the minimum runtime seam required to make a project
+scoped People Asset resolvable after a controlled-service restart. It does not
+certify any pixels and does not activate a pack by metadata alone.
+
+## Root cause of the pre-Provider block
+
+The Professional contracts and `AnchorPackPreparationService` already existed,
+but only injected test/host code could call them. The deployed Product API
+constructed its default `V3ProductApiService` with an in-memory visual-asset
+catalog, and it exposed no formal People Asset lifecycle routes. A restart
+therefore discarded the catalog and `_bind_professional_mode()` correctly
+returned `professional_people_asset_not_found`.
+
+## Formal lifecycle now available
+
+The additive Product API seam is:
+
+```text
+POST /api/v3/creative-agent/projects/{project_id}/people-assets
+  -> create a project-scoped draft People Asset
+  -> requires root_source_asset_id and explicit consent_reference
+
+GET /api/v3/creative-agent/projects/{project_id}/people-assets
+GET /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}
+
+POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate
+  -> requires an existing active, complete pack_version_id
+  -> requires confirm_activation=true
+  -> updates the People Asset and Face Identity active pointers
+  -> appends catalog history
+```
+
+Pack preparation remains the existing injected `AnchorPackPreparationService`
+contract. It must produce all nine bounded candidates, shared review decisions,
+serial root/front/three-quarter/profile evidence, and a `review` pack before
+`activate()` can make the pack active. No route accepts arbitrary candidate
+metadata as a substitute for that service.
+
+## Persistence and binding
+
+The controlled app now injects `PersistentVisualAssetCatalog` into the V3
+Product API. Its root is `V3_VISUAL_ASSET_CATALOG_ROOT` when configured, or the
+deployment-local `.media_storage/v3_visual_assets` directory by default. The
+catalog stores metadata and append-only lifecycle history only; image bytes
+remain in the existing V3 asset/output stores.
+
+At generation time the existing `_bind_professional_mode()` resolver reads the
+project-scoped active People Asset and active Face Identity pack, validates
+project/asset/module/pack ownership and user activation, then freezes the
+sanitized binding before Brain planning. Standard Mode never consults this
+catalog.
+
+## Acceptance boundary
+
+This seam makes a real binding possible; it does not create a passing pack.
+The supplied child source still needs a fresh real run through:
+
+```text
+front: 3 candidates -> shared Vision -> winner / one bounded repair
+three-quarter: root + front winner -> 3 candidates -> winner
+profile: root + front + three-quarter winner -> 3 candidates -> winner
+```
+
+Until all stages pass with prompt/reference parity and append-only provenance,
+Professional M5, Gate C/D, P10, and production availability remain blocked.
