@@ -1,5 +1,12 @@
 # Doc166 — V3 Shared Developmental-Age Coherence and Professional Neutral-Anchor Quality Spec
 
+> **Doc167 refinement:** Doc166 remains authoritative for developmental-age
+> ownership, source-age non-inheritance and Professional neutral capture. Its
+> provisional visual acceptance does not certify the stronger integrated
+> facial soft-tissue, attention and affect threshold introduced by Doc167.
+> Fresh work must use Doc167 for developmental facial vitality while preserving
+> every Doc166 ownership and anti-brittleness boundary.
+
 ## Status
 
 ```text
