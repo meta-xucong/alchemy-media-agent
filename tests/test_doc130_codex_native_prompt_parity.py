@@ -643,3 +643,37 @@ def test_plugin_launcher_accepts_an_ignored_external_environment_pointer(
     launcher.load_runtime_environment(repository_root=tmp_path, environ=dict(os.environ))
 
     assert os.environ["V3_LLM_BRAIN_REMOTE_ENABLED"] == "true"
+
+
+def test_plugin_launcher_resolves_only_explicit_professional_catalog_configuration(
+    tmp_path: Path,
+) -> None:
+    launcher = _load_plugin_launcher()
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+
+    assert launcher.resolve_professional_catalog_root(
+        repository_root=tmp_path,
+        environ={"ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT": str(catalog)},
+    ) == catalog.resolve()
+
+    pointer_root = tmp_path / "pointer-root"
+    pointer_root.mkdir()
+    (pointer_root / ".codex-local-professional-catalog-path").write_text(
+        str(catalog), encoding="utf-8"
+    )
+    assert launcher.resolve_professional_catalog_root(
+        repository_root=pointer_root,
+        environ={},
+    ) == catalog.resolve()
+
+    with pytest.raises(
+        RuntimeError,
+        match="ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT",
+    ):
+        launcher.resolve_professional_catalog_root(
+            repository_root=tmp_path,
+            environ={
+                "ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT": str(tmp_path / "missing")
+            },
+        )

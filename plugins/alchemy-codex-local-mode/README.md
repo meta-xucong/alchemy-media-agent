@@ -94,6 +94,13 @@ configuration, never a request field, and it reads only the existing
 People-Asset/Face-Identity metadata. Without it, the Professional relay
 correctly fails closed.
 
+For the installed plugin, set the non-secret
+`ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT` environment variable or
+place that directory path in the repository's ignored
+`.codex-local-professional-catalog-path` pointer file, then restart Codex. The
+launcher validates that the directory exists and passes it only as process
+configuration; no binding, pack record or image path becomes an MCP selector.
+
 ## Local repository setup
 
 The plugin cache intentionally does not contain a second copy of Alchemy V3.

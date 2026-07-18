@@ -9,7 +9,8 @@
       "cwd": ".",
       "env_vars": [
         "ALCHEMY_CODEX_LOCAL_REPO_ROOT",
-        "ALCHEMY_CODEX_LOCAL_ENV_FILE"
+        "ALCHEMY_CODEX_LOCAL_ENV_FILE",
+        "ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT"
       ]
     }
   }

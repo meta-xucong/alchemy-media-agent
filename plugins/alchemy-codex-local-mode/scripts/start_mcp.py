@@ -10,7 +10,9 @@ import sys
 
 _ROOT_ENV = "ALCHEMY_CODEX_LOCAL_REPO_ROOT"
 _ENV_FILE_ENV = "ALCHEMY_CODEX_LOCAL_ENV_FILE"
+_PROFESSIONAL_CATALOG_ENV = "ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT"
 _LOCAL_ENV_PATH_FILE = ".codex-local-env-path"
+_LOCAL_PROFESSIONAL_CATALOG_PATH_FILE = ".codex-local-professional-catalog-path"
 
 
 def _is_alchemy_root(path: Path) -> bool:
@@ -115,6 +117,47 @@ def load_runtime_environment(
     load_dotenv(dotenv_path=env_file, override=False)
 
 
+def resolve_professional_catalog_root(
+    *,
+    repository_root: Path,
+    environ: dict[str, str] | None = None,
+) -> Path | None:
+    """Resolve one explicit metadata-only Professional catalog root.
+
+    The value is process configuration, never an MCP request field.  A local
+    pointer supports an isolated acceptance catalog without copying its
+    records into the repository or weakening the server-owned binding seam.
+    """
+
+    values = environ if environ is not None else os.environ
+    configured = str(values.get(_PROFESSIONAL_CATALOG_ENV) or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    else:
+        pointer = repository_root / _LOCAL_PROFESSIONAL_CATALOG_PATH_FILE
+        if pointer.is_file():
+            try:
+                pointer_value = pointer.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError(f"Could not read {pointer}: {exc}") from exc
+            if pointer_value:
+                candidates.append(Path(pointer_value).expanduser())
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if resolved.is_dir():
+            return resolved
+    if configured:
+        raise RuntimeError(
+            f"Configured {_PROFESSIONAL_CATALOG_ENV} is not an available catalog directory."
+        )
+    return None
+
+
 def configure_import_paths(root: Path) -> None:
     """Expose both repository packages required by the V3 source layout.
 
@@ -142,6 +185,9 @@ def main() -> int:
     root = resolve_repository_root()
     load_runtime_environment(repository_root=root)
     configure_import_paths(root)
+    catalog_root = resolve_professional_catalog_root(repository_root=root)
+    if catalog_root is not None:
+        sys.argv.extend(["--professional-asset-catalog-root", str(catalog_root)])
     runpy.run_module("services.alchemy_codex_local_adapter.mcp_server", run_name="__main__")
     return 0
 
