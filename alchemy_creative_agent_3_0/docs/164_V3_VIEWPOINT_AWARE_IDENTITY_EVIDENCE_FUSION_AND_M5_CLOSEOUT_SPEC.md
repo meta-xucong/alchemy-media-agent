@@ -55,6 +55,13 @@ applied to planning metadata and, critically, generation metadata before the
 generation loop begins. Post-run enrichment reuses the identical helper so the
 execution receipt and returned plan cannot disagree.
 
+Live receipt inspection then found one further narrowing: CentralCreativeBrain
+constructs each output plan through an explicit metadata allow-list. The runtime
+metadata was correct, but the serial strategy/stage were absent from that list,
+so the Provider still received the ordinary reference policy. The fields are now
+preserved at this per-output boundary, with a direct CentralCreativeBrain test;
+their values still originate only from the frozen-plan projection above.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation

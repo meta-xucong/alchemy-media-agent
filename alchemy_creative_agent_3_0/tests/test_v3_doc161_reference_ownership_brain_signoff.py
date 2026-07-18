@@ -14,6 +14,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payloa
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainReferenceChannelOwnershipDecisionMissing,
 )
+from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -304,6 +305,23 @@ def test_doc164_generate_loop_receives_frozen_professional_stage_before_provider
         "serial_anchor_pack_root_reuse_v1"
     )
     assert captured["professional_reference_stage"] == "three_quarter"
+
+
+def test_doc164_central_brain_keeps_frozen_professional_stage_on_each_output_plan() -> None:
+    result = CentralCreativeBrain().run_generation_loop(
+        user_input="Prepare one three-quarter identity anchor.",
+        runtime_metadata={
+            "requested_image_count": 1,
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_reference_stage": "three_quarter",
+        },
+    )
+
+    metadata = result.generation_plans[0].metadata
+    assert metadata["professional_identity_reference_strategy"] == (
+        "serial_anchor_pack_root_reuse_v1"
+    )
+    assert metadata["professional_reference_stage"] == "three_quarter"
 
 
 def test_doc161_professional_anchor_preparation_rejects_missing_root_before_brain(monkeypatch) -> None:

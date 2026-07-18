@@ -127,6 +127,17 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                # These values were already validated against the immutable
+                # activation-plan metadata by ScenarioRuntime.  Preserve them
+                # when CentralCreativeBrain creates the per-output plan;
+                # otherwise the Provider sees the ordinary identity-reference
+                # policy and expands every source into two derivatives.
+                "professional_identity_reference_strategy": context.metadata.get(
+                    "professional_identity_reference_strategy"
+                ),
+                "professional_reference_stage": context.metadata.get(
+                    "professional_reference_stage"
+                ),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),
                 "retry_attempt": context.metadata.get("retry_attempt"),
@@ -300,6 +311,12 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                "professional_identity_reference_strategy": context.metadata.get(
+                    "professional_identity_reference_strategy"
+                ),
+                "professional_reference_stage": context.metadata.get(
+                    "professional_reference_stage"
+                ),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),
                 "retry_attempt": context.metadata.get("retry_attempt"),
