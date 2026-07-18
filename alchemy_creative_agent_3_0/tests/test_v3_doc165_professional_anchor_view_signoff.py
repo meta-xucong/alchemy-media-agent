@@ -191,4 +191,3 @@ def test_doc165_runtime_reanswers_missing_view_receipt_once_with_same_frozen_rol
     assert audit["professional_anchor_view_contract_recovery_attempted"] is True
     assert audit["professional_anchor_view_contract_recovery_succeeded"] is True
     assert audit["professional_anchor_view_decision_signed"] is True
-
