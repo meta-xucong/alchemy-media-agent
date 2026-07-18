@@ -48,6 +48,7 @@ class ProductApiAnchorPackPreparationHost:
     def __init__(self, service: V3ProductApiService) -> None:
         self.product_service = service
         self._review_by_candidate_id: dict[str, AnchorReviewDecision] = {}
+        self._stage_plan_source_job_ids: dict[tuple[str, str], str] = {}
         self._orchestrator = AnchorPackPreparationService(
             generator=self,
             reviewer=self,
@@ -80,6 +81,7 @@ class ProductApiAnchorPackPreparationHost:
     def generate(self, request: AnchorGenerationRequest) -> AnchorCandidateResult:
         """Materialize one bounded candidate through the ordinary Product API."""
 
+        stage_key = (request.pack_version_id, request.view_role)
         status = self.product_service.create_professional_anchor_preparation_job(
             {
                 "user_input": self._structural_view_request(request.view_role),
@@ -96,9 +98,11 @@ class ProductApiAnchorPackPreparationHost:
             },
             view_role=request.view_role,
             reference_evidence_ids=list(request.reference_evidence_ids),
+            stage_plan_source_job_id=self._stage_plan_source_job_ids.get(stage_key),
         )
         if status.status != ProductJobStatusValue.PLANNED:
             raise RuntimeError("professional_anchor_candidate_planning_blocked")
+        self._stage_plan_source_job_ids.setdefault(stage_key, status.job_id)
         # Candidate one owns the one shared bounded repair for the stage;
         # candidates two and three remain independent first attempts.
         generation = self.product_service.generate_job(

@@ -327,6 +327,28 @@ def test_doc161_product_api_internal_anchor_job_injects_server_owned_contract(tm
         "professional_face_identity_quality_contract"
     ]["owner"] == "remote_v3_llm_brain"
 
+    remote_call_count = len(provider.requests)
+    second = service.create_professional_anchor_preparation_job(
+        {
+            "user_input": "Prepare one straight-on Face Identity anchor of this same person.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_asset_ids": [upload.asset_id],
+            "metadata": {
+                "project_id": "project_doc161_internal_host",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        },
+        view_role="standard_front",
+        reference_evidence_ids=[upload.asset_id],
+        stage_plan_source_job_id=status.job_id,
+    )
+    assert second.status == ProductJobStatusValue.PLANNED
+    assert len(provider.requests) == remote_call_count
+    second_record = service.get_job_record(second.job_id)
+    assert second_record is not None
+    assert second_record.request.metadata["capability_plan_provenance"]["source_job_id"] == status.job_id
+
 
 def test_doc161_public_job_cannot_impersonate_anchor_preparation() -> None:
     service = V3ProductApiService()

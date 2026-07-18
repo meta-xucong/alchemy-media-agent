@@ -46,6 +46,7 @@ class _SharedProductService:
         *,
         view_role,
         reference_evidence_ids,
+        stage_plan_source_job_id=None,
     ):  # noqa: ANN001, ANN201
         job_id = f"job_{len(self.requests) + 1}"
         self.requests.append(
@@ -54,6 +55,7 @@ class _SharedProductService:
                 "payload": payload,
                 "view_role": view_role,
                 "reference_evidence_ids": list(reference_evidence_ids),
+                "stage_plan_source_job_id": stage_plan_source_job_id,
             }
         )
         return SimpleNamespace(status=ProductJobStatusValue.PLANNED, job_id=job_id)
@@ -162,6 +164,11 @@ def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service
     )
     assert all(attempt.candidate.prompt_reference_parity_verified for attempt in result.attempts)
     assert all(attempt.candidate.brain_plan_id.startswith("planning_job_") for attempt in result.attempts)
+    assert service.requests[0]["stage_plan_source_job_id"] is None
+    assert service.requests[1]["stage_plan_source_job_id"] == service.requests[0]["job_id"]
+    assert service.requests[2]["stage_plan_source_job_id"] == service.requests[0]["job_id"]
+    assert service.requests[3]["stage_plan_source_job_id"] is None
+    assert service.requests[6]["stage_plan_source_job_id"] is None
     assert service.requests[0]["payload"]["user_input"].endswith(
         "Remote Brain must author the complete visual direction."
     )

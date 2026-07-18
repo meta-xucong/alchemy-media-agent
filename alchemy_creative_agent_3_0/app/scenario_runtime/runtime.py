@@ -3239,7 +3239,7 @@ class ScenarioRuntime:
         it reaches the image Provider.
         """
 
-        if stage == "plan":
+        if stage == "plan" and request.metadata.get("professional_anchor_stage_plan_reuse") is not True:
             return None
         frozen = request.metadata.get("frozen_remote_creative_brain")
         if frozen is None:

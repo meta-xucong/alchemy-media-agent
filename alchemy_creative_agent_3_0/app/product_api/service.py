@@ -937,6 +937,7 @@ class V3ProductApiService:
         *,
         view_role: Literal["standard_front", "three_quarter", "profile"],
         reference_evidence_ids: list[str] | None = None,
+        stage_plan_source_job_id: str | None = None,
     ) -> ProductJobStatus:
         """Internal host entry for a pre-activation Face Identity view.
 
@@ -946,8 +947,34 @@ class V3ProductApiService:
         pack, bypass shared review, or be invoked through the public route.
         """
 
+        create_request = self._coerce_create_job_request(request)
+        trusted_reuse = bool(str(stage_plan_source_job_id or "").strip())
+        if trusted_reuse:
+            source_job_id = str(stage_plan_source_job_id).strip()
+            source = self.job_store.get(source_job_id)
+            if source is None:
+                raise ValueError("professional_anchor_stage_plan_source_not_found")
+            source_metadata = dict(source.request.metadata or {})
+            if (
+                source_metadata.get("professional_anchor_pack_preparation") is not True
+                or source_metadata.get("professional_reference_stage") != view_role
+                or source.request.user_input != create_request.user_input
+            ):
+                raise ValueError("professional_anchor_stage_plan_source_mismatch")
+            reusable = {
+                key: source_metadata[key]
+                for key in self._SERVER_OWNED_RUNTIME_METADATA
+                if key in source_metadata
+            }
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                **reusable,
+                "capability_plan_reuse_source_job_id": source_job_id,
+                "professional_anchor_stage_plan_reuse": True,
+            }
         return self._create_creative_job(
-            request,
+            create_request,
+            trusted_capability_plan_reuse=trusted_reuse,
             trusted_professional_anchor_preparation=True,
             professional_anchor_view_role=view_role,
             professional_anchor_reference_evidence_ids=reference_evidence_ids,
@@ -7655,6 +7682,7 @@ class V3ProductApiService:
             "professional_identity_reference_strategy",
             "professional_reference_stage",
             "professional_anchor_reference_assets",
+            "professional_anchor_stage_plan_reuse",
         }
     )
 
