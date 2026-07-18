@@ -10,11 +10,12 @@ without a complete reviewed result and explicit user confirmation.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import ConfigDict, field_validator
 
 from ..schemas.models import V3BaseModel
+from .anchor_pack import AnchorPackPreparationResult
 from .catalog import InMemoryVisualAssetCatalog
 from .contracts import FaceIdentityModule, IdentityAnchorPackVersion, PeopleAsset, RootSourceProvenance
 
@@ -55,6 +56,25 @@ class PeopleAssetActivationRequest(V3BaseModel):
         return value
 
 
+class PeopleAssetPrepareRequest(V3BaseModel):
+    """Empty public payload; planning evidence is server-owned by the host."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class AnchorPackPreparationHost(Protocol):
+    """Host seam backed by the shared Brain/Provider/Vision preparation path."""
+
+    def prepare(
+        self,
+        *,
+        project_id: str,
+        people_asset: PeopleAsset,
+        root_source_provenance: RootSourceProvenance,
+    ) -> AnchorPackPreparationResult:
+        """Prepare a complete pack without accepting caller-supplied prompt evidence."""
+
+
 class PeopleAssetLifecycleService:
     """Project-scoped catalog operations used by Product API and hosts."""
 
@@ -63,9 +83,11 @@ class PeopleAssetLifecycleService:
         catalog: InMemoryVisualAssetCatalog,
         *,
         root_source_resolver: Callable[[str], Any | None] | None = None,
+        anchor_pack_host: AnchorPackPreparationHost | None = None,
     ) -> None:
         self.catalog = catalog
         self.root_source_resolver = root_source_resolver
+        self.anchor_pack_host = anchor_pack_host
 
     def create_draft(
         self,
@@ -115,6 +137,28 @@ class PeopleAssetLifecycleService:
     def list(self, project_id: str) -> list[PeopleAsset]:
         return self.catalog.list_assets(project_id)
 
+    def prepare_pack(self, project_id: str, people_asset_id: str) -> AnchorPackPreparationResult:
+        """Run the injected shared preparation host, failing closed if absent."""
+
+        if self.anchor_pack_host is None:
+            raise RuntimeError("professional_anchor_pack_prepare_unavailable")
+        asset = self.get(project_id, people_asset_id)
+        if asset.root_source_provenance is None:
+            raise ValueError("professional_people_asset_root_provenance_missing")
+        result = self.anchor_pack_host.prepare(
+            project_id=project_id,
+            people_asset=asset,
+            root_source_provenance=asset.root_source_provenance,
+        )
+        pack = result.pack
+        if pack.people_asset_id != people_asset_id or pack.root_source_provenance.project_id != project_id:
+            raise ValueError("professional_anchor_pack_prepare_binding_mismatch")
+        if pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id:
+            raise ValueError("professional_anchor_pack_prepare_root_mismatch")
+        if result.status == "review" and pack.status != "review":
+            raise ValueError("professional_anchor_pack_prepare_result_inconsistent")
+        return result
+
     def activate_pack(
         self,
         project_id: str,
@@ -159,7 +203,9 @@ class PeopleAssetLifecycleService:
 
 
 __all__ = [
+    "AnchorPackPreparationHost",
     "PeopleAssetActivationRequest",
     "PeopleAssetCreateRequest",
     "PeopleAssetLifecycleService",
+    "PeopleAssetPrepareRequest",
 ]

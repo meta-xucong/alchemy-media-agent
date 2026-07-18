@@ -7,9 +7,11 @@ from typing import Any
 from ..app_shell import get_scenario_hub_contract
 from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
 from ..visual_assets import (
+    AnchorPackPreparationHost,
     PeopleAssetActivationRequest,
     PeopleAssetCreateRequest,
     PeopleAssetLifecycleService,
+    PeopleAssetPrepareRequest,
 )
 from .service import V3ProductApiService
 
@@ -22,6 +24,7 @@ class V3ProductRouteHandlers:
         service: V3ProductApiService | None = None,
         project_store: InMemoryProjectStore | None = None,
         template_registry: ProjectTemplateRegistry | None = None,
+        anchor_pack_preparation_host: AnchorPackPreparationHost | None = None,
     ) -> None:
         self.service = service or V3ProductApiService()
         self.project_service = V3ProjectModeService(
@@ -32,6 +35,7 @@ class V3ProductRouteHandlers:
         self.people_asset_service = PeopleAssetLifecycleService(
             self.service.visual_asset_catalog,
             root_source_resolver=self.service.asset_store.get_upload,
+            anchor_pack_host=anchor_pack_preparation_host,
         )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -122,6 +126,17 @@ class V3ProductRouteHandlers:
         self.project_service.get_project(project_id)
         asset = self.people_asset_service.get(project_id, people_asset_id)
         return {"people_asset": asset.model_dump(mode="json")}
+
+    def post_project_people_asset_prepare(
+        self,
+        project_id: str,
+        people_asset_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        PeopleAssetPrepareRequest.model_validate(payload)
+        result = self.people_asset_service.prepare_pack(project_id, people_asset_id)
+        return {"preparation": result.model_dump(mode="json")}
 
     def post_project_people_asset_activate(
         self,
