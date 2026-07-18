@@ -185,7 +185,14 @@ class ProductApiAnchorPackPreparationHost:
         )
         raw_status = str(inspection.get("status") or "").strip().lower()
         passes = verified and raw_status in {"pass", "warning"} and not missing_dimensions
-        issue_codes = [str(item) for item in inspection.get("issue_codes", []) if str(item).strip()]
+        raw_issues = inspection.get("issue_codes")
+        if not isinstance(raw_issues, list):
+            raw_issues = inspection.get("detected_issues")
+        issue_codes = []
+        for item in raw_issues if isinstance(raw_issues, list) else []:
+            code = item.get("code") if isinstance(item, dict) else item
+            if str(code or "").strip():
+                issue_codes.append(str(code).strip())
         if missing_dimensions:
             issue_codes.append("professional_anchor_review_score_incomplete")
         decision = AnchorReviewDecision(

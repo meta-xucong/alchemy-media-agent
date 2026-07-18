@@ -374,6 +374,7 @@ def _enforced_inspection_prompt(
         "hard_semantic_contract": bool(review_contract["hard_semantic_contract"]),
         "human_authenticity_contract": review_contract.get("human_authenticity_contract") or {},
         "human_naturalness_verdict_required": bool(review_contract.get("human_naturalness_verdict_required")),
+        "professional_identity_quality": review_contract.get("professional_identity_quality") or {},
     }
     lines = [
         "You are V3's post-generation visual inspector.",
@@ -398,6 +399,13 @@ def _enforced_inspection_prompt(
         lines.append(
             "Frozen template output evidence: inspect the assigned Brain-owned evidence dimensions without inventing a role or recipe. "
             + json.dumps(output_evidence, ensure_ascii=False)
+        )
+    if review_contract.get("professional_identity_quality", {}).get("applies"):
+        lines.append(
+            "Professional identity scoring: judge recognizability of the same person before generic polish. "
+            "For same_person_readability, distinctive_feature_readability, age_identity_direction, human_realism, "
+            "prompt_owned_channel_obedience, pose_compliance, and visual_quality, higher is better. "
+            "ai_overperfection_penalty is the exception: 0 means no visible AI/beauty-filter overperfection and 1 means severe overperfection."
         )
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
