@@ -962,11 +962,17 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         and isinstance(decision.get("frozen_binding"), dict)
         and target in {"standard_front", "three_quarter", "profile"}
     ):
-        return {}
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The frozen Professional anchor-view requirement is malformed."
+        )
     if version == "v3_professional_anchor_view_decision_v2" and capture != "neutral_identity_evidence_capture":
-        return {}
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The frozen Professional neutral-capture requirement is missing or contradictory."
+        )
     if version == "v3_professional_anchor_view_decision_v1" and capture:
-        return {}
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "A historical Professional anchor-view requirement cannot claim a v2 capture decision."
+        )
     return {
         "contract_version": version,
         "target_view_role": target,

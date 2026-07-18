@@ -6,6 +6,7 @@ import inspect
 import json
 
 import pytest
+from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
@@ -21,6 +22,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
     _professional_identity_quality_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _human_guidance(user_input: str):
@@ -145,6 +147,78 @@ def test_doc166_finalizer_requires_exact_neutral_capture_receipt() -> None:
     assert "whole-person developmental stage" in payload["remote_response_contract"]
     assert "neutral identity-evidence capture" in payload["remote_response_contract"]
     assert "append a correction" in payload["remote_response_contract"]
+
+
+def test_doc166_runtime_carries_age_capture_and_view_to_one_brain_signoff(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    source = tmp_path / "identity-root.png"
+    Image.new("RGB", (640, 640), (172, 138, 121)).save(source)
+    brain = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain))
+
+    result = runtime.plan_job(
+        {
+            "user_input": (
+                "Keep this same person's recognizable identity, represent them at approximately six years old, "
+                "and prepare the frozen neutral identity evidence view."
+            ),
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [
+                {
+                    "asset_id": "root_doc166",
+                    "role": "face_reference",
+                    "file_path": str(source),
+                    "use_policy": "identity",
+                    "strength": "hard",
+                }
+            ],
+            "metadata": {
+                "project_id": "project_doc166_runtime",
+                "requested_image_count": 1,
+                "require_real_images": True,
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": (
+                    ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+                        view_role="standard_front"
+                    )
+                ),
+            },
+        }
+    )
+
+    assert result.status.value == "planned"
+    finalizer = [request for request in brain.requests if request["stage"] == "provider_prompt_finalize"][-1]
+    context = finalizer["metadata"]["canonical_prompt_context"]
+    assert context["human_realism_age_resolution"]["developmental_age_coherence"] == (
+        "whole_person_requested_stage"
+    )
+    assert context["professional_face_identity_quality_contract"]["capture_presentation"] == (
+        "neutral_identity_evidence_capture"
+    )
+    assert context["professional_anchor_view_decision"] == {
+        "required": True,
+        "contract_version": "v3_professional_anchor_view_decision_v2",
+        "owner": "remote_v3_llm_brain",
+        "target_view_role": "standard_front",
+        "capture_presentation": "neutral_identity_evidence_capture",
+        "frozen_binding": context["frozen_binding"],
+    }
+    audit = result.metadata["llm_brain"]["audit"]
+    assert audit["professional_anchor_view_decisions"] == [
+        {
+            "contract_version": "v3_professional_anchor_view_decision_v2",
+            "target_view_role": "standard_front",
+            "capture_presentation": "neutral_identity_evidence_capture",
+            "status": "approved",
+            "owner": "remote_v3_llm_brain",
+        }
+    ]
 
 
 @pytest.mark.parametrize("receipt_capture", [None, "studio_beauty_portrait"])
