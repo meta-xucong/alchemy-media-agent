@@ -651,18 +651,32 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(anchor_view_requirement, dict)
         else ""
     )
+    anchor_capture_continuity = (
+        str(anchor_view_requirement.get("capture_continuity") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
     anchor_view_decision_required = bool(
         isinstance(anchor_view_requirement, dict)
         and anchor_view_requirement.get("required") is True
         and anchor_view_version in {
             "v3_professional_anchor_view_decision_v1",
             "v3_professional_anchor_view_decision_v2",
+            "v3_professional_anchor_view_decision_v3",
         }
         and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(anchor_view_requirement.get("frozen_binding"), dict)
         and anchor_view_target in {"standard_front", "three_quarter", "profile"}
         and (
             anchor_capture_presentation == "neutral_identity_evidence_capture"
+            and anchor_capture_continuity
+            == (
+                "establish_neutral_capture"
+                if anchor_view_target == "standard_front"
+                else "preserve_approved_prior_capture"
+            )
+            if anchor_view_version == "v3_professional_anchor_view_decision_v3"
+            else anchor_capture_presentation == "neutral_identity_evidence_capture"
             if anchor_view_version == "v3_professional_anchor_view_decision_v2"
             else not anchor_capture_presentation
         )
@@ -715,6 +729,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             **(
                 {"capture_presentation": anchor_capture_presentation}
                 if anchor_capture_presentation
+                else {}
+            ),
+            **(
+                {"capture_continuity": anchor_capture_continuity}
+                if anchor_capture_continuity
                 else {}
             ),
             "status": "approved|rewritten",
@@ -803,6 +822,14 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "those roles rather than claiming that visibly different references share the same styling. The final "
                 "prompt must contain one unambiguous frozen viewpoint and no competing viewpoint description."
             )
+            if anchor_capture_continuity == "preserve_approved_prior_capture":
+                response_contract += (
+                    " The typed serial-capture decision requires the selected prior-view winner to own the in-pack "
+                    "capture presentation. Preserve that already approved presentation materially across the new "
+                    "view rather than replacing it with a generic alternative or re-inheriting presentation from "
+                    "the identity root. Express this relationship inside one complete prompt; do not copy local "
+                    "feature words, append a correction, or turn capture presentation into reusable identity truth."
+                )
     anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
     if isinstance(anchor_view_recovery, dict):
         response_contract += (

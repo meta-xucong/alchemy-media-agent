@@ -1167,10 +1167,15 @@ class ScenarioRuntime:
                     raise CapabilityActivationError("professional_anchor_view_contract_missing")
                 context["professional_anchor_view_decision"] = {
                     "required": True,
-                    "contract_version": "v3_professional_anchor_view_decision_v2",
+                    "contract_version": "v3_professional_anchor_view_decision_v3",
                     "owner": "remote_v3_llm_brain",
                     "target_view_role": target_view_role,
                     "capture_presentation": "neutral_identity_evidence_capture",
+                    "capture_continuity": (
+                        "establish_neutral_capture"
+                        if target_view_role == "standard_front"
+                        else "preserve_approved_prior_capture"
+                    ),
                     "frozen_binding": dict(context.get("frozen_binding") or {}),
                 }
         return context

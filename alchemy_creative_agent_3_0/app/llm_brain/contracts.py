@@ -122,11 +122,19 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     contract_version: Literal[
         "v3_professional_anchor_view_decision_v1",
         "v3_professional_anchor_view_decision_v2",
+        "v3_professional_anchor_view_decision_v3",
     ]
     target_view_role: Literal["standard_front", "three_quarter", "profile"]
-    # Required and exact for v2 by the adapter. Optional here keeps historical
-    # v1 receipts readable without weakening new anchor preparation.
+    # Required and exact for v2/v3 by the adapter. Optional here keeps
+    # historical v1 receipts readable without weakening new preparation.
     capture_presentation: Literal["neutral_identity_evidence_capture"] | None = None
+    # V3 makes serial capture continuity explicit without describing any
+    # clothing, background, lighting, crop, or facial recipe. The Brain owns
+    # how the complete image preserves that semantic relationship.
+    capture_continuity: Literal[
+        "establish_neutral_capture",
+        "preserve_approved_prior_capture",
+    ] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 

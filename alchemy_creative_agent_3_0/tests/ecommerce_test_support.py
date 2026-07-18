@@ -136,17 +136,31 @@ class EcommerceRemoteBrainTestProvider:
             if isinstance(anchor_view_requirement, dict)
             else ""
         )
+        anchor_capture_continuity = (
+            str(anchor_view_requirement.get("capture_continuity") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
         requires_anchor_view_decision = bool(
             isinstance(anchor_view_requirement, dict)
             and anchor_view_requirement.get("required") is True
             and anchor_view_version in {
                 "v3_professional_anchor_view_decision_v1",
                 "v3_professional_anchor_view_decision_v2",
+                "v3_professional_anchor_view_decision_v3",
             }
             and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
             and anchor_view_target in {"standard_front", "three_quarter", "profile"}
             and (
                 anchor_capture_presentation == "neutral_identity_evidence_capture"
+                and anchor_capture_continuity
+                == (
+                    "establish_neutral_capture"
+                    if anchor_view_target == "standard_front"
+                    else "preserve_approved_prior_capture"
+                )
+                if anchor_view_version == "v3_professional_anchor_view_decision_v3"
+                else anchor_capture_presentation == "neutral_identity_evidence_capture"
                 if anchor_view_version == "v3_professional_anchor_view_decision_v2"
                 else not anchor_capture_presentation
             )
@@ -204,6 +218,11 @@ class EcommerceRemoteBrainTestProvider:
                             **(
                                 {"capture_presentation": anchor_capture_presentation}
                                 if anchor_capture_presentation
+                                else {}
+                            ),
+                            **(
+                                {"capture_continuity": anchor_capture_continuity}
+                                if anchor_capture_continuity
                                 else {}
                             ),
                             "status": "approved",

@@ -1025,11 +1025,13 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
     target = str(decision.get("target_view_role") or "").strip()
     version = str(decision.get("contract_version") or "").strip()
     capture = str(decision.get("capture_presentation") or "").strip()
+    continuity = str(decision.get("capture_continuity") or "").strip()
     if not (
         decision.get("required") is True
         and version in {
             "v3_professional_anchor_view_decision_v1",
             "v3_professional_anchor_view_decision_v2",
+            "v3_professional_anchor_view_decision_v3",
         }
         and decision.get("owner") == "remote_v3_llm_brain"
         and isinstance(decision.get("frozen_binding"), dict)
@@ -1046,10 +1048,25 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         raise BrainProfessionalAnchorViewDecisionMissing(
             "A historical Professional anchor-view requirement cannot claim a v2 capture decision."
         )
+    if version == "v3_professional_anchor_view_decision_v3":
+        expected_continuity = (
+            "establish_neutral_capture"
+            if target == "standard_front"
+            else "preserve_approved_prior_capture"
+        )
+        if capture != "neutral_identity_evidence_capture" or continuity != expected_continuity:
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "The frozen Professional serial-capture continuity requirement is missing or contradictory."
+            )
+    elif continuity:
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "A historical Professional anchor-view requirement cannot claim a v3 continuity decision."
+        )
     return {
         "contract_version": version,
         "target_view_role": target,
         **({"capture_presentation": capture} if capture else {}),
+        **({"capture_continuity": continuity} if continuity else {}),
     }
 
 
@@ -1064,9 +1081,12 @@ def _matches_professional_anchor_view_receipts(
     expected_version = expected_requirement.get("contract_version")
     expected_target_view_role = expected_requirement.get("target_view_role")
     expected_capture = expected_requirement.get("capture_presentation")
+    expected_continuity = expected_requirement.get("capture_continuity")
     expected_keys = {"contract_version", "target_view_role", "status", "owner"}
     if expected_capture:
         expected_keys.add("capture_presentation")
+    if expected_continuity:
+        expected_keys.add("capture_continuity")
     if not isinstance(candidate, list) or len(candidate) != expected_count:
         return False
     return all(
@@ -1082,6 +1102,12 @@ def _matches_professional_anchor_view_receipts(
             item["professional_anchor_view_decision"].get("capture_presentation") == expected_capture
             if expected_capture
             else "capture_presentation" not in item["professional_anchor_view_decision"]
+        )
+        and (
+            item["professional_anchor_view_decision"].get("capture_continuity")
+            == expected_continuity
+            if expected_continuity
+            else "capture_continuity" not in item["professional_anchor_view_decision"]
         )
         and item["professional_anchor_view_decision"].get("status") in {"approved", "rewritten"}
         and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"

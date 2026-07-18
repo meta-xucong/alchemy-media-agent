@@ -48,7 +48,17 @@ def _human_guidance(user_input: str):
     )
 
 
-def _v2_anchor_request(*, capture_presentation: str = "neutral_identity_evidence_capture") -> BrainRunRequest:
+def _anchor_request(
+    *,
+    target_view_role: str = "standard_front",
+    capture_presentation: str = "neutral_identity_evidence_capture",
+    capture_continuity: str | None = None,
+) -> BrainRunRequest:
+    continuity = capture_continuity or (
+        "establish_neutral_capture"
+        if target_view_role == "standard_front"
+        else "preserve_approved_prior_capture"
+    )
     return BrainRunRequest(
         user_input="Prepare one identity anchor from the frozen Professional plan.",
         stage="provider_prompt_finalize",
@@ -59,10 +69,11 @@ def _v2_anchor_request(*, capture_presentation: str = "neutral_identity_evidence
             "canonical_prompt_context": {
                 "professional_anchor_view_decision": {
                     "required": True,
-                    "contract_version": "v3_professional_anchor_view_decision_v2",
+                    "contract_version": "v3_professional_anchor_view_decision_v3",
                     "owner": "remote_v3_llm_brain",
-                    "target_view_role": "standard_front",
+                    "target_view_role": target_view_role,
                     "capture_presentation": capture_presentation,
+                    "capture_continuity": continuity,
                     "frozen_binding": {
                         "envelope_id": "opaque-envelope",
                         "ledger_id": "opaque-ledger",
@@ -159,13 +170,14 @@ def test_doc166_professional_contract_declares_neutral_capture_without_renderer_
 
 
 def test_doc166_finalizer_requires_exact_neutral_capture_receipt() -> None:
-    payload = json.loads(build_remote_payload(_v2_anchor_request()))
+    payload = json.loads(build_remote_payload(_anchor_request()))
     schema = payload["return_schema"]["canonical_provider_prompts"][0]
 
     assert schema["professional_anchor_view_decision"] == {
-        "contract_version": "v3_professional_anchor_view_decision_v2",
+        "contract_version": "v3_professional_anchor_view_decision_v3",
         "target_view_role": "standard_front",
         "capture_presentation": "neutral_identity_evidence_capture",
+        "capture_continuity": "establish_neutral_capture",
         "status": "approved|rewritten",
         "owner": "remote_v3_llm_brain",
     }
@@ -174,6 +186,19 @@ def test_doc166_finalizer_requires_exact_neutral_capture_receipt() -> None:
     assert "prior-view winner as evidence of the approved capture presentation" in payload["remote_response_contract"]
     assert "one unambiguous frozen viewpoint" in payload["remote_response_contract"]
     assert "append a correction" in payload["remote_response_contract"]
+
+
+def test_doc166_serial_anchor_requires_prior_capture_continuity_receipt() -> None:
+    payload = json.loads(build_remote_payload(_anchor_request(target_view_role="three_quarter")))
+    schema = payload["return_schema"]["canonical_provider_prompts"][0]
+
+    assert schema["professional_anchor_view_decision"]["capture_continuity"] == (
+        "preserve_approved_prior_capture"
+    )
+    assert "selected prior-view winner to own the in-pack capture presentation" in (
+        payload["remote_response_contract"]
+    )
+    assert "re-inheriting presentation from the identity root" in payload["remote_response_contract"]
 
 
 def test_doc166_finalizer_requires_current_request_owned_age_receipt() -> None:
@@ -254,18 +279,20 @@ def test_doc166_runtime_carries_age_capture_and_view_to_one_brain_signoff(
     )
     assert context["professional_anchor_view_decision"] == {
         "required": True,
-        "contract_version": "v3_professional_anchor_view_decision_v2",
+        "contract_version": "v3_professional_anchor_view_decision_v3",
         "owner": "remote_v3_llm_brain",
         "target_view_role": "standard_front",
         "capture_presentation": "neutral_identity_evidence_capture",
+        "capture_continuity": "establish_neutral_capture",
         "frozen_binding": context["frozen_binding"],
     }
     audit = result.metadata["llm_brain"]["audit"]
     assert audit["professional_anchor_view_decisions"] == [
         {
-            "contract_version": "v3_professional_anchor_view_decision_v2",
+            "contract_version": "v3_professional_anchor_view_decision_v3",
             "target_view_role": "standard_front",
             "capture_presentation": "neutral_identity_evidence_capture",
+            "capture_continuity": "establish_neutral_capture",
             "status": "approved",
             "owner": "remote_v3_llm_brain",
         }
@@ -327,7 +354,7 @@ def test_doc166_adapter_rejects_missing_or_mismatched_capture_receipt(
 
         def run(self, request) -> dict:  # noqa: ANN001
             receipt = {
-                "contract_version": "v3_professional_anchor_view_decision_v2",
+                "contract_version": "v3_professional_anchor_view_decision_v3",
                 "target_view_role": "standard_front",
                 "status": "approved",
                 "owner": "remote_v3_llm_brain",
@@ -348,7 +375,7 @@ def test_doc166_adapter_rejects_missing_or_mismatched_capture_receipt(
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     adapter = V3LLMBrainAdapter(provider=InvalidCaptureProvider())
     with pytest.raises(BrainProfessionalAnchorViewDecisionMissing):
-        adapter.finalize_canonical_provider_prompts(_v2_anchor_request())
+        adapter.finalize_canonical_provider_prompts(_anchor_request())
 
 
 def test_doc166_shared_review_exposes_age_and_neutral_capture_separately() -> None:
