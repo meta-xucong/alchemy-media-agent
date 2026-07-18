@@ -264,6 +264,37 @@ def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_r
     assert output["reference_input_contract"]["admitted_reference_count"] == 5
 
 
+def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_contract(tmp_path: Path) -> None:
+    root = _write_png(tmp_path / "root.png")
+    catalog = _catalog()
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=_resolver(catalog),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(
+        NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+            _arguments(root, professional_reference_stage="standard_front")
+        )
+    )
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    metadata = capturing.payloads[0]["metadata"]
+    assert metadata["professional_anchor_pack_preparation"] is True
+    planning = metadata["professional_planning_metadata"]
+    assert planning["professional_reference_stage"] == "standard_front"
+    assert planning["professional_face_identity_quality_contract"]["capture_presentation"] == (
+        "neutral_identity_evidence_capture"
+    )
+    finalizer = [request for request in brain.requests if request["stage"] == "provider_prompt_finalize"][-1]
+    context = finalizer["metadata"]["canonical_prompt_context"]
+    assert context["professional_anchor_view_decision"]["capture_presentation"] == (
+        "neutral_identity_evidence_capture"
+    )
+
+
 def test_professional_mcp_schema_and_dispatch_are_explicit_and_safe(tmp_path: Path) -> None:
     names = [tool["name"] for tool in TOOL_SCHEMAS]
     assert names == [

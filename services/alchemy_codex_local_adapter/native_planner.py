@@ -15,7 +15,10 @@ from app.providers.base import ProviderRuntimeError
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
-from alchemy_creative_agent_3_0.app.visual_assets import ProfessionalModeBinding
+from alchemy_creative_agent_3_0.app.visual_assets import (
+    ProfessionalModeBinding,
+    ProfessionalModeRuntimeBridge,
+)
 from alchemy_creative_agent_3_0.app.photography_profiles import (
     GENERAL_PHOTOGRAPHY_PROFILE_ID,
     default_photographer_profile_catalog,
@@ -239,12 +242,22 @@ class CodexNativeImageGenPlanner:
             metadata = {
                 "photographer_profile_binding": profile_binding.model_dump(mode="json"),
             }
+        anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+            view_role=request.professional_reference_stage or "standard_front"
+        )
         metadata.update(
             {
                 "professional_mode": "professional",
                 "project_id": request.project_id,
                 "professional_mode_binding_record": binding.model_dump(mode="json"),
                 "local_mcp_professional_relay": True,
+                # The serial relay is a conversation-only projection of the
+                # formal anchor-preparation path, not an ordinary Professional
+                # delivery.  Reuse the typed server contract so the Remote
+                # Brain owns neutral capture and exact view resolution; never
+                # repair a missing capture decision with local prompt prose.
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": anchor_preparation_metadata,
                 "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
                 **(
                     {"professional_reference_stage": request.professional_reference_stage}
