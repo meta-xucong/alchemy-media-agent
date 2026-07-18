@@ -7597,10 +7597,28 @@ class V3ProductApiService:
         scenario_selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
         has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
         trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
-        uploaded_assets: list[Any] = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        resolved_uploads = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        uploaded_assets: list[Any] = list(resolved_uploads)
         anchor_references = metadata.get("professional_anchor_reference_assets")
         if isinstance(anchor_references, list):
-            uploaded_assets.extend(item for item in anchor_references if isinstance(item, dict))
+            frozen_anchor_references = [
+                dict(item) for item in anchor_references if isinstance(item, dict)
+            ]
+            uploaded_assets.extend(frozen_anchor_references)
+            # Keep the server-resolved selected-output binding intact when
+            # Scenario Runtime freezes the generation plan.  Treating that
+            # reviewed winner as an ordinary upload strips its top-level
+            # output_id/source_type and makes provider admission fail closed
+            # before the supplementary anchor can materialize.
+            metadata["reference_assets"] = [
+                *[
+                    item.model_dump(mode="json")
+                    if hasattr(item, "model_dump")
+                    else dict(item)
+                    for item in resolved_uploads
+                ],
+                *frozen_anchor_references,
+            ]
         return {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,

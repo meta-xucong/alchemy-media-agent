@@ -30,6 +30,15 @@ failure with no pixels. That remains append-only upstream evidence. It is not
 reclassified as an identity-quality failure and does not authorize replaying the
 same operation.
 
+The first rerun after the cross-view correction produced a verified passing front
+winner (`same-person 0.8806`, `human realism 0.90`, `visual quality 0.93`). It then
+exposed a separate supplementary-reference transport defect: the reviewed front
+winner was canonical in Product API metadata, but Scenario Runtime reconstructed it
+as a generic upload and stripped the top-level `output_id` / `source_type` before
+Provider admission. All three three-quarter operations correctly failed closed with
+zero pixels. The correction freezes the server-resolved root plus prior-winner list
+as typed `reference_assets`; it does not change prompts, reference counts or review.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation
@@ -100,7 +109,9 @@ Code acceptance requires:
 4. unknown view remains conservative;
 5. identity drift still fails when SFace and multimodal evidence are weak;
 6. no prompt, template or Provider routing behavior changes;
-7. Doc96/Professional/Doc163 focused tests and the complete V3 suite pass.
+7. a reviewed prior winner retains its canonical output binding across Product API,
+   Scenario Runtime and Provider materialization;
+8. Doc96/Professional/Doc163 focused tests and the complete V3 suite pass.
 
 Pixel acceptance remains the existing bounded sequence:
 
