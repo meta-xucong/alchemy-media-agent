@@ -7,6 +7,8 @@ IMPLEMENTATION_AND_CODE_ACCEPTANCE_COMPLETE
 LOCAL_MCP_VISUAL_ACCEPTANCE_COMPLETE
 DOC165_TECHNICAL_M5_EXECUTION_EVIDENCE_REMAINS_VALID
 APPROXIMATELY_SIX_YEAR_OLD_VISUAL_QUALITY_ACCEPTED_AT_WINNER_LEVEL
+MODEL_READY_FORMAL_FRONT_AND_THREE_QUARTER_ACCEPTED
+CANONICAL_FIVE_REFERENCE_PROFILE_MCP_ACCEPTED
 FORMAL_PRODUCT_API_PACK_REACTIVATION_NOT_PERFORMED
 PRODUCTION_AND_BROWSER_GATE_UNCHANGED
 ```
@@ -666,3 +668,33 @@ fail-closed handling, exact nine-candidate transport, serial references and the
 Doc166 age/capture contracts. A new formal M5 run must use a new People Asset,
 new pack and new Job/output identifiers created after this closure. Only that
 run may be assessed for front winner, supplementary views and activation.
+
+## 18. Model-ready rerun and provider-equivalent profile closeout
+
+The new run used a fresh project, People Asset and pack after the preparation-
+intent transport closure. Repository-pinned YuNet/SFace artifacts were fetched
+to the configured local model directory, so every identity derivative reported
+`face_localization_status=detected` rather than heuristic fallback.
+
+Formal Product API pixels passed front and three-quarter shared Vision review.
+The profile materializer then proved the complete 5-reference contract before
+the image request: one root pose-geometry derivative, paired feature/pose
+derivatives for the front winner, paired feature/pose derivatives for the
+three-quarter winner, 271657 total bytes, no missing evidence and five detected
+faces. The Web Provider returned no profile pixel, which remains upstream hold
+evidence.
+
+Under the operator-approved Provider/MCP equivalence rule, the same Brain-
+signed canonical profile prompt and the same five files were sent unchanged to
+Codex built-in ImageGen three times. Shared Professional Vision returned `pass`
+for all three, with no issue codes. Likeness-first selection chose the candidate
+with `same_person_readability=0.90` and
+`distinctive_feature_readability=0.89`; the other two remain append-only visual
+evidence outside Git.
+
+This closes Doc166 image-channel quality and confirms that the shared age,
+identity, neutral-capture, face-localization and viewpoint contracts work
+together. It does not import conversation pixels into Product API history,
+activate the fresh pack or change a production/browser gate. Full sanitized
+details are recorded in
+`visual_assets/PROFESSIONAL_MODE_M5_PROVIDER_EQUIVALENT_CLOSEOUT_20260719.md`.

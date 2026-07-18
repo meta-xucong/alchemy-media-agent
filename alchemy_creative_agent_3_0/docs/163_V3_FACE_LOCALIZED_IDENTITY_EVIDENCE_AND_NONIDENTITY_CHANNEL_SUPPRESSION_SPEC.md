@@ -1,6 +1,6 @@
 # Doc163 — V3 Face-localized Identity Evidence and Non-identity Channel Suppression
 
-Status: implementation candidate complete; full serial Professional M5 rerun required.
+Status: implementation complete; model-ready 2/3/5 serial evidence verified and provider-equivalent visual acceptance recorded.
 
 ## 1. Runtime finding
 

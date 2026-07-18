@@ -145,6 +145,15 @@ It keeps the same architecture and requires a shared, Brain-owned age-coherence
 refinement plus a Professional-only neutral evidence-capture objective. It does
 not invalidate Doc165 lifecycle evidence, add a child module or open production.
 
+`PROFESSIONAL_MODE_M5_PROVIDER_EQUIVALENT_CLOSEOUT_20260719.md`
+
+Records the model-ready fresh Product API run, the complete five-reference
+profile materialization receipt, and three canonical-prompt MCP profile
+candidates reviewed through the shared Professional Vision contract. Under the
+operator-approved Provider/MCP equivalence rule, image-channel quality is
+accepted. The record does not import MCP pixels, activate a Product API pack or
+open the Professional production gate.
+
 ### Persistent People Asset Lifecycle And Controlled Runtime Handoff
 
 `PROFESSIONAL_MODE_PERSISTENT_ASSET_LIFECYCLE_AND_CONTROLLED_RUNTIME_HANDOFF_20260718.md`

@@ -1,6 +1,6 @@
 # Doc164 — V3 Viewpoint-aware Identity Evidence Fusion and M5 Closeout
 
-Status: implementation complete; formal serial Professional M5 rerun required.
+Status: implementation complete; front and three-quarter formal pixels plus profile provider-equivalent pixels verified.
 
 ## 1. Reproducible finding
 
