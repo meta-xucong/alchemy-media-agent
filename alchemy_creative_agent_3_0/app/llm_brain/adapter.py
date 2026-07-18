@@ -75,6 +75,8 @@ class V3LLMBrainAdapter:
             fallback.audit = {**fallback.audit, "remote_provider_available": False}
             return fallback
         started = time.perf_counter()
+        semantic_recovery_attempted = False
+        initial_rejected_sections: list[str] = []
         try:
             data = self.provider.run(request)
             transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
@@ -88,16 +90,63 @@ class V3LLMBrainAdapter:
                 data,
                 requires_complete_image_set=strict_remote_contract,
             )
+            initial_rejected_sections = _remote_contract_rejected_sections(result)
+            recovery_transport_receipt: dict[str, Any] = {}
+            if strict_remote_contract and initial_rejected_sections:
+                # A valid transport JSON object can still violate the frozen
+                # semantic schema. Give the same remote Brain one bounded
+                # opportunity to re-answer the same immutable request. This
+                # is not local JSON repair and it happens before any image
+                # Provider operation.
+                semantic_recovery_attempted = True
+                recovery_request = _semantic_contract_recovery_request(
+                    request,
+                    rejected_sections=initial_rejected_sections,
+                )
+                recovery_started = time.perf_counter()
+                recovery_data = self.provider.run(recovery_request)
+                recovery_transport_receipt = (
+                    pop_transport_receipt(recovery_data) if isinstance(recovery_data, dict) else {}
+                )
+                recovery_transport_receipt = _with_elapsed_transport_receipt(
+                    recovery_transport_receipt,
+                    stage=request.stage,
+                    elapsed_ms=_elapsed_ms(recovery_started),
+                )
+                result = self._merge_remote_result(
+                    fallback,
+                    recovery_data,
+                    requires_complete_image_set=True,
+                )
             result.llm_used = True
             result.fallback_used = False
             result.provider = self.provider.provider
             result.model = self.provider.model
+            final_rejected_sections = _remote_contract_rejected_sections(result)
             result.audit = {
                 **result.audit,
                 "source": "v3_remote_brain",
                 "remote_reasoning_visible": False,
                 "remote_provider_available": True,
                 **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
+                "remote_semantic_contract_recovery_attempted": semantic_recovery_attempted,
+                "remote_semantic_contract_recovery_succeeded": bool(
+                    semantic_recovery_attempted and not final_rejected_sections
+                ),
+                **(
+                    {
+                        "remote_semantic_contract_recovery_initial_rejected_sections": initial_rejected_sections,
+                        "remote_semantic_contract_recovery_final_rejected_sections": final_rejected_sections,
+                        "remote_semantic_contract_recovery_call_count": 1,
+                    }
+                    if semantic_recovery_attempted
+                    else {}
+                ),
+                **(
+                    {"remote_semantic_contract_recovery_transport": recovery_transport_receipt}
+                    if recovery_transport_receipt
+                    else {}
+                ),
             }
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
@@ -114,6 +163,17 @@ class V3LLMBrainAdapter:
                 ),
                 "remote_brain_elapsed_ms": _elapsed_ms(started),
                 "remote_brain_stage": request.stage,
+                "remote_semantic_contract_recovery_attempted": semantic_recovery_attempted,
+                "remote_semantic_contract_recovery_succeeded": False,
+                **(
+                    {
+                        "remote_semantic_contract_recovery_initial_rejected_sections": initial_rejected_sections,
+                        "remote_semantic_contract_recovery_final_rejected_sections": initial_rejected_sections,
+                        "remote_semantic_contract_recovery_call_count": 1,
+                    }
+                    if semantic_recovery_attempted
+                    else {}
+                ),
             }
             return fallback
 
@@ -463,6 +523,30 @@ def _provider_native_text_requirements(metadata: dict[str, Any], scenario_parame
     else:
         values = [raw]
     return list(dict.fromkeys(str(value).strip() for value in values if str(value or "").strip()))[:8]
+
+
+def _remote_contract_rejected_sections(result: BrainRunResult) -> list[str]:
+    raw = result.audit.get("remote_contract_rejected_sections") if isinstance(result.audit, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(str(item).strip() for item in raw if str(item).strip()))
+
+
+def _semantic_contract_recovery_request(
+    request: BrainRunRequest,
+    *,
+    rejected_sections: list[str],
+) -> BrainRunRequest:
+    """Add a server-owned schema marker without changing frozen task facts."""
+
+    metadata = dict(request.metadata)
+    metadata["remote_semantic_contract_recovery"] = {
+        "contract_version": "v3_remote_semantic_contract_recovery_v1",
+        "attempt": 1,
+        "rejected_sections": list(rejected_sections),
+        "same_frozen_request": True,
+    }
+    return request.model_copy(update={"metadata": metadata}, deep=True)
 
 
 def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:

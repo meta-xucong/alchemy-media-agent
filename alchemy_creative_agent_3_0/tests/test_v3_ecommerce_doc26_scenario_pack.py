@@ -342,7 +342,7 @@ def test_ecommerce_remote_brain_faults_fail_closed_without_static_outputs(
     assert expected_reason in " ".join(created.warnings)
     provenance = created.metadata["ecommerce_runtime_provenance"]
     assert provenance["events"][-1]["failure_reason_codes"] == [expected_reason]
-    assert provider.requests == [] if fault == "unavailable" else len(provider.requests) == 1
+    assert provider.requests == [] if fault == "unavailable" else len(provider.requests) == 2
 
 
 @pytest.mark.parametrize(

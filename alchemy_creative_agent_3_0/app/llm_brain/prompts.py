@@ -393,6 +393,24 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "add hidden reasoning, project-history summaries, UI copy, or any "
             "additional top-level sections."
         )
+        recovery = request.metadata.get("remote_semantic_contract_recovery")
+        if isinstance(recovery, dict) and recovery.get("contract_version") == "v3_remote_semantic_contract_recovery_v1":
+            rejected_sections = [
+                str(item).strip()
+                for item in recovery.get("rejected_sections", [])
+                if str(item).strip()
+            ]
+            payload["semantic_contract_recovery"] = {
+                "contract_version": "v3_remote_semantic_contract_recovery_v1",
+                "attempt": 1,
+                "rejected_sections": rejected_sections,
+                "same_frozen_request": True,
+            }
+            payload["remote_response_contract"] += (
+                " This is the single bounded schema re-answer for the same frozen request. "
+                "Re-author the complete compact contract; do not return a patch, diff, commentary, "
+                "fallback direction, or additional section."
+            )
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
     payload = {
         "task": "prepare_pre_generation_image_reasoning",

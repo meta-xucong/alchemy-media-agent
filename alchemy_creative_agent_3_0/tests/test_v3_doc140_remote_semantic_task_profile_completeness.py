@@ -147,7 +147,7 @@ def test_doc140_partial_remote_task_profile_blocks_before_signing_or_materializa
     outcome = result.metadata["remote_creative_brain_outcome"]
     assert outcome["reason_code"] == "remote_creative_brain_task_profile_invalid"
     assert outcome["remote_contract_rejected_sections"] == ["visual_task_profile"]
-    assert [item["stage"] for item in provider.requests] == ["plan"]
+    assert [item["stage"] for item in provider.requests] == ["plan", "plan"]
 
 
 def test_doc140_remote_adult_profile_activates_shared_human_realism_without_local_inference() -> None:
