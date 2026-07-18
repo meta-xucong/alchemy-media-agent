@@ -13,6 +13,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.execution import (
     ProfessionalModeExecutionAdapter,
     ProfessionalModeExecutionRequest,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
 def _binding() -> ProfessionalModeBinding:
@@ -100,6 +101,17 @@ def test_professional_adapter_returns_structured_block_for_identity_conflict() -
     assert result.context is None
     assert result.reason_codes == ["owned_channel_suppressed", "reference_owned_channel_conflict"]
     assert result.blocked_decisions[0].reference_id == "other_person"
+
+
+def test_professional_planning_metadata_exposes_typed_anchor_quality_contract() -> None:
+    metadata = ProfessionalModeRuntimeBridge.planning_metadata(_binding())
+
+    contract = metadata["professional_face_identity_quality_contract"]
+    assert contract["contract_version"] == "professional_face_identity_quality_v1"
+    assert contract["priority_order"][0] == "same_person_likeness"
+    assert contract["anti_overperfection_boundary"] == "reject_generic_perfect_beauty_surface"
+    assert contract["owner"] == "remote_v3_llm_brain"
+    assert contract["review_owner"] == "v3_shared_vision"
 
 
 def test_professional_adapter_blocks_unsafe_full_frame_instead_of_dropping_it() -> None:

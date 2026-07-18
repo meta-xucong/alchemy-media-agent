@@ -113,6 +113,21 @@ pre-Provider readiness gate, the host renderer-parity receipt, and the
 explicit metadata-only binding resolver. It does not weaken shared Vision,
 create a second renderer, or certify M5 pixels.
 
+`PROFESSIONAL_MODE_M5_REAL_BINDING_PREFLIGHT_20260718.md`
+
+Records the current real-pixel preflight: no server-owned active People Asset
+and Face Identity anchor pack was available, so M5 correctly stopped before
+Provider materialization. It is non-counting evidence and does not open any
+production gate.
+
+`PROFESSIONAL_MODE_M5_CHILD_REAL_PIXEL_RERUN_20260718.md`
+
+Records the fresh rerun using the earlier child reference. The real Brain and
+GPT Image 2 Provider produced three front candidates plus one bounded retry;
+shared Vision still rejected all of them for human-skin/AI-polish defects, so
+the serial chain stopped before three-quarter and profile. It is non-counting
+evidence and does not open any production gate.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:

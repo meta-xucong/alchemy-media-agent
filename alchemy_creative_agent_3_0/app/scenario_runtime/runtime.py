@@ -960,6 +960,15 @@ class ScenarioRuntime:
         }
         if age_resolution:
             context["human_realism_age_resolution"] = age_resolution
+        if ScenarioRuntime._is_professional_mode_selected(request):
+            # Keep the anchor-pack quality objective typed and Brain-owned.
+            # Do not build a local prompt recipe here: the Remote Brain must
+            # reconcile this contract with the selected view and user intent.
+            planning_metadata = request.metadata.get("professional_planning_metadata")
+            if isinstance(planning_metadata, dict):
+                quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
+                if isinstance(quality_contract, dict):
+                    context["professional_face_identity_quality_contract"] = dict(quality_contract)
         return context
 
     @staticmethod
@@ -1088,8 +1097,24 @@ class ScenarioRuntime:
         return bool(
             metadata.get("require_real_images")
             or metadata.get("real_image_generation")
-            or str(metadata.get("professional_mode") or "").lower() == "professional"
+            or ScenarioRuntime._is_professional_mode_selected(request)
         )
+
+    @staticmethod
+    def _is_professional_mode_selected(request: ScenarioRuntimeRequest) -> bool:
+        """Recognize the persisted server-owned boolean and public string forms.
+
+        Product API stores the normalized Professional selection as ``True``
+        in internal metadata, while direct runtime callers may use the public
+        string ``"professional"``.  Treating only the string as active would
+        silently drop the anchor-pack quality contract before the Brain
+        finalizer, which is exactly the failure mode M5 exposed.
+        """
+
+        value = request.metadata.get("professional_mode")
+        if value is True:
+            return True
+        return str(value or "").strip().lower() == "professional"
 
     @staticmethod
     def _remote_creative_brain_block(
@@ -2637,6 +2662,16 @@ class ScenarioRuntime:
         if professional is not None:
             context = professional.context
             metadata["professional_mode"] = True
+            if context is not None:
+                quality_contract = context.planning_metadata.get(
+                    "professional_face_identity_quality_contract"
+                )
+                if isinstance(quality_contract, dict):
+                    # Persist only the small, typed semantic contract needed
+                    # to explain the frozen Professional quality objective.
+                    # Binding records and raw reference plans remain private
+                    # to the runtime and are not projected here.
+                    metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
             metadata["professional_mode_execution"] = {
                 "status": professional.status,
                 "binding": (
@@ -2981,7 +3016,7 @@ class ScenarioRuntime:
         if frozen is not None:
             return frozen
         base_metadata = self._brain_runtime_metadata(request, resolution, quality_mode=quality_mode)
-        if str(request.metadata.get("professional_mode") or "").lower() == "professional":
+        if self._is_professional_mode_selected(request):
             # The remote Brain receives only the explicit, typed creative
             # evidence. Server job/project records and raw reference-plan
             # payloads remain local provenance and never become Brain input.
@@ -3003,6 +3038,12 @@ class ScenarioRuntime:
                     )
                     if key in safe_admission
                 }
+                quality_contract = safe_admission.get("professional_face_identity_quality_contract")
+                if isinstance(quality_contract, dict):
+                    # This is a typed semantic contract only.  Raw binding,
+                    # paths, and server-owned reference plans never cross the
+                    # Brain boundary.
+                    base_metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
         brain_request = self.llm_brain_adapter.build_request(
             user_input=request.user_input,

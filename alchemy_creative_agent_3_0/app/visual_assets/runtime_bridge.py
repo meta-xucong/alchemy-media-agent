@@ -95,6 +95,24 @@ class ProfessionalModeRuntimeBridge:
             "asset_channel_claims": binding_set.to_provenance()["claims"],
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
+            # This is a semantic quality contract for the Face Identity
+            # anchor-pack workflow, not renderer prose.  It makes the
+            # professional identity objective explicit to the Brain while
+            # keeping prompt authorship and pixel review in the shared path.
+            "professional_face_identity_quality_contract": {
+                "contract_version": "professional_face_identity_quality_v1",
+                "scope": "face_identity_anchor_pack",
+                "priority_order": [
+                    "same_person_likeness",
+                    "natural_human_presence",
+                    "age_fidelity",
+                    "camera_observed_skin_materiality",
+                    "prompt_owned_view_and_styling",
+                ],
+                "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+                "owner": "remote_v3_llm_brain",
+                "review_owner": "v3_shared_vision",
+            },
         }
         if canonical_prompt_hash is not None:
             if not canonical_prompt_hash.strip():

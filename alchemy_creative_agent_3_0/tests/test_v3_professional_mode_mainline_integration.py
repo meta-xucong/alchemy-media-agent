@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets import (
@@ -114,6 +115,15 @@ def test_product_api_wires_explicit_professional_mode_into_shared_planning() -> 
     assert "portrait_identity" in plan["dependency_order"]
     assert all("professional_mode_binding_record" not in request["metadata"] for request in provider.requests)
     assert all("professional_reference_channel_plans" not in request["metadata"] for request in provider.requests)
+    finalizers = [request for request in provider.requests if request["stage"] == "provider_prompt_finalize"]
+    assert len(finalizers) == 1
+    context = finalizers[0]["metadata"]["canonical_prompt_context"]
+    quality_contract = context["professional_face_identity_quality_contract"]
+    assert quality_contract["priority_order"][0] == "same_person_likeness"
+    assert quality_contract["anti_overperfection_boundary"] == "reject_generic_perfect_beauty_surface"
+    payload = build_remote_payload(BrainRunRequest.model_validate(finalizers[0]))
+    assert "camera-observed human materiality" in payload
+    assert "generic perfect" in payload
 
 
 def test_professional_planning_provenance_boolean_is_accepted_on_generation() -> None:

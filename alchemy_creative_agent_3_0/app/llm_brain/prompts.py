@@ -639,6 +639,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "with contract_version v3_human_naturalness_decision_v1, owner remote_v3_llm_brain, "
             "and status approved or rewritten."
         )
+    professional_anchor_contract = context.get("professional_face_identity_quality_contract")
+    if isinstance(professional_anchor_contract, dict):
+        response_contract += (
+            " For the Professional Face Identity anchor-pack contract, likeness to the selected person is the first-order "
+            "criterion. Preserve the person's age direction and distinctive feature relationships before aesthetic polish. "
+            "The complete prompt must require camera-observed human materiality: visible but subtle natural skin texture, "
+            "non-uniform complexion, ordinary eyelid/lip detail, and small real-life asymmetries. Do not substitute a generic "
+            "perfect, poreless, retouched, pageant, fashion, or beauty-app face. This is a semantic quality requirement, "
+            "not a static prompt recipe; keep the selected view and user-owned styling intact."
+        )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",
         "stage": request.stage,
