@@ -146,6 +146,7 @@ def test_doc166_finalizer_requires_exact_neutral_capture_receipt() -> None:
     }
     assert "whole-person developmental stage" in payload["remote_response_contract"]
     assert "neutral identity-evidence capture" in payload["remote_response_contract"]
+    assert "prior-view winner as evidence of the approved capture presentation" in payload["remote_response_contract"]
     assert "append a correction" in payload["remote_response_contract"]
 
 

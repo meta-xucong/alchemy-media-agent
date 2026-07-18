@@ -750,7 +750,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "inventing an adult persona, a beauty portrait, or inconsistent capture treatment. Preserve current "
                 "request and reference-channel ownership, and return capture_presentation "
                 "neutral_identity_evidence_capture in the same typed receipt. This is a semantic objective, not a "
-                "background, clothing, facial-feature, complexion, or lighting keyword recipe."
+                "background, clothing, facial-feature, complexion, or lighting keyword recipe. During a serial anchor "
+                "stage, treat an already selected prior-view winner as evidence of the approved capture presentation: "
+                "keep that presentation coherent and change only the frozen view unless the current request explicitly "
+                "owns another change. This continuity applies only inside anchor preparation and must not turn scene, "
+                "wardrobe, light, camera, or styling into reusable identity channels."
             )
     anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
     if isinstance(anchor_view_recovery, dict):
