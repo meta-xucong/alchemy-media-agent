@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -813,6 +814,7 @@ class V3ProductApiService:
         trusted_capability_plan_reuse: bool = False,
         trusted_professional_anchor_preparation: bool = False,
         professional_anchor_view_role: Literal["standard_front", "three_quarter", "profile"] | None = None,
+        professional_anchor_reference_evidence_ids: list[str] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         self._assert_runtime_metadata_server_owned(
@@ -825,6 +827,11 @@ class V3ProductApiService:
                 raise ValueError("professional_anchor_pack_preparation_stage_invalid")
             planning_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
                 view_role=professional_anchor_view_role
+            )
+            anchor_reference_assets = self._professional_anchor_reference_assets(
+                create_request,
+                view_role=professional_anchor_view_role,
+                reference_evidence_ids=professional_anchor_reference_evidence_ids,
             )
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
@@ -839,6 +846,7 @@ class V3ProductApiService:
                     "professional_identity_reference_strategy"
                 ],
                 "professional_reference_stage": planning_metadata["professional_reference_stage"],
+                "professional_anchor_reference_assets": anchor_reference_assets,
             }
         else:
             self._bind_professional_mode(
@@ -928,6 +936,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         view_role: Literal["standard_front", "three_quarter", "profile"],
+        reference_evidence_ids: list[str] | None = None,
     ) -> ProductJobStatus:
         """Internal host entry for a pre-activation Face Identity view.
 
@@ -941,7 +950,59 @@ class V3ProductApiService:
             request,
             trusted_professional_anchor_preparation=True,
             professional_anchor_view_role=view_role,
+            professional_anchor_reference_evidence_ids=reference_evidence_ids,
         )
+
+    def _professional_anchor_reference_assets(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        view_role: Literal["standard_front", "three_quarter", "profile"],
+        reference_evidence_ids: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        """Resolve one server-owned root/winner chain for shared execution."""
+
+        expected_count = {"standard_front": 1, "three_quarter": 2, "profile": 3}[view_role]
+        evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
+        if not evidence_ids:
+            evidence_ids = list(request.uploaded_asset_ids[:1])
+        if len(evidence_ids) != expected_count or len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("professional_anchor_reference_chain_invalid")
+        root_asset_id = evidence_ids[0]
+        if root_asset_id not in request.uploaded_asset_ids:
+            raise ValueError("professional_anchor_reference_root_mismatch")
+        root = self.asset_store.get_upload(root_asset_id)
+        root_status = str(root.status.value if root is not None and hasattr(root.status, "value") else "")
+        if root is None or root_status != "ready":
+            raise ValueError("professional_anchor_reference_root_not_ready")
+
+        selected: list[dict[str, Any]] = []
+        for output_id in evidence_ids[1:]:
+            output = self.output_store.get_output(output_id)
+            path = Path(output.file_path) if output is not None and output.file_path else None
+            if output is None or path is None or not path.is_file():
+                raise ValueError("professional_anchor_selected_output_not_found")
+            selected.append(
+                {
+                    "asset_id": output.output_id,
+                    "role": "face_reference",
+                    "file_path": str(path),
+                    "uri": output.preview_url,
+                    "filename": path.name,
+                    "mime_type": output.mime_type,
+                    "metadata": {
+                        "source_type": "selected_output",
+                        "output_id": output.output_id,
+                        "source_job_id": output.job_id,
+                        "use_policy": "identity",
+                        "strength": "hard",
+                        "provider_input_required": True,
+                        "canonical_output_binding": True,
+                        "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                    },
+                }
+            )
+        return selected
 
     def get_job_record(self, job_id: str) -> ProductJobRecord | None:
         """Internal Project Mode lookup; no new public low-level API is exposed."""
@@ -2094,7 +2155,21 @@ class V3ProductApiService:
         )
         job_upload_ids = set(self._dedupe_strings(record.request.uploaded_asset_ids))
         admitted_source_ids = [asset_id for asset_id in source_ids if asset_id in job_upload_ids]
-        if not admitted_source_ids:
+        frozen_anchor_references = dict(record.request.metadata or {}).get(
+            "professional_anchor_reference_assets"
+        )
+        frozen_anchor_references = (
+            [dict(item) for item in frozen_anchor_references if isinstance(item, dict)]
+            if isinstance(frozen_anchor_references, list)
+            else []
+        )
+        frozen_anchor_ids = {
+            str(item.get("asset_id") or "").strip()
+            for item in frozen_anchor_references
+            if str(item.get("asset_id") or "").strip()
+        }
+        admitted_output_ids = [source_id for source_id in source_ids if source_id in frozen_anchor_ids]
+        if not admitted_source_ids and not admitted_output_ids:
             return {
                 "review_reference_evidence_required": True,
                 "review_reference_evidence_available": False,
@@ -2119,10 +2194,31 @@ class V3ProductApiService:
             )
         metadata: dict[str, Any] = {
             "review_reference_evidence_required": True,
-            "review_reference_evidence_available": bool(review_assets),
+            "review_reference_evidence_available": bool(review_assets or admitted_output_ids),
         }
         if review_assets:
             metadata["uploaded_assets"] = review_assets
+        selected_review_assets: list[dict[str, Any]] = []
+        for output_id in admitted_output_ids:
+            output = self.output_store.get_output(output_id)
+            path = Path(output.file_path) if output is not None and output.file_path else None
+            if output is None or path is None or not path.is_file():
+                continue
+            selected_review_assets.append(
+                {
+                    "asset_id": output.output_id,
+                    "output_id": output.output_id,
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "admitted_generation_reference",
+                    "file_path": str(path),
+                    "mime_type": output.mime_type,
+                }
+            )
+        if admitted_output_ids and len(selected_review_assets) != len(admitted_output_ids):
+            metadata["review_reference_evidence_available"] = False
+        if selected_review_assets:
+            metadata["reference_assets"] = selected_review_assets
         return metadata
 
     @staticmethod
@@ -7467,12 +7563,16 @@ class V3ProductApiService:
         scenario_selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
         has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
         trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
+        uploaded_assets: list[Any] = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        anchor_references = metadata.get("professional_anchor_reference_assets")
+        if isinstance(anchor_references, list):
+            uploaded_assets.extend(item for item in anchor_references if isinstance(item, dict))
         return {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,
             "scenario_selection": scenario_selection,
             "uploaded_asset_ids": list(request.uploaded_asset_ids),
-            "uploaded_assets": self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids)),
+            "uploaded_assets": uploaded_assets,
             "product_profile": dict(request.product_profile),
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
@@ -7554,6 +7654,7 @@ class V3ProductApiService:
             "professional_anchor_pack_preparation",
             "professional_identity_reference_strategy",
             "professional_reference_stage",
+            "professional_anchor_reference_assets",
         }
     )
 

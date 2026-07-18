@@ -40,14 +40,17 @@ class AnchorGenerationRequest(V3BaseModel):
     candidate_index: int = Field(ge=1, le=3)
     root_source_asset_id: str
     reference_evidence_ids: list[str] = Field(default_factory=list)
-    brain_plan_id: str
-    canonical_prompt_hash: str
+    # The actual plan/hash do not exist until the Remote Brain and canonical
+    # materializer finish this candidate.  They are therefore optional on the
+    # pre-generation request and mandatory on ``AnchorCandidateResult``.
+    brain_plan_id: str | None = None
+    canonical_prompt_hash: str | None = None
     reference_strategy: Literal["serial_anchor_pack_root_reuse_v1"] = "serial_anchor_pack_root_reuse_v1"
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "root_source_asset_id")
     @classmethod
-    def require_nonempty_evidence(cls, value: str) -> str:
-        if not value.strip():
+    def require_nonempty_evidence(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
             raise ValueError("Brain plan, canonical prompt hash, and root evidence are required")
         return value
 
@@ -80,13 +83,13 @@ class AnchorPackPreparationRequest(V3BaseModel):
     project_id: str
     asset: PeopleAsset
     root_source_provenance: RootSourceProvenance
-    brain_plan_id: str
-    canonical_prompt_hash: str
+    brain_plan_id: str | None = None
+    canonical_prompt_hash: str | None = None
 
     @field_validator("brain_plan_id", "canonical_prompt_hash")
     @classmethod
-    def require_brain_contract(cls, value: str) -> str:
-        if not value.strip():
+    def require_brain_contract(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
             raise ValueError("Brain plan and canonical prompt hash are required before generation")
         return value
 
@@ -107,6 +110,23 @@ class AnchorCandidateResult(V3BaseModel):
     candidate_index: int = Field(ge=1, le=3)
     source_candidate_ids: list[str] = Field(min_length=1)
     source_asset_ids: list[str] = Field(min_length=1)
+    brain_plan_id: str
+    canonical_prompt_hash: str
+    prompt_compilation_id: str
+    prompt_reference_parity_verified: bool
+
+    @field_validator("brain_plan_id", "canonical_prompt_hash", "prompt_compilation_id")
+    @classmethod
+    def require_actual_candidate_provenance(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("actual per-candidate Brain and canonical prompt provenance is required")
+        return value
+
+    @model_validator(mode="after")
+    def require_materialization_parity(self) -> "AnchorCandidateResult":
+        if not self.prompt_reference_parity_verified:
+            raise ValueError("anchor candidate prompt/reference parity must be verified")
+        return self
 
 
 class AnchorReviewDecision(V3BaseModel):

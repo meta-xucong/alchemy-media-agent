@@ -16,6 +16,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
 )
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
@@ -337,3 +338,71 @@ def test_doc161_public_job_cannot_impersonate_anchor_preparation() -> None:
                 "metadata": {"professional_anchor_pack_preparation": True},
             }
         )
+
+
+def test_doc162_internal_profile_anchor_resolves_root_and_two_reviewed_winners(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    provider = EcommerceRemoteBrainTestProvider()
+    service = V3ProductApiService(
+        scenario_runtime=ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    )
+    service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "uploads")
+    service.output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
+    image = Image.new("RGB", (128, 128), (184, 140, 120))
+    content = BytesIO()
+    image.save(content, format="PNG")
+    raw = content.getvalue()
+    encoded = base64.b64encode(raw).decode("ascii")
+    upload = service.create_uploaded_asset(
+        {
+            "filename": "authorized-root.png",
+            "mime_type": "image/png",
+            "size_bytes": len(raw),
+            "role": "face_reference",
+        }
+    )
+    service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": encoded, "mime_type": "image/png"},
+    )
+    service.complete_uploaded_asset(upload.asset_id)
+    winners = [
+        service.output_store.save_base64_output(
+            job_id=f"source_job_{index}",
+            candidate_id=f"source_candidate_{index}",
+            asset_id=f"source_asset_{index}",
+            provider="test",
+            model="test",
+            encoded_image=encoded,
+            mime_type="image/png",
+            metadata={"review_status": "pass"},
+        )
+        for index in range(2)
+    ]
+
+    status = service.create_professional_anchor_preparation_job(
+        {
+            "user_input": "Prepare one profile Face Identity anchor of this same person.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_asset_ids": [upload.asset_id],
+            "metadata": {
+                "project_id": "project_doc162_profile_host",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        },
+        view_role="profile",
+        reference_evidence_ids=[upload.asset_id, *(item.output_id for item in winners)],
+    )
+
+    assert status.status == ProductJobStatusValue.PLANNED
+    record = service.get_job_record(status.job_id)
+    assert record is not None
+    selected = record.request.metadata["professional_anchor_reference_assets"]
+    assert [item["asset_id"] for item in selected] == [item.output_id for item in winners]
+    runtime_payload = service._runtime_request_payload(record.request)  # noqa: SLF001
+    assert [item.asset_id if hasattr(item, "asset_id") else item["asset_id"] for item in runtime_payload["uploaded_assets"]] == [
+        upload.asset_id,
+        winners[0].output_id,
+        winners[1].output_id,
+    ]

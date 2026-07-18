@@ -26,6 +26,7 @@ from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, Produ
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.visual_assets import PersistentVisualAssetCatalog
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
@@ -106,12 +107,14 @@ V2_IDEMPOTENCY_PREFIX = "v2:"
 V3_VISUAL_ASSET_CATALOG_ROOT = Path(
     os.getenv("V3_VISUAL_ASSET_CATALOG_ROOT", str(Path(".media_storage") / "v3_visual_assets"))
 )
+_v3_product_service = V3ProductApiService(
+    job_store=PersistentProductJobStore(),
+    visual_asset_catalog=PersistentVisualAssetCatalog(V3_VISUAL_ASSET_CATALOG_ROOT),
+)
 v3_route_handlers = V3ProductRouteHandlers(
-    service=V3ProductApiService(
-        job_store=PersistentProductJobStore(),
-        visual_asset_catalog=PersistentVisualAssetCatalog(V3_VISUAL_ASSET_CATALOG_ROOT),
-    ),
+    service=_v3_product_service,
     project_store=PersistentProjectStore(),
+    anchor_pack_preparation_host=ProductApiAnchorPackPreparationHost(_v3_product_service),
 )
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

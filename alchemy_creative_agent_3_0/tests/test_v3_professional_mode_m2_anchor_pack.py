@@ -60,6 +60,10 @@ class FakeGenerator:
             candidate_index=request.candidate_index,
             source_candidate_ids=[f"candidate_{token}"],
             source_asset_ids=["asset_root_1"],
+            brain_plan_id=f"brain_{token}",
+            canonical_prompt_hash=f"sha256:{token}",
+            prompt_compilation_id=f"prompt_{token}",
+            prompt_reference_parity_verified=True,
         )
 
 
@@ -265,6 +269,10 @@ def test_m2_likeness_is_primary_over_polish_and_small_pose_defects() -> None:
                 candidate_index=1,
                 source_candidate_ids=["candidate_1"],
                 source_asset_ids=["asset_root_1"],
+                brain_plan_id="brain_1",
+                canonical_prompt_hash="sha256:1",
+                prompt_compilation_id="prompt_1",
+                prompt_reference_parity_verified=True,
             )
         ).identity_scores,
         2: reviewer.review(
@@ -276,6 +284,10 @@ def test_m2_likeness_is_primary_over_polish_and_small_pose_defects() -> None:
                 candidate_index=2,
                 source_candidate_ids=["candidate_2"],
                 source_asset_ids=["asset_root_1"],
+                brain_plan_id="brain_2",
+                canonical_prompt_hash="sha256:2",
+                prompt_compilation_id="prompt_2",
+                prompt_reference_parity_verified=True,
             )
         ).identity_scores,
         3: reviewer.review(
@@ -287,6 +299,10 @@ def test_m2_likeness_is_primary_over_polish_and_small_pose_defects() -> None:
                 candidate_index=3,
                 source_candidate_ids=["candidate_3"],
                 source_asset_ids=["asset_root_1"],
+                brain_plan_id="brain_3",
+                canonical_prompt_hash="sha256:3",
+                prompt_compilation_id="prompt_3",
+                prompt_reference_parity_verified=True,
             )
         ).identity_scores,
     }
