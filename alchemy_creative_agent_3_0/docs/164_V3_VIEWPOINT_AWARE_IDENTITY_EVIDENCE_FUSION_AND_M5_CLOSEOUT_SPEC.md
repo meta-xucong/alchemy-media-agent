@@ -62,6 +62,17 @@ so the Provider still received the ordinary reference policy. The fields are now
 preserved at this per-output boundary, with a direct CentralCreativeBrain test;
 their values still originate only from the frozen-plan projection above.
 
+Once the 2/3 reference budgets were correct, real three-quarter pixels exposed
+a review-authority ambiguity rather than a renderer failure. The root garden,
+blue wardrobe and warm location light were not inherited, but shared Vision
+treated continuity with the already-reviewed neutral front anchor as if every
+reference were an identity-only upload. Serial anchor review now distinguishes
+the immutable root (`identity_only`) from prior reviewed winners
+(`identity_plus_neutral_anchor_capture_continuity`). This is review-only typed
+authority derived from the frozen strategy/stage. It does not add renderer
+language, suppress issue codes locally, relax identity/Human Realism thresholds,
+or change ordinary portrait review.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation

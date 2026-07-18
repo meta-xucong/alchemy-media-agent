@@ -265,6 +265,11 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
     apparel_contract = review_contract.get("apparel_construction_truth") or {}
     output_evidence = _active_output_evidence_contract(metadata, review_contract)
     reference_count = len(_inspection_reference_paths(metadata))
+    serial_anchor_review = _professional_serial_anchor_review_context(
+        metadata,
+        review_contract,
+        reference_count=reference_count,
+    )
     if review_contract["enforced"]:
         return _enforced_inspection_prompt(
             user_goal=user_goal,
@@ -275,6 +280,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             review_contract=review_contract,
             apparel_contract=apparel_contract,
             output_evidence=output_evidence,
+            serial_anchor_review=serial_anchor_review,
         )
     prompt = "\n".join(
         [
@@ -359,6 +365,7 @@ def _enforced_inspection_prompt(
     review_contract: dict[str, Any],
     apparel_contract: dict[str, Any],
     output_evidence: dict[str, Any],
+    serial_anchor_review: dict[str, Any],
 ) -> str:
     """Build a lean inspection request directly from frozen enforced truth.
 
@@ -407,6 +414,18 @@ def _enforced_inspection_prompt(
             "prompt_owned_channel_obedience, pose_compliance, and visual_quality, higher is better. "
             "ai_overperfection_penalty is the exception: 0 means no visible AI/beauty-filter overperfection and 1 means severe overperfection."
         )
+    if serial_anchor_review:
+        lines.append(
+            "Professional serial-anchor reference authority: Image 2 is the immutable root portrait and remains "
+            "identity-only. Any later reference images are previously reviewed anchor winners, not ordinary "
+            "identity-only uploads. Their neutral capture continuity may intentionally carry across the three-view "
+            "identity set when it does not conflict with the current Brain-authored direction. Judge source leakage "
+            "and prompt-channel obedience only after applying these distinct authorities; do not classify intended "
+            "prior-winner capture continuity as source-style leakage. The requested viewpoint must still change, and "
+            "root scene/style leakage, identity drift, weak human realism, AI overperfection, or conflict with the "
+            "current direction must still fail normally. Frozen authority: "
+            + json.dumps(serial_anchor_review, ensure_ascii=False)
+        )
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
             "Human authenticity attestation: assess the frozen personhood, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
@@ -421,6 +440,52 @@ def _enforced_inspection_prompt(
         )
     lines.append(_review_response_shape(review_contract))
     return "\n".join(lines)
+
+
+def _professional_serial_anchor_review_context(
+    metadata: dict[str, Any],
+    review_contract: dict[str, Any],
+    *,
+    reference_count: int,
+) -> dict[str, Any]:
+    """Describe reference roles for Vision without changing renderer intent.
+
+    Root evidence and previously reviewed winners have different authority in
+    a serial Face Identity pack.  The distinction is admitted only by the
+    frozen Professional strategy/stage and never by prompt keywords.
+    """
+
+    professional = review_contract.get("professional_identity_quality")
+    strategy = str(metadata.get("professional_identity_reference_strategy") or "").strip()
+    stage = str(metadata.get("professional_reference_stage") or "").strip()
+    previous_winner_count = {
+        "standard_front": 0,
+        "three_quarter": 1,
+        "profile": 2,
+    }.get(stage)
+    if (
+        not isinstance(professional, dict)
+        or not professional.get("applies")
+        or strategy != "serial_anchor_pack_root_reuse_v1"
+        or previous_winner_count is None
+        or reference_count < 1 + previous_winner_count
+    ):
+        return {}
+    return {
+        "contract_version": "professional_serial_anchor_review_authority_v1",
+        "strategy": strategy,
+        "stage": stage,
+        "root_reference_image_index": 2,
+        "root_authority": "same_person_identity_only",
+        "reviewed_prior_anchor_image_indexes": list(
+            range(3, 3 + previous_winner_count)
+        ),
+        "reviewed_prior_anchor_authority": (
+            "same_person_identity_plus_neutral_anchor_capture_continuity"
+        ),
+        "current_brain_direction_authoritative": True,
+        "required_stage_change": "target_viewpoint_geometry",
+    }
 
 
 def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:

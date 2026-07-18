@@ -15,6 +15,9 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainReferenceChannelOwnershipDecisionMissing,
 )
 from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    _inspection_prompt,
+)
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -322,6 +325,70 @@ def test_doc164_central_brain_keeps_frozen_professional_stage_on_each_output_pla
         "serial_anchor_pack_root_reuse_v1"
     )
     assert metadata["professional_reference_stage"] == "three_quarter"
+
+
+def test_doc164_serial_anchor_vision_distinguishes_root_from_reviewed_winner(
+    tmp_path,
+) -> None:
+    root = tmp_path / "root.png"
+    winner = tmp_path / "front-winner.png"
+    Image.new("RGB", (64, 64), (160, 130, 115)).save(root)
+    Image.new("RGB", (64, 64), (150, 135, 125)).save(winner)
+    planning = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="three_quarter"
+    )
+    prompt = _inspection_prompt(
+        {
+            "user_input": "Prepare one three-quarter identity anchor.",
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_reference_stage": "three_quarter",
+            "reference_assets": [
+                {"asset_id": "root", "role": "face_reference", "file_path": str(root)},
+                {
+                    "asset_id": "front",
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "file_path": str(winner),
+                },
+            ],
+            "capability_execution_envelope": {
+                "activation_plan": {
+                    "plan_id": "plan_doc164",
+                    "activation_mode": "enforced",
+                    "dependency_order": [],
+                    "metadata": planning,
+                },
+                "resolved_constraint_ledger": {
+                    "hard_semantic_contract": True,
+                    "provider_projection": {
+                        "composed_visual_contribution": {"active_capability_ids": []}
+                    },
+                    "review_contracts": [],
+                },
+            },
+        }
+    )
+
+    assert "Image 2 is the immutable root portrait" in prompt
+    assert "previously reviewed anchor winners" in prompt
+    assert "same_person_identity_plus_neutral_anchor_capture_continuity" in prompt
+    assert '"reviewed_prior_anchor_image_indexes": [3]' in prompt
+
+
+def test_doc164_ordinary_identity_review_does_not_gain_anchor_continuity(tmp_path) -> None:
+    root = tmp_path / "root.png"
+    Image.new("RGB", (64, 64), (160, 130, 115)).save(root)
+    prompt = _inspection_prompt(
+        {
+            "user_input": "Keep the same person in a new setting.",
+            "reference_assets": [
+                {"asset_id": "root", "role": "face_reference", "file_path": str(root)}
+            ],
+        }
+    )
+
+    assert "Professional serial-anchor reference authority" not in prompt
+    assert "previously reviewed anchor winners" not in prompt
 
 
 def test_doc161_professional_anchor_preparation_rejects_missing_root_before_brain(monkeypatch) -> None:
