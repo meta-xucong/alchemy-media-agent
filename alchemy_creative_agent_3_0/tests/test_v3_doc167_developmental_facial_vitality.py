@@ -9,7 +9,10 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import SYSTEM_PROMPT, build_remote_payload
-from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainDevelopmentalAgeDecisionMissing
+from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainDevelopmentalAgeDecisionMissing,
+    BrainDevelopmentalPresenceDecisionMissing,
+)
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
@@ -49,6 +52,13 @@ def _age_owned_request() -> BrainRunRequest:
                     "age_fidelity": "follow_explicit_prompt",
                     "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
                     "developmental_age_coherence": "whole_person_requested_stage",
+                    "developmental_presence": _PRESENCE_REQUIREMENT,
+                    "owner": "remote_v3_llm_brain",
+                    "frozen_binding": {"envelope_id": "opaque-envelope", "ledger_id": "opaque-ledger"},
+                },
+                "human_developmental_presence_decision": {
+                    "required": True,
+                    "contract_version": "v3_human_developmental_presence_decision_v1",
                     "developmental_presence": _PRESENCE_REQUIREMENT,
                     "owner": "remote_v3_llm_brain",
                     "frozen_binding": {"envelope_id": "opaque-envelope", "ledger_id": "opaque-ledger"},
@@ -95,6 +105,12 @@ def test_doc167_brain_receipt_requires_integrated_developmental_presence() -> No
         "status": "approved|rewritten",
         "owner": "remote_v3_llm_brain",
     }
+    assert schema["human_developmental_presence_decision"] == {
+        "contract_version": "v3_human_developmental_presence_decision_v1",
+        "developmental_presence": _PRESENCE_REQUIREMENT,
+        "status": "approved|rewritten",
+        "owner": "remote_v3_llm_brain",
+    }
     contract = payload["remote_response_contract"]
     assert "explicit age words were removed" in contract
     assert "generic age label" in contract
@@ -135,6 +151,42 @@ def test_doc167_adapter_rejects_legacy_receipt_for_fresh_v2_requirement(
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     adapter = V3LLMBrainAdapter(provider=LegacyReceiptProvider())
     with pytest.raises(BrainDevelopmentalAgeDecisionMissing):
+        adapter.finalize_canonical_provider_prompts(_age_owned_request())
+
+
+def test_doc167_adapter_rejects_missing_presence_receipt_for_fresh_full_person(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingPresenceProvider:
+        provider = "missing_presence_receipt_fixture"
+        model = "fixture"
+
+        def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
+            return True
+
+        def run(self, request):  # noqa: ANN001, ARG002
+            return {
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "A complete remote-authored developmental-stage portrait direction.",
+                        "review_status": "approved",
+                        "human_developmental_age_decision": {
+                            "contract_version": "v3_human_developmental_age_decision_v2",
+                            "age_fidelity": "follow_explicit_prompt",
+                            "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                            "developmental_age_coherence": "whole_person_requested_stage",
+                            "developmental_presence": _PRESENCE_REQUIREMENT,
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        },
+                    }
+                ]
+            }
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(provider=MissingPresenceProvider())
+    with pytest.raises(BrainDevelopmentalPresenceDecisionMissing):
         adapter.finalize_canonical_provider_prompts(_age_owned_request())
 
 

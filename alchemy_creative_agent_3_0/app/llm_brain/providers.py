@@ -42,6 +42,10 @@ class BrainDevelopmentalAgeDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted the current-request-owned age receipt."""
 
 
+class BrainDevelopmentalPresenceDecisionMissing(BrainProviderError):
+    """The final Brain sign-off omitted the age-general facial-presence receipt."""
+
+
 class BrainProfessionalAnchorViewDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted or changed the frozen anchor view."""
 

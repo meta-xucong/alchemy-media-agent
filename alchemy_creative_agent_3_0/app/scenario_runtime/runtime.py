@@ -782,6 +782,25 @@ class ScenarioRuntime:
                 "owner": "remote_v3_llm_brain",
                 "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
             }
+            presence_requirement = next(
+                (
+                    item.get("developmental_presence_requirement")
+                    for item in canonical_prompt_context.get(
+                        "active_semantic_capability_contracts", []
+                    )
+                    if isinstance(item, dict)
+                    and item.get("capability_id") == "human_realism"
+                ),
+                None,
+            )
+            if presence_requirement == "integrated_stage_coherent_face_attention_and_affect":
+                canonical_prompt_context["human_developmental_presence_decision"] = {
+                    "required": True,
+                    "contract_version": "v3_human_developmental_presence_decision_v1",
+                    "developmental_presence": presence_requirement,
+                    "owner": "remote_v3_llm_brain",
+                    "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
+                }
 
         signing_request = BrainRunRequest(
             user_input=request.user_input,

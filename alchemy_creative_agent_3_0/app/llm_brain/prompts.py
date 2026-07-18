@@ -643,6 +643,19 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     )
     if isinstance(age_requirement, dict) and not age_decision_required:
         raise ValueError("Human developmental-age finalization requires one valid frozen ownership contract.")
+    presence_requirement = context.get("human_developmental_presence_decision")
+    presence_decision_required = bool(
+        isinstance(presence_requirement, dict)
+        and presence_requirement.get("required") is True
+        and presence_requirement.get("contract_version")
+        == "v3_human_developmental_presence_decision_v1"
+        and presence_requirement.get("developmental_presence")
+        == "integrated_stage_coherent_face_attention_and_affect"
+        and presence_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(presence_requirement.get("frozen_binding"), dict)
+    )
+    if isinstance(presence_requirement, dict) and not presence_decision_required:
+        raise ValueError("Human developmental-presence finalization requires one valid frozen contract.")
     anchor_view_requirement = context.get("professional_anchor_view_decision")
     anchor_view_target = (
         str(anchor_view_requirement.get("target_view_role") or "").strip()
@@ -731,6 +744,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
+    if presence_decision_required:
+        prompt_schema["human_developmental_presence_decision"] = {
+            "contract_version": "v3_human_developmental_presence_decision_v1",
+            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     if anchor_view_decision_required:
         prompt_schema["professional_anchor_view_decision"] = {
             "contract_version": anchor_view_version,
@@ -804,6 +824,19 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "Do not use a facial measurement, feature checklist, age stereotype or fixed expression vocabulary. "
             "For every output, return the exact schema-only "
             "human_developmental_age_decision receipt with owner remote_v3_llm_brain and status approved or rewritten."
+        )
+    if presence_decision_required:
+        response_contract += (
+            " Independently review every complete prompt against the frozen developmental-presence obligation, even when "
+            "the reference already appears to share the requested stage. Approval requires the stage to remain perceptually "
+            "legible through this particular person's integrated facial presence if explicit age words were removed. "
+            "Do not approve generic phrases such as child-appropriate features and proportions, childlike presence, youthful, "
+            "natural or age appropriate as sufficient resolution. Reconcile soft-tissue response, attention and affect as one "
+            "integrated person in the exact scene without prescribing a round face, large eyes, teeth, smile, measurement, "
+            "demographic template or fixed expression. A quiet neutral capture and a lively moment are both valid when they belong "
+            "to the person's stage and situation. If the candidate is generic, rewrite the whole prompt; never append a repair phrase. "
+            "For every output, return the exact schema-only human_developmental_presence_decision receipt with owner "
+            "remote_v3_llm_brain and status approved or rewritten."
         )
     if anchor_view_decision_required:
         response_contract += (

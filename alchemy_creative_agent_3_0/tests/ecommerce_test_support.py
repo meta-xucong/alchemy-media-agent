@@ -120,6 +120,20 @@ class EcommerceRemoteBrainTestProvider:
             == "integrated_stage_coherent_face_attention_and_affect"
             and age_requirement.get("owner") == "remote_v3_llm_brain"
         )
+        presence_requirement = (
+            context.get("human_developmental_presence_decision")
+            if isinstance(context, dict)
+            else None
+        )
+        requires_developmental_presence_decision = bool(
+            isinstance(presence_requirement, dict)
+            and presence_requirement.get("required") is True
+            and presence_requirement.get("contract_version")
+            == "v3_human_developmental_presence_decision_v1"
+            and presence_requirement.get("developmental_presence")
+            == "integrated_stage_coherent_face_attention_and_affect"
+            and presence_requirement.get("owner") == "remote_v3_llm_brain"
+        )
         anchor_view_requirement = (
             context.get("professional_anchor_view_decision") if isinstance(context, dict) else None
         )
@@ -211,6 +225,18 @@ class EcommerceRemoteBrainTestProvider:
                         }
                     }
                     if requires_developmental_age_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "human_developmental_presence_decision": {
+                            "contract_version": "v3_human_developmental_presence_decision_v1",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_developmental_presence_decision
                     else {}
                 ),
                 **(

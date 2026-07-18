@@ -116,6 +116,22 @@ class BrainDevelopmentalAgeDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class BrainDevelopmentalPresenceDecision(V3BaseModel):
+    """Safe receipt for integrated, age-general facial presence review.
+
+    It proves only that the Brain reconsidered the complete prompt against the
+    frozen semantic obligation. It contains no face type, age estimate,
+    measurement, expression choice or renderer fragment.
+    """
+
+    contract_version: Literal["v3_human_developmental_presence_decision_v1"]
+    developmental_presence: Literal[
+        "integrated_stage_coherent_face_attention_and_affect"
+    ]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainProfessionalAnchorViewDecision(V3BaseModel):
     """Safe receipt for the frozen Professional anchor viewpoint.
 
@@ -171,6 +187,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # developmental stage to the current request. Historical and same-age
     # records remain readable without this receipt.
     human_developmental_age_decision: BrainDevelopmentalAgeDecision | None = None
+    # Fresh full-person Human Realism work requires this age-general receipt;
+    # historical and detail-only records remain readable without it.
+    human_developmental_presence_decision: BrainDevelopmentalPresenceDecision | None = None
     # Historical and non-anchor records remain readable without this field.
     # Formal Professional anchor preparation requires the exact frozen role.
     professional_anchor_view_decision: BrainProfessionalAnchorViewDecision | None = None

@@ -22,6 +22,7 @@ from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunRe
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .providers import (
     BrainDevelopmentalAgeDecisionMissing,
+    BrainDevelopmentalPresenceDecisionMissing,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
@@ -247,6 +248,15 @@ class V3LLMBrainAdapter:
             raise BrainDevelopmentalAgeDecisionMissing(
                 "Remote Brain did not return the required developmental-age ownership receipt."
             )
+        developmental_presence_requirement = _required_human_developmental_presence_requirement(request)
+        if developmental_presence_requirement and not _matches_human_developmental_presence_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_requirement=developmental_presence_requirement,
+        ):
+            raise BrainDevelopmentalPresenceDecisionMissing(
+                "Remote Brain did not return the required developmental-presence receipt."
+            )
         professional_anchor_view_requirement = _required_professional_anchor_view_requirement(request)
         if professional_anchor_view_requirement and not _matches_professional_anchor_view_receipts(
             prompts_raw,
@@ -300,6 +310,21 @@ class V3LLMBrainAdapter:
                         if prompt.human_developmental_age_decision is not None
                     ]
                     if developmental_age_requirement
+                    else []
+                ),
+                "human_developmental_presence_decision_required": bool(
+                    developmental_presence_requirement
+                ),
+                "human_developmental_presence_decision_signed": bool(
+                    developmental_presence_requirement
+                ),
+                "human_developmental_presence_decisions": (
+                    [
+                        prompt.human_developmental_presence_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.human_developmental_presence_decision is not None
+                    ]
+                    if developmental_presence_requirement
                     else []
                 ),
                 "professional_anchor_view_decision_required": bool(professional_anchor_view_requirement),
@@ -1009,6 +1034,59 @@ def _matches_human_developmental_age_receipts(
             for key, value in expected_requirement.items()
         )
         and item["human_developmental_age_decision"].get("status") in {"approved", "rewritten"}
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _required_human_developmental_presence_requirement(
+    request: BrainRunRequest,
+) -> dict[str, str]:
+    """Return the exact age-general facial-presence decision, if applicable."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("human_developmental_presence_decision")
+    if not isinstance(decision, dict):
+        return {}
+    expected = {
+        "contract_version": "v3_human_developmental_presence_decision_v1",
+        "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+        "owner": "remote_v3_llm_brain",
+    }
+    if not (
+        decision.get("required") is True
+        and all(decision.get(key) == value for key, value in expected.items())
+        and isinstance(decision.get("frozen_binding"), dict)
+    ):
+        raise BrainDevelopmentalPresenceDecisionMissing(
+            "The frozen developmental-presence requirement is malformed."
+        )
+    return expected
+
+
+def _matches_human_developmental_presence_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_requirement: dict[str, str],
+) -> bool:
+    """Validate exact semantic-signoff parity without inspecting prompt words."""
+
+    expected_keys = {*expected_requirement, "status"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("human_developmental_presence_decision"), dict)
+        and set(item["human_developmental_presence_decision"]) == expected_keys
+        and all(
+            item["human_developmental_presence_decision"].get(key) == value
+            for key, value in expected_requirement.items()
+        )
+        and item["human_developmental_presence_decision"].get("status")
+        in {"approved", "rewritten"}
         for index, item in enumerate(candidate, start=1)
     )
 
