@@ -18,6 +18,7 @@ from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.scenario_runtime import runtime as scenario_runtime_module
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
@@ -247,6 +248,62 @@ def test_doc161_formal_professional_anchor_preparation_reaches_shared_runtime(tm
         "professional_face_identity_quality_contract"
     ]
     assert context["reference_channel_ownership_decision"]["required"] is True
+
+
+def test_doc164_generate_loop_receives_frozen_professional_stage_before_provider(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    source = tmp_path / "professional-root.png"
+    Image.new("RGB", (640, 640), (184, 140, 120)).save(source)
+    planning = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="three_quarter"
+    )
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    captured: dict[str, object] = {}
+    real_generation_loop = scenario_runtime_module.run_generation_loop
+
+    def capture_generation_metadata(**kwargs):  # noqa: ANN003, ANN202
+        captured.update(dict(kwargs["runtime_metadata"]))
+        return real_generation_loop(**kwargs)
+
+    monkeypatch.setattr(
+        scenario_runtime_module,
+        "run_generation_loop",
+        capture_generation_metadata,
+    )
+
+    result = runtime.generate_job(
+        {
+            "user_input": "Prepare one three-quarter Face Identity anchor of the same person.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [
+                {
+                    "asset_id": "professional_root_doc164",
+                    "role": "face_reference",
+                    "file_path": str(source),
+                    "use_policy": "identity",
+                    "strength": "hard",
+                }
+            ],
+            "metadata": {
+                "project_id": "project_doc164_generation_boundary",
+                "requested_image_count": 1,
+                "require_real_images": True,
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": planning,
+            },
+        }
+    )
+
+    assert result.status.value == "generated"
+    assert captured["professional_identity_reference_strategy"] == (
+        "serial_anchor_pack_root_reuse_v1"
+    )
+    assert captured["professional_reference_stage"] == "three_quarter"
 
 
 def test_doc161_professional_anchor_preparation_rejects_missing_root_before_brain(monkeypatch) -> None:

@@ -48,6 +48,13 @@ The runtime now projects only the validated strategy/stage from the immutable pl
 into each generation plan. A parity mismatch is recorded as a bounded candidate
 failure rather than escaping as a validation exception.
 
+The next bounded run showed that enriching the returned generation plan is too
+late for the real Provider path: `run_generation_loop` has already materialized
+the request at that point. The same frozen selector projection is therefore now
+applied to planning metadata and, critically, generation metadata before the
+generation loop begins. Post-run enrichment reuses the identical helper so the
+execution receipt and returned plan cannot disagree.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation
