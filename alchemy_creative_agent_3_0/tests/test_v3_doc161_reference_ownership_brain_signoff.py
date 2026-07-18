@@ -180,14 +180,90 @@ def test_doc161_real_reference_runtime_requires_and_records_brain_signoff(tmp_pa
 
 
 def test_doc161_professional_anchor_preparation_has_formal_quality_context() -> None:
-    metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(view_role="front")
+    metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(view_role="standard_front")
 
     assert metadata["professional_mode"] is True
     assert metadata["professional_anchor_pack_preparation"] is True
-    assert metadata["professional_reference_stage"] == "front"
+    assert metadata["professional_reference_stage"] == "standard_front"
     contract = metadata["professional_face_identity_quality_contract"]
     assert contract["priority_order"][0] == "same_person_likeness"
     assert contract["owner"] == "remote_v3_llm_brain"
     serialized = json.dumps(metadata).lower()
     assert "prompt_additions" not in serialized
     assert "canonical_provider_prompt" not in serialized
+
+
+def test_doc161_formal_professional_anchor_preparation_reaches_shared_runtime(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    source = tmp_path / "professional-root.png"
+    Image.new("RGB", (640, 640), (184, 140, 120)).save(source)
+    planning = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="standard_front"
+    )
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+
+    result = runtime.plan_job(
+        {
+            "user_input": (
+                "Prepare one straight-on Face Identity anchor of the same person, with ordinary neutral styling "
+                "and camera-observed human materiality."
+            ),
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_assets": [
+                {
+                    "asset_id": "professional_root_doc161",
+                    "role": "face_reference",
+                    "file_path": str(source),
+                    "use_policy": "identity",
+                    "strength": "hard",
+                }
+            ],
+            "metadata": {
+                "project_id": "project_doc161_anchor",
+                "requested_image_count": 1,
+                "require_real_images": True,
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": planning,
+            },
+        }
+    )
+
+    assert result.status.value == "planned"
+    plan = result.metadata["capability_activation_plan"]
+    assert {"portrait_identity", "reference_channel_policy", "human_realism"}.issubset(
+        set(plan["dependency_order"])
+    )
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    context = finalizer["metadata"]["canonical_prompt_context"]
+    assert context["professional_face_identity_quality_contract"] == planning[
+        "professional_face_identity_quality_contract"
+    ]
+    assert context["reference_channel_ownership_decision"]["required"] is True
+
+
+def test_doc161_professional_anchor_preparation_rejects_missing_root_before_brain(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    planning = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="standard_front"
+    )
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Prepare one Face Identity anchor.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": planning,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    assert "professional_anchor_pack_root_evidence_missing" in " ".join(result.warnings)
+    assert provider.requests == []

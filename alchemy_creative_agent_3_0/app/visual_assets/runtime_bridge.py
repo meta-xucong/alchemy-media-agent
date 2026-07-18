@@ -99,7 +99,7 @@ class ProfessionalModeRuntimeBridge:
     @staticmethod
     def anchor_pack_preparation_metadata(
         *,
-        view_role: Literal["front", "three_quarter", "profile"],
+        view_role: Literal["standard_front", "three_quarter", "profile"],
     ) -> dict[str, object]:
         """Return the formal shared-planning context for pack preparation.
 

@@ -446,6 +446,46 @@ class ScenarioRuntime:
         """Admit explicit Professional Mode before the shared plan freezes."""
 
         metadata = dict(request.metadata or {})
+        if metadata.get("professional_anchor_pack_preparation") is True:
+            if activation_mode != "enforced":
+                raise CapabilityActivationError("professional_mode_requires_enforced_activation")
+            raw_mode = metadata.get("professional_mode")
+            if raw_mode is not True and str(raw_mode or "").strip().lower() != "professional":
+                raise CapabilityActivationError("professional_anchor_pack_preparation_mode_missing")
+            planning_metadata = metadata.get("professional_planning_metadata")
+            stage = (
+                planning_metadata.get("professional_reference_stage")
+                if isinstance(planning_metadata, dict)
+                else None
+            )
+            if stage not in {"standard_front", "three_quarter", "profile"}:
+                raise CapabilityActivationError("professional_anchor_pack_preparation_stage_invalid")
+            expected_metadata = self.professional_mode_runtime_bridge.anchor_pack_preparation_metadata(
+                view_role=stage
+            )
+            if planning_metadata != expected_metadata:
+                raise CapabilityActivationError("professional_anchor_pack_preparation_contract_invalid")
+            identity_roles = {
+                "face_reference",
+                "identity",
+                "portrait_identity_reference",
+            }
+            identity_assets = [
+                asset
+                for asset in self._uploaded_assets(request)
+                if str(asset.role.value if hasattr(asset.role, "value") else asset.role).strip().lower()
+                in identity_roles
+                and str(asset.file_path or "").strip()
+            ]
+            if not identity_assets:
+                raise CapabilityActivationError("professional_anchor_pack_root_evidence_missing")
+            safe_metadata = {
+                **metadata,
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": dict(planning_metadata),
+            }
+            return None, None, request.model_copy(update={"metadata": safe_metadata})
         # Product API persists the server-owned planning provenance as a
         # boolean (``True``) while the public request contract uses the
         # explicit string ``"professional"``.  Normalize that internal
@@ -3304,6 +3344,8 @@ class ScenarioRuntime:
         resolution = self.scenario_registry.resolve(request.scenario_selection)
         specialized = self._specialized_scenario_plan_from_metadata(request, resolution)
         planned = specialized.required_capability_ids if specialized is not None else []
+        if request.metadata.get("professional_anchor_pack_preparation") is True:
+            planned = [*planned, "portrait_identity", "reference_channel_policy", "human_realism"]
         return self._dedupe_preserve_order([str(item) for item in [*explicit, *planned] if str(item).strip()])
 
     def _uploaded_assets(self, request: ScenarioRuntimeRequest) -> list[UploadedAssetInfo]:
