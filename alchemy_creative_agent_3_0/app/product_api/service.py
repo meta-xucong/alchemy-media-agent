@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import re
 from time import sleep
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from uuid import uuid4
 
 from ..app_shell.navigation import get_navigation_entry
@@ -32,7 +32,7 @@ from ..photography_profiles import (
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
-from ..visual_assets import InMemoryVisualAssetCatalog, bind_professional_mode
+from ..visual_assets import InMemoryVisualAssetCatalog, ProfessionalModeRuntimeBridge, bind_professional_mode
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -811,6 +811,8 @@ class V3ProductApiService:
         *,
         trusted_photography_continuation: bool = False,
         trusted_capability_plan_reuse: bool = False,
+        trusted_professional_anchor_preparation: bool = False,
+        professional_anchor_view_role: Literal["standard_front", "three_quarter", "profile"] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         self._assert_runtime_metadata_server_owned(
@@ -818,10 +820,23 @@ class V3ProductApiService:
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
         )
         self._bind_server_job_instance_id(create_request)
-        self._bind_professional_mode(
-            create_request,
-            trusted_capability_plan_reuse=trusted_capability_plan_reuse,
-        )
+        if trusted_professional_anchor_preparation:
+            if professional_anchor_view_role is None:
+                raise ValueError("professional_anchor_pack_preparation_stage_invalid")
+            planning_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+                view_role=professional_anchor_view_role
+            )
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "professional_mode": True,
+                "professional_anchor_pack_preparation": True,
+                "professional_planning_metadata": planning_metadata,
+            }
+        else:
+            self._bind_professional_mode(
+                create_request,
+                trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+            )
         if trusted_capability_plan_reuse:
             self._validate_and_bind_trusted_capability_plan_reuse(create_request)
         self._resolve_and_pin_photographer_profile(
@@ -899,6 +914,26 @@ class V3ProductApiService:
 
     def create_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         return self.create_creative_job(request)
+
+    def create_professional_anchor_preparation_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        view_role: Literal["standard_front", "three_quarter", "profile"],
+    ) -> ProductJobStatus:
+        """Internal host entry for a pre-activation Face Identity view.
+
+        The caller supplies the ordinary user request and admitted upload ID.
+        This method adds only the server-owned Professional preparation
+        contract before the normal ScenarioRuntime path. It cannot activate a
+        pack, bypass shared review, or be invoked through the public route.
+        """
+
+        return self._create_creative_job(
+            request,
+            trusted_professional_anchor_preparation=True,
+            professional_anchor_view_role=view_role,
+        )
 
     def get_job_record(self, job_id: str) -> ProductJobRecord | None:
         """Internal Project Mode lookup; no new public low-level API is exposed."""
@@ -7508,6 +7543,7 @@ class V3ProductApiService:
             "professional_planning_metadata",
             "professional_mode_execution",
             "professional_mode_binding_error",
+            "professional_anchor_pack_preparation",
         }
     )
 

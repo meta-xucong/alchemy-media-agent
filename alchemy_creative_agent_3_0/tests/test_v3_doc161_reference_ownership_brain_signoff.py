@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+from io import BytesIO
 
 import pytest
 from PIL import Image
@@ -12,6 +14,8 @@ from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payloa
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainReferenceChannelOwnershipDecisionMissing,
 )
+from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
@@ -267,3 +271,66 @@ def test_doc161_professional_anchor_preparation_rejects_missing_root_before_brai
     assert result.status.value == "blocked"
     assert "professional_anchor_pack_root_evidence_missing" in " ".join(result.warnings)
     assert provider.requests == []
+
+
+def test_doc161_product_api_internal_anchor_job_injects_server_owned_contract(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    provider = EcommerceRemoteBrainTestProvider()
+    service = V3ProductApiService(
+        scenario_runtime=ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    )
+    service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "uploads")
+    image = Image.new("RGB", (640, 640), (184, 140, 120))
+    content = BytesIO()
+    image.save(content, format="PNG")
+    raw = content.getvalue()
+    upload = service.create_uploaded_asset(
+        {
+            "filename": "authorized-root.png",
+            "mime_type": "image/png",
+            "size_bytes": len(raw),
+            "role": "face_reference",
+        }
+    )
+    service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": base64.b64encode(raw).decode("ascii"), "mime_type": "image/png"},
+    )
+    service.complete_uploaded_asset(upload.asset_id)
+
+    status = service.create_professional_anchor_preparation_job(
+        {
+            "user_input": "Prepare one straight-on Face Identity anchor of this same person.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_asset_ids": [upload.asset_id],
+            "metadata": {
+                "project_id": "project_doc161_internal_host",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        },
+        view_role="standard_front",
+    )
+
+    assert status.status == ProductJobStatusValue.PLANNED
+    record = service.get_job_record(status.job_id)
+    assert record is not None
+    assert record.request.metadata["professional_anchor_pack_preparation"] is True
+    assert record.request.metadata["professional_planning_metadata"][
+        "professional_reference_stage"
+    ] == "standard_front"
+    assert record.request.metadata["capability_activation_plan"]["metadata"][
+        "professional_face_identity_quality_contract"
+    ]["owner"] == "remote_v3_llm_brain"
+
+
+def test_doc161_public_job_cannot_impersonate_anchor_preparation() -> None:
+    service = V3ProductApiService()
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Impersonate an internal preparation job.",
+                "scenario_selection": {"scenario_id": "general_creative"},
+                "metadata": {"professional_anchor_pack_preparation": True},
+            }
+        )
