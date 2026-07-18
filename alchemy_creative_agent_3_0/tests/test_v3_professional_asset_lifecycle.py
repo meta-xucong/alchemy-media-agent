@@ -78,13 +78,14 @@ def _handlers(tmp_path, *, anchor_pack_preparation_host=None):
 
 
 class _PreparationHost:
-    def __init__(self, root_source_asset_id: str) -> None:
+    def __init__(self, root_source_asset_id: str, catalog: PersistentVisualAssetCatalog) -> None:
         self.root_source_asset_id = root_source_asset_id
+        self.catalog = catalog
         self.calls = []
 
     def prepare(self, *, project_id, people_asset, root_source_provenance):
         self.calls.append((project_id, people_asset.people_asset_id, root_source_provenance.source_asset_id))
-        return AnchorPackPreparationResult(
+        result = AnchorPackPreparationResult(
             status="review",
             pack=_pack(people_asset.people_asset_id, project_id, self.root_source_asset_id).model_copy(
                 update={"status": "review", "user_activation_confirmed": False}
@@ -92,6 +93,14 @@ class _PreparationHost:
             attempts=[],
             winner_candidate_id="candidate_standard_front_3",
         )
+        self.catalog.save_pack(result.pack, project_id=project_id, event_type="review")
+        return result
+
+    def activate(self, pack, *, confirmed: bool):
+        assert confirmed is True
+        active = pack.model_copy(update={"status": "active", "user_activation_confirmed": True})
+        self.catalog.save_pack(active, project_id=active.root_source_provenance.project_id, event_type="activate")
+        return active
 
 
 def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> None:
@@ -144,7 +153,7 @@ def test_people_asset_prepare_route_fails_closed_without_shared_host(tmp_path) -
 
 def test_people_asset_prepare_route_uses_injected_shared_host_and_preserves_binding(tmp_path) -> None:
     handlers, _, project_id, root_source_asset_id = _handlers(tmp_path)
-    host = _PreparationHost(root_source_asset_id)
+    host = _PreparationHost(root_source_asset_id, handlers.service.visual_asset_catalog)
     # Recreate the facade with the same service/catalog and the explicit host;
     # no route is allowed to create candidates or prompt evidence itself.
     handlers = V3ProductRouteHandlers(
@@ -164,6 +173,13 @@ def test_people_asset_prepare_route_uses_injected_shared_host_and_preserves_bind
     assert prepared["preparation"]["status"] == "review"
     assert prepared["preparation"]["pack"]["status"] == "review"
     assert host.calls == [(project_id, "child_asset", root_source_asset_id)]
+    activated = handlers.post_project_people_asset_activate(
+        project_id,
+        "child_asset",
+        {"pack_version_id": "pack_child_v1", "confirm_activation": True},
+    )
+    assert activated["lifecycle_state"] == "active"
+    assert activated["people_asset"]["active_pack_version_id"] == "pack_child_v1"
 
 
 def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmation(tmp_path) -> None:

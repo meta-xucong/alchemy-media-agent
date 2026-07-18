@@ -74,6 +74,14 @@ class AnchorPackPreparationHost(Protocol):
     ) -> AnchorPackPreparationResult:
         """Prepare a complete pack without accepting caller-supplied prompt evidence."""
 
+    def activate(
+        self,
+        pack: IdentityAnchorPackVersion,
+        *,
+        confirmed: bool,
+    ) -> IdentityAnchorPackVersion:
+        """Activate only after the explicit user confirmation route is called."""
+
 
 class PeopleAssetLifecycleService:
     """Project-scoped catalog operations used by Product API and hosts."""
@@ -171,6 +179,10 @@ class PeopleAssetLifecycleService:
         pack = self.catalog.get_pack(project_id, people_asset_id, request.pack_version_id)
         if pack is None:
             raise KeyError("professional_people_asset_pack_not_found")
+        if pack.status == "review":
+            if self.anchor_pack_host is None:
+                raise RuntimeError("professional_anchor_pack_activate_unavailable")
+            pack = self.anchor_pack_host.activate(pack, confirmed=True)
         if (
             asset.root_source_provenance is None
             or pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id

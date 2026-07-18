@@ -42,7 +42,8 @@ POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id
      shared host is configured
 
 POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate
-  -> requires an existing active, complete pack_version_id
+  -> requires an existing complete reviewed pack_version_id and an injected
+     shared activator; the activator changes review -> active
   -> requires confirm_activation=true
   -> updates the People Asset and Face Identity active pointers
   -> appends catalog history
@@ -54,7 +55,8 @@ serial root/front/three-quarter/profile evidence, and a `review` pack before
 `activate()` can make the pack active. No route accepts arbitrary candidate
 metadata as a substitute for that service.
 
-The prepare route is only a formal host seam; it is not a local generator. The
+The prepare/activation route is only a formal shared-service seam; it is not a
+local generator or a metadata switch. The
 controlled app intentionally leaves the host unset until the authenticated
 runtime wires the existing shared Brain/Provider/Vision adapters. Therefore a
 prepare request cannot silently fall back to General, MCP-only planning, a
