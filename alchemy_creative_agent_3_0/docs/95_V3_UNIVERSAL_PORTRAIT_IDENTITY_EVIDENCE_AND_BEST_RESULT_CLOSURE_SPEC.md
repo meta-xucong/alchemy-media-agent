@@ -121,8 +121,40 @@ The complete original remains in project history. It is sent upstream only
 when Doc93 explicitly assigns source-owned hair, wardrobe, appearance, scene,
 lighting, camera, mood, or style channels.
 
-The provider prompt must explicitly state that both derivatives are
-complementary crops of one single source person. Feature-detail evidence owns
+### 4.4 Explicit Developmental-Stage Transition Exception
+
+The default two-derivative pyramid remains authoritative for same-stage
+identity continuity. A narrower evidence-authority rule applies only when all
+of the following are already frozen by the shared runtime:
+
+```text
+the source is an uploaded portrait identity root
+the current request explicitly owns a different developmental stage
+Human Realism resolves age_fidelity as follow_explicit_prompt
+the operation is not Professional anchor-pack preparation or a serial stage
+```
+
+For that first cross-stage transformation, the Provider receives the
+feature-detail identity derivative without the source head-geometry
+derivative. The feature derivative preserves the person's identity-critical
+brow-eye and nose-mouth relationships while avoiding an additional hard lock
+on the source's apparent developmental geometry. This is not weaker identity
+handling: it is a conflict-resolution rule between identity ownership and the
+current request's explicit stage ownership.
+
+The runtime does not estimate an age, inspect facial ratios, select a child
+face type or author a renderer phrase. The decision is made only from the
+frozen semantic ownership contract. After a reviewed result establishes the
+requested stage, that selected result can become ordinary same-stage
+continuity evidence under the default two-derivative rule.
+
+Professional anchor-pack preparation and its serial 2/3/5 reference budget are
+unchanged. Same-stage General, E-Commerce and Photography portrait work is
+unchanged. Legacy records remain readable and are not reinterpreted.
+
+When the default pair applies, the provider prompt must explicitly state that
+both derivatives are complementary crops of one single source person.
+Feature-detail evidence owns
 the brow-eye and nose-mouth relationships; head-geometry evidence owns the
 forehead, face ratio, temple-cheek-jaw contour, jaw slope, and chin scale. The
 model must never interpret them as two candidate identities or average them

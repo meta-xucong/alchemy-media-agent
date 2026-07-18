@@ -1199,7 +1199,11 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
             return True
 
         def run(self, request):  # noqa: ANN001
-            if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
+            if request.stage in {
+                "provider_prompt_finalize",
+                "provider_prompt_human_naturalness_resign",
+                "provider_prompt_developmental_presence_verify",
+            }:
                 canonical_context = request.metadata.get("canonical_prompt_context")
                 preflight = (
                     canonical_context.get("final_prompt_semantic_preflight")
@@ -1227,6 +1231,25 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                     if isinstance(decision_requirement, dict) and decision_requirement.get("required") is True
                     else {}
                 )
+                presence_requirement = (
+                    canonical_context.get("human_developmental_presence_decision")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
+                presence_receipt = (
+                    {
+                        "human_developmental_presence_decision": {
+                            "contract_version": "v3_human_developmental_presence_decision_v2",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "resolution_mode": "holistic_person_and_situation_resolution",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if isinstance(presence_requirement, dict)
+                    and presence_requirement.get("required") is True
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
@@ -1235,6 +1258,7 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                             "review_status": "approved",
                             **receipt,
                             **decision_receipt,
+                            **presence_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]
@@ -1358,7 +1382,11 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
             return True
 
         def run(self, request):  # noqa: ANN001
-            if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
+            if request.stage in {
+                "provider_prompt_finalize",
+                "provider_prompt_human_naturalness_resign",
+                "provider_prompt_developmental_presence_verify",
+            }:
                 canonical_context = request.metadata.get("canonical_prompt_context")
                 preflight = (
                     canonical_context.get("final_prompt_semantic_preflight")
@@ -1386,6 +1414,25 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                     if isinstance(decision_requirement, dict) and decision_requirement.get("required") is True
                     else {}
                 )
+                presence_requirement = (
+                    canonical_context.get("human_developmental_presence_decision")
+                    if isinstance(canonical_context, dict)
+                    else None
+                )
+                presence_receipt = (
+                    {
+                        "human_developmental_presence_decision": {
+                            "contract_version": "v3_human_developmental_presence_decision_v2",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "resolution_mode": "holistic_person_and_situation_resolution",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if isinstance(presence_requirement, dict)
+                    and presence_requirement.get("required") is True
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
@@ -1394,6 +1441,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                             "review_status": "approved",
                             **receipt,
                             **decision_receipt,
+                            **presence_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]

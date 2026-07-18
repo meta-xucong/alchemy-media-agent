@@ -63,7 +63,10 @@ class PhotographyRemoteBrainTestProvider:
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
         decision_requirement = canonical_context.get("human_naturalness_decision") if isinstance(canonical_context, dict) else None
         requires_human_naturalness_decision = bool(
-            request.stage == "provider_prompt_human_naturalness_resign"
+            request.stage in {
+                "provider_prompt_human_naturalness_resign",
+                "provider_prompt_developmental_presence_verify",
+            }
             or (
                 isinstance(decision_requirement, dict)
                 and decision_requirement.get("required") is True
@@ -82,6 +85,41 @@ class PhotographyRemoteBrainTestProvider:
             and ownership_requirement.get("contract_version")
             == "v3_reference_channel_ownership_decision_v1"
             and ownership_requirement.get("owner") == "remote_v3_llm_brain"
+        )
+        age_requirement = (
+            canonical_context.get("human_developmental_age_decision")
+            if isinstance(canonical_context, dict)
+            else None
+        )
+        requires_developmental_age_decision = bool(
+            isinstance(age_requirement, dict)
+            and age_requirement.get("required") is True
+            and age_requirement.get("contract_version")
+            == "v3_human_developmental_age_decision_v2"
+            and age_requirement.get("age_fidelity") == "follow_explicit_prompt"
+            and age_requirement.get("source_age_inheritance")
+            == "not_automatic_when_current_prompt_assigns_age"
+            and age_requirement.get("developmental_age_coherence")
+            == "whole_person_requested_stage"
+            and age_requirement.get("developmental_presence")
+            == "integrated_stage_coherent_face_attention_and_affect"
+            and age_requirement.get("owner") == "remote_v3_llm_brain"
+        )
+        presence_requirement = (
+            canonical_context.get("human_developmental_presence_decision")
+            if isinstance(canonical_context, dict)
+            else None
+        )
+        requires_developmental_presence_decision = bool(
+            isinstance(presence_requirement, dict)
+            and presence_requirement.get("required") is True
+            and presence_requirement.get("contract_version")
+            == "v3_human_developmental_presence_decision_v2"
+            and presence_requirement.get("developmental_presence")
+            == "integrated_stage_coherent_face_attention_and_affect"
+            and presence_requirement.get("resolution_mode")
+            == "holistic_person_and_situation_resolution"
+            and presence_requirement.get("owner") == "remote_v3_llm_brain"
         )
         payload["canonical_provider_prompts"] = [
             {
@@ -112,6 +150,34 @@ class PhotographyRemoteBrainTestProvider:
                         }
                     }
                     if requires_reference_ownership_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "human_developmental_age_decision": {
+                            "contract_version": "v3_human_developmental_age_decision_v2",
+                            "age_fidelity": "follow_explicit_prompt",
+                            "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                            "developmental_age_coherence": "whole_person_requested_stage",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_developmental_age_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "human_developmental_presence_decision": {
+                            "contract_version": "v3_human_developmental_presence_decision_v2",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "resolution_mode": "holistic_person_and_situation_resolution",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_developmental_presence_decision
                     else {}
                 ),
             }

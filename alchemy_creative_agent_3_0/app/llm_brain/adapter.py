@@ -917,6 +917,7 @@ def _requires_human_naturalness_decision(request: BrainRunRequest) -> bool:
         and (
             request.stage in {
                 "provider_prompt_human_naturalness_resign",
+                "provider_prompt_developmental_presence_verify",
                 "provider_prompt_professional_capture_resign",
             }
             or (
@@ -1050,8 +1051,11 @@ def _required_human_developmental_presence_requirement(
     if not isinstance(decision, dict):
         return {}
     expected = {
-        "contract_version": "v3_human_developmental_presence_decision_v1",
+        "contract_version": "v3_human_developmental_presence_decision_v2",
         "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+        "resolution_mode": (
+            "holistic_person_and_situation_resolution"
+        ),
         "owner": "remote_v3_llm_brain",
     }
     if not (

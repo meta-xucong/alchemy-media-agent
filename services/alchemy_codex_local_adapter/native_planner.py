@@ -479,6 +479,7 @@ class CodexNativeImageGenPlanner:
         allowed_stages = {
             "provider_prompt_finalize",
             "provider_prompt_human_naturalness_resign",
+            "provider_prompt_developmental_presence_verify",
             "provider_prompt_professional_capture_resign",
         }
         raw_stages = audit.get("canonical_provider_prompt_stages")
@@ -496,10 +497,14 @@ class CodexNativeImageGenPlanner:
             if isinstance(item, dict) and str(item.get("status") or "") in {"approved", "rewritten"}
         ] if isinstance(raw_decisions, list) else []
         historical_two_pass = ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+        developmental_two_pass = [
+            "provider_prompt_finalize",
+            "provider_prompt_developmental_presence_verify",
+        ]
         professional_two_pass = ["provider_prompt_finalize", "provider_prompt_professional_capture_resign"]
         professional_three_pass = [
             "provider_prompt_finalize",
-            "provider_prompt_human_naturalness_resign",
+            "provider_prompt_developmental_presence_verify",
             "provider_prompt_professional_capture_resign",
         ]
         combined_finalizer = ["provider_prompt_finalize"]
@@ -508,6 +513,7 @@ class CodexNativeImageGenPlanner:
             not in {
                 tuple(combined_finalizer),
                 tuple(historical_two_pass),
+                tuple(developmental_two_pass),
                 tuple(professional_two_pass),
                 tuple(professional_three_pass),
             }

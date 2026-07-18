@@ -797,8 +797,11 @@ class ScenarioRuntime:
             if presence_requirement == "integrated_stage_coherent_face_attention_and_affect":
                 canonical_prompt_context["human_developmental_presence_decision"] = {
                     "required": True,
-                    "contract_version": "v3_human_developmental_presence_decision_v1",
+                    "contract_version": "v3_human_developmental_presence_decision_v2",
                     "developmental_presence": presence_requirement,
+                    "resolution_mode": (
+                        "holistic_person_and_situation_resolution"
+                    ),
                     "owner": "remote_v3_llm_brain",
                     "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
                 }
@@ -881,7 +884,7 @@ class ScenarioRuntime:
             resign_context = self._human_naturalness_resigning_context(canonical_prompt_context)
             resign_request = signing_request.model_copy(
                 update={
-                    "stage": "provider_prompt_human_naturalness_resign",
+                    "stage": "provider_prompt_developmental_presence_verify",
                     "metadata": {
                         "canonical_prompt_context": resign_context,
                         "candidate_canonical_provider_prompts": [
@@ -918,7 +921,7 @@ class ScenarioRuntime:
                 "human_developmental_presence_resign_completed": True,
                 "human_developmental_presence_resign_mode": "shared_with_age_transition_recheck",
             }
-            final_stage = "provider_prompt_human_naturalness_resign"
+            final_stage = "provider_prompt_developmental_presence_verify"
             finalizer_stages.append(final_stage)
         anchor_decision = canonical_prompt_context.get("professional_anchor_view_decision")
         serial_capture_resign_required = bool(

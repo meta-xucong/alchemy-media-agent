@@ -2,8 +2,8 @@
 
 ## Status
 
-Architecture and visual-acceptance authority for the child-feel optimization
-stage. This document refines Doc147/155 expression ownership and Doc166
+Accepted controlled foundation refinement for developmental facial vitality.
+This document refines Doc147/155 expression ownership and Doc166
 developmental-age coherence. It does not create a child module, kidswear
 recipe, template route, Provider path, facial measurement model or local prompt
 patch.
@@ -114,6 +114,19 @@ features, benchmark identity or renderer phrase.
 Legacy v7/v1 records remain readable. They do not certify the fresh Doc167
 obligation and cannot be silently upgraded.
 
+The first controlled iteration showed that a schema-only v1 approval could
+still accompany a Brain prompt reduced to iconic age features. Fresh work
+therefore uses the v2 presence receipt with one indivisible application mode:
+
+```text
+resolution_mode =
+  holistic_person_and_situation_resolution
+```
+
+This is not a face recipe. It proves the Brain rejected feature-list and stock-
+expression shortcuts before approving its own complete prompt. Historical v1
+receipts remain readable but cannot certify this stronger application duty.
+
 ## 5. Remote Brain final-signoff duty
 
 When the obligation applies, the Brain must ask a perceptual question before
@@ -133,6 +146,14 @@ The Brain must preserve:
 - user-owned expression, style, wardrobe, scene and complexion;
 - the possibility of lean, round, quiet, serious, lively or smiling people;
 - the difference between a neutral identity capture and a lifestyle moment.
+
+The initial semantic profile must also preserve explicit ownership. When the
+user assigns the current person a developmental stage and explicitly says the
+reference's apparent stage is not inherited, the Brain records
+`current_request_assigns_stage` even when the source stage is unavailable or
+looks similar. This is not local age estimation: it is the Brain honoring the
+user's unambiguous ownership decision. `preserve_reference_stage` is reserved
+for continuity requests that leave developmental stage owned by the reference.
 
 The Brain must not satisfy the contract with generic labels alone, including
 `childlike`, `youthful`, `cute`, `natural`, `lively`, `baby fat`, `big eyes` or
@@ -272,3 +293,72 @@ This work must not add:
 Doc167 changes no foundation architecture. It strengthens one shared Human
 Realism semantic obligation, its Brain sign-off receipt and its existing shared
 review evidence.
+
+## 13. Controlled iteration record
+
+The controlled comparison isolated prompt authorship from reference evidence.
+All results used the same authorized identity source, the same current-stage
+ownership and the same Brain-owned prompt path. The supplied benchmark boards
+were viewed only by the human evaluator and were never Provider inputs.
+
+| Iteration | Identity evidence | Neutral | Lively | Finding |
+| --- | --- | ---: | ---: | --- |
+| v2 presence signoff | Doc95 feature + head geometry | 8.8 | 8.6 | clean realism and improved stage reading, but lower-face maturity and source-stage geometry remained visible |
+| isolated evidence experiment | feature detail only | 8.9 | 8.8-8.9 | stage-coherent facial fullness and attention moved materially closer to the benchmark while recognizable identity remained |
+| pose-geometry control | feature + pose geometry | below feature-only | not advanced | stronger geometry evidence reintroduced the source's older apparent stage |
+
+The evidence experiment establishes a generic conflict: when the current
+request explicitly owns a different developmental stage, hard-locking the
+source head geometry can contradict that ownership even though the canonical
+Prompt is correct. Doc95 therefore defines a narrow first-transition evidence
+profile. It uses only the stage-flexible feature relationship derivative and
+does not add face wording, age classification, benchmark features or a new
+module.
+
+### 13.1 Final canonical Local MCP acceptance
+
+The normal Local MCP/Web materializer repeated the experiment without an
+adapter bypass:
+
+```text
+requested outputs: 2
+Brain stages:
+  provider_prompt_finalize
+  provider_prompt_developmental_presence_verify
+admitted portrait references per output: 1
+admitted derivative: portrait_identity_crop
+fallback used: false
+Prompt hashes:
+  neutral  0a2c2fd850b943a7875b8bbd4064f200d6a43bb12b5e4c1585f97b577d868411
+  lively   ce886b6efa2283d4b999d55c4c7b6d3f6a333bfec54deb568dd0c383636e8fb5
+generated pixel hashes:
+  neutral  51489a4bc316b486eaf640de6da8ec140bbdcd3eae1d6982cb12696d58117fc9
+  lively   bb18c905d4c3740e28ca3db08e24d1174b259bc964d924a9372c03f019d42f13
+```
+
+Shared Vision returned `hybrid / verified / pass` for both outputs. Neutral
+scored overall 0.92 and Human Realism 0.94; lively scored overall 0.91 and
+Human Realism 0.93. No issue codes were returned. The reviewer explicitly
+found that the neutral subject read at the requested stage with a coherent
+non-smiling presence, and that the lively expression was situation-owned
+rather than a presenter smile.
+
+External benchmark comparison:
+
+| Dimension | Neutral | Lively | Threshold |
+| --- | ---: | ---: | ---: |
+| Photographic realism | 9.2 | 9.1 | 8.5 |
+| Developmental facial reading | 9.0 | 9.2 | 8.5 |
+| Soft-tissue / lower-face coherence | 9.0 | 9.1 | 8.5 |
+| Attention and affect authenticity | 8.8 | 9.3 | 8.5 |
+| Mouth / teeth / expression coherence | 8.8 | 9.3 | 8.5 |
+| Clean commercial capture | 9.4 | 9.3 | 8.5 |
+| Overall child-stage vitality | 9.0 | 9.2 | 8.8 |
+
+The neutral image no longer depends on a smile to read at the requested
+stage. The lively image shows eye, cheek, mouth and non-uniform visible dental
+response as one spontaneous event rather than the historical fixed commercial
+grin. Both retain clean real-camera material and recognizable identity
+direction. The controlled Doc167 quality threshold is therefore met, subject
+to the final repository regression and isolation checks; this does not by
+itself open any production template gate.

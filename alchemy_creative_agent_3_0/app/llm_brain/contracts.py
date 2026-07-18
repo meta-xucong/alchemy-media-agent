@@ -124,10 +124,16 @@ class BrainDevelopmentalPresenceDecision(V3BaseModel):
     measurement, expression choice or renderer fragment.
     """
 
-    contract_version: Literal["v3_human_developmental_presence_decision_v1"]
+    contract_version: Literal[
+        "v3_human_developmental_presence_decision_v1",
+        "v3_human_developmental_presence_decision_v2",
+    ]
     developmental_presence: Literal[
         "integrated_stage_coherent_face_attention_and_affect"
     ]
+    resolution_mode: Literal[
+        "holistic_person_and_situation_resolution"
+    ] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 

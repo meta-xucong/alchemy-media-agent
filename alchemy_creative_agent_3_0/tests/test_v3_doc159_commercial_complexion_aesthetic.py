@@ -46,7 +46,7 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "visibly includes a person or model" in SYSTEM_PROMPT
     assert "do not invent a hidden bright-complexion treatment" in SYSTEM_PROMPT
     assert "never inherit that reference's identity, age, face, hair, wardrobe, scene, or mood" in SYSTEM_PROMPT
-    assert "historical adult or child sample" in SYSTEM_PROMPT
+    assert "historical demographic sample" in SYSTEM_PROMPT
     assert "softly neutral and light with restrained peach-pink warmth" in SYSTEM_PROMPT
     assert "brightness come from clean scene light, not lifted exposure" in SYSTEM_PROMPT
     assert "follow the face's planes instead of diffusing across the whole face" in SYSTEM_PROMPT

@@ -2365,7 +2365,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 reference_constraint = f"{reference_constraint} Selected-reference closure: {'; '.join(closure_prompt_rules[:4])}."
             if reference_conflict_rules and human_photo_context and "product" not in use_policy and "brand" not in use_policy:
                 reference_constraint = f"{reference_constraint} Prompt conflict rule: {'; '.join(reference_conflict_rules[:4])}."
-            portrait_identity_derivative_kinds = self._professional_identity_derivative_kinds(request, asset)
+            portrait_identity_derivative_kinds = self._portrait_identity_derivative_kinds(request, asset)
             derivatives = self._reference_truth_derivatives(
                 asset,
                 truth_layers,
@@ -2933,6 +2933,42 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if self._is_selected_generated_source(asset):
             return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
         return None
+
+    def _portrait_identity_derivative_kinds(
+        self,
+        request: GenerationRequest,
+        asset: dict[str, Any],
+    ) -> tuple[str, ...] | None:
+        """Select identity evidence from frozen ownership, never face semantics.
+
+        Same-stage portrait continuity keeps Doc95's complementary feature and
+        head-geometry evidence.  Professional serial anchor preparation keeps
+        its independently frozen 2/3/5 reference contract.  The only shared
+        exception is an uploaded identity root whose current-request-owned
+        developmental stage is explicitly allowed to differ from the source:
+        its first transition uses the stage-flexible feature relationship crop
+        without hard-locking the source head geometry.  A reviewed result can
+        then become ordinary same-stage continuity evidence.
+
+        This is an evidence-authority decision.  It does not infer an age,
+        describe a face, author Provider prose, or classify a scenario.
+        """
+
+        professional_kinds = self._professional_identity_derivative_kinds(request, asset)
+        if professional_kinds is not None:
+            return professional_kinds
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if (
+            metadata.get("professional_anchor_pack_preparation")
+            or metadata.get("professional_identity_reference_strategy")
+        ):
+            return None
+        if not self._is_uploaded_truth_source(asset) or asset.get("output_id"):
+            return None
+        if self._human_realism_age_fidelity(request) != "follow_explicit_prompt":
+            return None
+        return ("portrait_identity_crop",)
 
     def _assert_professional_view_evidence_ready(
         self,

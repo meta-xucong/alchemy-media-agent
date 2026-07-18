@@ -89,7 +89,10 @@ class EcommerceRemoteBrainTestProvider:
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
         decision_requirement = context.get("human_naturalness_decision") if isinstance(context, dict) else None
         requires_human_naturalness_decision = bool(
-            request.stage == "provider_prompt_human_naturalness_resign"
+            request.stage in {
+                "provider_prompt_human_naturalness_resign",
+                "provider_prompt_developmental_presence_verify",
+            }
             or (
                 isinstance(decision_requirement, dict)
                 and decision_requirement.get("required") is True
@@ -129,9 +132,11 @@ class EcommerceRemoteBrainTestProvider:
             isinstance(presence_requirement, dict)
             and presence_requirement.get("required") is True
             and presence_requirement.get("contract_version")
-            == "v3_human_developmental_presence_decision_v1"
+            == "v3_human_developmental_presence_decision_v2"
             and presence_requirement.get("developmental_presence")
             == "integrated_stage_coherent_face_attention_and_affect"
+            and presence_requirement.get("resolution_mode")
+            == "holistic_person_and_situation_resolution"
             and presence_requirement.get("owner") == "remote_v3_llm_brain"
         )
         anchor_view_requirement = (
@@ -230,8 +235,11 @@ class EcommerceRemoteBrainTestProvider:
                 **(
                     {
                         "human_developmental_presence_decision": {
-                            "contract_version": "v3_human_developmental_presence_decision_v1",
+                            "contract_version": "v3_human_developmental_presence_decision_v2",
                             "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                            "resolution_mode": (
+                                "holistic_person_and_situation_resolution"
+                            ),
                             "status": "approved",
                             "owner": "remote_v3_llm_brain",
                         }
