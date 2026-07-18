@@ -831,6 +831,14 @@ class V3ProductApiService:
                 "professional_mode": True,
                 "professional_anchor_pack_preparation": True,
                 "professional_planning_metadata": planning_metadata,
+                # These are server-owned transport selectors for the shared
+                # provider materializer.  Keeping them only inside the Brain
+                # planning context left the 2/3/5 serial evidence policy
+                # inactive at execution time.
+                "professional_identity_reference_strategy": planning_metadata[
+                    "professional_identity_reference_strategy"
+                ],
+                "professional_reference_stage": planning_metadata["professional_reference_stage"],
             }
         else:
             self._bind_professional_mode(
@@ -7544,6 +7552,8 @@ class V3ProductApiService:
             "professional_mode_execution",
             "professional_mode_binding_error",
             "professional_anchor_pack_preparation",
+            "professional_identity_reference_strategy",
+            "professional_reference_stage",
         }
     )
 

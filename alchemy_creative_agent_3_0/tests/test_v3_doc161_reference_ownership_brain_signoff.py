@@ -189,6 +189,7 @@ def test_doc161_professional_anchor_preparation_has_formal_quality_context() -> 
     assert metadata["professional_mode"] is True
     assert metadata["professional_anchor_pack_preparation"] is True
     assert metadata["professional_reference_stage"] == "standard_front"
+    assert metadata["professional_identity_reference_strategy"] == "serial_anchor_pack_root_reuse_v1"
     contract = metadata["professional_face_identity_quality_contract"]
     assert contract["priority_order"][0] == "same_person_likeness"
     assert contract["owner"] == "remote_v3_llm_brain"
@@ -316,6 +317,8 @@ def test_doc161_product_api_internal_anchor_job_injects_server_owned_contract(tm
     record = service.get_job_record(status.job_id)
     assert record is not None
     assert record.request.metadata["professional_anchor_pack_preparation"] is True
+    assert record.request.metadata["professional_identity_reference_strategy"] == "serial_anchor_pack_root_reuse_v1"
+    assert record.request.metadata["professional_reference_stage"] == "standard_front"
     assert record.request.metadata["professional_planning_metadata"][
         "professional_reference_stage"
     ] == "standard_front"

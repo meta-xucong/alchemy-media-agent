@@ -113,7 +113,7 @@ class ProfessionalModeRuntimeBridge:
             "professional_mode": True,
             "professional_anchor_pack_preparation": True,
             "professional_reference_stage": view_role,
-            "professional_identity_reference_strategy": "shared_serial_anchor_evidence",
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
             "professional_face_identity_quality_contract": (

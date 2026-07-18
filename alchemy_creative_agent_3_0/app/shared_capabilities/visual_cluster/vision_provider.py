@@ -513,6 +513,11 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         issue_codes.append("delivery_evidence_dimension_mismatch")
         score_dimensions.append("delivery_evidence_fidelity")
         sources.append("template_deliverable_owner")
+    professional_identity = _professional_identity_quality_contract(metadata, plan)
+    if professional_identity["applies"]:
+        issue_codes.extend(professional_identity["issue_codes"])
+        score_dimensions.extend(professional_identity["score_dimensions"])
+        sources.append("professional_face_identity_quality")
     human_authenticity_contract = _frozen_human_authenticity_contract(review_contracts, active_ids)
     return {
         "activation_plan_id": composed.get("activation_plan_id") or plan.get("plan_id"),
@@ -526,8 +531,70 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         "requires_pixel_review": hard_semantic_contract,
         "apparel_construction_truth": apparel_truth,
         "template_delivery_evidence": template_evidence,
+        "professional_identity_quality": professional_identity,
         "human_authenticity_contract": human_authenticity_contract,
         "human_naturalness_verdict_required": bool(human_authenticity_contract),
+    }
+
+
+def _professional_identity_quality_contract(
+    metadata: dict[str, Any],
+    activation_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Project the frozen Professional identity objective into shared Vision.
+
+    This is a typed review schema, not a renderer recipe.  It is accepted only
+    from the frozen activation plan (or its envelope metadata projection), so
+    mutable request metadata cannot turn an ordinary portrait into a
+    Professional anchor review.
+    """
+
+    plan_metadata = activation_plan.get("metadata") if isinstance(activation_plan, dict) else None
+    if not isinstance(plan_metadata, dict):
+        envelope = _execution_envelope(metadata)
+        raw_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        plan_metadata = raw_plan.get("metadata") if isinstance(raw_plan, dict) else None
+    contract = (
+        plan_metadata.get("professional_face_identity_quality_contract")
+        if isinstance(plan_metadata, dict)
+        else None
+    )
+    if not isinstance(contract, dict) and _execution_envelope(metadata):
+        # Anchor preparation has no active pack yet, so its exact server-owned
+        # preparation contract is retained beside the frozen envelope rather
+        # than inside a normal Professional binding.  It is still immutable:
+        # Product API rejects these keys from public callers and Scenario
+        # Runtime validates the complete preparation metadata for equality.
+        preparation = metadata.get("professional_planning_metadata")
+        if isinstance(preparation, dict):
+            contract = preparation.get("professional_face_identity_quality_contract")
+    applies = bool(
+        isinstance(contract, dict)
+        and contract.get("contract_version") == "professional_face_identity_quality_v1"
+        and contract.get("owner") == "remote_v3_llm_brain"
+        and contract.get("review_owner") == "v3_shared_vision"
+    )
+    return {
+        "applies": applies,
+        "contract_version": contract.get("contract_version") if applies else None,
+        "score_dimensions": [
+            "same_person_readability",
+            "distinctive_feature_readability",
+            "age_identity_direction",
+            "human_realism",
+            "prompt_owned_channel_obedience",
+            "pose_compliance",
+            "visual_quality",
+            "ai_overperfection_penalty",
+        ] if applies else [],
+        "issue_codes": [
+            "professional_identity_mismatch",
+            "professional_distinctive_features_lost",
+            "professional_age_identity_drift",
+            "professional_prompt_owned_channel_ignored",
+            "professional_pose_noncompliance",
+            "professional_ai_overperfection",
+        ] if applies else [],
     }
 
 
@@ -660,6 +727,9 @@ def inspection_reference_paths(metadata: dict[str, Any], *, identity_only: bool 
     direct = metadata.get("uploaded_assets")
     if isinstance(direct, list):
         candidates.extend(item for item in direct if isinstance(item, dict))
+    selected = metadata.get("reference_assets")
+    if isinstance(selected, list):
+        candidates.extend(item for item in selected if isinstance(item, dict))
     ranked = sorted(
         candidates,
         key=lambda item: (
@@ -669,6 +739,7 @@ def inspection_reference_paths(metadata: dict[str, Any], *, identity_only: bool 
     )
     result: list[Path] = []
     seen: set[str] = set()
+    reference_limit = _inspection_reference_limit(metadata)
     for item in ranked:
         if identity_only:
             role_text = " ".join(
@@ -688,9 +759,26 @@ def inspection_reference_paths(metadata: dict[str, Any], *, identity_only: bool 
             continue
         seen.add(resolved)
         result.append(path)
-        if len(result) >= 2:
+        if len(result) >= reference_limit:
             break
     return result
+
+
+def _inspection_reference_limit(metadata: dict[str, Any]) -> int:
+    """Allow the three frozen source views only for a formal anchor stage."""
+
+    envelope = _execution_envelope(metadata)
+    plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+    projection = _professional_identity_quality_contract(metadata, plan if isinstance(plan, dict) else {})
+    strategy = str(metadata.get("professional_identity_reference_strategy") or "").strip()
+    stage = str(metadata.get("professional_reference_stage") or "").strip()
+    if (
+        projection["applies"]
+        and strategy == "serial_anchor_pack_root_reuse_v1"
+        and stage in {"standard_front", "three_quarter", "profile"}
+    ):
+        return 3
+    return 2
 
 
 def _inspection_reference_paths(metadata: dict[str, Any]) -> list[Path]:

@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import json
 
+from PIL import Image
+
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    active_review_contract,
+    inspection_reference_paths,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
@@ -161,3 +168,75 @@ def test_doc162_transport_failure_does_not_trigger_semantic_recovery(monkeypatch
     assert result.llm_used is False
     assert result.audit["remote_semantic_contract_recovery_attempted"] is False
 
+
+def _professional_review_metadata() -> dict:
+    planning = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="profile"
+    )
+    return {
+        "capability_execution_envelope": {
+            "activation_plan": {
+                "activation_mode": "enforced",
+                "metadata": {
+                    "professional_face_identity_quality_contract": planning[
+                        "professional_face_identity_quality_contract"
+                    ]
+                },
+            },
+            "resolved_constraint_ledger": {
+                "hard_semantic_contract": True,
+                "review_contracts": [],
+                "provider_projection": {},
+            },
+        },
+        "professional_planning_metadata": planning,
+        "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+        "professional_reference_stage": "profile",
+    }
+
+
+def test_doc162_professional_quality_contract_projects_typed_shared_vision_dimensions() -> None:
+    contract = active_review_contract(_professional_review_metadata())
+
+    assert contract["professional_identity_quality"]["applies"] is True
+    assert "same_person_readability" in contract["score_dimensions"]
+    assert "distinctive_feature_readability" in contract["score_dimensions"]
+    assert "prompt_owned_channel_obedience" in contract["score_dimensions"]
+    assert "professional_ai_overperfection" in contract["issue_codes"]
+
+
+def test_doc162_professional_profile_review_keeps_three_original_sources(tmp_path) -> None:
+    metadata = _professional_review_metadata()
+    references = []
+    for index, source_type in enumerate(("uploaded", "selected_output", "selected_output"), start=1):
+        path = tmp_path / f"reference-{index}.png"
+        Image.new("RGB", (32, 32), (index * 20, 40, 60)).save(path)
+        references.append(
+            {
+                "asset_id": f"source_{index}",
+                "file_path": str(path),
+                "source_type": source_type,
+                "role": "face_reference",
+                "use_policy": "identity",
+            }
+        )
+    metadata["reference_assets"] = references
+
+    assert inspection_reference_paths(metadata) == [
+        tmp_path / "reference-1.png",
+        tmp_path / "reference-2.png",
+        tmp_path / "reference-3.png",
+    ]
+
+
+def test_doc162_ordinary_review_still_caps_reference_sources_at_two(tmp_path) -> None:
+    metadata = _professional_review_metadata()
+    metadata.pop("professional_identity_reference_strategy")
+    references = []
+    for index in range(1, 4):
+        path = tmp_path / f"ordinary-{index}.png"
+        Image.new("RGB", (32, 32), (index * 20, 40, 60)).save(path)
+        references.append({"asset_id": f"ordinary_{index}", "file_path": str(path)})
+    metadata["reference_assets"] = references
+
+    assert len(inspection_reference_paths(metadata)) == 2
