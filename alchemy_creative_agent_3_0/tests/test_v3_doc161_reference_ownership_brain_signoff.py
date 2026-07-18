@@ -428,3 +428,14 @@ def test_doc162_internal_profile_anchor_resolves_root_and_two_reviewed_winners(t
         winners[0].output_id,
         winners[1].output_id,
     ]
+    generation_metadata = record.planning_result.generation_plans[0].metadata
+    assert generation_metadata["professional_identity_reference_strategy"] == (
+        "serial_anchor_pack_root_reuse_v1"
+    )
+    assert generation_metadata["professional_reference_stage"] == "profile"
+    frozen_references = generation_metadata["reference_assets"]
+    assert [item.get("output_id") for item in frozen_references[1:]] == [
+        winners[0].output_id,
+        winners[1].output_id,
+    ]
+    assert all(item.get("source_type") == "selected_output" for item in frozen_references[1:])

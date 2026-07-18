@@ -190,6 +190,10 @@ class ProductApiAnchorPackPreparationHost:
             and str(output_metadata.get("prompt_compilation_id") or "").strip()
             and int(output_metadata.get("provider_reference_image_count") or 0) == expected_reference_count
         )
+        if not parity_verified:
+            raise AnchorCandidateUnavailable(
+                "professional_anchor_prompt_reference_parity_unverified"
+            )
         candidate = AnchorCandidateResult(
             candidate_id=selected.candidate_id,
             view_id=f"view_{selected.output_id}",

@@ -249,6 +249,33 @@ def test_doc163_product_host_withholds_anchor_when_face_localization_falls_back(
     )
 
 
+def test_doc164_product_host_records_reference_parity_failure_without_crashing() -> None:
+    service = _SharedProductService()
+    original_generate = service.generate_job
+
+    def wrong_reference_budget(job_id, request):  # noqa: ANN001, ANN202
+        status = original_generate(job_id, request)
+        output = service.output_store.by_job[job_id][0]
+        output.metadata["provider_reference_image_count"] = 99
+        return status
+
+    service.generate_job = wrong_reference_budget  # type: ignore[method-assign]
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=_root(),
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["no_passing_front_candidate"]
+    assert len(result.generation_failures) == 3
+    assert {
+        item.failure_code for item in result.generation_failures
+    } == {"professional_anchor_prompt_reference_parity_unverified"}
+
+
 def test_doc163_selected_anchor_winner_has_canonical_provider_binding(tmp_path) -> None:
     upload_store = V3UploadedAssetStore(tmp_path / "uploads")
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")

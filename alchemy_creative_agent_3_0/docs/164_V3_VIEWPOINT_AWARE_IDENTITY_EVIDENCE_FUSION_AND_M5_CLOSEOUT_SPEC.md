@@ -39,6 +39,15 @@ Provider admission. All three three-quarter operations correctly failed closed w
 zero pixels. The correction freezes the server-resolved root plus prior-winner list
 as typed `reference_assets`; it does not change prompts, reference counts or review.
 
+The following run admitted the reviewed winner and produced real three-quarter
+pixels, but exposed one final parity projection defect: the frozen activation plan
+contained the serial reference strategy and stage while per-output generation
+metadata did not. Provider therefore used the ordinary two-derivative policy for
+both sources (four references) instead of the frozen three-reference stage policy.
+The runtime now projects only the validated strategy/stage from the immutable plan
+into each generation plan. A parity mismatch is recorded as a bounded candidate
+failure rather than escaping as a validation exception.
+
 ## 2. Authority and scope
 
 This document extends Docs 93, 95, 96, 161, 162 and 163. It is shared foundation

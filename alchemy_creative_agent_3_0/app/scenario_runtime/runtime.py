@@ -3091,6 +3091,32 @@ class ScenarioRuntime:
                 "requested_image_size": preparation.normalized_job_intent.effective_image_size,
             }
         )
+        plan_metadata = (
+            dict(preparation.activation_plan.metadata or {})
+            if preparation.activation_plan is not None
+            else {}
+        )
+        professional_strategy = str(
+            plan_metadata.get("professional_identity_reference_strategy") or ""
+        ).strip()
+        professional_stage = str(plan_metadata.get("professional_reference_stage") or "").strip()
+        if (
+            plan_metadata.get("professional_anchor_pack_preparation") is True
+            and professional_strategy == "serial_anchor_pack_root_reuse_v1"
+            and professional_stage in {"standard_front", "three_quarter", "profile"}
+        ):
+            # These selectors come from the frozen activation-plan metadata,
+            # not mutable request fields.  Provider materialization needs
+            # them to turn the serial root/winner chain into the exact 2/3/5
+            # view-conditioned derivative budget.  Omitting them silently
+            # expands each source to the ordinary two-derivative pair and
+            # invalidates prompt/reference parity.
+            frozen_provider_metadata.update(
+                {
+                    "professional_identity_reference_strategy": professional_strategy,
+                    "professional_reference_stage": professional_stage,
+                }
+            )
         generation_plans = [
             generation_plan.model_copy(
                 update={
