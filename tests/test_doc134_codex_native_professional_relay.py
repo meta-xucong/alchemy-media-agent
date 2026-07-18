@@ -134,6 +134,9 @@ def test_professional_relay_requires_server_owned_binding_and_projects_existing_
     assert result["provenance"]["professional_binding"]["pack_version_id"] == "pack_1"
     assert result["provenance"]["professional_reference_stage"] == "standard_front"
     assert result["provenance"]["professional_identity_reference_strategy"] == "serial_anchor_pack_root_reuse_v1"
+    assert result["provenance"]["professional_serial_intent_sha256"] == hashlib.sha256(
+        parsed_request.user_input.encode("utf-8")
+    ).hexdigest()
     assert result["provenance"]["delivery_state"] == "conversation_only_not_certified"
     frozen = capturing.last_result.metadata["capability_activation_plan"]
     assert frozen["metadata"]["professional_mode"] is True

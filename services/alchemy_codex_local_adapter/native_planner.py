@@ -280,6 +280,9 @@ class CodexNativeImageGenPlanner:
                     "professional_identity_view_ids": list(binding.identity_view_ids),
                     "professional_reference_stage": request.professional_reference_stage,
                     "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_serial_intent_sha256": hashlib.sha256(
+                        request.user_input.encode("utf-8")
+                    ).hexdigest(),
                     "professional_binding_evidence_sha256": self._binding_evidence_sha256(binding),
                 }
             )

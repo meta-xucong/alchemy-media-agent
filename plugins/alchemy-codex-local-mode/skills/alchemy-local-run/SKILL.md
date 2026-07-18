@@ -22,6 +22,11 @@ or Provider request failed.
    `file_path` and channel. A conversation upload is equivalent only when its
    host supplies that local path; otherwise stop with the planner's public-safe
    block rather than probing a Codex cache/session or substituting an image.
+   For a Professional front -> three-quarter -> profile sequence, reuse the
+   exact same frozen `user_input` at every stage. Only
+   `professional_reference_stage` and the append-only selected-winner
+   references may change. Compare `professional_serial_intent_sha256` across
+   stages and stop on a mismatch; never repair a mismatch by rewriting text.
 2. If the plan is blocked, show the public-safe reason and stop.  Do not switch
    to another template, a web renderer, a provider, or a local workaround.
 3. For every returned output, make exactly one Codex built-in image-generation

@@ -73,6 +73,12 @@ requests retain their existing derivative behavior. A supplementary stage is
 blocked before Provider dispatch if any required feature/pose evidence scope is
 missing.
 
+All stages in one serial sequence must reuse the exact same frozen
+`user_input`; the stage selector and append-only reviewed-winner references are
+the only moving inputs. Each result exposes `professional_serial_intent_sha256`
+so the Codex host can compare the frozen intent before rendering. A mismatch is
+non-counting and must stop rather than being repaired with local prompt text.
+
 For every successful output, Codex passes the returned `imagegen_prompt`
 verbatim to exactly one built-in image-generation call. The MCP returns the
 same final Unicode prompt and rendering parameters that Web Mode's Provider
