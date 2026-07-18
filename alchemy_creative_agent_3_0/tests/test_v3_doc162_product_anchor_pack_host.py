@@ -13,6 +13,7 @@ from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
 )
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.contracts import CreateCreativeJobRequest
+from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import ProductJobRecord, V3ProductApiService
 from alchemy_creative_agent_3_0.app.visual_assets.catalog import InMemoryVisualAssetCatalog
@@ -245,6 +246,60 @@ def test_doc163_product_host_withholds_anchor_when_face_localization_falls_back(
         "professional_anchor_face_localization_unverified" in attempt.review.issue_codes
         for attempt in result.attempts
     )
+
+
+def test_doc163_selected_anchor_winner_has_canonical_provider_binding(tmp_path) -> None:
+    upload_store = V3UploadedAssetStore(tmp_path / "uploads")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(asset_store=upload_store, output_store=output_store)
+    image = Image.new("RGB", (64, 64), (130, 110, 100))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    upload = service.create_uploaded_asset(
+        {
+            "filename": "root.png",
+            "mime_type": "image/png",
+            "size_bytes": len(buffer.getvalue()),
+            "role": "face_reference",
+        }
+    )
+    service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": encoded, "mime_type": "image/png"},
+    )
+    service.complete_uploaded_asset(upload.asset_id)
+    winner = output_store.save_base64_output(
+        job_id="source_job",
+        candidate_id="source_candidate",
+        asset_id="source_asset",
+        provider="test",
+        model="test",
+        encoded_image=encoded,
+        mime_type="image/png",
+    )
+    request = CreateCreativeJobRequest(
+        user_input="Prepare a supplementary anchor.",
+        uploaded_asset_ids=[upload.asset_id],
+    )
+
+    references = service._professional_anchor_reference_assets(  # noqa: SLF001
+        request,
+        view_role="three_quarter",
+        reference_evidence_ids=[upload.asset_id, winner.output_id],
+    )
+
+    assert len(references) == 1
+    assert references[0]["asset_id"] == winner.output_id
+    assert references[0]["output_id"] == winner.output_id
+    assert references[0]["source_type"] == "selected_output"
+    assert references[0]["role"] == "face_reference"
+    assert references[0]["use_policy"] == "identity"
+    assert references[0]["strength"] == "hard"
+    assert references[0]["provider_input_required"] is True
+    assert references[0]["metadata"]["canonical_output_binding"] is True
+    assert references[0]["metadata"]["professional_anchor_lineage_evidence"] is True
+    assert references[0]["metadata"]["professional_anchor_lineage_role"] == "prior_view_winner"
 
 
 def test_doc162_shared_review_receives_frozen_selected_winner_sources(tmp_path) -> None:

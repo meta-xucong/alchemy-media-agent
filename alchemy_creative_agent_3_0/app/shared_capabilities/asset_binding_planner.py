@@ -113,6 +113,12 @@ class AssetBindingPlanner(SharedCapabilityModule):
             "forbidden_transformations": forbidden_transformations,
             "placement_intent": self._placement_for_role(role),
             "review_expectations": analysis.get("identity_requirements", []),
+            "professional_anchor_lineage_evidence": bool(
+                analysis.get("professional_anchor_lineage_evidence")
+            ),
+            "professional_anchor_lineage_role": analysis.get(
+                "professional_anchor_lineage_role"
+            ),
         }
 
     def _placement_for_role(self, role: str) -> str:
@@ -135,12 +141,21 @@ class AssetBindingPlanner(SharedCapabilityModule):
         hard_roles = {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value, AssetRole.NONHUMAN_IDENTITY_REFERENCE.value}
         for role in hard_roles:
             role_bindings = [binding for binding in bindings if binding["role"] == role]
-            if len(role_bindings) > 1:
+            competing_bindings = [
+                binding
+                for binding in role_bindings
+                if not (
+                    role == AssetRole.FACE_REFERENCE.value
+                    and binding.get("professional_anchor_lineage_evidence") is True
+                    and binding.get("professional_anchor_lineage_role") == "prior_view_winner"
+                )
+            ]
+            if len(competing_bindings) > 1:
                 warnings.append(
                     CapabilityWarning(
                         code="asset_binding_role_conflict",
                         message=f"Multiple uploaded assets compete for hard role '{role}'.",
-                        metadata={"asset_ids": [binding["asset_id"] for binding in role_bindings]},
+                        metadata={"asset_ids": [binding["asset_id"] for binding in competing_bindings]},
                     )
                 )
         return warnings

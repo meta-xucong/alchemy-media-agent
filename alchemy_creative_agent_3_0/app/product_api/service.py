@@ -1012,7 +1012,12 @@ class V3ProductApiService:
             selected.append(
                 {
                     "asset_id": output.output_id,
+                    "output_id": output.output_id,
                     "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
                     "file_path": str(path),
                     "uri": output.preview_url,
                     "filename": path.name,
@@ -1025,6 +1030,8 @@ class V3ProductApiService:
                         "strength": "hard",
                         "provider_input_required": True,
                         "canonical_output_binding": True,
+                        "professional_anchor_lineage_evidence": True,
+                        "professional_anchor_lineage_role": "prior_view_winner",
                         "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                     },
                 }

@@ -77,6 +77,12 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                 AssetRole.NONHUMAN_IDENTITY_REFERENCE,
                 AssetRole.BACKGROUND_REFERENCE,
             },
+            "professional_anchor_lineage_evidence": bool(
+                asset.metadata.get("professional_anchor_lineage_evidence")
+            ),
+            "professional_anchor_lineage_role": asset.metadata.get(
+                "professional_anchor_lineage_role"
+            ),
         }
         if path is None or not path.exists():
             warnings.append(

@@ -1,6 +1,6 @@
 # Doc163 — V3 Face-localized Identity Evidence and Non-identity Channel Suppression
 
-Status: implementation candidate complete; bounded Professional M5 rerun required.
+Status: implementation candidate complete; full serial Professional M5 rerun required.
 
 ## 1. Runtime finding
 
@@ -120,3 +120,25 @@ relaxed to force a winner.
 - no local prompt or negative-prompt patch;
 - no change to user intent, reference ownership or product truth;
 - no claim that a code pass alone completes M5, Gate C/D or production activation.
+
+## 6. First bounded rerun record
+
+The first run on the v3 evidence profile produced three verified, passing front
+candidates. The selected winner recorded same-person readability 0.8447, human realism
+0.90, visual quality 0.94 and pose compliance 0.98. Shared Vision no longer reported
+source wardrobe or hairstyle over-inheritance.
+
+The run then exposed a separate serial-lineage transport defect before the
+three-quarter Provider call:
+
+- the root and reviewed front winner were both analysed as competing hard
+  `face_reference` uploads;
+- the selected winner carried its canonical output ID only inside metadata, while the
+  Provider admission contract requires a top-level output binding;
+- all three three-quarter operations therefore failed closed with zero pixels.
+
+The correction keeps both references as hard identity evidence but marks the reviewed
+winner as server-owned `prior_view_winner` lineage evidence, not a competing identity
+claim. It also projects the canonical output ID, source type, use policy, strength and
+provider requirement at the typed asset boundary. Ordinary multiple hard face uploads
+still conflict. No prompt, Provider, reviewer or retry semantics change.

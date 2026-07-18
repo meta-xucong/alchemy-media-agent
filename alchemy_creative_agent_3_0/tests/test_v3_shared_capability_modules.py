@@ -119,6 +119,46 @@ def test_asset_binding_planner_prioritizes_product_and_warns_logo_conflicts(tmp_
     assert any(warning.code == "asset_binding_role_conflict" for warning in binding.warnings)
 
 
+def test_professional_prior_view_winner_complements_root_identity_without_role_conflict(tmp_path) -> None:
+    root_path = _image(tmp_path / "root-face.png", size=(360, 480), color=(210, 190, 176))
+    winner_path = _image(tmp_path / "front-winner.png", size=(360, 480), color=(190, 176, 164))
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            assets=[
+                UploadedAssetInfo(
+                    asset_id="root_identity",
+                    role=AssetRole.FACE_REFERENCE,
+                    file_path=str(root_path),
+                    filename=root_path.name,
+                ),
+                UploadedAssetInfo(
+                    asset_id="front_winner",
+                    role=AssetRole.FACE_REFERENCE,
+                    file_path=str(winner_path),
+                    filename=winner_path.name,
+                    metadata={
+                        "source_type": "selected_output",
+                        "professional_anchor_lineage_evidence": True,
+                        "professional_anchor_lineage_role": "prior_view_winner",
+                    },
+                ),
+            ],
+        ),
+        module_ids=["asset_role_analyzer", "asset_binding_planner"],
+    )
+
+    binding = result.results[1]
+    bindings = binding.facts["asset_binding_plan"]["bindings"]
+    assert len(bindings) == 2
+    assert not any(warning.code == "asset_binding_role_conflict" for warning in binding.warnings)
+    assert next(item for item in bindings if item["asset_id"] == "front_winner")[
+        "professional_anchor_lineage_evidence"
+    ] is True
+
+
 def test_case_library_has_no_ecommerce_delivery_recipe_in_shared_foundation() -> None:
     registry = SharedCapabilityRegistry.with_default_modules()
 
