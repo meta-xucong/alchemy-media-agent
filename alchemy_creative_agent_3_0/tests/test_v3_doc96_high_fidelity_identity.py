@@ -69,6 +69,9 @@ def test_doc96_governance_is_universal_and_not_scene_named() -> None:
 class _StaticVisionProvider:
     provider_name = "doc96_static_vision"
 
+    def __init__(self, *, same_person_score: float = 0.70) -> None:
+        self.same_person_score = same_person_score
+
     def available(self, *, force: bool = False) -> bool:
         return True
 
@@ -78,8 +81,8 @@ class _StaticVisionProvider:
             "confidence": 0.9,
             "issue_codes": ["identity_drift", "same_type_not_same_person"],
             "scores": {
-                "same_person_readability": 0.70,
-                "identity_consistency": 0.70,
+                "same_person_readability": self.same_person_score,
+                "identity_consistency": self.same_person_score,
                 "prompt_owned_channel_obedience": 0.90,
                 "human_realism": 0.82,
                 "commercial_finish": 0.86,
@@ -89,9 +92,10 @@ class _StaticVisionProvider:
 
 
 class _StaticIdentityMetric:
-    def __init__(self, score: float, geometry: float) -> None:
+    def __init__(self, score: float, geometry: float, *, viewpoint_relationship: str = "unknown") -> None:
         self.score = score
         self.geometry = geometry
+        self.viewpoint_relationship = viewpoint_relationship
 
     def evaluate(self, output_path, reference_paths):
         return IdentityMetricResult(
@@ -106,7 +110,10 @@ class _StaticIdentityMetric:
             selected_reference_index=0,
             selected_output_index=0,
             output_face_box=[0.25, 0.2, 0.5, 0.55],
-            metadata={"embedding_persisted": False},
+            metadata={
+                "embedding_persisted": False,
+                "viewpoint_relationship": self.viewpoint_relationship,
+            },
         )
 
 
@@ -185,6 +192,64 @@ def test_doc96_fused_metric_can_clear_subjective_same_type_identity_issue(tmp_pa
         str(issue.get("code") if isinstance(issue, dict) else issue.code) for issue in report.detected_issues
     }
     assert report.evidence["identity_metric"]["metadata"]["embedding_persisted"] is False
+
+
+def test_doc164_cross_view_geometry_is_advisory_without_lowering_identity_gate(tmp_path) -> None:
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    inspector = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(same_person_score=0.86),
+        identity_metric_provider=_StaticIdentityMetric(
+            0.865,
+            0.5688,
+            viewpoint_relationship="cross_view",
+        ),
+    )
+
+    report = inspector.inspect(_resolution(output), metadata=_identity_review_metadata(reference))
+
+    fusion = report.evidence["identity_review_fusion"]
+    assert fusion["viewpoint_relationship"] == "cross_view"
+    assert fusion["geometry_evidence_mode"] == "cross_view_advisory"
+    assert fusion["applied_weights"] == {
+        "objective_metric": 0.6,
+        "geometry": 0.05,
+        "multimodal": 0.35,
+    }
+    assert fusion["hard_gate_passed"] is True
+    assert report.score_card["same_person_readability"] >= 0.82
+
+
+def test_doc164_same_view_geometry_keeps_strict_original_weight(tmp_path) -> None:
+    reference = tmp_path / "reference.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (512, 512), (220, 210, 200)).save(reference)
+    Image.new("RGB", (512, 512), (210, 205, 200)).save(output)
+    inspector = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(same_person_score=0.86),
+        identity_metric_provider=_StaticIdentityMetric(
+            0.865,
+            0.5688,
+            viewpoint_relationship="same_view",
+        ),
+    )
+
+    report = inspector.inspect(_resolution(output), metadata=_identity_review_metadata(reference))
+
+    fusion = report.evidence["identity_review_fusion"]
+    assert fusion["geometry_evidence_mode"] == "same_view_direct"
+    assert fusion["applied_weights"] == {
+        "objective_metric": 0.55,
+        "geometry": 0.25,
+        "multimodal": 0.2,
+    }
+    assert fusion["hard_gate_passed"] is False
+    assert "identity_metric_below_commercial_target" in {
+        str(issue.get("code") if isinstance(issue, dict) else issue.code)
+        for issue in report.detected_issues
+    }
 
 
 def test_doc96_mid_band_metric_emits_local_repair_signal(tmp_path) -> None:

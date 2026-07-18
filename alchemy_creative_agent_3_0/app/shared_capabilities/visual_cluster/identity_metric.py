@@ -77,6 +77,9 @@ class SFaceIdentityMetricProvider:
             calibrated = _calibrate_sface_cosine(raw)
             detection_confidence = min(float(reference_face[-1]), float(output_face[-1]))
             metric_confidence = max(0.0, min(1.0, detection_confidence * (0.9 if len(output_faces) == 1 else 0.78)))
+            reference_view_hint = _view_hint(reference_face)
+            output_view_hint = _view_hint(output_face)
+            viewpoint_relationship = _viewpoint_relationship(reference_view_hint, output_view_hint)
             reason_codes: list[str] = []
             if len(output_faces) > 1:
                 reason_codes.append("multiple_output_faces_metric_subject_selected")
@@ -100,6 +103,13 @@ class SFaceIdentityMetricProvider:
                 metadata={
                     "provider": self.provider_name,
                     "calibration_version": CALIBRATION_VERSION,
+                    # Coarse pose labels are ephemeral review evidence, not
+                    # biometric identity data. They keep a 2-D landmark
+                    # comparison from acting as if a deliberate viewpoint
+                    # change were same-view face-shape drift.
+                    "selected_reference_view_hint": reference_view_hint,
+                    "output_view_hint": output_view_hint,
+                    "viewpoint_relationship": viewpoint_relationship,
                     "ephemeral_embedding": True,
                     "embedding_persisted": False,
                 },
@@ -286,6 +296,21 @@ def _view_hint(face: Any) -> str:
         return "front"
     side = "right" if offset > 0 else "left"
     return f"{side}_three_quarter" if magnitude <= 0.32 else f"{side}_profile"
+
+
+def _viewpoint_relationship(reference_view: str, output_view: str) -> str:
+    """Classify whether 2-D landmark geometry is directly comparable.
+
+    The label is intentionally coarse.  It does not infer identity or author
+    any rendering direction; it only controls how much evidentiary weight a
+    pose-sensitive 2-D measurement receives during shared review.
+    """
+
+    reference = str(reference_view or "unknown").strip().lower()
+    output = str(output_view or "unknown").strip().lower()
+    if not reference or not output or "unknown" in {reference, output}:
+        return "unknown"
+    return "same_view" if reference == output else "cross_view"
 
 
 def _framing_hint(face: Any, shape: Any) -> str:

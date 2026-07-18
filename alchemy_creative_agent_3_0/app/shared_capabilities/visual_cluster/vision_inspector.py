@@ -564,7 +564,18 @@ class VisionOutputInspector:
             return payload, None
         llm_score = _safe_float(multimodal_score, default=objective)
         metric_confidence = _safe_float(payload.get("metric_confidence"), default=0.0)
-        if metric_confidence >= 0.7:
+        metric_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        viewpoint_relationship = str(metric_metadata.get("viewpoint_relationship") or "unknown").strip().lower()
+        if viewpoint_relationship == "cross_view" and metric_confidence >= 0.7:
+            # SFace similarity and the multimodal reviewer remain useful
+            # across an intentional viewpoint change.  Raw 2-D landmark
+            # ratios do not: perspective changes eye spacing, nose offset and
+            # jaw projection even for the same person.  Keep geometry as a
+            # small corroborating signal without lowering the 0.82 gate.
+            weights = {"objective_metric": 0.60, "geometry": 0.05, "multimodal": 0.35}
+        elif viewpoint_relationship == "cross_view":
+            weights = {"objective_metric": 0.40, "geometry": 0.05, "multimodal": 0.55}
+        elif metric_confidence >= 0.7:
             weights = {"objective_metric": 0.55, "geometry": 0.25, "multimodal": 0.20}
         else:
             weights = {"objective_metric": 0.35, "geometry": 0.20, "multimodal": 0.45}
@@ -580,6 +591,14 @@ class VisionOutputInspector:
             "fused_identity_score": round(fused, 4),
             "fusion_confidence": round(max(0.0, min(1.0, (metric_confidence + 0.75) / 2.0)), 4),
             "applied_weights": weights,
+            "viewpoint_relationship": viewpoint_relationship,
+            "geometry_evidence_mode": (
+                "cross_view_advisory"
+                if viewpoint_relationship == "cross_view"
+                else "same_view_direct"
+                if viewpoint_relationship == "same_view"
+                else "unclassified"
+            ),
             "hard_gate_passed": fused >= 0.82,
             "reason_codes": [] if fused >= 0.82 else [
                 "identity_metric_low" if fused < 0.72 else "identity_metric_below_commercial_target"
