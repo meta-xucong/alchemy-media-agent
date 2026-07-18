@@ -104,10 +104,11 @@ def _age_owned_request() -> BrainRunRequest:
             "canonical_prompt_context": {
                 "human_developmental_age_decision": {
                     "required": True,
-                    "contract_version": "v3_human_developmental_age_decision_v1",
+                    "contract_version": "v3_human_developmental_age_decision_v2",
                     "age_fidelity": "follow_explicit_prompt",
                     "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
                     "developmental_age_coherence": "whole_person_requested_stage",
+                    "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
                     "owner": "remote_v3_llm_brain",
                     "frozen_binding": {"envelope_id": "opaque-envelope", "ledger_id": "opaque-ledger"},
                 },
@@ -124,7 +125,7 @@ def test_doc166_shared_contract_separates_developmental_age_from_identity() -> N
     contract = guidance.semantic_contract
     serialized = json.dumps(contract, ensure_ascii=False).lower()
 
-    assert contract["contract_version"] == "v3_human_realism_semantic_v7"
+    assert contract["contract_version"] == "v3_human_realism_semantic_v8"
     assert contract["developmental_age_coherence_requirement"] == "whole_person_requested_stage"
     assert "human_developmental_age_coherence" in contract["quality_axes"]
     assert "human_age_or_identity_fidelity" in contract["quality_axes"]
@@ -229,10 +230,11 @@ def test_doc166_finalizer_requires_current_request_owned_age_receipt() -> None:
     schema = payload["return_schema"]["canonical_provider_prompts"][0]
 
     assert schema["human_developmental_age_decision"] == {
-        "contract_version": "v3_human_developmental_age_decision_v1",
+        "contract_version": "v3_human_developmental_age_decision_v2",
         "age_fidelity": "follow_explicit_prompt",
         "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
         "developmental_age_coherence": "whole_person_requested_stage",
+        "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
         "status": "approved|rewritten",
         "owner": "remote_v3_llm_brain",
     }
@@ -416,8 +418,10 @@ def test_doc166_shared_review_exposes_age_and_neutral_capture_separately() -> No
     )
     assert contract["applies"] is True
     assert "developmental_age_coherence" in contract["score_dimensions"]
+    assert "developmental_facial_presence" in contract["score_dimensions"]
     assert "neutral_capture_compliance" in contract["score_dimensions"]
     assert "professional_developmental_age_drift" in contract["issue_codes"]
+    assert "professional_developmental_presence_drift" in contract["issue_codes"]
     assert "professional_neutral_capture_mismatch" in contract["issue_codes"]
 
 

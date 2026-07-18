@@ -1037,6 +1037,7 @@ class ScenarioRuntime:
             "quality_axes",
             "identity_age_fidelity",
             "developmental_age_coherence_requirement",
+            "developmental_presence_requirement",
             "physical_coherence",
             "reference_boundary",
             "ordinary_age_appropriate_context",
@@ -1060,12 +1061,17 @@ class ScenarioRuntime:
         ):
             raise CapabilityActivationError("human_realism_semantic_contract_missing")
         if (
-            contract.get("contract_version") != "v3_human_realism_semantic_v7"
+            contract.get("contract_version") != "v3_human_realism_semantic_v8"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
             or contract.get("developmental_age_coherence_requirement")
             not in {"whole_person_requested_stage", "not_applicable"}
+            or contract.get("developmental_presence_requirement")
+            not in {
+                "integrated_stage_coherent_face_attention_and_affect",
+                "not_applicable",
+            }
             or contract.get("physical_coherence") != "required"
             or contract.get("reference_boundary") != "resolved_channels_only"
             or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
@@ -1190,10 +1196,11 @@ class ScenarioRuntime:
             if age_resolution.get("age_fidelity") == "follow_explicit_prompt":
                 context["human_developmental_age_decision"] = {
                     "required": True,
-                    "contract_version": "v3_human_developmental_age_decision_v1",
+                    "contract_version": "v3_human_developmental_age_decision_v2",
                     "age_fidelity": age_resolution["age_fidelity"],
                     "source_age_inheritance": age_resolution["source_age_inheritance"],
                     "developmental_age_coherence": age_resolution["developmental_age_coherence"],
+                    "developmental_presence": age_resolution["developmental_presence"],
                     "owner": "remote_v3_llm_brain",
                     "frozen_binding": dict(context["frozen_binding"]),
                 }
@@ -1328,6 +1335,7 @@ class ScenarioRuntime:
                 else "preserve_for_same_age_continuation"
             ),
             "developmental_age_coherence": "whole_person_requested_stage",
+            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
             "review_owner": "v3_shared_vision",
             "decision_owner": "remote_v3_llm_brain",
             "creative_prompt_owner": "remote_v3_llm_brain",

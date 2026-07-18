@@ -16,6 +16,7 @@ from .contracts import GeneratedOutputResolution
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
     "contract_version",
     "developmental_age_coherence_requirement",
+    "developmental_presence_requirement",
     "personhood_requirement",
     "expression_ownership_requirement",
     "expression_resolution_requirement",
@@ -30,6 +31,16 @@ HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS = (
     "unrelated situations, return human_naturalness_verdict.status=retry_recommended with only the generic "
     "human_expression_context dimension. Do not fail a smile merely because it is visible, and do not emit renderer "
     "wording, expression variants, demographic judgements, or a local repair phrase."
+)
+
+HUMAN_DEVELOPMENTAL_PRESENCE_REVIEW_INSTRUCTIONS = (
+    "Developmental stage-coherent facial presence review is semantic and age-general. When the current request owns an age-bearing "
+    "stage, judge whether the pixels make that stage legible through one integrated person's facial soft-tissue "
+    "response, attention and affect, rather than through scale or an age label alone. A neutral, cool, smiling or "
+    "lively person may pass when the facial presence belongs to the requested stage and situation. The review must not require "
+    "a round face, large eyes, visible teeth, a smile, a facial measurement or resemblance to a demographic template. "
+    "When the image is realistic but the person reads as a different developmental stage or as an interchangeable "
+    "adult-trained presentation, use the existing human_developmental_age_coherence evidence; do not author renderer wording."
 )
 
 
@@ -51,9 +62,14 @@ def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids:
         if not isinstance(candidate, dict) or set(candidate) != _HUMAN_AUTHENTICITY_CONTRACT_KEYS:
             continue
         if (
-            candidate.get("contract_version") == "v3_human_realism_semantic_v7"
+            candidate.get("contract_version") == "v3_human_realism_semantic_v8"
             and candidate.get("developmental_age_coherence_requirement")
             in {"whole_person_requested_stage", "not_applicable"}
+            and candidate.get("developmental_presence_requirement")
+            in {
+                "integrated_stage_coherent_face_attention_and_affect",
+                "not_applicable",
+            }
             and candidate.get("personhood_requirement") == "individual_noninterchangeable_presence"
             and candidate.get("expression_ownership_requirement")
             == "situation_owned_unless_explicit_user_direction"
@@ -447,6 +463,7 @@ def _enforced_inspection_prompt(
             "Human authenticity attestation: assess the frozen personhood, developmental-age coherence, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
             "When developmental-age coherence applies, judge the whole observed person against the requested stage; "
             "do not infer a pass or failure from one facial trait, a fixed proportion, or a demographic stereotype. "
+            + HUMAN_DEVELOPMENTAL_PRESENCE_REVIEW_INSTRUCTIONS + " "
             + HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS + " "
             "Return only the required structured verdict and allowed generic issue codes; do not write renderer instructions, "
             "demographic classifications, facial-feature recipes, or new creative direction."
@@ -675,6 +692,7 @@ def _professional_identity_quality_contract(
             "distinctive_feature_readability",
             "age_identity_direction",
             "developmental_age_coherence",
+            "developmental_facial_presence",
             "human_realism",
             "prompt_owned_channel_obedience",
             "pose_compliance",
@@ -691,6 +709,7 @@ def _professional_identity_quality_contract(
             "professional_distinctive_features_lost",
             "professional_age_identity_drift",
             "professional_developmental_age_drift",
+            "professional_developmental_presence_drift",
             "professional_prompt_owned_channel_ignored",
             "professional_pose_noncompliance",
             "professional_ai_overperfection",

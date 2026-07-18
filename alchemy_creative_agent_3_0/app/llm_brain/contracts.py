@@ -102,10 +102,16 @@ class BrainDevelopmentalAgeDecision(V3BaseModel):
     measurement, demographic profile, or renderer prompt fragment.
     """
 
-    contract_version: Literal["v3_human_developmental_age_decision_v1"]
+    contract_version: Literal[
+        "v3_human_developmental_age_decision_v1",
+        "v3_human_developmental_age_decision_v2",
+    ]
     age_fidelity: Literal["follow_explicit_prompt"]
     source_age_inheritance: Literal["not_automatic_when_current_prompt_assigns_age"]
     developmental_age_coherence: Literal["whole_person_requested_stage"]
+    developmental_presence: Literal[
+        "integrated_stage_coherent_face_attention_and_affect"
+    ] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 

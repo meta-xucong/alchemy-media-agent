@@ -111,11 +111,13 @@ class EcommerceRemoteBrainTestProvider:
         requires_developmental_age_decision = bool(
             isinstance(age_requirement, dict)
             and age_requirement.get("required") is True
-            and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v1"
+            and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v2"
             and age_requirement.get("age_fidelity") == "follow_explicit_prompt"
             and age_requirement.get("source_age_inheritance")
             == "not_automatic_when_current_prompt_assigns_age"
             and age_requirement.get("developmental_age_coherence") == "whole_person_requested_stage"
+            and age_requirement.get("developmental_presence")
+            == "integrated_stage_coherent_face_attention_and_affect"
             and age_requirement.get("owner") == "remote_v3_llm_brain"
         )
         anchor_view_requirement = (
@@ -199,10 +201,11 @@ class EcommerceRemoteBrainTestProvider:
                 **(
                     {
                         "human_developmental_age_decision": {
-                            "contract_version": "v3_human_developmental_age_decision_v1",
+                            "contract_version": "v3_human_developmental_age_decision_v2",
                             "age_fidelity": "follow_explicit_prompt",
                             "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
                             "developmental_age_coherence": "whole_person_requested_stage",
+                            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
                             "status": "approved",
                             "owner": "remote_v3_llm_brain",
                         }

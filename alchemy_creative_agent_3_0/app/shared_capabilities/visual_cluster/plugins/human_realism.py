@@ -22,6 +22,7 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             for key in (
                 "contract_version",
                 "developmental_age_coherence_requirement",
+                "developmental_presence_requirement",
                 "personhood_requirement",
                 "expression_ownership_requirement",
                 "expression_resolution_requirement",

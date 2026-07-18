@@ -642,20 +642,29 @@ class HumanPhotorealismLayer:
 
         is_detail = human_subject_kind == "hand_or_skin_detail"
         return {
-            # v7 separates requested developmental-age coherence from
-            # identity continuity.  Both remain whole-image perceptual
+            # v8 keeps the v7 ownership split and adds one indivisible,
+            # age-general perceptual obligation.  It deliberately does not
+            # prescribe facial parts: the Brain must make the requested stage
+            # readable as one integrated person and shared Vision must attest
+            # the same result from pixels.
+            # Developmental presence and identity continuity remain whole-image perceptual
             # obligations rather than facial measurements or prompt atoms.
             # They are
             # deliberately semantic rather than a renderer word list: the
             # remote Brain owns the complete prompt and the shared reviewer
             # later verifies the same frozen intent from pixels.
-            "contract_version": "v3_human_realism_semantic_v7",
+            "contract_version": "v3_human_realism_semantic_v8",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
             "identity_age_fidelity": "explicit_or_reference_backed" if not is_detail else "not_applicable",
             "developmental_age_coherence_requirement": (
                 "not_applicable" if is_detail else "whole_person_requested_stage"
+            ),
+            "developmental_presence_requirement": (
+                "not_applicable"
+                if is_detail
+                else "integrated_stage_coherent_face_attention_and_affect"
             ),
             "physical_coherence": "required",
             "reference_boundary": "resolved_channels_only",

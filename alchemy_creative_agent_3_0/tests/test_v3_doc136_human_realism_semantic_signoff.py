@@ -51,7 +51,7 @@ def test_doc136_enforced_human_guidance_is_typed_and_has_no_local_prompt_or_retr
     assert guidance.reference_preserve_rules == []
     assert guidance.reference_do_not_inherit_rules == []
     assert guidance.retry_patch_templates == {}
-    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v7"
+    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v8"
     assert guidance.semantic_contract["developmental_age_coherence_requirement"] == (
         "whole_person_requested_stage"
     )

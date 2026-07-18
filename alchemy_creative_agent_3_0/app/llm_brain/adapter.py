@@ -970,10 +970,11 @@ def _required_human_developmental_age_requirement(request: BrainRunRequest) -> d
     if not isinstance(decision, dict):
         return {}
     expected = {
-        "contract_version": "v3_human_developmental_age_decision_v1",
+        "contract_version": "v3_human_developmental_age_decision_v2",
         "age_fidelity": "follow_explicit_prompt",
         "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
         "developmental_age_coherence": "whole_person_requested_stage",
+        "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
         "owner": "remote_v3_llm_brain",
     }
     if not (

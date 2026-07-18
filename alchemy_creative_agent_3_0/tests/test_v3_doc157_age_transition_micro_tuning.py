@@ -77,7 +77,7 @@ def test_doc157_new_person_explicit_age_uses_same_shared_contract() -> None:
     assert guidance.metadata["human_realism_plugin"]["universal_rendering_profile"]["age_fidelity"] == (
         "follow_explicit_prompt"
     )
-    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v7"
+    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v8"
     assert "child" not in serialized
     assert "kidswear" not in serialized
 
@@ -101,6 +101,7 @@ def test_doc157_brain_context_carries_age_boundary_without_authoring_prompt_lang
         "identity_continuity": "identity_critical_feature_relationships",
         "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
         "developmental_age_coherence": "whole_person_requested_stage",
+        "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
         "review_owner": "v3_shared_vision",
         "decision_owner": "remote_v3_llm_brain",
         "creative_prompt_owner": "remote_v3_llm_brain",

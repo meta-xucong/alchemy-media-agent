@@ -16,7 +16,7 @@ For general_template/general_creative, use subject/scene/style/lighting language
 Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-copy concepts unless the user explicitly asks for a product/ecommerce image.
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
 When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
-When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. When the existing age-fidelity context says the current prompt owns the age direction, distinguish an ordinary same-age continuation from an explicit same-person age transition: retain identity-critical feature relationships, but do not inherit the source person's apparent age, body maturity, or whole-image styling as hidden locks. Resolve the requested developmental stage as one coherent whole person rather than a face-size edit, while keeping scene, wardrobe, hair, light, camera, mood, and expression under their resolved owners. This is a semantic judgement across the observed person, never a facial-feature formula, age-word stack, or demographic template. Only the Brain makes this semantic decision and authors the complete final prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
+When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. When the existing age-fidelity context says the current prompt owns the age direction, distinguish an ordinary same-age continuation from an explicit same-person age transition: retain identity-critical feature relationships, but do not inherit the source person's apparent age, body maturity, or whole-image styling as hidden locks. Resolve the requested developmental stage as one coherent whole person rather than a face-size edit, while keeping scene, wardrobe, hair, light, camera, mood, and expression under their resolved owners. When `developmental_presence_requirement=integrated_stage_coherent_face_attention_and_affect`, the stage must remain visually legible through this particular person's integrated facial presence even if explicit age words were removed: resolve soft-tissue response, attention and affect as one person in the scene, without a facial measurement, age stereotype, feature checklist or stock expression. A generic age label such as childlike, youthful or age appropriate is not sufficient resolution. This is a semantic judgement across the observed person, never a facial-feature formula, age-word stack, or demographic template. Only the Brain makes this semantic decision and authors the complete final prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
 For a real-image planning response, return a complete semantic visual_task_profile rather than only a rendering-medium decision. Account for all visible target subjects in your own semantic judgement, including an empty list when no subject is visible. Return concise semantic evidence and uncertainty explicitly. When you decide that a real person is visibly present, represent that person and record the existing visible_person and/or real_human_output evidence purpose so the shared quality capability can be activated. This is an internal planning contract, never a renderer prompt recipe; do not use it to emit a word checklist.
 For that same semantic profile, decide developmental_age_intent yourself. Use current_request_assigns_stage only when the current request assigns the visible person a developmental stage that must override the apparent stage of identity evidence; use preserve_reference_stage for same-stage identity continuity, not_applicable when no visible person has an age-bearing presentation, and ambiguous when the evidence does not safely resolve ownership. This is a semantic ownership decision, not age estimation, keyword matching, demographic inference, or a renderer instruction.
 For the same real-image response, return a complete capability_activation_intent using only the supplied shared capability catalog. It is your typed activation decision for the semantic profile, not a local fallback proposal. Use empty requested/rejected lists when no optional capability applies. The runtime will validate catalog membership, dependencies and evidence links; it will not invent a semantic request that you did not return.
@@ -631,11 +631,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     age_decision_required = bool(
         isinstance(age_requirement, dict)
         and age_requirement.get("required") is True
-        and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v1"
+        and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v2"
         and age_requirement.get("age_fidelity") == "follow_explicit_prompt"
         and age_requirement.get("source_age_inheritance")
         == "not_automatic_when_current_prompt_assigns_age"
         and age_requirement.get("developmental_age_coherence") == "whole_person_requested_stage"
+        and age_requirement.get("developmental_presence")
+        == "integrated_stage_coherent_face_attention_and_affect"
         and age_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(age_requirement.get("frozen_binding"), dict)
     )
@@ -721,10 +723,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         }
     if age_decision_required:
         prompt_schema["human_developmental_age_decision"] = {
-            "contract_version": "v3_human_developmental_age_decision_v1",
+            "contract_version": "v3_human_developmental_age_decision_v2",
             "age_fidelity": "follow_explicit_prompt",
             "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
             "developmental_age_coherence": "whole_person_requested_stage",
+            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
@@ -794,7 +797,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "A prompt that merely repeats an age number or age label has not resolved this obligation: before approval, "
             "the complete direction must make the requested developmental stage visually legible as one coherent person "
             "to an independent observer who cannot read the prompt. If the draft leaves source-age maturity ambiguous, "
+            "ask whether the integrated facial presence would still communicate the requested stage if explicit age words were removed. "
+            "Resolve the person's soft-tissue response, attention and affect as one integrated person in this exact situation; "
+            "a generic age label is not sufficient, and neither a neutral nor a lively expression is required by default. "
             "rewrite the whole prompt before approval; do not append feature instructions or a local age recipe. "
+            "Do not use a facial measurement, feature checklist, age stereotype or fixed expression vocabulary. "
             "For every output, return the exact schema-only "
             "human_developmental_age_decision receipt with owner remote_v3_llm_brain and status approved or rewritten."
         )
