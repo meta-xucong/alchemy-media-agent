@@ -72,6 +72,16 @@ class VisualTaskProfile(V3BaseModel):
     scenario_id: str
     output_medium: str = "image"
     rendering_intent: RenderingIntent = Field(default_factory=RenderingIntent)
+    # Remote semantic decision only.  The value says who owns the requested
+    # developmental stage; it does not estimate age or encode facial/body
+    # geometry.  Shared runtime consumes this frozen decision instead of
+    # rediscovering age intent from words, regexes, or reference appearance.
+    developmental_age_intent: Literal[
+        "current_request_assigns_stage",
+        "preserve_reference_stage",
+        "not_applicable",
+        "ambiguous",
+    ] = "ambiguous"
     subject_entities: list[VisualSubjectEntity] = Field(default_factory=list)
     preservation_targets: list[PreservationTarget] = Field(default_factory=list)
     allowed_changes: list[str] = Field(default_factory=list)

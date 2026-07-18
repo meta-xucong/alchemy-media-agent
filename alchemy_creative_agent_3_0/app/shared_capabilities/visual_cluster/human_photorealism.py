@@ -290,24 +290,6 @@ _CHINESE_CHILD_TERMS = {
     "\u672a\u6210\u5e74",
 }
 
-_EXPLICIT_AGE_TERMS = _CHILD_TERMS | {
-    "adult",
-    "young adult",
-    "middle-aged",
-    "middle aged",
-    "senior",
-    "elderly",
-    "older person",
-}
-
-_CHINESE_EXPLICIT_AGE_TERMS = _CHINESE_CHILD_TERMS | {
-    "\u6210\u5e74\u4eba",
-    "\u9752\u5e74",
-    "\u4e2d\u5e74",
-    "\u8001\u5e74",
-    "\u8001\u4eba",
-}
-
 _HAND_OR_SKIN_TERMS = {
     "hand",
     "hands",
@@ -840,21 +822,18 @@ class HumanPhotorealismLayer:
                     evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
                 )
             forced_kind = str(metadata.get("human_subject_kind") or "person")
-            # The age signal is an admission fact, not a creative decision.
-            # The Brain still decides whether the request is same-age
-            # continuation or an explicit age transition and authors the
-            # complete renderer prompt. Keeping this existing typed
-            # ``age_fidelity`` value in the enforced path prevents the
-            # frozen executor from silently reverting to source-age
-            # inheritance before that Brain decision is signed.
-            explicit_age_signal = _has_explicit_age_direction(text)
+            # The initial Remote Brain owns this semantic decision.  Enforced
+            # runtime must consume its frozen result rather than reclassifying
+            # the user's language with a keyword or age-pattern matcher.
+            age_intent = str(metadata.get("frozen_developmental_age_intent") or "ambiguous")
+            current_request_owns_age = age_intent == "current_request_assigns_stage"
             rendering_profile = _universal_rendering_profile(
                 "",
                 metadata={
                     **metadata,
                     "age_fidelity": (
                         "follow_explicit_prompt"
-                        if explicit_age_signal
+                        if current_request_owns_age
                         else metadata.get("age_fidelity")
                     ),
                 },
@@ -870,7 +849,7 @@ class HumanPhotorealismLayer:
                 universal_rendering_profile=rendering_profile,
                 evidence={
                     "frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {}),
-                    "explicit_age_fidelity_signal": explicit_age_signal,
+                    "frozen_developmental_age_intent": age_intent,
                 },
                 safety_sensitive_person=safety_sensitive_person,
             )
@@ -931,7 +910,11 @@ class HumanPhotorealismLayer:
         if "product_with_human_signal" in reason_codes:
             reason_codes.append("product_on_person_detected")
 
-        explicit_age_signal = _has_explicit_age_direction(text)
+        age_intent = str(metadata.get("frozen_developmental_age_intent") or "ambiguous")
+        current_request_owns_age = (
+            age_intent == "current_request_assigns_stage"
+            or str(metadata.get("age_fidelity") or "").strip().lower() == "follow_explicit_prompt"
+        )
         is_hand_or_skin = _contains_any(text, _HAND_OR_SKIN_TERMS) or _contains_any(text, _CHINESE_HAND_OR_SKIN_TERMS)
         face_is_explicitly_excluded = _contains_any(
             text,
@@ -975,8 +958,8 @@ class HumanPhotorealismLayer:
         else:
             human_subject_kind = "person"
             strictness = "commercial_strict" if any(token in text for token in ["commercial", "cover", "campaign", "\u5546\u4e1a", "\u5c01\u9762"]) else "balanced"
-        if explicit_age_signal:
-            reason_codes.append("explicit_age_fidelity_signal")
+        if current_request_owns_age:
+            reason_codes.append("current_request_developmental_stage_owned")
 
         reason_codes = _dedupe(reason_codes)
         if not reason_codes:
@@ -992,7 +975,14 @@ class HumanPhotorealismLayer:
         evidence["safety_sensitive_person"] = safety_sensitive_person
         rendering_profile = _universal_rendering_profile(
             text,
-            metadata={**metadata, "age_fidelity": "follow_explicit_prompt" if explicit_age_signal else metadata.get("age_fidelity")},
+            metadata={
+                **metadata,
+                "age_fidelity": (
+                    "follow_explicit_prompt"
+                    if current_request_owns_age
+                    else metadata.get("age_fidelity")
+                ),
+            },
         )
         return _activation_payload(
             applies=True,
@@ -1067,19 +1057,6 @@ def _people_explicitly_excluded(text: str) -> bool:
             "没有人",
             "不含人物",
         )
-    )
-
-
-def _has_explicit_age_direction(text: str) -> bool:
-    """Recognize explicit age declarations without inferring age from appearance."""
-
-    if _contains_any(text, _EXPLICIT_AGE_TERMS) or _contains_any(text, _CHINESE_EXPLICIT_AGE_TERMS):
-        return True
-    normalized = str(text or "").lower()
-    return bool(
-        re.search(r"\b(?:age|aged)\s*\d{1,2}\b", normalized)
-        or re.search(r"\b\d{1,2}\s*(?:-| )?year(?:s)?[- ]old\b", normalized)
-        or re.search(r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*岁", normalized)
     )
 
 

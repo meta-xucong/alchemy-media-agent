@@ -38,6 +38,10 @@ class BrainReferenceChannelOwnershipDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted the frozen reference-ownership receipt."""
 
 
+class BrainDevelopmentalAgeDecisionMissing(BrainProviderError):
+    """The final Brain sign-off omitted the current-request-owned age receipt."""
+
+
 class BrainProfessionalAnchorViewDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted or changed the frozen anchor view."""
 

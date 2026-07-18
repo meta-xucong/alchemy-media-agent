@@ -16,6 +16,7 @@ def _guidance(user_input: str, *, subject_type: str = "character"):
         subject_type=subject_type,
         variation_mode="delivery_suite",
         has_identity_reference=True,
+        metadata={"frozen_developmental_age_intent": "current_request_assigns_stage"},
     )
 
 

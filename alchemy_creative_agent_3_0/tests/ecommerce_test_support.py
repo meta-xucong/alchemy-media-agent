@@ -19,8 +19,14 @@ class EcommerceRemoteBrainTestProvider:
     provider = "ecommerce_remote_brain_test_double"
     model = "contract-fixture-v1"
 
-    def __init__(self, *, fault: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fault: str | None = None,
+        developmental_age_intent: str = "not_applicable",
+    ) -> None:
         self.fault = fault
+        self.developmental_age_intent = developmental_age_intent
         self.requests: list[dict] = []
 
     def available(self, *, force: bool = False) -> bool:
@@ -71,6 +77,7 @@ class EcommerceRemoteBrainTestProvider:
         # now reject a response which gives merely this one sub-object.
         payload["visual_task_profile"] = {
             **payload["visual_task_profile"],
+            "developmental_age_intent": self.developmental_age_intent,
             "rendering_intent": {
                 "rendering_mode": "photoreal",
                 "stylization_scope": "none",
@@ -99,6 +106,17 @@ class EcommerceRemoteBrainTestProvider:
             and ownership_requirement.get("contract_version")
             == "v3_reference_channel_ownership_decision_v1"
             and ownership_requirement.get("owner") == "remote_v3_llm_brain"
+        )
+        age_requirement = context.get("human_developmental_age_decision") if isinstance(context, dict) else None
+        requires_developmental_age_decision = bool(
+            isinstance(age_requirement, dict)
+            and age_requirement.get("required") is True
+            and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v1"
+            and age_requirement.get("age_fidelity") == "follow_explicit_prompt"
+            and age_requirement.get("source_age_inheritance")
+            == "not_automatic_when_current_prompt_assigns_age"
+            and age_requirement.get("developmental_age_coherence") == "whole_person_requested_stage"
+            and age_requirement.get("owner") == "remote_v3_llm_brain"
         )
         anchor_view_requirement = (
             context.get("professional_anchor_view_decision") if isinstance(context, dict) else None
@@ -162,6 +180,20 @@ class EcommerceRemoteBrainTestProvider:
                         }
                     }
                     if requires_reference_ownership_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "human_developmental_age_decision": {
+                            "contract_version": "v3_human_developmental_age_decision_v1",
+                            "age_fidelity": "follow_explicit_prompt",
+                            "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                            "developmental_age_coherence": "whole_person_requested_stage",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_developmental_age_decision
                     else {}
                 ),
                 **(

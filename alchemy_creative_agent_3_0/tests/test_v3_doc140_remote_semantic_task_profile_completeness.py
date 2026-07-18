@@ -51,6 +51,7 @@ def _remote_profile(*, visible_person: bool) -> dict:
             "stylization_scope": "none",
             "decision_owner": "remote_brain",
         },
+        "developmental_age_intent": "preserve_reference_stage" if visible_person else "not_applicable",
         "subject_entities": entities,
         "visual_intent_tags": ["photographic_observation"],
         "unknown_requirements": [],
@@ -120,6 +121,7 @@ def test_doc140_compact_real_image_schema_requires_complete_semantic_profile() -
 
     assert {
         "rendering_intent",
+        "developmental_age_intent",
         "subject_entities",
         "visual_intent_tags",
         "unknown_requirements",

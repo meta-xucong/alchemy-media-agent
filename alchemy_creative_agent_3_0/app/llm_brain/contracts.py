@@ -95,6 +95,21 @@ class BrainReferenceChannelOwnershipDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class BrainDevelopmentalAgeDecision(V3BaseModel):
+    """Safe receipt for a current-request-owned developmental-age decision.
+
+    This records ownership parity only.  It contains no age estimate, facial
+    measurement, demographic profile, or renderer prompt fragment.
+    """
+
+    contract_version: Literal["v3_human_developmental_age_decision_v1"]
+    age_fidelity: Literal["follow_explicit_prompt"]
+    source_age_inheritance: Literal["not_automatic_when_current_prompt_assigns_age"]
+    developmental_age_coherence: Literal["whole_person_requested_stage"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainProfessionalAnchorViewDecision(V3BaseModel):
     """Safe receipt for the frozen Professional anchor viewpoint.
 
@@ -138,6 +153,10 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # Historical records remain readable. New reference-conditioned enforced
     # jobs require this receipt when a frozen Doc93 ownership package applies.
     reference_channel_ownership_decision: BrainReferenceChannelOwnershipDecision | None = None
+    # Required only when the frozen shared age policy assigns the target
+    # developmental stage to the current request. Historical and same-age
+    # records remain readable without this receipt.
+    human_developmental_age_decision: BrainDevelopmentalAgeDecision | None = None
     # Historical and non-anchor records remain readable without this field.
     # Formal Professional anchor preparation requires the exact frozen role.
     professional_anchor_view_decision: BrainProfessionalAnchorViewDecision | None = None

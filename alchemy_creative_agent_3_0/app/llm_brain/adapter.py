@@ -21,6 +21,7 @@ from .context_digest import (
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .providers import (
+    BrainDevelopmentalAgeDecisionMissing,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
@@ -237,6 +238,15 @@ class V3LLMBrainAdapter:
             raise BrainReferenceChannelOwnershipDecisionMissing(
                 "Remote Brain did not return the required reference-channel ownership decision receipt."
             )
+        developmental_age_requirement = _required_human_developmental_age_requirement(request)
+        if developmental_age_requirement and not _matches_human_developmental_age_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_requirement=developmental_age_requirement,
+        ):
+            raise BrainDevelopmentalAgeDecisionMissing(
+                "Remote Brain did not return the required developmental-age ownership receipt."
+            )
         professional_anchor_view_requirement = _required_professional_anchor_view_requirement(request)
         if professional_anchor_view_requirement and not _matches_professional_anchor_view_receipts(
             prompts_raw,
@@ -279,6 +289,17 @@ class V3LLMBrainAdapter:
                         if prompt.reference_channel_ownership_decision is not None
                     ]
                     if reference_ownership_decision_required
+                    else []
+                ),
+                "human_developmental_age_decision_required": bool(developmental_age_requirement),
+                "human_developmental_age_decision_signed": bool(developmental_age_requirement),
+                "human_developmental_age_decisions": (
+                    [
+                        prompt.human_developmental_age_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.human_developmental_age_decision is not None
+                    ]
+                    if developmental_age_requirement
                     else []
                 ),
                 "professional_anchor_view_decision_required": bool(professional_anchor_view_requirement),
@@ -936,6 +957,58 @@ def _matches_reference_channel_ownership_receipts(candidate: Any, *, expected_co
     )
 
 
+def _required_human_developmental_age_requirement(request: BrainRunRequest) -> dict[str, str]:
+    """Return the exact frozen age-ownership decision, if applicable."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("human_developmental_age_decision")
+    if not isinstance(decision, dict):
+        return {}
+    expected = {
+        "contract_version": "v3_human_developmental_age_decision_v1",
+        "age_fidelity": "follow_explicit_prompt",
+        "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+        "developmental_age_coherence": "whole_person_requested_stage",
+        "owner": "remote_v3_llm_brain",
+    }
+    if not (
+        decision.get("required") is True
+        and all(decision.get(key) == value for key, value in expected.items())
+        and isinstance(decision.get("frozen_binding"), dict)
+    ):
+        raise BrainDevelopmentalAgeDecisionMissing(
+            "The frozen developmental-age ownership requirement is malformed."
+        )
+    return expected
+
+
+def _matches_human_developmental_age_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_requirement: dict[str, str],
+) -> bool:
+    """Validate exact ownership parity without reading renderer prose."""
+
+    expected_keys = {*expected_requirement, "status"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("human_developmental_age_decision"), dict)
+        and set(item["human_developmental_age_decision"]) == expected_keys
+        and all(
+            item["human_developmental_age_decision"].get(key) == value
+            for key, value in expected_requirement.items()
+        )
+        and item["human_developmental_age_decision"].get("status") in {"approved", "rewritten"}
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
 def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> dict[str, str]:
     """Return the exact server-frozen anchor receipt contract, if required.
 
@@ -1043,6 +1116,7 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
     if not _has_remote_rendering_intent(candidate) or not isinstance(candidate, dict):
         return False
     required_profile_fields = {
+        "developmental_age_intent",
         "subject_entities",
         "visual_intent_tags",
         "unknown_requirements",
@@ -1056,9 +1130,17 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
     tags = candidate.get("visual_intent_tags")
     unknowns = candidate.get("unknown_requirements")
     confidence = candidate.get("confidence")
+    developmental_age_intent = candidate.get("developmental_age_intent")
     if not all(isinstance(value, list) for value in (entities, evidence, tags, unknowns)):
         return False
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
+        return False
+    if developmental_age_intent not in {
+        "current_request_assigns_stage",
+        "preserve_reference_stage",
+        "not_applicable",
+        "ambiguous",
+    }:
         return False
     entity_fields = {
         "entity_id",
@@ -1107,6 +1189,7 @@ def _merge_complete_remote_visual_task_profile(base: Any, remote: dict[str, Any]
     merged = _merge_dict(base if isinstance(base, dict) else {}, remote)
     for key in (
         "rendering_intent",
+        "developmental_age_intent",
         "subject_entities",
         "visual_intent_tags",
         "unknown_requirements",

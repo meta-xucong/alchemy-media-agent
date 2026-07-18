@@ -1257,6 +1257,7 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                         "stylization_scope": "none",
                         "decision_owner": "remote_brain",
                     },
+                    "developmental_age_intent": "preserve_reference_stage",
                     "subject_entities": [
                         {
                             "entity_id": "remote_subject_1",
@@ -1415,6 +1416,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                         "stylization_scope": "none",
                         "decision_owner": "remote_brain",
                     },
+                    "developmental_age_intent": "preserve_reference_stage",
                     "subject_entities": [
                         {
                             "entity_id": "remote_subject_1",

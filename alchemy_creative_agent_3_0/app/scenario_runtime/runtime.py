@@ -1099,6 +1099,16 @@ class ScenarioRuntime:
             context["reference_channel_ownership_decision"] = reference_ownership
         if age_resolution:
             context["human_realism_age_resolution"] = age_resolution
+            if age_resolution.get("age_fidelity") == "follow_explicit_prompt":
+                context["human_developmental_age_decision"] = {
+                    "required": True,
+                    "contract_version": "v3_human_developmental_age_decision_v1",
+                    "age_fidelity": age_resolution["age_fidelity"],
+                    "source_age_inheritance": age_resolution["source_age_inheritance"],
+                    "developmental_age_coherence": age_resolution["developmental_age_coherence"],
+                    "owner": "remote_v3_llm_brain",
+                    "frozen_binding": dict(context["frozen_binding"]),
+                }
         if ScenarioRuntime._is_professional_mode_selected(request):
             # Keep the anchor-pack quality objective typed and Brain-owned.
             # Do not build a local prompt recipe here: the Remote Brain must

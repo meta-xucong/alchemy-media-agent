@@ -1586,6 +1586,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         frozen_profile = dict(frozen_profile) if isinstance(frozen_profile, dict) else {}
         rendering_intent = frozen_profile.get("rendering_intent")
         rendering_intent = dict(rendering_intent) if isinstance(rendering_intent, dict) else {}
+        developmental_age_intent = str(
+            frozen_profile.get("developmental_age_intent") or "ambiguous"
+        ).strip()
         active_capability_ids = {
             str(item).strip()
             for item in activation_plan.get("dependency_order", [])
@@ -1603,6 +1606,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             # request to compose Human Realism words into a provider prompt.
             "human_realism_execution_required": "human_realism" in active_capability_ids,
             "frozen_rendering_intent": rendering_intent,
+            "frozen_developmental_age_intent": developmental_age_intent,
             "project_context_summary": {
                 "project_id": project_context.get("project_id"),
                 "template_id": project_context.get("template_id"),

@@ -10,7 +10,12 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRunt
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
 
 
-def _guidance(user_input: str, *, has_identity_reference: bool = True):
+def _guidance(
+    user_input: str,
+    *,
+    has_identity_reference: bool = True,
+    developmental_age_intent: str = "preserve_reference_stage",
+):
     return HumanPhotorealismLayer().build(
         project_id="project_doc157",
         job_id="job_doc157",
@@ -28,6 +33,7 @@ def _guidance(user_input: str, *, has_identity_reference: bool = True):
                 "stylization_scope": "none",
                 "decision_owner": "remote_brain",
             },
+            "frozen_developmental_age_intent": developmental_age_intent,
         },
     )
 
@@ -35,14 +41,15 @@ def _guidance(user_input: str, *, has_identity_reference: bool = True):
 def test_doc157_enforced_path_preserves_typed_age_direction_without_local_transition_recipe() -> None:
     guidance = _guidance(
         "Keep this same approximately 10-year-old person's face, but render a 6-year-old version "
-        "in the current garden scene and current dress."
+        "in the current garden scene and current dress.",
+        developmental_age_intent="current_request_assigns_stage",
     )
     plugin = guidance.metadata["human_realism_plugin"]
     profile = plugin["universal_rendering_profile"]
     evidence = plugin["evidence"]
 
     assert profile["age_fidelity"] == "follow_explicit_prompt"
-    assert evidence["explicit_age_fidelity_signal"] is True
+    assert evidence["frozen_developmental_age_intent"] == "current_request_assigns_stage"
     assert guidance.semantic_contract["identity_age_fidelity"] == "explicit_or_reference_backed"
     assert guidance.positive_prompt_fragments == []
     assert guidance.retry_patch_templates == {}
@@ -55,7 +62,7 @@ def test_doc157_same_person_without_age_direction_keeps_reference_continuity_mod
     plugin = guidance.metadata["human_realism_plugin"]
 
     assert plugin["universal_rendering_profile"]["age_fidelity"] == "preserve_reference"
-    assert plugin["evidence"]["explicit_age_fidelity_signal"] is False
+    assert plugin["evidence"]["frozen_developmental_age_intent"] == "preserve_reference_stage"
     assert guidance.semantic_contract["identity_age_fidelity"] == "explicit_or_reference_backed"
 
 
@@ -63,6 +70,7 @@ def test_doc157_new_person_explicit_age_uses_same_shared_contract() -> None:
     guidance = _guidance(
         "Create a new real-camera person approximately 6 years old in an ordinary garden scene.",
         has_identity_reference=False,
+        developmental_age_intent="current_request_assigns_stage",
     )
     serialized = json.dumps(guidance.semantic_contract, ensure_ascii=False).lower()
 

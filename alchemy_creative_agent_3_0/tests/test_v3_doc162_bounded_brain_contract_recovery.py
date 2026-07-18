@@ -24,6 +24,7 @@ def _complete_profile() -> dict:
             "stylization_scope": "none",
             "decision_owner": "remote_brain",
         },
+        "developmental_age_intent": "not_applicable",
         "subject_entities": [],
         "visual_intent_tags": ["photographic_observation"],
         "unknown_requirements": [],

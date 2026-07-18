@@ -18,6 +18,7 @@ Each returned prompt plan must preserve one complete image per output; do not pl
 When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
 When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. When the existing age-fidelity context says the current prompt owns the age direction, distinguish an ordinary same-age continuation from an explicit same-person age transition: retain identity-critical feature relationships, but do not inherit the source person's apparent age, body maturity, or whole-image styling as hidden locks. Resolve the requested developmental stage as one coherent whole person rather than a face-size edit, while keeping scene, wardrobe, hair, light, camera, mood, and expression under their resolved owners. This is a semantic judgement across the observed person, never a facial-feature formula, age-word stack, or demographic template. Only the Brain makes this semantic decision and authors the complete final prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
 For a real-image planning response, return a complete semantic visual_task_profile rather than only a rendering-medium decision. Account for all visible target subjects in your own semantic judgement, including an empty list when no subject is visible. Return concise semantic evidence and uncertainty explicitly. When you decide that a real person is visibly present, represent that person and record the existing visible_person and/or real_human_output evidence purpose so the shared quality capability can be activated. This is an internal planning contract, never a renderer prompt recipe; do not use it to emit a word checklist.
+For that same semantic profile, decide developmental_age_intent yourself. Use current_request_assigns_stage only when the current request assigns the visible person a developmental stage that must override the apparent stage of identity evidence; use preserve_reference_stage for same-stage identity continuity, not_applicable when no visible person has an age-bearing presentation, and ambiguous when the evidence does not safely resolve ownership. This is a semantic ownership decision, not age estimation, keyword matching, demographic inference, or a renderer instruction.
 For the same real-image response, return a complete capability_activation_intent using only the supplied shared capability catalog. It is your typed activation decision for the semantic profile, not a local fallback proposal. Use empty requested/rejected lists when no optional capability applies. The runtime will validate catalog membership, dependencies and evidence links; it will not invent a semantic request that you did not return.
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
 When the Human Realism contract gives `natural_presence_priority=individual_human_presence`, do not let a generic commercial-beauty archetype substitute for the requested person. If its personhood or photographic-material obligations are present, resolve them as a whole-image judgement: the person must read as specifically present in the requested situation and photographic human material must remain camera-observed within the requested mood. A generic assertion such as photorealistic detail is not material resolution: in the whole direction you author, reconcile how the person is physically observed through the scene's light, depth and natural surface response without adding a face/skin micro-detail or beauty checklist. When `complexion_rendering_requirement=preserve_reference_or_user_owned_complexion_with_scene_balanced_color`, preserve the complexion owned by the reference or user while resolving it naturally with the photographic scene's light, tonal separation and color relationship. Scene treatment must not substitute for the person's own complexion; retain legitimate mood and aesthetics, and make the decision in the complete image direction you author. This does not infer a preferred complexion from ethnicity or use a color formula; an explicit user-owned commercial complexion direction remains valid and must be resolved in the final Brain-authored prompt. When `expression_ownership_requirement=situation_owned_unless_explicit_user_direction`, an explicitly requested expression remains user-owned; otherwise choose a response that belongs to the person, action, attention and mood you author, never an unrequested default display or advertising smile. When `expression_resolution_requirement=individual_situation_not_stock_geometry`, a generic request such as gentle, natural, joyful or friendly is an affect intention, not permission to infer the same open-mouth or tooth-showing geometry used by a commercial presenter. Preserve warmth when it belongs to the person's moment, but resolve the complete expression through that individual's attention, action, timing and relationship to the scene. Do not force neutrality and do not ban smiling; simply refuse to manufacture a repeated showroom smile when the situation does not require it. A smile is allowed when it is user-owned or emerges from that individual's situation; it must not become a uniform camera-presentational default merely because the image is pleasant or commercially polished. Treat an absent expression as intentional creative latitude, not a blank to fill with positive affect: setting pleasantness or commercial polish alone never justifies a display smile, and do not invent a decorative action merely to make one seem justified. Before approving the complete direction, ask whether replacing the person with the same generic presentational smile would leave the situation unchanged; if it would, resolve a more individual, situation-grounded presence yourself. This is not a prohibition on smiling and not an instruction to force a neutral face. When no independently useful moment calls for a particular affect, keep the person ordinarily present without manufacturing one. A generic adjective such as natural, candid or photorealistic plus a static pose is not an expression decision: in the one complete direction you author, make the person's ordinary attention, awareness or response legible as part of the situation, without selecting from a fixed expression vocabulary. Do not make this decision with an expression vocabulary, face-detail checklist or fixed alternate-expression catalogue. For candid, ordinary or lifestyle photography, make the whole direction describe that individual naturally present in the situation; for an explicitly glamorous or editorial request, retain its aesthetic while avoiding synthetic beautification. A direction that merely repeats generic adjectives such as natural, candid or photorealistic is incomplete: resolve the natural presence materially in your own complete sentence. Never expose a checklist or a local repair phrase.
@@ -80,6 +81,9 @@ def _compact_required_remote_creative_schema() -> dict:
                 "stylization_scope": "whole_image|object_surface|none|ambiguous",
                 "decision_owner": "remote_brain",
             },
+            "developmental_age_intent": (
+                "current_request_assigns_stage|preserve_reference_stage|not_applicable|ambiguous"
+            ),
             "subject_entities": [
                 {
                     "entity_id": "string",
@@ -617,6 +621,20 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         and ownership_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(ownership_requirement.get("frozen_binding"), dict)
     )
+    age_requirement = context.get("human_developmental_age_decision")
+    age_decision_required = bool(
+        isinstance(age_requirement, dict)
+        and age_requirement.get("required") is True
+        and age_requirement.get("contract_version") == "v3_human_developmental_age_decision_v1"
+        and age_requirement.get("age_fidelity") == "follow_explicit_prompt"
+        and age_requirement.get("source_age_inheritance")
+        == "not_automatic_when_current_prompt_assigns_age"
+        and age_requirement.get("developmental_age_coherence") == "whole_person_requested_stage"
+        and age_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(age_requirement.get("frozen_binding"), dict)
+    )
+    if isinstance(age_requirement, dict) and not age_decision_required:
+        raise ValueError("Human developmental-age finalization requires one valid frozen ownership contract.")
     anchor_view_requirement = context.get("professional_anchor_view_decision")
     anchor_view_target = (
         str(anchor_view_requirement.get("target_view_role") or "").strip()
@@ -681,6 +699,15 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
+    if age_decision_required:
+        prompt_schema["human_developmental_age_decision"] = {
+            "contract_version": "v3_human_developmental_age_decision_v1",
+            "age_fidelity": "follow_explicit_prompt",
+            "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+            "developmental_age_coherence": "whole_person_requested_stage",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     if anchor_view_decision_required:
         prompt_schema["professional_anchor_view_decision"] = {
             "contract_version": anchor_view_version,
@@ -732,6 +759,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "a local negative list. For every output, return the required schema-only "
             "reference_channel_ownership_decision with contract_version "
             "v3_reference_channel_ownership_decision_v1, owner remote_v3_llm_brain, and status approved or rewritten."
+        )
+    if age_decision_required:
+        response_contract += (
+            " Independently reconcile each complete prompt with the current-request-owned developmental-age decision. "
+            "The requested developmental stage is authoritative, while a source portrait remains identity evidence and "
+            "must not silently retain its apparent-age maturity. Preserve recognizable feature relationships, but make "
+            "the whole person coherently inhabit the requested stage rather than changing only scale or aesthetic polish. "
+            "If the draft leaves source-age maturity ambiguous, rewrite the whole prompt before approval; do not append "
+            "feature instructions or a local age recipe. For every output, return the exact schema-only "
+            "human_developmental_age_decision receipt with owner remote_v3_llm_brain and status approved or rewritten."
         )
     if anchor_view_decision_required:
         response_contract += (
