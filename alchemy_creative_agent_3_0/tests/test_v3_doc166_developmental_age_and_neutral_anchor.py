@@ -200,6 +200,29 @@ def test_doc166_serial_anchor_requires_prior_capture_continuity_receipt() -> Non
     )
     assert "re-inheriting presentation from the identity root" in payload["remote_response_contract"]
 
+    resign_request = _anchor_request(target_view_role="three_quarter").model_copy(
+        update={
+            "stage": "provider_prompt_professional_capture_resign",
+            "metadata": {
+                **_anchor_request(target_view_role="three_quarter").metadata,
+                "candidate_canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": "A complete Brain-authored candidate that still needs serial capture verification.",
+                        "review_status": "approved",
+                    }
+                ],
+            },
+        },
+        deep=True,
+    )
+    resign_payload = json.loads(build_remote_payload(resign_request))
+    assert resign_payload["stage"] == "provider_prompt_professional_capture_resign"
+    assert "generic neutral" in resign_payload["remote_response_contract"].lower()
+    assert resign_payload["candidate_canonical_provider_prompts"][0]["prompt"].startswith(
+        "A complete Brain-authored candidate"
+    )
+
 
 def test_doc166_finalizer_requires_current_request_owned_age_receipt() -> None:
     payload = json.loads(build_remote_payload(_age_owned_request()))

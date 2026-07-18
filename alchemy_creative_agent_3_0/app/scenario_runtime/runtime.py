@@ -729,7 +729,10 @@ class ScenarioRuntime:
         Brain-owned finalization path. A current-request-owned developmental
         stage receives one additional bounded remote re-sign: the second pass
         judges the first complete prompt, never reconstructs it locally, and
-        becomes the only renderer-facing result.
+        becomes the only renderer-facing result. Professional serial stages
+        receive one separate bounded capture-continuity re-sign after age
+        coherence, because the prior winner—not the identity root—owns the
+        in-pack capture presentation.
         """
 
         if not (policy.requires_remote_creative_brain or self._requires_remote_creative_brain_for_real_images(request)):
@@ -882,6 +885,54 @@ class ScenarioRuntime:
                 "human_developmental_age_resign_mode": "bounded_remote_complete_prompt_recheck",
             }
             final_stage = "provider_prompt_human_naturalness_resign"
+            finalizer_stages.append(final_stage)
+        anchor_decision = canonical_prompt_context.get("professional_anchor_view_decision")
+        serial_capture_resign_required = bool(
+            isinstance(anchor_decision, dict)
+            and anchor_decision.get("contract_version")
+            == "v3_professional_anchor_view_decision_v3"
+            and anchor_decision.get("capture_continuity")
+            == "preserve_approved_prior_capture"
+        )
+        if serial_capture_resign_required:
+            capture_context = self._human_naturalness_resigning_context(canonical_prompt_context)
+            capture_resign_request = signing_request.model_copy(
+                update={
+                    "stage": "provider_prompt_professional_capture_resign",
+                    "metadata": {
+                        "canonical_prompt_context": capture_context,
+                        "candidate_canonical_provider_prompts": [
+                            item.model_dump(mode="json") for item in prompts
+                        ],
+                    },
+                },
+                deep=True,
+            )
+            try:
+                prompts, capture_resign_audit = (
+                    self.llm_brain_adapter.finalize_canonical_provider_prompts(
+                        capture_resign_request
+                    )
+                )
+            except Exception as exc:
+                raise self._remote_creative_brain_block(
+                    "professional_anchor_capture_resign_unavailable",
+                    brain_result,
+                ) from exc
+            if isinstance(capture_resign_audit.get("remote_brain_transport"), dict):
+                finalizer_transport_history.append(
+                    dict(capture_resign_audit["remote_brain_transport"])
+                )
+            audit = {
+                **audit,
+                **capture_resign_audit,
+                "professional_anchor_capture_resign_required": True,
+                "professional_anchor_capture_resign_completed": True,
+                "professional_anchor_capture_resign_mode": (
+                    "bounded_remote_complete_prompt_recheck"
+                ),
+            }
+            final_stage = "provider_prompt_professional_capture_resign"
             finalizer_stages.append(final_stage)
         if "human_realism" in plan.dependency_order:
             # Keep retry evidence in the same final sign-off context. The

@@ -476,7 +476,11 @@ class CodexNativeImageGenPlanner:
         """
 
         audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
-        allowed_stages = {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}
+        allowed_stages = {
+            "provider_prompt_finalize",
+            "provider_prompt_human_naturalness_resign",
+            "provider_prompt_professional_capture_resign",
+        }
         raw_stages = audit.get("canonical_provider_prompt_stages")
         stages = [str(item) for item in raw_stages if str(item) in allowed_stages] if isinstance(raw_stages, list) else []
         if not stages:
@@ -492,9 +496,21 @@ class CodexNativeImageGenPlanner:
             if isinstance(item, dict) and str(item.get("status") or "") in {"approved", "rewritten"}
         ] if isinstance(raw_decisions, list) else []
         historical_two_pass = ["provider_prompt_finalize", "provider_prompt_human_naturalness_resign"]
+        professional_two_pass = ["provider_prompt_finalize", "provider_prompt_professional_capture_resign"]
+        professional_three_pass = [
+            "provider_prompt_finalize",
+            "provider_prompt_human_naturalness_resign",
+            "provider_prompt_professional_capture_resign",
+        ]
         combined_finalizer = ["provider_prompt_finalize"]
         if human_active and (
-            tuple(stages) not in {tuple(combined_finalizer), tuple(historical_two_pass)}
+            tuple(stages)
+            not in {
+                tuple(combined_finalizer),
+                tuple(historical_two_pass),
+                tuple(professional_two_pass),
+                tuple(professional_three_pass),
+            }
             or not human_resigned
             or not human_decision_signed
             or not decision_statuses

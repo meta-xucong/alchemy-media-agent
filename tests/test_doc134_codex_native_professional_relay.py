@@ -272,6 +272,15 @@ def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_r
         "prior_view_winner",
         "prior_view_winner",
     ]
+    assert [request["stage"] for request in brain.requests] == [
+        "plan",
+        "provider_prompt_finalize",
+        "provider_prompt_professional_capture_resign",
+    ]
+    assert result["provenance"]["canonical_prompt_signing"]["stages"] == [
+        "provider_prompt_finalize",
+        "provider_prompt_professional_capture_resign",
+    ]
 
 
 def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_contract(tmp_path: Path) -> None:

@@ -362,7 +362,11 @@ def _requires_remote_creative_contract(request: BrainRunRequest) -> bool:
 
 
 def build_remote_payload(request: BrainRunRequest) -> str:
-    if request.stage in {"provider_prompt_finalize", "provider_prompt_human_naturalness_resign"}:
+    if request.stage in {
+        "provider_prompt_finalize",
+        "provider_prompt_human_naturalness_resign",
+        "provider_prompt_professional_capture_resign",
+    }:
         return json.dumps(_canonical_provider_prompt_finalization_payload(request), ensure_ascii=False, sort_keys=True)
     requires_remote_creative_contract = _requires_remote_creative_contract(request)
     if requires_remote_creative_contract:
@@ -579,17 +583,19 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     context = request.metadata.get("canonical_prompt_context")
     context = dict(context) if isinstance(context, dict) else {}
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
+    is_professional_capture_resign = request.stage == "provider_prompt_professional_capture_resign"
+    is_complete_prompt_resign = is_human_naturalness_resign or is_professional_capture_resign
     candidate_prompts: list[dict[str, object]] = []
-    if is_human_naturalness_resign:
+    if is_complete_prompt_resign:
         raw_candidates = request.metadata.get("candidate_canonical_provider_prompts")
         if not isinstance(raw_candidates, list):
-            raise ValueError("Human Realism re-signing requires canonical Brain candidates.")
+            raise ValueError("Complete-prompt re-signing requires canonical Brain candidates.")
         for expected_index, candidate in enumerate(raw_candidates, start=1):
             if not isinstance(candidate, dict):
-                raise ValueError("Human Realism re-signing candidates must be objects.")
+                raise ValueError("Complete-prompt re-signing candidates must be objects.")
             prompt = " ".join(str(candidate.get("prompt") or "").split())
             if int(candidate.get("output_index") or 0) != expected_index or len(prompt) < 24:
-                raise ValueError("Human Realism re-signing candidates must preserve the canonical output contract.")
+                raise ValueError("Complete-prompt re-signing candidates must preserve the canonical output contract.")
             candidate_prompts.append(
                 {
                     "output_index": expected_index,
@@ -598,7 +604,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 }
             )
         if len(candidate_prompts) != request.requested_image_count:
-            raise ValueError("Human Realism re-signing candidates do not match requested output count.")
+            raise ValueError("Complete-prompt re-signing candidates do not match requested output count.")
     preflight = context.get("final_prompt_semantic_preflight")
     preflight_required = isinstance(preflight, dict) and bool(preflight.get("required"))
     decision_requirement = context.get("human_naturalness_decision")
@@ -830,6 +836,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     "the identity root. Express this relationship inside one complete prompt; do not copy local "
                     "feature words, append a correction, or turn capture presentation into reusable identity truth."
                 )
+    if is_professional_capture_resign:
+        response_contract += (
+            " This is the one bounded independent Professional serial-capture re-sign. Judge the supplied complete "
+            "Brain prompt against the frozen v3 continuity receipt and the distinct identity_root/prior_view_winner "
+            "bindings. Approval is valid only when the complete renderer direction materially preserves the selected "
+            "prior winner's in-pack capture presentation and changes only the frozen viewpoint. A generic neutral, "
+            "age-appropriate, studio, background, or clothing description is not continuity. If the candidate leaves "
+            "room to re-inherit presentation from the identity root or invent a replacement capture, rewrite the whole "
+            "prompt yourself and return only that complete direction plus the required typed receipts."
+        )
     anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
     if isinstance(anchor_view_recovery, dict):
         response_contract += (
@@ -866,7 +882,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     }
     if isinstance(anchor_view_recovery, dict):
         payload["professional_anchor_view_contract_recovery"] = dict(anchor_view_recovery)
-    if is_human_naturalness_resign:
+    if is_complete_prompt_resign:
         # These are complete prompts authored by the first remote Brain pass,
         # never local fragments or mutable visual-cluster prose.
         payload["candidate_canonical_provider_prompts"] = candidate_prompts

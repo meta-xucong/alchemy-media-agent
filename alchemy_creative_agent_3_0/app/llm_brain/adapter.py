@@ -890,7 +890,10 @@ def _requires_human_naturalness_decision(request: BrainRunRequest) -> bool:
     return bool(
         _requires_human_semantic_preflight(request)
         and (
-            request.stage == "provider_prompt_human_naturalness_resign"
+            request.stage in {
+                "provider_prompt_human_naturalness_resign",
+                "provider_prompt_professional_capture_resign",
+            }
             or (
                 isinstance(decision, dict)
                 and decision.get("required") is True
