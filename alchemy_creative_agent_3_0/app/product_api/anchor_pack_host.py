@@ -12,6 +12,7 @@ from typing import Any
 
 from ..visual_assets.anchor_pack import (
     AnchorCandidateResult,
+    AnchorCandidateUnavailable,
     AnchorGenerationRequest,
     AnchorPackPreparationRequest,
     AnchorPackPreparationResult,
@@ -101,7 +102,7 @@ class ProductApiAnchorPackPreparationHost:
             stage_plan_source_job_id=self._stage_plan_source_job_ids.get(stage_key),
         )
         if status.status != ProductJobStatusValue.PLANNED:
-            raise RuntimeError("professional_anchor_candidate_planning_blocked")
+            raise AnchorCandidateUnavailable("professional_anchor_candidate_planning_blocked")
         self._stage_plan_source_job_ids.setdefault(stage_key, status.job_id)
         # Candidate one owns the one shared bounded repair for the stage;
         # candidates two and three remain independent first attempts.
@@ -117,7 +118,7 @@ class ProductApiAnchorPackPreparationHost:
             },
         )
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
-            raise RuntimeError("professional_anchor_candidate_generation_failed")
+            raise AnchorCandidateUnavailable("professional_anchor_candidate_generation_failed")
         candidate, review = self._candidate_and_review(status.job_id, request)
         self._review_by_candidate_id[candidate.candidate_id] = review
         return candidate

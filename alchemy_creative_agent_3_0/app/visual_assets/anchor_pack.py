@@ -146,12 +146,30 @@ class AnchorCandidateAttempt(V3BaseModel):
     review: AnchorReviewDecision
 
 
+class AnchorCandidateFailure(V3BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    stage: Literal["front", "supplementary"]
+    view_role: Literal["standard_front", "three_quarter", "profile"]
+    candidate_index: int = Field(ge=1, le=3)
+    failure_code: str
+
+
+class AnchorCandidateUnavailable(RuntimeError):
+    """Expected fail-closed terminal state for one bounded materialization."""
+
+    def __init__(self, failure_code: str) -> None:
+        super().__init__(failure_code)
+        self.failure_code = failure_code
+
+
 class AnchorPackPreparationResult(V3BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     status: Literal["review", "blocked"]
     pack: IdentityAnchorPackVersion
     attempts: list[AnchorCandidateAttempt] = Field(default_factory=list)
+    generation_failures: list[AnchorCandidateFailure] = Field(default_factory=list)
     winner_candidate_id: str | None = None
     failure_codes: list[str] = Field(default_factory=list)
 
@@ -198,6 +216,7 @@ class AnchorPackPreparationService:
     def prepare(self, request: AnchorPackPreparationRequest) -> AnchorPackPreparationResult:
         pack_version_id = f"pack_{uuid4().hex}"
         attempts: list[AnchorCandidateAttempt] = []
+        generation_failures: list[AnchorCandidateFailure] = []
         passing_fronts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
 
         for candidate_index in range(1, self.FRONT_CANDIDATE_COUNT + 1):
@@ -208,7 +227,18 @@ class AnchorPackPreparationService:
                 candidate_index=candidate_index,
                 reference_evidence_ids=[request.root_source_provenance.source_asset_id],
             )
-            candidate, review = self._generate_and_review(generation_request)
+            try:
+                candidate, review = self._generate_and_review(generation_request)
+            except AnchorCandidateUnavailable as exc:
+                generation_failures.append(
+                    AnchorCandidateFailure(
+                        stage="front",
+                        view_role="standard_front",
+                        candidate_index=candidate_index,
+                        failure_code=exc.failure_code,
+                    )
+                )
+                continue
             attempts.append(
                 AnchorCandidateAttempt(stage="front", request=generation_request, candidate=candidate, review=review)
             )
@@ -222,6 +252,7 @@ class AnchorPackPreparationService:
                 status="blocked",
                 pack=pack,
                 attempts=attempts,
+                generation_failures=generation_failures,
                 failure_codes=["no_passing_front_candidate"],
             )
 
@@ -238,7 +269,18 @@ class AnchorPackPreparationService:
                     candidate_index=candidate_index,
                     reference_evidence_ids=list(selected_evidence_ids),
                 )
-                candidate, review = self._generate_and_review(generation_request)
+                try:
+                    candidate, review = self._generate_and_review(generation_request)
+                except AnchorCandidateUnavailable as exc:
+                    generation_failures.append(
+                        AnchorCandidateFailure(
+                            stage="supplementary",
+                            view_role=role,
+                            candidate_index=candidate_index,
+                            failure_code=exc.failure_code,
+                        )
+                    )
+                    continue
                 attempts.append(
                     AnchorCandidateAttempt(
                         stage="supplementary", request=generation_request, candidate=candidate, review=review
@@ -254,6 +296,7 @@ class AnchorPackPreparationService:
                     status="blocked",
                     pack=pack,
                     attempts=attempts,
+                    generation_failures=generation_failures,
                     winner_candidate_id=winner.candidate_id,
                     failure_codes=["required_supplementary_view_failed"],
                 )
@@ -268,6 +311,7 @@ class AnchorPackPreparationService:
             status="review",
             pack=pack,
             attempts=attempts,
+            generation_failures=generation_failures,
             winner_candidate_id=winner.candidate_id,
         )
 

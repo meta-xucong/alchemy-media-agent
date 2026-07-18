@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
+    AnchorCandidateUnavailable,
     AnchorGenerationRequest,
     AnchorPackPreparationRequest,
     AnchorPackPreparationService,
@@ -161,6 +162,27 @@ def test_m2_front_failure_blocks_before_supplementary_generation() -> None:
     assert result.pack.status == "failed"
     assert len(generator.requests) == 3
     assert result.failure_codes == ["no_passing_front_candidate"]
+
+
+def test_m2_one_provider_terminal_failure_does_not_abort_remaining_bounded_candidates() -> None:
+    class PartiallyUnavailableGenerator(FakeGenerator):
+        def generate(self, request: AnchorGenerationRequest) -> AnchorCandidateResult:
+            self.requests.append(request)
+            if request.view_role == "standard_front" and request.candidate_index == 2:
+                raise AnchorCandidateUnavailable("provider_policy_blocked")
+            # Avoid appending a second time in the base fake.
+            self.requests.pop()
+            return super().generate(request)
+
+    generator = PartiallyUnavailableGenerator()
+    result = AnchorPackPreparationService(generator=generator, reviewer=FakeReviewer()).prepare(_request())
+
+    assert result.status == "review"
+    assert len(generator.requests) == 9
+    assert [(item.view_role, item.candidate_index, item.failure_code) for item in result.generation_failures] == [
+        ("standard_front", 2, "provider_policy_blocked")
+    ]
+    assert len(result.attempts) == 8
 
 
 def test_m2_supplementary_failure_blocks_activation() -> None:
