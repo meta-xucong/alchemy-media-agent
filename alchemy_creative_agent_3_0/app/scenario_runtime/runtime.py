@@ -906,6 +906,22 @@ class ScenarioRuntime:
         projection = dict(ledger.provider_projection or {})
         semantic_contracts = ScenarioRuntime._active_semantic_capability_contracts(plan, ledger)
         age_resolution = ScenarioRuntime._human_realism_age_resolution(projection)
+        retry_provenance = request.metadata.get("resolved_retry_provenance")
+        retry_evidence = {
+            "active": bool(request.metadata.get("visual_auto_retry_active")),
+            "issue_codes": ScenarioRuntime._normalized_retry_evidence_issue_codes(request, plan),
+        }
+        if isinstance(retry_provenance, dict):
+            observed = retry_provenance.get("observed_review_evidence")
+            if isinstance(observed, list):
+                bounded_observed = [
+                    " ".join(str(item or "").replace("\x00", " ").split())[:240].strip()
+                    for item in observed
+                    if str(item or "").strip()
+                ]
+                bounded_observed = list(dict.fromkeys(item for item in bounded_observed if item))[:8]
+                if bounded_observed:
+                    retry_evidence["observed_review_evidence"] = bounded_observed
         references = []
         for asset in request.uploaded_assets:
             role = asset.role.value if hasattr(asset.role, "value") else asset.role
@@ -946,10 +962,7 @@ class ScenarioRuntime:
                 "revision_mode": "rewrite_complete_canonical_prompt",
             },
             "reference_bindings": references,
-            "retry_evidence": {
-                "active": bool(request.metadata.get("visual_auto_retry_active")),
-                "issue_codes": ScenarioRuntime._normalized_retry_evidence_issue_codes(request, plan),
-            },
+            "retry_evidence": retry_evidence,
             # These are opaque integrity bindings for the runtime, not
             # creative vocabulary for the final prompt.
             "frozen_binding": {

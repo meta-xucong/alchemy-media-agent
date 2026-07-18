@@ -168,6 +168,37 @@ def test_doc142_retry_keeps_normalized_human_evidence_in_the_combined_finalizer(
     assert finalizer["metadata"]["canonical_prompt_context"]["human_naturalness_decision"]["required"] is True
 
 
+def test_doc160_retry_forwards_review_observations_without_local_repair_language() -> None:
+    provider = _DecisionResigner()
+    request = copy.deepcopy(_HUMAN_REQUEST)
+    request["metadata"].update(
+        {
+            "visual_auto_retry_active": True,
+            "visual_retry_reason_codes": ["plastic_skin"],
+            "resolved_retry_provenance": {
+                "retry_evidence_only": True,
+                "prompt_owner": "remote_v3_llm_brain",
+                "observed_review_evidence": [
+                    "The skin surface reads over-smoothed and the highlights are too uniform.",
+                    "This is evidence, not a renderer instruction.",
+                ],
+            },
+        }
+    )
+
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(request)
+
+    assert result.status.value == "planned"
+    finalizer = next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    retry_evidence = finalizer["metadata"]["canonical_prompt_context"]["retry_evidence"]
+    assert retry_evidence["observed_review_evidence"] == [
+        "The skin surface reads over-smoothed and the highlights are too uniform.",
+        "This is evidence, not a renderer instruction.",
+    ]
+    assert "prompt_additions" not in str(retry_evidence)
+    assert "negative_additions" not in str(retry_evidence)
+
+
 @pytest.mark.parametrize(
     "user_input",
     [

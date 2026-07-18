@@ -134,6 +134,45 @@ def test_doc66_post_generation_review_builds_candidate_scoped_signal_package() -
     assert "identity" in signal_package.candidate_signals[0].metadata["issue_groups"]
 
 
+def test_doc160_retry_signal_keeps_bounded_visual_observations_as_evidence() -> None:
+    merger = OutputQualityReviewMerger()
+    inspection = VisualInspectionReport(
+        inspection_id="inspection_doc160_evidence",
+        project_id="project_doc160_review",
+        job_id="job_doc160_review",
+        candidate_id="candidate_doc160_retry",
+        output_id="output_doc160_retry",
+        mode="hybrid",
+        status="fail_retryable",
+        verification_state="verified",
+        confidence=0.94,
+        detected_issues=[{"code": "human_skin_or_retouch", "retryable": True}],
+        user_visible_summary=[
+            "Skin reads over-smoothed and the highlights are too uniform.",
+            "Keep the scene direction while restoring camera-observed material variation.",
+            "x" * 500,
+            "Skin reads over-smoothed and the highlights are too uniform.",
+        ],
+        retryable=True,
+    )
+
+    package = merger.build_package(
+        job_id="job_doc160_review",
+        project_id="project_doc160_review",
+        resolutions=[],
+        inspections=[inspection],
+        max_attempts=1,
+    )
+
+    signal = package.real_review_signal_package
+    assert signal is not None
+    assert signal.candidate_signals[0].observed_review_evidence == [
+        "Skin reads over-smoothed and the highlights are too uniform.",
+        "Keep the scene direction while restoring camera-observed material variation.",
+        "x" * 240,
+    ]
+
+
 def test_doc118_manual_review_does_not_reinterpret_diagnostic_issue_as_an_auto_retry() -> None:
     merger = OutputQualityReviewMerger()
     inspection = VisualInspectionReport(
@@ -269,3 +308,44 @@ def test_doc66_product_api_prefers_real_review_signal_for_precise_retry() -> Non
     assert "artifact" in patch["issue_groups"]
     assert "artifact_repair" not in patch
     assert "negative_additions" not in patch
+
+
+def test_doc160_enforced_brain_retry_provenance_carries_observations_only() -> None:
+    service = V3ProductApiService()
+    result = SimpleNamespace(
+        metadata={
+            "capability_activation_plan": {
+                "activation_mode": "enforced",
+                "plan_id": "plan_doc160",
+                "fingerprint": "fingerprint_doc160",
+            },
+            "llm_brain": {
+                "canonical_provider_prompts": [{"output_index": 1, "prompt": "complete prompt"}],
+                "audit": {"remote_canonical_provider_prompts_received": True},
+            },
+            "visual_cluster": {
+                "real_review_signal_package": {
+                    "candidate_signals": [
+                        {
+                            "recommended_action": "retry",
+                            "observed_review_evidence": [
+                                "The face surface reads over-smoothed in the available pixels.",
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    metadata = service._resolved_retry_metadata(result, {})
+
+    assert metadata["resolved_retry_provenance"]["observed_review_evidence"] == [
+        "The face surface reads over-smoothed in the available pixels.",
+    ]
+    assert metadata["resolved_retry_provenance"]["retry_evidence_only"] is True
+    assert "prompt_additions" not in str(metadata)
+    assert "negative_additions" not in str(metadata)
+    assert "observed_review_evidence" not in str(
+        service._public_metadata_projection(metadata)  # noqa: SLF001
+    )

@@ -278,6 +278,7 @@ class OutputQualityReviewMerger:
             retry_patch=dict(inspection.retry_patch) if retry_eligible else {},
             recommended_action=action,
             user_visible_summary=list(inspection.user_visible_summary) or [self._candidate_summary(action)],
+            observed_review_evidence=_bounded_review_observations(inspection.user_visible_summary),
             metadata={
                 "inspection_id": inspection.inspection_id,
                 "inspection_mode": inspection.mode,
@@ -403,6 +404,23 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [part.strip() for part in value.split(",") if part.strip()]
     return []
+
+
+def _bounded_review_observations(value: Any) -> list[str]:
+    """Keep short visual observations as evidence for a later Brain pass.
+
+    Vision output is untrusted review data.  It is deliberately bounded and
+    normalized here so it cannot become a hidden prompt channel or a second
+    local repair vocabulary.  The next Brain pass decides whether and how an
+    observation changes the complete image direction.
+    """
+
+    observations: list[str] = []
+    for raw in _string_list(value):
+        text = " ".join(raw.replace("\x00", " ").split())[:240].strip()
+        if text:
+            observations.append(text)
+    return _dedupe(observations)[:4]
 
 
 def _dedupe(values: Any) -> list[str]:

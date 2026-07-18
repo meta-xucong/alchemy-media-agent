@@ -3100,14 +3100,18 @@ class V3ProductApiService:
         if not plan_id or not fingerprint:
             return {}
         if self._uses_brain_signed_provider_prompts(result):
+            provenance = {
+                "authority": "v3_product_api",
+                "activation_plan_id": plan_id,
+                "activation_plan_fingerprint": fingerprint,
+                "retry_evidence_only": True,
+                "prompt_owner": "remote_v3_llm_brain",
+            }
+            observed_evidence = self._brain_retry_review_observations(result)
+            if observed_evidence:
+                provenance["observed_review_evidence"] = observed_evidence
             return {
-                "resolved_retry_provenance": {
-                    "authority": "v3_product_api",
-                    "activation_plan_id": plan_id,
-                    "activation_plan_fingerprint": fingerprint,
-                    "retry_evidence_only": True,
-                    "prompt_owner": "remote_v3_llm_brain",
-                },
+                "resolved_retry_provenance": provenance,
             }
         return {
             "resolved_retry_patch": dict(retry_patch),
@@ -3117,6 +3121,35 @@ class V3ProductApiService:
                 "activation_plan_fingerprint": fingerprint,
             },
         }
+
+    def _brain_retry_review_observations(self, result: PlanningResult) -> list[str]:
+        """Return bounded Vision observations for the next whole-direction pass.
+
+        Enforced retries previously retained only normalized issue dimensions.
+        That preserved the no-local-prompt rule but discarded the reviewer's
+        short visual explanation.  Keep the explanation as untrusted evidence
+        only; the Remote Brain must interpret it and author a complete prompt.
+        """
+
+        cluster = self._visual_cluster_metadata_from_result(result)
+        package = self._real_review_signal_package_from_cluster(cluster)
+        signals = package.get("candidate_signals") if isinstance(package, dict) else None
+        if not isinstance(signals, list):
+            return []
+        observations: list[str] = []
+        for signal in signals:
+            if not isinstance(signal, dict) or signal.get("recommended_action") != "retry":
+                continue
+            raw = signal.get("observed_review_evidence")
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                text = " ".join(str(item or "").replace("\x00", " ").split())[:240].strip()
+                if text and text not in observations:
+                    observations.append(text)
+                if len(observations) >= 8:
+                    return observations
+        return observations
 
     @staticmethod
     def _uses_brain_signed_provider_prompts(result: PlanningResult) -> bool:
@@ -5493,6 +5526,7 @@ class V3ProductApiService:
             "runtime_transport",
             "final_provider_prompt",
             "post_generation_review_package",
+            "observed_review_evidence",
             "visual_auto_retry",
         }
         if isinstance(value, dict):

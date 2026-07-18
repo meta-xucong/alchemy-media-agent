@@ -415,6 +415,9 @@ class RealReviewCandidateSignal(V3BaseModel):
     retry_patch: dict[str, Any] = Field(default_factory=dict)
     recommended_action: str = "keep"
     user_visible_summary: list[str] = Field(default_factory=list)
+    # Provider-neutral observations retained for the next Brain decision.
+    # These are evidence, never renderer instructions or local repair prose.
+    observed_review_evidence: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
