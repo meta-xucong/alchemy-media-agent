@@ -12,6 +12,7 @@ from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.providers import (
+    BrainDevelopmentalPresenceDecisionMissing,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
     BrainReferenceChannelOwnershipDecisionMissing,
@@ -860,6 +861,8 @@ class ScenarioRuntime:
                         if isinstance(failure, BrainHumanNaturalnessDecisionMissing)
                         else "reference_channel_ownership_decision_missing"
                         if isinstance(failure, BrainReferenceChannelOwnershipDecisionMissing)
+                        else "human_developmental_presence_decision_missing"
+                        if isinstance(failure, BrainDevelopmentalPresenceDecisionMissing)
                         else "professional_anchor_view_decision_missing"
                         if isinstance(failure, BrainProfessionalAnchorViewDecisionMissing)
                         else "remote_creative_brain_prompt_signoff_unavailable"
@@ -871,7 +874,10 @@ class ScenarioRuntime:
         finalizer_transport_history: list[dict[str, Any]] = []
         if isinstance(audit.get("remote_brain_transport"), dict):
             finalizer_transport_history.append(dict(audit["remote_brain_transport"]))
-        if canonical_prompt_context.get("human_developmental_age_decision"):
+        age_resign_required = bool(
+            canonical_prompt_context.get("human_developmental_age_decision")
+        )
+        if age_resign_required:
             resign_context = self._human_naturalness_resigning_context(canonical_prompt_context)
             resign_request = signing_request.model_copy(
                 update={
@@ -891,7 +897,9 @@ class ScenarioRuntime:
                 )
             except Exception as exc:
                 raise self._remote_creative_brain_block(
-                    "human_developmental_age_resign_unavailable",
+                    (
+                        "human_developmental_age_resign_unavailable"
+                    ),
                     brain_result,
                 ) from exc
             if isinstance(resign_audit.get("remote_brain_transport"), dict):
@@ -899,9 +907,16 @@ class ScenarioRuntime:
             audit = {
                 **audit,
                 **resign_audit,
-                "human_developmental_age_resign_required": True,
-                "human_developmental_age_resign_completed": True,
-                "human_developmental_age_resign_mode": "bounded_remote_complete_prompt_recheck",
+                "human_developmental_age_resign_required": age_resign_required,
+                "human_developmental_age_resign_completed": age_resign_required,
+                "human_developmental_age_resign_mode": (
+                    "bounded_remote_complete_prompt_recheck"
+                    if age_resign_required
+                    else None
+                ),
+                "human_developmental_presence_resign_required": True,
+                "human_developmental_presence_resign_completed": True,
+                "human_developmental_presence_resign_mode": "shared_with_age_transition_recheck",
             }
             final_stage = "provider_prompt_human_naturalness_resign"
             finalizer_stages.append(final_stage)

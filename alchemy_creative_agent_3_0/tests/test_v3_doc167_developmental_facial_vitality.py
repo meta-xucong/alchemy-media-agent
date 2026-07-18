@@ -20,6 +20,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
     _professional_identity_quality_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 _PRESENCE_REQUIREMENT = "integrated_stage_coherent_face_attention_and_affect"
@@ -227,3 +228,57 @@ def test_doc167_runtime_contract_path_contains_no_local_child_face_recipe() -> N
         "re.compile",
     ):
         assert forbidden not in source
+
+
+def test_doc167_same_stage_person_uses_one_combined_finalizer_without_extra_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PresenceResigner(EcommerceRemoteBrainTestProvider):
+        def run(self, request):  # noqa: ANN001
+            payload = super().run(request)
+            if request.stage == "provider_prompt_finalize":
+                payload["canonical_provider_prompts"][0]["prompt"] = (
+                    "A real-camera portrait in which this particular six-year-old quietly notices the photographer, "
+                    "her resting facial fullness, attentive gaze and small unperformed mouth response reading together "
+                    "as one ordinary person at the requested stage in soft window light."
+                )
+                payload["canonical_provider_prompts"][0][
+                    "human_developmental_presence_decision"
+                ]["status"] = "rewritten"
+            return payload
+
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = PresenceResigner(developmental_age_intent="preserve_reference_stage")
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(
+        {
+            "user_input": (
+                "Create a real-camera portrait of the same approximately six-year-old person, "
+                "quietly attentive in an ordinary bright studio."
+            ),
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1, "require_real_images": True},
+        }
+    )
+
+    assert result.status.value == "planned"
+    assert [item["stage"] for item in provider.requests] == [
+        "plan",
+        "provider_prompt_finalize",
+    ]
+    audit = result.metadata["llm_brain"]["audit"]
+    assert audit.get("human_developmental_age_resign_required") is not True
+    assert audit["human_developmental_presence_decision_required"] is True
+    assert audit["human_developmental_presence_decision_signed"] is True
+    assert audit["human_developmental_presence_decisions"] == [
+        {
+            "contract_version": "v3_human_developmental_presence_decision_v1",
+            "developmental_presence": _PRESENCE_REQUIREMENT,
+            "status": "rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
+    ]
+    final_prompt = result.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"]
+    assert "one ordinary person at the requested stage" in final_prompt
+    assert "child-appropriate features and proportions" not in final_prompt
