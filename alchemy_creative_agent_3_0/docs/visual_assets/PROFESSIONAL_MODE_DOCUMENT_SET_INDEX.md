@@ -128,6 +128,16 @@ shared Vision still rejected all of them for human-skin/AI-polish defects, so
 the serial chain stopped before three-quarter and profile. It is non-counting
 evidence and does not open any production gate.
 
+### Persistent People Asset Lifecycle And Controlled Runtime Handoff
+
+`PROFESSIONAL_MODE_PERSISTENT_ASSET_LIFECYCLE_AND_CONTROLLED_RUNTIME_HANDOFF_20260718.md`
+
+Defines the additive project-scoped People Asset create/read/activate routes,
+explicit user-confirmation boundary, append-only catalog history, and the
+controlled app's `PersistentVisualAssetCatalog` injection. This makes a real
+binding resolvable after restart; it does not create a passing pack or certify
+M5.
+
 ## Compatibility Authority
 
 The effective authority is selected by the execution mode:

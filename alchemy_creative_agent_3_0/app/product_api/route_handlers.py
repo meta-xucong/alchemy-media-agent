@@ -6,6 +6,11 @@ from typing import Any
 
 from ..app_shell import get_scenario_hub_contract
 from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
+from ..visual_assets import (
+    PeopleAssetActivationRequest,
+    PeopleAssetCreateRequest,
+    PeopleAssetLifecycleService,
+)
 from .service import V3ProductApiService
 
 
@@ -24,6 +29,7 @@ class V3ProductRouteHandlers:
             project_store=project_store,
             template_registry=template_registry,
         )
+        self.people_asset_service = PeopleAssetLifecycleService(self.service.visual_asset_catalog)
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.service.create_job(payload).model_dump(mode="json")
@@ -95,6 +101,35 @@ class V3ProductRouteHandlers:
 
     def get_project_context(self, project_id: str) -> dict[str, Any]:
         return self.project_service.get_project_context(project_id).model_dump(mode="json")
+
+    def get_project_people_assets(self, project_id: str) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        return {
+            "project_id": project_id,
+            "people_assets": [item.model_dump(mode="json") for item in self.people_asset_service.list(project_id)],
+        }
+
+    def post_project_people_asset(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        request = PeopleAssetCreateRequest.model_validate(payload)
+        asset = self.people_asset_service.create_draft(project_id, request)
+        return {"people_asset": asset.model_dump(mode="json"), "lifecycle_state": "draft"}
+
+    def get_project_people_asset(self, project_id: str, people_asset_id: str) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        asset = self.people_asset_service.get(project_id, people_asset_id)
+        return {"people_asset": asset.model_dump(mode="json")}
+
+    def post_project_people_asset_activate(
+        self,
+        project_id: str,
+        people_asset_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        request = PeopleAssetActivationRequest.model_validate(payload)
+        asset = self.people_asset_service.activate_pack(project_id, people_asset_id, request)
+        return {"people_asset": asset.model_dump(mode="json"), "lifecycle_state": "active"}
 
     def post_project_reference(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.add_project_reference(project_id, payload).model_dump(mode="json")

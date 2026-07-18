@@ -26,6 +26,7 @@ from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, Produ
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
+from alchemy_creative_agent_3_0.app.visual_assets import PersistentVisualAssetCatalog
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
@@ -102,8 +103,14 @@ IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
+V3_VISUAL_ASSET_CATALOG_ROOT = Path(
+    os.getenv("V3_VISUAL_ASSET_CATALOG_ROOT", str(Path(".media_storage") / "v3_visual_assets"))
+)
 v3_route_handlers = V3ProductRouteHandlers(
-    service=V3ProductApiService(job_store=PersistentProductJobStore()),
+    service=V3ProductApiService(
+        job_store=PersistentProductJobStore(),
+        visual_asset_catalog=PersistentVisualAssetCatalog(V3_VISUAL_ASSET_CATALOG_ROOT),
+    ),
     project_store=PersistentProjectStore(),
 )
 v3_output_store = V3GeneratedOutputStore()
@@ -624,6 +631,51 @@ def v3_project_timeline_endpoint(project_id: str, request: Request, authorizatio
 def v3_project_context_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_context, project_id)
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/people-assets")
+def v3_project_people_assets_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_people_assets, project_id)
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/people-assets")
+async def v3_create_project_people_asset_endpoint(
+    project_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_project_people_asset, project_id, payload)
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}")
+def v3_get_project_people_asset_endpoint(
+    project_id: str,
+    people_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_people_asset, project_id, people_asset_id)
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate")
+async def v3_activate_project_people_asset_endpoint(
+    project_id: str,
+    people_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_project_people_asset_activate,
+        project_id,
+        people_asset_id,
+        payload,
+    )
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/references")

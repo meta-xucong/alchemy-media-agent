@@ -158,6 +158,10 @@ class PeopleAsset(_StrictVisualAssetModel):
     project_id: str
     subject_kind: Literal["human_person", "fictional_character"]
     face_identity_module: FaceIdentityModule
+    # The immutable root declaration is retained with the project asset so a
+    # restart can resume formal pack preparation without trusting raw request
+    # metadata.  Pixel bytes remain in the existing uploaded-asset store.
+    root_source_provenance: RootSourceProvenance | None = None
     active_pack_version_id: str | None = None
     status: AssetStatus = "draft"
 
