@@ -3,10 +3,11 @@
 ## Status
 
 ```text
-DEVELOPMENT_SPEC_READY
-IMPLEMENTATION_NOT_STARTED
+IMPLEMENTATION_AND_CODE_ACCEPTANCE_COMPLETE
+LOCAL_MCP_VISUAL_ACCEPTANCE_COMPLETE
 DOC165_TECHNICAL_M5_EXECUTION_EVIDENCE_REMAINS_VALID
-APPROXIMATELY_SIX_YEAR_OLD_VISUAL_QUALITY_ACCEPTANCE_REOPENED
+APPROXIMATELY_SIX_YEAR_OLD_VISUAL_QUALITY_ACCEPTED_AT_WINNER_LEVEL
+FORMAL_PRODUCT_API_PACK_REACTIVATION_NOT_PERFORMED
 PRODUCTION_AND_BROWSER_GATE_UNCHANGED
 ```
 
@@ -503,3 +504,130 @@ The controlled child references guide human acceptance. They do not become
 runtime rules. The solution succeeds only if it generalizes across ages,
 expressions, scenes and templates while preserving exact prompt ownership and
 reference-channel authority.
+
+## 15. Implementation closure
+
+Doc166 was implemented on the existing shared architecture. No child module,
+kidswear branch, age keyword table, regex classifier, local anatomy recipe,
+complexion palette or post-Brain prompt suffix was introduced.
+
+The completed implementation is split into independently verified mainline
+milestones:
+
+```text
+85e1a25  freeze the Brain-owned developmental-age decision
+f54b645  require observable whole-person age coherence at Brain sign-off
+e3a1af8  add one bounded complete-prompt age-coherence re-sign
+8642747  preserve typed Professional serial capture continuity
+632824e  independently re-sign Professional capture continuity
+```
+
+The effective execution contract is:
+
+1. The Remote Brain returns a typed developmental-age decision bound to the
+   frozen request and source-age ownership decision.
+2. Human Realism consumes that frozen decision as a shared obligation; it does
+   not infer age through text scanning.
+3. The Remote Brain signs a complete canonical prompt and may perform one
+   bounded complete-prompt re-sign when age coherence is not observable.
+4. Professional serial preparation carries a typed capture-continuity decision
+   independently of age. A later view must preserve the approved neutral
+   capture rather than silently changing wardrobe or photographic treatment.
+5. The final renderer prompt remains entirely Brain-authored. Runtime code only
+   validates receipts, ownership and exact bindings.
+6. Local MCP accepts only the canonical signed prompt and the admitted
+   reference set; it cannot re-plan, append a phrase or persist a synthetic
+   Product API winner.
+
+Static audit confirmed that the prohibited narrow phrases occur only in
+negative regression assertions or historical test fixtures. They do not occur
+as executable shared-runtime guidance.
+
+## 16. Controlled Local MCP visual acceptance record
+
+### 16.1 Frozen evidence
+
+The run used one authorized source portrait, one frozen People Asset binding,
+one unchanged approximately-six-year-old user intent and the existing serial
+reference budgets. The benchmark boards remained human-evaluation references
+outside Git and were never sent to the renderer.
+
+Safe provenance:
+
+```text
+authorized source sha256:
+93786216f2a33fbdd668b7b68e2b9b2fb8a5092de26e9173314a79021684e079
+
+frozen serial intent sha256:
+f6d363441bfccc41506e726dbd0acdedeac24689cc34e735962f02d8017ad3ca
+```
+
+Every view was materialized from the canonical Brain-signed prompt and the
+exact admitted reference order. No benchmark board, local corrective phrase or
+manual prompt edit was used.
+
+### 16.2 Accepted provisional winners
+
+| View | Canonical prompt SHA-256 | Selected output SHA-256 | Human acceptance |
+| --- | --- | --- | --- |
+| front | `e7fb8d9efb1de572ee942ddab861566eb89f388dfac790288305fe1c952616ca` | `a81ad609abc919255cc8ac7cf93caf942886aa77a500f9c1186614f0539cfc8f` | approximately 6–7; clean high-key capture; naturally fair, non-plastic skin; restrained smile |
+| three-quarter | `bb781637b4a68c8b19b8c92535d7744026fe62cce5161595ce071fbe53d29e506` | `feb4a0d38126ea7cde033666e0002f4fa4726819452eece4d7bc5c735d1dbccf` | identity and age coherent with front; off-white capture continuity preserved |
+| profile | `213d22ebe7e64daa47b058039c5845d4e6a56947ce667374efca7fb04942984f2` | `dfa223756926e769b9863670643cd089c5c4ede69ac0c0b09292ba21729bd9f6` | strict profile role; approximately 6–7; coherent hair, skin and neutral capture |
+
+Two additional profile pixels from a fresh Brain re-sign were retained as
+failed candidates because they read as three-quarter rather than strict
+profile. Two three-quarter candidates were retained as continuity failures
+because they changed the neutral off-white shirt to blue. One front candidate
+was rejected for a formulaic exposed-teeth commercial smile. This acceptance
+therefore applies to selected-winner quality, not to an assertion that every
+stochastic candidate passes.
+
+One profile call was intermittently policy-blocked. The runtime did not alter
+the prompt locally. It either retried the exact signed request within the
+authorized candidate budget or obtained a new complete Remote Brain signature
+from the same frozen intent.
+
+### 16.3 Benchmark comparison and decision
+
+Against the three supplied real child-model boards, the selected trio is judged
+at approximately `8.8/10` overall. It reaches the accepted commercial model-card
+band for:
+
+- a consistently legible approximately-six-year-old developmental stage;
+- cheek and lower-face volume without imposing a round-face stereotype;
+- ordinary child gaze and restrained mouth/teeth presentation;
+- bright white or near-white capture without dirty grey styling;
+- clean, naturally fair East Asian commercial complexion without oily shine,
+  waxiness, synthetic pores or painterly smearing;
+- recognizable cross-view identity and stable capture treatment.
+
+The benchmark boards contain natural variation that a stochastic renderer will
+not reproduce in every candidate. The accepted contract is therefore a real
+winner-selection gate: failed candidates remain append-only evidence and cannot
+be promoted merely because their aggregate score is attractive.
+
+The user-approved quality threshold for continuing Professional modelling is
+met by the selected trio. In the user's provider-equivalence acceptance model,
+this Local MCP run closes image-channel quality for Doc166 because it uses the
+same canonical prompt and admitted references. It does not, by itself, create a
+Product API candidate, activate a new persistent anchor pack, open a production
+flag or replace a later browser/deployment gate.
+
+### 16.4 Verification
+
+Final verification on the integrated mainline state:
+
+```text
+Doc130/133/134 Local MCP parity and relay tests: 45 passed
+complete V3 regression: 955 passed, 2 existing FastAPI deprecation warnings
+compileall: passed
+browser JavaScript syntax: passed
+plugin manifest validation: passed
+git diff --check: passed
+```
+
+The remaining Professional action is now lifecycle work rather than another
+Doc166 quality redesign: if a persistent production-grade pack is required,
+run a fresh append-only Product API preparation using the same frozen contract,
+shared Vision certification and explicit activation. Do not reuse rejected MCP
+candidates or fabricate lifecycle records from this conversation-only run.
