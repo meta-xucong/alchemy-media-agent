@@ -661,6 +661,23 @@ def v3_get_project_people_asset_endpoint(
     return _run_v3_handler(v3_route_handlers.get_project_people_asset, project_id, people_asset_id)
 
 
+@app.post("/api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/prepare")
+async def v3_prepare_project_people_asset_endpoint(
+    project_id: str,
+    people_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_project_people_asset_prepare,
+        project_id,
+        people_asset_id,
+        payload,
+    )
+
+
 @app.post("/api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate")
 async def v3_activate_project_people_asset_endpoint(
     project_id: str,

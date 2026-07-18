@@ -27,9 +27,11 @@ from .anchor_pack import (
 from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
 from .runtime_bridge import CanonicalProviderPromptReceipt, ProfessionalModeRuntimeBridge
 from .lifecycle import (
+    AnchorPackPreparationHost,
     PeopleAssetActivationRequest,
     PeopleAssetCreateRequest,
     PeopleAssetLifecycleService,
+    PeopleAssetPrepareRequest,
 )
 from .execution import (
     ProfessionalModeExecutionContext,
@@ -83,6 +85,8 @@ __all__ = [
     "PeopleAssetActivationRequest",
     "PeopleAssetCreateRequest",
     "PeopleAssetLifecycleService",
+    "PeopleAssetPrepareRequest",
+    "AnchorPackPreparationHost",
     "ProfessionalModeExecutionAdapter",
     "ProfessionalModeExecutionContext",
     "ProfessionalModeExecutionRequest",

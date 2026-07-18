@@ -34,8 +34,16 @@ POST /api/v3/creative-agent/projects/{project_id}/people-assets
 GET /api/v3/creative-agent/projects/{project_id}/people-assets
 GET /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}
 
+POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/prepare
+  -> invokes an explicitly injected shared AnchorPackPreparationHost
+  -> accepts an empty public payload; Brain plan, canonical prompt, references,
+     Provider calls, and Vision review remain server-owned
+  -> fails closed with `professional_anchor_pack_prepare_unavailable` when no
+     shared host is configured
+
 POST /api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}/activate
-  -> requires an existing active, complete pack_version_id
+  -> requires an existing complete reviewed pack_version_id and an injected
+     shared activator; the activator changes review -> active
   -> requires confirm_activation=true
   -> updates the People Asset and Face Identity active pointers
   -> appends catalog history
@@ -46,6 +54,13 @@ contract. It must produce all nine bounded candidates, shared review decisions,
 serial root/front/three-quarter/profile evidence, and a `review` pack before
 `activate()` can make the pack active. No route accepts arbitrary candidate
 metadata as a substitute for that service.
+
+The prepare/activation route is only a formal shared-service seam; it is not a
+local generator or a metadata switch. The
+controlled app intentionally leaves the host unset until the authenticated
+runtime wires the existing shared Brain/Provider/Vision adapters. Therefore a
+prepare request cannot silently fall back to General, MCP-only planning, a
+synthetic pack, or a private review/retry path.
 
 The route resolves `root_source_asset_id` through the existing Product API upload
 store and fails closed unless the upload has completed image validation. A raw

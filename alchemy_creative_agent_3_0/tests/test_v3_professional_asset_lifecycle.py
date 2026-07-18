@@ -8,6 +8,7 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
 from alchemy_creative_agent_3_0.app.visual_assets import (
+    AnchorPackPreparationResult,
     AnchorView,
     FaceIdentityModule,
     IdentityAnchorPackVersion,
@@ -48,7 +49,7 @@ def _pack(people_asset_id: str, project_id: str, root_source_asset_id: str) -> I
     )
 
 
-def _handlers(tmp_path):
+def _handlers(tmp_path, *, anchor_pack_preparation_host=None):
     catalog = PersistentVisualAssetCatalog(tmp_path / "visual-assets")
     service = V3ProductApiService(visual_asset_catalog=catalog)
     content = base64.b64decode(
@@ -67,9 +68,39 @@ def _handlers(tmp_path):
         {"content_base64": base64.b64encode(content).decode("ascii"), "mime_type": "image/png"},
     ) is not None
     assert service.complete_uploaded_asset(upload.asset_id) is not None
-    handlers = V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore())
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        anchor_pack_preparation_host=anchor_pack_preparation_host,
+    )
     project = handlers.post_projects({"user_goal": "Professional child face asset"})["project"]
     return handlers, catalog, project["project_id"], upload.asset_id
+
+
+class _PreparationHost:
+    def __init__(self, root_source_asset_id: str, catalog: PersistentVisualAssetCatalog) -> None:
+        self.root_source_asset_id = root_source_asset_id
+        self.catalog = catalog
+        self.calls = []
+
+    def prepare(self, *, project_id, people_asset, root_source_provenance):
+        self.calls.append((project_id, people_asset.people_asset_id, root_source_provenance.source_asset_id))
+        result = AnchorPackPreparationResult(
+            status="review",
+            pack=_pack(people_asset.people_asset_id, project_id, self.root_source_asset_id).model_copy(
+                update={"status": "review", "user_activation_confirmed": False}
+            ),
+            attempts=[],
+            winner_candidate_id="candidate_standard_front_3",
+        )
+        self.catalog.save_pack(result.pack, project_id=project_id, event_type="review")
+        return result
+
+    def activate(self, pack, *, confirmed: bool):
+        assert confirmed is True
+        active = pack.model_copy(update={"status": "active", "user_activation_confirmed": True})
+        self.catalog.save_pack(active, project_id=active.root_source_provenance.project_id, event_type="activate")
+        return active
 
 
 def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> None:
@@ -104,6 +135,51 @@ def test_people_asset_formal_entry_rejects_non_ready_root_source(tmp_path) -> No
                 "consent_reference": "user-authorized-child-source-20260718",
             },
         )
+
+
+def test_people_asset_prepare_route_fails_closed_without_shared_host(tmp_path) -> None:
+    handlers, _, project_id, root_source_asset_id = _handlers(tmp_path)
+    handlers.post_project_people_asset(
+        project_id,
+        {
+            "people_asset_id": "child_asset",
+            "root_source_asset_id": root_source_asset_id,
+            "consent_reference": "user-authorized-child-source-20260718",
+        },
+    )
+    with pytest.raises(RuntimeError, match="professional_anchor_pack_prepare_unavailable"):
+        handlers.post_project_people_asset_prepare(project_id, "child_asset", {})
+
+
+def test_people_asset_prepare_route_uses_injected_shared_host_and_preserves_binding(tmp_path) -> None:
+    handlers, _, project_id, root_source_asset_id = _handlers(tmp_path)
+    host = _PreparationHost(root_source_asset_id, handlers.service.visual_asset_catalog)
+    # Recreate the facade with the same service/catalog and the explicit host;
+    # no route is allowed to create candidates or prompt evidence itself.
+    handlers = V3ProductRouteHandlers(
+        service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        anchor_pack_preparation_host=host,
+    )
+    handlers.post_project_people_asset(
+        project_id,
+        {
+            "people_asset_id": "child_asset",
+            "root_source_asset_id": root_source_asset_id,
+            "consent_reference": "user-authorized-child-source-20260718",
+        },
+    )
+    prepared = handlers.post_project_people_asset_prepare(project_id, "child_asset", {})
+    assert prepared["preparation"]["status"] == "review"
+    assert prepared["preparation"]["pack"]["status"] == "review"
+    assert host.calls == [(project_id, "child_asset", root_source_asset_id)]
+    activated = handlers.post_project_people_asset_activate(
+        project_id,
+        "child_asset",
+        {"pack_version_id": "pack_child_v1", "confirm_activation": True},
+    )
+    assert activated["lifecycle_state"] == "active"
+    assert activated["people_asset"]["active_pack_version_id"] == "pack_child_v1"
 
 
 def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmation(tmp_path) -> None:
