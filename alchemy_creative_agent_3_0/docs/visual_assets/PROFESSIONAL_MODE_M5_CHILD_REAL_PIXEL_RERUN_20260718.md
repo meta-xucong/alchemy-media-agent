@@ -104,3 +104,27 @@ readiness.
    may the existing 3-candidate three-quarter and profile stages run with the
    strict 2/3/5 serial reference budgets.
 
+## Root-cause correction applied after this run
+
+The failed run exposed a transport defect in addition to the visible pixel
+defect. Product API persists the normalized Professional selection as the
+server-owned boolean `professional_mode=true`, while the canonical-prompt
+bridge was checking only the public string `"professional"`. Consequently the
+typed Face Identity quality contract could be present in the planning adapter
+but absent from the final Brain request. The shared Vision gate was therefore
+correctly rejecting polished outputs, while the Brain was not receiving the
+full likeness-first / anti-overperfection objective that should have guided
+the provider prompt.
+
+The correction is now implemented on the acceptance branch:
+
+- both Professional mode representations activate the same transport path;
+- the sanitized Face Identity quality contract reaches the canonical finalizer
+  and its response contract, without exposing raw plans, paths, or private
+  binding records;
+- the frozen result metadata records the same typed contract for provenance;
+- the shared Vision thresholds and bounded retry rules remain unchanged.
+
+This is a root transport correction, not an acceptance waiver. A new real
+M5 attempt is still required; until front passes and the serial three-view
+chain completes, M5 and production remain blocked.

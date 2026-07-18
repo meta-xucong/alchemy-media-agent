@@ -139,3 +139,32 @@ def test_doc136_enforced_reviewer_is_built_from_frozen_contract_not_legacy_catal
         assert required in prompt
     assert "doll_like_child_face" not in prompt
     assert "Judge visible text artifacts, watermarks, collage/split panels" not in prompt
+
+
+def test_doc136_professional_anchor_contract_reaches_brain_as_semantic_quality_only() -> None:
+    request = BrainRunRequest(
+        user_input="Create a professional face identity anchor.",
+        job_id="job_anchor",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={
+            "canonical_prompt_context": {
+                "professional_face_identity_quality_contract": {
+                    "contract_version": "professional_face_identity_quality_v1",
+                    "priority_order": ["same_person_likeness", "natural_human_presence"],
+                    "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+                    "owner": "remote_v3_llm_brain",
+                    "review_owner": "v3_shared_vision",
+                }
+            }
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+    contract = payload["frozen_render_context"]["professional_face_identity_quality_contract"]
+    assert contract["priority_order"][0] == "same_person_likeness"
+    assert "camera-observed human materiality" in payload["remote_response_contract"]
+    assert "generic perfect" in payload["remote_response_contract"]
+    assert "prompt_fragments" not in json.dumps(contract, ensure_ascii=False)
