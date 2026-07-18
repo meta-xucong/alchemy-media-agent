@@ -21,6 +21,7 @@ HUMAN_REALISM_REVIEW_DIMENSIONS = (
     "human_rendering_artifact",
     "human_anatomy_or_proportion",
     "human_age_or_identity_fidelity",
+    "human_developmental_age_coherence",
     "human_expression_context",
     "human_skin_or_retouch",
     "human_scene_coherence",
@@ -82,7 +83,7 @@ def normalize_human_realism_issue_code(issue_code: str) -> str:
     if normalized in HUMAN_REALISM_REVIEW_DIMENSIONS:
         return normalized
     if normalized in _LEGACY_HUMAN_AGE_ALIASES:
-        return "human_age_or_identity_fidelity"
+        return "human_developmental_age_coherence"
     if normalized in _LEGACY_HUMAN_EXPRESSION_ALIASES:
         return "human_expression_context"
     if normalized in _LEGACY_HUMAN_SKIN_ALIASES:
@@ -659,16 +660,21 @@ class HumanPhotorealismLayer:
 
         is_detail = human_subject_kind == "hand_or_skin_detail"
         return {
-            # v6 adds expression-resolution ownership to the whole-image
-            # perceptual obligations.  They are
+            # v7 separates requested developmental-age coherence from
+            # identity continuity.  Both remain whole-image perceptual
+            # obligations rather than facial measurements or prompt atoms.
+            # They are
             # deliberately semantic rather than a renderer word list: the
             # remote Brain owns the complete prompt and the shared reviewer
             # later verifies the same frozen intent from pixels.
-            "contract_version": "v3_human_realism_semantic_v6",
+            "contract_version": "v3_human_realism_semantic_v7",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
             "identity_age_fidelity": "explicit_or_reference_backed" if not is_detail else "not_applicable",
+            "developmental_age_coherence_requirement": (
+                "not_applicable" if is_detail else "whole_person_requested_stage"
+            ),
             "physical_coherence": "required",
             "reference_boundary": "resolved_channels_only",
             "ordinary_age_appropriate_context": bool(activation.get("safety_sensitive_person")),

@@ -21,6 +21,7 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             key: semantic_contract.get(key)
             for key in (
                 "contract_version",
+                "developmental_age_coherence_requirement",
                 "personhood_requirement",
                 "expression_ownership_requirement",
                 "expression_resolution_requirement",

@@ -948,6 +948,7 @@ class ScenarioRuntime:
             "rendering_goal",
             "quality_axes",
             "identity_age_fidelity",
+            "developmental_age_coherence_requirement",
             "physical_coherence",
             "reference_boundary",
             "ordinary_age_appropriate_context",
@@ -971,10 +972,12 @@ class ScenarioRuntime:
         ):
             raise CapabilityActivationError("human_realism_semantic_contract_missing")
         if (
-            contract.get("contract_version") != "v3_human_realism_semantic_v6"
+            contract.get("contract_version") != "v3_human_realism_semantic_v7"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
+            or contract.get("developmental_age_coherence_requirement")
+            not in {"whole_person_requested_stage", "not_applicable"}
             or contract.get("physical_coherence") != "required"
             or contract.get("reference_boundary") != "resolved_channels_only"
             or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
@@ -1108,9 +1111,10 @@ class ScenarioRuntime:
                     raise CapabilityActivationError("professional_anchor_view_contract_missing")
                 context["professional_anchor_view_decision"] = {
                     "required": True,
-                    "contract_version": "v3_professional_anchor_view_decision_v1",
+                    "contract_version": "v3_professional_anchor_view_decision_v2",
                     "owner": "remote_v3_llm_brain",
                     "target_view_role": target_view_role,
+                    "capture_presentation": "neutral_identity_evidence_capture",
                     "frozen_binding": dict(context.get("frozen_binding") or {}),
                 }
         return context
@@ -1211,6 +1215,8 @@ class ScenarioRuntime:
                 if age_fidelity == "follow_explicit_prompt"
                 else "preserve_for_same_age_continuation"
             ),
+            "developmental_age_coherence": "whole_person_requested_stage",
+            "review_owner": "v3_shared_vision",
             "decision_owner": "remote_v3_llm_brain",
             "creative_prompt_owner": "remote_v3_llm_brain",
         }
@@ -1224,7 +1230,7 @@ class ScenarioRuntime:
 
         This is data normalization only.  It never creates a repair sentence
         or changes other frozen capability evidence.  Historical fine-grained
-        Human Realism labels collapse to the five shared dimensions before
+        Human Realism labels collapse to the shared dimensions before
         they are presented to the Brain.
         """
 

@@ -88,14 +88,15 @@ def test_doc128_product_only_children_garment_does_not_activate_human_realism() 
 def test_doc128_legacy_human_codes_are_read_only_aliases_to_shared_dimensions() -> None:
     expected = {
         "doll_like_child_face": "human_rendering_artifact",
-        "adultified_child_model": "human_age_or_identity_fidelity",
+        "adultified_child_model": "human_developmental_age_coherence",
         "synthetic_child_skin": "human_skin_or_retouch",
         "bad_hands_or_body": "human_anatomy_or_proportion",
         "template_smile": "human_expression_context",
         "flat_scene_lighting": "human_scene_coherence",
     }
 
-    assert set(HUMAN_REALISM_REVIEW_DIMENSIONS) == set(expected.values())
+    assert set(expected.values()).issubset(set(HUMAN_REALISM_REVIEW_DIMENSIONS))
+    assert "human_developmental_age_coherence" in HUMAN_REALISM_REVIEW_DIMENSIONS
     for legacy, normalized in expected.items():
         assert normalize_human_realism_issue_code(legacy) == normalized
     assert normalize_human_realism_issue_code("product_identity_drift") == "product_identity_drift"

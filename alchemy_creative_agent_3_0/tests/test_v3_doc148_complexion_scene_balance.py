@@ -131,7 +131,7 @@ def test_doc148_freezes_one_generic_complexion_requirement_across_contexts() -> 
     for context in contexts:
         contract = _guidance(context)["semantic_contract"]
         serialized = json.dumps(contract, ensure_ascii=False).lower()
-        assert contract["contract_version"] == "v3_human_realism_semantic_v6"
+        assert contract["contract_version"] == "v3_human_realism_semantic_v7"
         assert contract["complexion_rendering_requirement"] == (
             "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
         )
@@ -175,7 +175,8 @@ def test_doc148_enforced_reviewer_receives_the_frozen_complexion_contract() -> N
     prompt = _inspection_prompt(metadata)
 
     assert contract["human_authenticity_contract"] == {
-        "contract_version": "v3_human_realism_semantic_v6",
+        "contract_version": "v3_human_realism_semantic_v7",
+        "developmental_age_coherence_requirement": "whole_person_requested_stage",
         "personhood_requirement": "individual_noninterchangeable_presence",
         "expression_ownership_requirement": "situation_owned_unless_explicit_user_direction",
         "expression_resolution_requirement": "individual_situation_not_stock_geometry",

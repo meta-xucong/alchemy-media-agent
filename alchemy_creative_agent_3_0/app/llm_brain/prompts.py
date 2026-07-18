@@ -16,7 +16,7 @@ For general_template/general_creative, use subject/scene/style/lighting language
 Do not introduce product, packaging, label, CTA, selling-point, offer, or ad-copy concepts unless the user explicitly asks for a product/ecommerce image.
 Each returned prompt plan must preserve one complete image per output; do not plan collages, split screens, contact sheets, storyboards, comparison panels, or multi-panel layouts unless the user explicitly asks for that format.
 When the response schema asks for canonical_provider_prompts, write the exact complete natural-language prompt to send to the image renderer for each output. It is the final creative instruction, not an outline or prompt fragments. Reconcile the frozen facts, reference truth, capability obligations, and safety before approving it. Do not include internal IDs, diagnostics, hidden-quality codes, local recipe labels, or markdown headings. An illustration or cartoon on an object surface is not automatically a request to render the whole image in that medium.
-When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. When the existing age-fidelity context says the current prompt owns the age direction, distinguish an ordinary same-age continuation from an explicit same-person age transition: retain identity-critical feature relationships, but do not inherit the source person's apparent age, body maturity, or whole-image styling as hidden locks. Re-express the complete person for the requested age while keeping scene, wardrobe, hair, light, camera, mood, and expression under their resolved owners. Only the Brain makes this semantic decision and authors the complete final prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
+When `frozen_render_context.active_semantic_capability_contracts` includes Human Realism, treat its typed fields as a semantic deliberation boundary: preserve explicit/reference-backed identity and age truth, keep physically credible real-camera human rendering and honour the resolved reference boundary. Reconcile it holistically with the user-owned direction; do not copy contract keys, axes, review codes or a checklist into the prompt. When the existing age-fidelity context says the current prompt owns the age direction, distinguish an ordinary same-age continuation from an explicit same-person age transition: retain identity-critical feature relationships, but do not inherit the source person's apparent age, body maturity, or whole-image styling as hidden locks. Resolve the requested developmental stage as one coherent whole person rather than a face-size edit, while keeping scene, wardrobe, hair, light, camera, mood, and expression under their resolved owners. This is a semantic judgement across the observed person, never a facial-feature formula, age-word stack, or demographic template. Only the Brain makes this semantic decision and authors the complete final prompt. On retry, use normalized review evidence to revise the whole image direction rather than appending a repair phrase.
 For a real-image planning response, return a complete semantic visual_task_profile rather than only a rendering-medium decision. Account for all visible target subjects in your own semantic judgement, including an empty list when no subject is visible. Return concise semantic evidence and uncertainty explicitly. When you decide that a real person is visibly present, represent that person and record the existing visible_person and/or real_human_output evidence purpose so the shared quality capability can be activated. This is an internal planning contract, never a renderer prompt recipe; do not use it to emit a word checklist.
 For the same real-image response, return a complete capability_activation_intent using only the supplied shared capability catalog. It is your typed activation decision for the semantic profile, not a local fallback proposal. Use empty requested/rejected lists when no optional capability applies. The runtime will validate catalog membership, dependencies and evidence links; it will not invent a semantic request that you did not return.
 When `frozen_render_context.final_prompt_semantic_preflight.required` is true, silently perform that whole-image Human Realism preflight before approving each canonical prompt. Decide whether the complete image direction can plausibly render a natural person in the requested age, photographic mood, physical setting and reference boundary; if not, rewrite the complete direction yourself before approval. This is a semantic judgement, not a request to emit a face/skin/hand word list. Return the required audit-only approval receipt, but never describe the preflight or its internal criteria in the renderer prompt.
@@ -623,14 +623,31 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(anchor_view_requirement, dict)
         else ""
     )
+    anchor_view_version = (
+        str(anchor_view_requirement.get("contract_version") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_capture_presentation = (
+        str(anchor_view_requirement.get("capture_presentation") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
     anchor_view_decision_required = bool(
         isinstance(anchor_view_requirement, dict)
         and anchor_view_requirement.get("required") is True
-        and anchor_view_requirement.get("contract_version")
-        == "v3_professional_anchor_view_decision_v1"
+        and anchor_view_version in {
+            "v3_professional_anchor_view_decision_v1",
+            "v3_professional_anchor_view_decision_v2",
+        }
         and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(anchor_view_requirement.get("frozen_binding"), dict)
         and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+        and (
+            anchor_capture_presentation == "neutral_identity_evidence_capture"
+            if anchor_view_version == "v3_professional_anchor_view_decision_v2"
+            else not anchor_capture_presentation
+        )
     )
     if isinstance(anchor_view_requirement, dict) and not anchor_view_decision_required:
         raise ValueError("Professional anchor finalization requires one valid frozen view contract.")
@@ -666,8 +683,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         }
     if anchor_view_decision_required:
         prompt_schema["professional_anchor_view_decision"] = {
-            "contract_version": "v3_professional_anchor_view_decision_v1",
+            "contract_version": anchor_view_version,
             "target_view_role": anchor_view_target,
+            **(
+                {"capture_presentation": anchor_capture_presentation}
+                if anchor_capture_presentation
+                else {}
+            ),
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
@@ -718,9 +740,18 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "the Remote Brain remains the sole author of the whole prompt. If the draft direction does not fulfill "
             "the frozen role, rewrite the entire prompt before approval; do not append a correction, inspect a local "
             "keyword list, or return a patch. For every output, return professional_anchor_view_decision with "
-            "contract_version v3_professional_anchor_view_decision_v1, the exact frozen target_view_role, owner "
+            f"contract_version {anchor_view_version}, the exact frozen target_view_role, owner "
             "remote_v3_llm_brain, and status approved or rewritten."
         )
+        if anchor_capture_presentation:
+            response_contract += (
+                " Also reconcile the Professional neutral identity-evidence capture as one complete photographic "
+                "decision: make identity, whole-person developmental stage, and cross-view comparison legible without "
+                "inventing an adult persona, a beauty portrait, or inconsistent capture treatment. Preserve current "
+                "request and reference-channel ownership, and return capture_presentation "
+                "neutral_identity_evidence_capture in the same typed receipt. This is a semantic objective, not a "
+                "background, clothing, facial-feature, complexion, or lighting keyword recipe."
+            )
     anchor_view_recovery = request.metadata.get("professional_anchor_view_contract_recovery")
     if isinstance(anchor_view_recovery, dict):
         response_contract += (
@@ -736,7 +767,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "The complete prompt must require camera-observed human materiality: visible but subtle natural skin texture, "
             "non-uniform complexion, ordinary eyelid/lip detail, and small real-life asymmetries. Do not substitute a generic "
             "perfect, poreless, retouched, pageant, fashion, or beauty-app face. This is a semantic quality requirement, "
-            "not a static prompt recipe; keep the selected view and user-owned styling intact."
+            "not a static prompt recipe; keep the selected view and user-owned styling intact. When the current request "
+            "owns an age direction, resolve the whole-person developmental stage coherently rather than altering only "
+            "facial scale or polish."
         )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",

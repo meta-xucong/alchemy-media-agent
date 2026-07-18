@@ -44,7 +44,7 @@ def test_doc155_same_shared_contract_adapts_explicit_six_and_ten_year_old_people
     ).semantic_contract
 
     assert six.keys() == ten.keys()
-    assert six["contract_version"] == ten["contract_version"] == "v3_human_realism_semantic_v6"
+    assert six["contract_version"] == ten["contract_version"] == "v3_human_realism_semantic_v7"
     assert six["identity_age_fidelity"] == ten["identity_age_fidelity"] == "explicit_or_reference_backed"
     assert six["ordinary_age_appropriate_context"] is True
     assert ten["ordinary_age_appropriate_context"] is True
@@ -61,7 +61,7 @@ def test_doc155_adult_uses_same_expression_semantics_without_child_branch() -> N
         "Create a real-camera photograph of a visible adult person reading beside a window at home."
     ).semantic_contract
 
-    assert adult["contract_version"] == "v3_human_realism_semantic_v6"
+    assert adult["contract_version"] == "v3_human_realism_semantic_v7"
     assert adult["ordinary_age_appropriate_context"] is False
     assert adult["expression_resolution_requirement"] == "individual_situation_not_stock_geometry"
     assert "child" not in json.dumps(adult, ensure_ascii=False).lower()
@@ -77,4 +77,3 @@ def test_doc155_brain_receives_semantic_resolution_not_a_local_expression_recipe
     assert "fixed alternate-expression catalogue" in combined
     assert "prompt_additions" not in combined
     assert "negative_additions" not in combined
-

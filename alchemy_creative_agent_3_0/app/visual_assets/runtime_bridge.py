@@ -80,9 +80,9 @@ class ProfessionalModeRuntimeBridge:
         return profile.model_copy(update={"explicit_user_controls": controls, "evidence": [*existing, evidence]})
 
     @staticmethod
-    def _face_identity_quality_contract() -> dict[str, object]:
-        return {
-            "contract_version": "professional_face_identity_quality_v1",
+    def _face_identity_quality_contract(*, neutral_capture: bool = False) -> dict[str, object]:
+        contract: dict[str, object] = {
+            "contract_version": "professional_face_identity_quality_v2",
             "scope": "face_identity_anchor_pack",
             "priority_order": [
                 "same_person_likeness",
@@ -92,9 +92,13 @@ class ProfessionalModeRuntimeBridge:
                 "prompt_owned_view_and_styling",
             ],
             "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+            "developmental_age_coherence": "whole_person_when_age_owned",
             "owner": "remote_v3_llm_brain",
             "review_owner": "v3_shared_vision",
         }
+        if neutral_capture:
+            contract["capture_presentation"] = "neutral_identity_evidence_capture"
+        return contract
 
     @staticmethod
     def anchor_pack_preparation_metadata(
@@ -117,7 +121,7 @@ class ProfessionalModeRuntimeBridge:
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
             "professional_face_identity_quality_contract": (
-                ProfessionalModeRuntimeBridge._face_identity_quality_contract()
+                ProfessionalModeRuntimeBridge._face_identity_quality_contract(neutral_capture=True)
             ),
         }
 

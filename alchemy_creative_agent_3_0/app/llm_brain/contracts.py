@@ -104,8 +104,14 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     searches prompt keywords or appends a view instruction.
     """
 
-    contract_version: Literal["v3_professional_anchor_view_decision_v1"]
+    contract_version: Literal[
+        "v3_professional_anchor_view_decision_v1",
+        "v3_professional_anchor_view_decision_v2",
+    ]
     target_view_role: Literal["standard_front", "three_quarter", "profile"]
+    # Required and exact for v2 by the adapter. Optional here keeps historical
+    # v1 receipts readable without weakening new anchor preparation.
+    capture_presentation: Literal["neutral_identity_evidence_capture"] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 

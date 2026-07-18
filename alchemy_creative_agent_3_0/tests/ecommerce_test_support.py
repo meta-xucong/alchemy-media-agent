@@ -108,13 +108,30 @@ class EcommerceRemoteBrainTestProvider:
             if isinstance(anchor_view_requirement, dict)
             else ""
         )
+        anchor_view_version = (
+            str(anchor_view_requirement.get("contract_version") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_capture_presentation = (
+            str(anchor_view_requirement.get("capture_presentation") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
         requires_anchor_view_decision = bool(
             isinstance(anchor_view_requirement, dict)
             and anchor_view_requirement.get("required") is True
-            and anchor_view_requirement.get("contract_version")
-            == "v3_professional_anchor_view_decision_v1"
+            and anchor_view_version in {
+                "v3_professional_anchor_view_decision_v1",
+                "v3_professional_anchor_view_decision_v2",
+            }
             and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
             and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+            and (
+                anchor_capture_presentation == "neutral_identity_evidence_capture"
+                if anchor_view_version == "v3_professional_anchor_view_decision_v2"
+                else not anchor_capture_presentation
+            )
         )
         payload["canonical_provider_prompts"] = [
             {
@@ -150,8 +167,13 @@ class EcommerceRemoteBrainTestProvider:
                 **(
                     {
                         "professional_anchor_view_decision": {
-                            "contract_version": "v3_professional_anchor_view_decision_v1",
+                            "contract_version": anchor_view_version,
                             "target_view_role": anchor_view_target,
+                            **(
+                                {"capture_presentation": anchor_capture_presentation}
+                                if anchor_capture_presentation
+                                else {}
+                            ),
                             "status": "approved",
                             "owner": "remote_v3_llm_brain",
                         }

@@ -51,7 +51,10 @@ def test_doc136_enforced_human_guidance_is_typed_and_has_no_local_prompt_or_retr
     assert guidance.reference_preserve_rules == []
     assert guidance.reference_do_not_inherit_rules == []
     assert guidance.retry_patch_templates == {}
-    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v6"
+    assert guidance.semantic_contract["contract_version"] == "v3_human_realism_semantic_v7"
+    assert guidance.semantic_contract["developmental_age_coherence_requirement"] == (
+        "whole_person_requested_stage"
+    )
     assert guidance.semantic_contract["rendering_goal"] == "photographic_real_person"
     assert guidance.semantic_contract["ordinary_age_appropriate_context"] is True
     assert guidance.semantic_contract["natural_presence_priority"] == "individual_human_presence"
@@ -152,9 +155,11 @@ def test_doc136_professional_anchor_contract_reaches_brain_as_semantic_quality_o
         metadata={
             "canonical_prompt_context": {
                 "professional_face_identity_quality_contract": {
-                    "contract_version": "professional_face_identity_quality_v1",
+                    "contract_version": "professional_face_identity_quality_v2",
                     "priority_order": ["same_person_likeness", "natural_human_presence"],
                     "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+                    "developmental_age_coherence": "whole_person_when_age_owned",
+                    "capture_presentation": "neutral_identity_evidence_capture",
                     "owner": "remote_v3_llm_brain",
                     "review_owner": "v3_shared_vision",
                 }

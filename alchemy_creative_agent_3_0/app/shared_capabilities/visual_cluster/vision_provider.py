@@ -15,6 +15,7 @@ from .contracts import GeneratedOutputResolution
 
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
     "contract_version",
+    "developmental_age_coherence_requirement",
     "personhood_requirement",
     "expression_ownership_requirement",
     "expression_resolution_requirement",
@@ -33,7 +34,7 @@ HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS = (
 
 
 def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids: list[str]) -> dict[str, Any]:
-    """Return only the v6 Human Realism review contract frozen in the ledger.
+    """Return only the current Human Realism review contract frozen in the ledger.
 
     This deliberately refuses mutable cluster metadata and historical v2
     records.  A fresh enforced job gets this contract through the active
@@ -50,7 +51,9 @@ def _frozen_human_authenticity_contract(review_contracts: list[Any], active_ids:
         if not isinstance(candidate, dict) or set(candidate) != _HUMAN_AUTHENTICITY_CONTRACT_KEYS:
             continue
         if (
-            candidate.get("contract_version") == "v3_human_realism_semantic_v6"
+            candidate.get("contract_version") == "v3_human_realism_semantic_v7"
+            and candidate.get("developmental_age_coherence_requirement")
+            in {"whole_person_requested_stage", "not_applicable"}
             and candidate.get("personhood_requirement") == "individual_noninterchangeable_presence"
             and candidate.get("expression_ownership_requirement")
             == "situation_owned_unless_explicit_user_direction"
@@ -408,10 +411,23 @@ def _enforced_inspection_prompt(
             + json.dumps(output_evidence, ensure_ascii=False)
         )
     if review_contract.get("professional_identity_quality", {}).get("applies"):
+        professional_quality = review_contract["professional_identity_quality"]
+        neutral_capture_applies = "neutral_capture_compliance" in professional_quality.get(
+            "score_dimensions", []
+        )
         lines.append(
             "Professional identity scoring: judge recognizability of the same person before generic polish. "
-            "For same_person_readability, distinctive_feature_readability, age_identity_direction, human_realism, "
-            "prompt_owned_channel_obedience, pose_compliance, and visual_quality, higher is better. "
+            "Keep identity continuity and developmental-age coherence as separate findings. "
+            + (
+                "Judge the neutral capture by whether it makes cross-view identity comparison clean and stable without imposing an unrelated persona. "
+                if neutral_capture_applies
+                else ""
+            )
+            + "For same_person_readability, distinctive_feature_readability, age_identity_direction, "
+            "developmental_age_coherence, human_realism, "
+            + ("neutral_capture_compliance, " if neutral_capture_applies else "")
+            + "prompt_owned_channel_obedience, "
+            "pose_compliance, and visual_quality, higher is better. "
             "ai_overperfection_penalty is the exception: 0 means no visible AI/beauty-filter overperfection and 1 means severe overperfection."
         )
     if serial_anchor_review:
@@ -428,7 +444,9 @@ def _enforced_inspection_prompt(
         )
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
-            "Human authenticity attestation: assess the frozen personhood, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
+            "Human authenticity attestation: assess the frozen personhood, developmental-age coherence, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
+            "When developmental-age coherence applies, judge the whole observed person against the requested stage; "
+            "do not infer a pass or failure from one facial trait, a fixed proportion, or a demographic stereotype. "
             + HUMAN_EXPRESSION_REVIEW_INSTRUCTIONS + " "
             "Return only the required structured verdict and allowed generic issue codes; do not write renderer instructions, "
             "demographic classifications, facial-feature recipes, or new creative direction."
@@ -643,7 +661,9 @@ def _professional_identity_quality_contract(
             contract = preparation.get("professional_face_identity_quality_contract")
     applies = bool(
         isinstance(contract, dict)
-        and contract.get("contract_version") == "professional_face_identity_quality_v1"
+        and contract.get("contract_version") == "professional_face_identity_quality_v2"
+        and contract.get("developmental_age_coherence") == "whole_person_when_age_owned"
+        and contract.get("capture_presentation") in {None, "neutral_identity_evidence_capture"}
         and contract.get("owner") == "remote_v3_llm_brain"
         and contract.get("review_owner") == "v3_shared_vision"
     )
@@ -654,19 +674,31 @@ def _professional_identity_quality_contract(
             "same_person_readability",
             "distinctive_feature_readability",
             "age_identity_direction",
+            "developmental_age_coherence",
             "human_realism",
             "prompt_owned_channel_obedience",
             "pose_compliance",
             "visual_quality",
             "ai_overperfection_penalty",
+            *(
+                ["neutral_capture_compliance"]
+                if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
+                else []
+            ),
         ] if applies else [],
         "issue_codes": [
             "professional_identity_mismatch",
             "professional_distinctive_features_lost",
             "professional_age_identity_drift",
+            "professional_developmental_age_drift",
             "professional_prompt_owned_channel_ignored",
             "professional_pose_noncompliance",
             "professional_ai_overperfection",
+            *(
+                ["professional_neutral_capture_mismatch"]
+                if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
+                else []
+            ),
         ] if applies else [],
     }
 

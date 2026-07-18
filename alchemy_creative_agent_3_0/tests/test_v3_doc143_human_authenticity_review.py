@@ -94,7 +94,7 @@ def _resolution(tmp_path: Path) -> GeneratedOutputResolution:
 def test_doc143_fresh_human_contract_has_only_generic_authenticity_obligations() -> None:
     contract = _guidance()["semantic_contract"]
 
-    assert contract["contract_version"] == "v3_human_realism_semantic_v6"
+    assert contract["contract_version"] == "v3_human_realism_semantic_v7"
     assert contract["personhood_requirement"] == "individual_noninterchangeable_presence"
     assert contract["expression_ownership_requirement"] == "situation_owned_unless_explicit_user_direction"
     assert contract["expression_resolution_requirement"] == "individual_situation_not_stock_geometry"
@@ -113,7 +113,8 @@ def test_doc143_enforced_reviewer_receives_frozen_authenticity_contract_not_lega
 
     assert contract["human_naturalness_verdict_required"] is True
     assert contract["human_authenticity_contract"] == {
-        "contract_version": "v3_human_realism_semantic_v6",
+        "contract_version": "v3_human_realism_semantic_v7",
+        "developmental_age_coherence_requirement": "whole_person_requested_stage",
         "personhood_requirement": "individual_noninterchangeable_presence",
         "expression_ownership_requirement": "situation_owned_unless_explicit_user_direction",
         "expression_resolution_requirement": "individual_situation_not_stock_geometry",
