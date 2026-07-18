@@ -1,8 +1,8 @@
 # Professional Mode M5 Real Binding Preflight — Blocked
 
-Date: 2026-07-18  
-Baseline: `origin/main@c6ebbf0`  
-Branch: `codex/professional-m5-three-view-acceptance`  
+Date: 2026-07-18
+Baseline: `origin/main@c6ebbf0`
+Branch: `codex/professional-m5-three-view-acceptance`
 Status: **non-counting preflight; M5 remains blocked**
 
 ## Scope
