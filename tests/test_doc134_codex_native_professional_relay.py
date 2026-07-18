@@ -186,6 +186,20 @@ def test_professional_relay_without_resolver_and_mcp_unknown_fields_fail_closed(
     assert exc.value.code == "codex_native_imagegen_invalid_input"
 
 
+def test_professional_relay_accepts_exact_persisted_timestamp_identifiers(tmp_path: Path) -> None:
+    reference = _write_png(tmp_path / "root.png")
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            reference,
+            project_id="project_doc165_20260718T133110Z",
+            people_asset_id="person_78c335f8908848b6",
+        )
+    )
+
+    assert request.project_id == "project_doc165_20260718T133110Z"
+    assert request.people_asset_id == "person_78c335f8908848b6"
+
+
 def test_professional_serial_reference_stage_requires_root_then_reviewed_winners(tmp_path: Path) -> None:
     root = _write_png(tmp_path / "root.png")
     winner = _write_png(tmp_path / "front-winner.png")

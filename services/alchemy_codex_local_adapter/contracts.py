@@ -40,7 +40,11 @@ _PROFESSIONAL_ALLOWED_TOP_LEVEL_FIELDS = {
     "photographer_profile_id",
 }
 _ALLOWED_REFERENCE_FIELDS = {"channel", "file_path"}
-_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+# Persisted Product API identifiers may contain the uppercase UTC separators
+# used by controlled run IDs (for example ``...T133110Z``).  This validator is
+# an opaque-selector boundary, not a semantic classifier; accept the storage
+# alphabet without lowercasing or re-authoring the server-owned value.
+_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,95}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
 _HARD_REFERENCE_CHANNELS = frozenset(
     {"portrait_identity", "selected_identity_reference", "product_truth", "nonhuman_identity"}
